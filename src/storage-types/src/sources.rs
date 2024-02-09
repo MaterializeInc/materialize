@@ -17,10 +17,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use bytes::BufMut;
-
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
-
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
@@ -28,17 +26,14 @@ use mz_persist_types::dyn_struct::{DynStruct, DynStructCfg, ValidityMut, Validit
 use mz_persist_types::stats::StatsFn;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-
 use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, RelationDesc, Row, RowDecoder,
     RowEncoder,
 };
-
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
@@ -47,11 +42,9 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-
 use crate::controller::{CollectionMetadata, StorageError};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
-
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use crate::AlterCompatible;
 
@@ -73,11 +66,12 @@ pub use crate::sources::testscript::TestScriptSourceConnection;
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
 /// A description of a source ingestion
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection> {
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
     /// The source description
     pub desc: SourceDesc<C>,
     /// Source collections made available to this ingestion.
+    #[proptest(strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<S>(), 0..4)")]
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
@@ -88,6 +82,9 @@ pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection>
     ///
     /// Note that this does _not_ include the remap collection, which is tracked
     /// in its own field.
+    #[proptest(
+        strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 0..4)"
+    )]
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
@@ -220,50 +217,12 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceExport<S = ()> {
     /// The index of the exported output stream
     pub output_index: usize,
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
-}
-
-impl<S> Arbitrary for IngestionDescription<S>
-where
-    S: Arbitrary + 'static,
-{
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<SourceDesc>().boxed(),
-            proptest::collection::btree_map(any::<GlobalId>(), any::<S>(), 1..4).boxed(),
-            proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 1..4)
-                .boxed(),
-            any::<S>().boxed(),
-            any::<StorageInstanceId>().boxed(),
-            any::<GlobalId>(),
-        )
-            .prop_map(
-                |(
-                    desc,
-                    source_imports,
-                    source_exports,
-                    ingestion_metadata,
-                    instance_id,
-                    remap_collection_id,
-                )| Self {
-                    desc,
-                    source_imports,
-                    source_exports,
-                    ingestion_metadata,
-                    instance_id,
-                    remap_collection_id,
-                },
-            )
-            .boxed()
-    }
 }
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
@@ -334,23 +293,6 @@ impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceEx
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
             },
         ))
-    }
-}
-
-impl<S> Arbitrary for SourceExport<S>
-where
-    S: Arbitrary + 'static,
-{
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (any::<usize>(), any::<S>())
-            .prop_map(|(output_index, storage_metadata)| Self {
-                output_index,
-                storage_metadata,
-            })
-            .boxed()
     }
 }
 
@@ -684,7 +626,7 @@ impl RustType<ProtoCompression> for Compression {
 }
 
 /// An external source of updates for a relational collection.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
     pub encoding: encoding::SourceDataEncoding<C>,
@@ -709,29 +651,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
             envelope,
             timestamp_interval,
         }
-    }
-}
-
-impl Arbitrary for SourceDesc {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<GenericSourceConnection>(),
-            any::<encoding::SourceDataEncoding>(),
-            any::<SourceEnvelope>(),
-            any::<Duration>(),
-        )
-            .prop_map(
-                |(connection, encoding, envelope, timestamp_interval)| Self {
-                    connection,
-                    encoding,
-                    envelope,
-                    timestamp_interval,
-                },
-            )
-            .boxed()
     }
 }
 

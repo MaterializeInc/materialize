@@ -25,5 +25,5 @@ pub fn any_antichain<T: PartialOrder>() -> impl Strategy<Value = Antichain<T>>
 where
     T: Arbitrary + Ord,
 {
-    proptest::collection::vec(any::<T>(), 1..11).prop_map(Into::into)
+    proptest::collection::vec(any::<T>(), 0..11).prop_map(Into::into)
 }
