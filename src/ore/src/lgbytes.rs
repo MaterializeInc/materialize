@@ -44,9 +44,17 @@ struct MetricsRegion {
 
 impl std::fmt::Debug for LgBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self.as_slice(), f)
+        std::fmt::Debug::fmt(self.as_ref(), f)
     }
 }
+
+impl PartialEq for LgBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl Eq for LgBytes {}
 
 impl Drop for MetricsRegion {
     fn drop(&mut self) {
@@ -56,9 +64,8 @@ impl Drop for MetricsRegion {
     }
 }
 
-impl LgBytes {
-    /// Presents this buf as a byte slice.
-    pub fn as_slice(&self) -> &[u8] {
+impl AsRef<[u8]> for LgBytes {
+    fn as_ref(&self) -> &[u8] {
         // This implementation of [bytes::Buf] chooses to panic instead of
         // allowing the offset to advance past remaining, which means this
         // invariant should always hold and we shouldn't need the std::cmp::min.
@@ -66,6 +73,13 @@ impl LgBytes {
         debug_assert!(self.offset <= self.region.buf.len());
         let offset = std::cmp::min(self.offset, self.region.buf.len());
         &self.region.buf[offset..]
+    }
+}
+
+impl std::ops::Deref for LgBytes {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
     }
 }
 
@@ -82,7 +96,7 @@ impl Buf for LgBytes {
     /// not change unless a call is made to `advance` or any other function that
     /// is documented to change the `Buf`'s current position.
     fn remaining(&self) -> usize {
-        self.as_slice().len()
+        self.as_ref().len()
     }
 
     /// Returns a slice starting at the current position and of length between 0
@@ -98,7 +112,7 @@ impl Buf for LgBytes {
     /// i.e., `Buf::remaining` returns 0, calls to `chunk()` should return an
     /// empty slice.
     fn chunk(&self) -> &[u8] {
-        self.as_slice()
+        self.as_ref()
     }
 
     /// Advance the internal cursor of the Buf

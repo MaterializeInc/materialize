@@ -30,7 +30,7 @@ use aws_types::region::Region;
 use bytes::Bytes;
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
-use mz_ore::bytes::SegmentedBytes;
+use mz_ore::bytes::{MaybeLgBytes, SegmentedBytes};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
@@ -458,7 +458,7 @@ impl Blob for S3Blob {
                 .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
 
             // Collect all of our segments.
-            segments.extend(part_body.into_segments());
+            segments.extend(part_body.into_segments().map(MaybeLgBytes::Bytes));
         }
 
         debug!(
