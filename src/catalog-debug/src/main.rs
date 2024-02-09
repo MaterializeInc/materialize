@@ -405,7 +405,8 @@ async fn upgrade_check(
         .open_savepoint(
             now(),
             &BootstrapArgs {
-                default_cluster_replica_size: "1".into(),
+                default_cluster_replica_size:
+                    "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
                 bootstrap_role: None,
             },
             None,
@@ -417,6 +418,15 @@ async fn upgrade_check(
     // debugging/testing/inspecting.
     let previous_ts = now().into();
 
+    // If this upgrade has new builtin replicas, then we need to assign some size to it. It doesn't
+    // really matter what size since it's not persisted, so we pick a random valid one.
+    let builtin_cluster_replica_size = cluster_replica_sizes
+        .0
+        .first_key_value()
+        .expect("we must have at least a single valid replica size")
+        .0
+        .clone();
+
     let (_catalog, _, _, last_catalog_version) = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
@@ -426,7 +436,7 @@ async fn upgrade_check(
             now,
             skip_migrations: false,
             cluster_replica_sizes,
-            builtin_cluster_replica_size: "1".into(),
+            builtin_cluster_replica_size,
             system_parameter_defaults: Default::default(),
             remote_system_parameters: None,
             availability_zones: vec![],
