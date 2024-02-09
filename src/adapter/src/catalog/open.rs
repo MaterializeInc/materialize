@@ -71,7 +71,6 @@ use mz_storage_types::sources::Timeline;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
-use crate::coord::catalog_oracle;
 use crate::AdapterError;
 
 #[derive(Debug)]
@@ -190,20 +189,9 @@ impl Catalog {
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
     pub fn initialize_state<'a>(
         config: StateConfig,
-        previous_ts: mz_repr::Timestamp,
+        boot_ts: mz_repr::Timestamp,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
-    ) -> BoxFuture<
-        'a,
-        Result<
-            (
-                CatalogState,
-                mz_repr::Timestamp,
-                BuiltinMigrationMetadata,
-                String,
-            ),
-            AdapterError,
-        >,
-    > {
+    ) -> BoxFuture<'a, Result<(CatalogState, BuiltinMigrationMetadata, String), AdapterError>> {
         async move {
             for builtin_role in BUILTIN_ROLES {
                 assert!(
@@ -264,24 +252,16 @@ impl Catalog {
 
             let is_read_only = storage.is_read_only();
             let mut txn = storage.transaction().await?;
-            // Choose a time at which to boot. This is the time at which we will run
-            // internal migrations.
-            //
-            // This time is usually the current system time, but with protection
-            // against backwards time jumps, even across restarts.
-            let boot_ts = {
-                let boot_ts = catalog_oracle::monotonic_now(
-                    config.now.clone(),
-                    previous_ts,
-                );
-                info!(%previous_ts, %boot_ts, "initialize_state");
-                if !is_read_only {
-                    // IMPORTANT: we durably record the new timestamp before using it.
-                    txn.set_timestamp(Timeline::EpochMilliseconds, boot_ts)?;
-                }
 
-                boot_ts
-            };
+            if !is_read_only {
+                // WIP: @joe, we're only persisting a boot_ts for the Catalog
+                // oracle, not for the Postgres oracle. We do it later though,
+                // when initializing the postgres oracle with an initial
+                // timestamp based on the boot_ts. It's not atomic with any
+                // catalog migrations and the like.
+                // IMPORTANT: we durably record the new timestamp before using it.
+                txn.set_timestamp(Timeline::EpochMilliseconds, boot_ts)?;
+            }
 
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
@@ -831,7 +811,6 @@ impl Catalog {
             txn.commit().await?;
             Ok((
                 state,
-                boot_ts,
                 builtin_migration_metadata,
                 last_seen_version,
             ))
@@ -856,7 +835,7 @@ impl Catalog {
     #[instrument(name = "catalog::open", skip_all)]
     pub fn open(
         config: Config<'_>,
-        previous_ts: mz_repr::Timestamp,
+        boot_ts: mz_repr::Timestamp,
     ) -> BoxFuture<
         'static,
         Result<
@@ -871,8 +850,8 @@ impl Catalog {
     > {
         async move {
             let mut storage = config.storage;
-            let (state, boot_ts, builtin_migration_metadata, last_seen_version) =
-                Self::initialize_state(config.state, previous_ts, &mut storage).await?;
+            let (state, builtin_migration_metadata, last_seen_version) =
+                Self::initialize_state(config.state, boot_ts, &mut storage).await?;
 
             let mut catalog = Catalog {
                 state,

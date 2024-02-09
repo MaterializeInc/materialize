@@ -427,7 +427,7 @@ async fn upgrade_check(
         .0
         .clone();
 
-    let (_catalog, _, _, last_catalog_version) = Catalog::initialize_state(
+    let (_catalog, _, last_catalog_version) = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
             all_features: false,

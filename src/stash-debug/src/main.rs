@@ -483,7 +483,7 @@ impl Usage {
             )
             .await
             {
-                Ok((_, _, _, last_catalog_version)) => {
+                Ok((_, _, last_catalog_version)) => {
                     storage.expire().await;
                     return Ok(format!(
                         "catalog upgrade from {} to {} would succeed",
