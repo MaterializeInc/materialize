@@ -220,6 +220,7 @@ fn columns_match(request: &Table, current: &Table) -> bool {
         fn eq(&self, other: &ColumnMetadata) -> bool {
             self.ty == other.ty
                 && self.primary_key == other.primary_key
+                // TODO(parkmycar): Better comparison for decimals.
                 && self.decimal.is_some() == other.decimal.is_some()
         }
     }
