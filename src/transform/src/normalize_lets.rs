@@ -546,7 +546,7 @@ mod let_motion {
             // Bindings to lower.
             let mut lowered = BTreeMap::<LocalId, MirRelationExpr>::new();
 
-            let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
+            let rec_ids = MirRelationExpr::recursive_ids(ids, values);
 
             while ids.last().map(|id| !rec_ids.contains(id)).unwrap_or(false) {
                 let id = ids.pop().expect("non-empty ids");

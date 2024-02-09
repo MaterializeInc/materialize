@@ -304,13 +304,13 @@ impl PredicatePushdown {
                                 if !predicate.is_literal_err() || all_errors {
                                     let mut supported = true;
                                     let mut new_predicate = predicate.clone();
-                                    new_predicate.visit_mut_post(&mut |e| {
+                                    new_predicate.visit_pre(|e| {
                                         if let MirScalarExpr::Column(c) = e {
                                             if *c >= group_key.len() {
                                                 supported = false;
                                             }
                                         }
-                                    })?;
+                                    });
                                     if supported {
                                         new_predicate.visit_mut_post(&mut |e| {
                                             if let MirScalarExpr::Column(i) = e {
@@ -512,7 +512,7 @@ impl PredicatePushdown {
                     // `get_predicates` should now contain the intersection
                     // of predicates at each *use* of the binding. If it is
                     // non-empty, we can move those predicates to the value.
-                    Self::push_into_let_binding(get_predicates, id, value, &mut [body])?;
+                    Self::push_into_let_binding(get_predicates, id, value, &mut [body]);
 
                     // Continue recursively on the value.
                     self.action(value, get_predicates)
@@ -527,7 +527,7 @@ impl PredicatePushdown {
                     // https://github.com/MaterializeInc/materialize/issues/18167#issuecomment-1477588262
 
                     // Pre-compute which Ids are used across iterations
-                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values)?;
+                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values);
 
                     // Predicate pushdown within the body
                     self.action(body, get_predicates)?;
@@ -549,7 +549,7 @@ impl PredicatePushdown {
                         // `get_predicates`: We push a predicate into the value of a binding, only
                         // if all Gets of this Id have this same predicate on top of them.
                         if !ids_used_across_iterations.contains(id) {
-                            Self::push_into_let_binding(get_predicates, id, value, &mut users)?;
+                            Self::push_into_let_binding(get_predicates, id, value, &mut users);
                         }
 
                         // Predicate pushdown within a binding
@@ -814,12 +814,12 @@ impl PredicatePushdown {
         id: &LocalId,
         value: &mut MirRelationExpr,
         users: &mut [&mut MirRelationExpr],
-    ) -> Result<(), TransformError> {
+    ) {
         if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
             if !list.is_empty() {
                 // Remove the predicates in `list` from the users.
                 for user in users {
-                    user.try_visit_mut_post::<_, TransformError>(&mut |e| {
+                    user.visit_pre_mut(|e| {
                         if let MirRelationExpr::Filter { input, predicates } = e {
                             if let MirRelationExpr::Get { id: get_id, .. } = **input {
                                 if get_id == Id::Local(*id) {
@@ -827,8 +827,7 @@ impl PredicatePushdown {
                                 }
                             }
                         }
-                        Ok(())
-                    })?;
+                    });
                 }
                 // Apply the predicates in `list` to value. Canonicalize
                 // `list` so that plans are always deterministic.
@@ -840,7 +839,6 @@ impl PredicatePushdown {
                 *value = value.take_dangerous().filter(list);
             }
         }
-        Ok(())
     }
 
     /// Returns `(<predicates to retain>, <predicates to push at each input>)`.
@@ -965,13 +963,13 @@ impl PredicatePushdown {
             let mut support = BTreeSet::new();
 
             // Seed with `map_exprs` support in `expr`.
-            expr.visit_post(&mut |e| {
+            expr.visit_pre(|e| {
                 if let MirScalarExpr::Column(c) = e {
                     if *c >= input_arity {
                         support.insert(*c);
                     }
                 }
-            })?;
+            });
 
             // Compute transitive closure of supports in `map_exprs`.
             let mut workset = support.iter().cloned().collect::<Vec<_>>();
@@ -981,7 +979,7 @@ impl PredicatePushdown {
                 std::mem::swap(&mut workset, &mut buffer);
                 // Drain the `buffer` and update `support` and `workset`.
                 for c in buffer.drain(..) {
-                    map_exprs[c - input_arity].visit_post(&mut |e| {
+                    map_exprs[c - input_arity].visit_pre(|e| {
                         if let MirScalarExpr::Column(c) = e {
                             if *c >= input_arity {
                                 if support.insert(*c) {
@@ -989,7 +987,7 @@ impl PredicatePushdown {
                                 }
                             }
                         }
-                    })?;
+                    });
                 }
             }
             support
@@ -1040,7 +1038,7 @@ impl PredicatePushdown {
                 }
             })?;
 
-            soft_assert_eq_no_log!(new_size, new_expr.size()?);
+            soft_assert_eq_no_log!(new_size, new_expr.size());
             if new_size <= size_limit {
                 Ok(Some(new_expr)) // We managed to stay within the limit.
             } else {

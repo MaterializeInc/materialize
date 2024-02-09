@@ -33,7 +33,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::zip_eq;
-use mz_expr::visit::Visit;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
 use crate::{TransformCtx, TransformError};
@@ -120,7 +119,7 @@ impl ProjectionPushdown {
                         id,
                         (desired_value_projection, new_type),
                     ))),
-                )?;
+                );
                 desired_projection.clone()
             }
             MirRelationExpr::LetRec {
@@ -130,7 +129,7 @@ impl ProjectionPushdown {
                 body,
             } => {
                 // Determine the recursive IDs in this LetRec binding.
-                let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
+                let rec_ids = MirRelationExpr::recursive_ids(ids, values);
 
                 // Seed the gets map with empty demand for each non-recursive ID.
                 for id in ids.iter().filter(|id| !rec_ids.contains(id)) {
@@ -158,7 +157,7 @@ impl ProjectionPushdown {
                 let mut updates = BTreeMap::new();
                 for (id, value) in zip_eq(ids.iter(), values.iter_mut()) {
                     // Update the current value.
-                    self.update_projection_around_get(value, &updates)?;
+                    self.update_projection_around_get(value, &updates);
                     // If this is a non-recursive ID, add an entry to the
                     // updates map for subsequent values and the body.
                     if !rec_ids.contains(id) {
@@ -171,7 +170,7 @@ impl ProjectionPushdown {
                     }
                 }
                 // Update the body.
-                self.update_projection_around_get(body, &updates)?;
+                self.update_projection_around_get(body, &updates);
 
                 // Remove the entries for all ids (don't restrict only to
                 // non-recursive IDs here for better hygene).
@@ -426,8 +425,8 @@ impl ProjectionPushdown {
         &self,
         relation: &mut MirRelationExpr,
         applied_projections: &BTreeMap<Id, (Vec<usize>, mz_repr::RelationType)>,
-    ) -> Result<(), TransformError> {
-        relation.visit_mut_pre(&mut |e| {
+    ) {
+        relation.visit_pre_mut(|e| {
             if let MirRelationExpr::Project { input, outputs } = e {
                 if let MirRelationExpr::Get {
                     id: inner_id,
@@ -450,8 +449,7 @@ impl ProjectionPushdown {
             // `Get(get_id)` are required. Thus, the columns returned by
             // `Get(get_id)` will not have changed, so no action
             // is necessary.
-        })?;
-        Ok(())
+        });
     }
 }
 

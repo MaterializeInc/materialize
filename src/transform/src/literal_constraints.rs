@@ -73,7 +73,7 @@ impl LiteralConstraints {
             let orig_mfp = mfp.clone();
 
             // Preparation for the literal constraints detection.
-            Self::inline_literal_constraints(&mut mfp)?;
+            Self::inline_literal_constraints(&mut mfp);
             Self::list_of_predicates_to_and_of_predicates(&mut mfp);
             Self::distribute_and_over_or(&mut mfp)?;
             Self::unary_and(&mut mfp);
@@ -84,7 +84,7 @@ impl LiteralConstraints {
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
                 relation: &MirRelationExpr,
-            ) -> Result<(), RecursionLimitError> {
+            ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
                 LiteralConstraints::canonicalize_predicates(mfp, relation);
@@ -94,12 +94,11 @@ impl LiteralConstraints {
                 // so in those cases we might have a more complicated MFP than the original MFP
                 // (despite the removal of the literal constraints and/or contradicting OR args).
                 // So let's use the simpler one.
-                if LiteralConstraints::predicates_size(orig_mfp)?
-                    < LiteralConstraints::predicates_size(mfp)?
+                if LiteralConstraints::predicates_size(orig_mfp)
+                    < LiteralConstraints::predicates_size(mfp)
                 {
                     *mfp = orig_mfp.clone();
                 }
-                Ok(())
             }
 
             let removed_contradicting_or_args = Self::remove_impossible_or_args(&mut mfp)?;
@@ -114,7 +113,7 @@ impl LiteralConstraints {
                     // We didn't find a usable index, so no chance to remove literal constraints.
                     // But, we might have removed contradicting OR args.
                     if removed_contradicting_or_args {
-                        undo_preparation(&mut mfp, &orig_mfp, relation)?;
+                        undo_preparation(&mut mfp, &orig_mfp, relation);
                     } else {
                         // We didn't remove anything, so let's go with the original MFP.
                         mfp = orig_mfp;
@@ -128,7 +127,7 @@ impl LiteralConstraints {
                     {
                         // We were able to remove the literal constraints or contradicting OR args,
                         // so we would like to use this new MFP, so we try undoing the preparation.
-                        undo_preparation(&mut mfp, &orig_mfp, relation)?;
+                        undo_preparation(&mut mfp, &orig_mfp, relation);
                     } else {
                         // We were not able to remove the literal constraint, so `mfp` is
                         // equivalent to `orig_mfp`, but `orig_mfp` is often simpler (or the same).
@@ -530,22 +529,22 @@ impl LiteralConstraints {
 
     /// Makes the job of [LiteralConstraints::detect_literal_constraints] easier by undoing some CSE to
     /// reconstruct literal constraints.
-    fn inline_literal_constraints(mfp: &mut MapFilterProject) -> Result<(), RecursionLimitError> {
+    fn inline_literal_constraints(mfp: &mut MapFilterProject) {
         let mut should_inline = vec![false; mfp.input_arity + mfp.expressions.len()];
         // Mark those expressions for inlining that contain a subexpression of the form
         // `<xxx> = <lit>` or `<lit> = <xxx>`.
         for (i, e) in mfp.expressions.iter().enumerate() {
-            e.visit_post(&mut |s| {
+            e.visit_pre(|s| {
                 if s.any_expr_eq_literal().is_some() {
                     should_inline[i + mfp.input_arity] = true;
                 }
-            })?;
+            });
         }
         // Whenever
         // `<Column(i)> = <lit>` or `<lit> = <Column(i)>`
         // appears in a predicate, mark the ith expression to be inlined.
         for (_before, p) in mfp.predicates.iter() {
-            p.visit_post(&mut |e| {
+            p.visit_pre(|e| {
                 if let MirScalarExpr::CallBinary {
                     func: BinaryFunc::Eq,
                     expr1,
@@ -567,11 +566,10 @@ impl LiteralConstraints {
                         }
                     }
                 }
-            })?;
+            });
         }
         // Perform the marked inlinings.
         mfp.perform_inlining(should_inline);
-        Ok(())
     }
 
     /// MFPs have a Vec of predicates `[p1, p2, ...]`, which logically represents `p1 AND p2 AND ...`.
@@ -636,7 +634,7 @@ impl LiteralConstraints {
         mfp.predicates.iter_mut().try_for_each(|(_, p)| {
             let mut old_p = MirScalarExpr::column(0);
             while old_p != *p {
-                let size = p.size()?;
+                let size = p.size();
                 // We might make the expression exponentially larger, so we should have some limit.
                 // Below 1000 (e.g., a single IN list of ~300 elements, or 3 IN lists of 4-5
                 // elements each), we are <10 ms for a single IN list, and even less for multiple IN
@@ -724,12 +722,12 @@ impl LiteralConstraints {
         }
     }
 
-    fn predicates_size(mfp: &MapFilterProject) -> Result<usize, RecursionLimitError> {
+    fn predicates_size(mfp: &MapFilterProject) -> usize {
         let mut sum = 0;
         for (_, p) in mfp.predicates.iter() {
-            sum = sum + p.size()?;
+            sum = sum + p.size();
         }
-        Ok(sum)
+        sum
     }
 }
 
