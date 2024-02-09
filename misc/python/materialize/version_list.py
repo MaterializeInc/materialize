@@ -98,9 +98,9 @@ def _create_ancestor_image_resolution(
     ancestor_overrides: dict[str, MzVersion]
 ) -> AncestorImageResolutionBase:
     if buildkite.is_in_buildkite():
-        return AncestorImageResolutionLocal(ancestor_overrides)
-    else:
         return AncestorImageResolutionInBuildkite(ancestor_overrides)
+    else:
+        return AncestorImageResolutionLocal(ancestor_overrides)
 
 
 class AncestorImageResolutionBase:
