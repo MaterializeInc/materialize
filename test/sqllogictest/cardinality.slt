@@ -299,11 +299,11 @@ Explained Query:
             Union
               Negate
                 Project (#0, #1)
-                  Join on=(#2 = least(#0, #1) AND #3 = greatest(#0, #1)) type=differential
+                  Join on=(#2 = greatest(#0, #1) AND #3 = least(#0, #1)) type=differential
                     ArrangeBy keys=[[greatest(#0, #1), least(#0, #1)]]
                       Get l0
-                    ArrangeBy keys=[[#1, #0]]
-                      Distinct project=[least(#0, #1), greatest(#0, #1)]
+                    ArrangeBy keys=[[#0, #1]]
+                      Distinct project=[greatest(#0, #1), least(#0, #1)]
                         Get l1
               Get l0
               Get l1
@@ -413,11 +413,11 @@ Explained Query:
             Union
               Negate
                 Project (#0, #1)
-                  Join on=(#2 = least(#0, #1) AND #3 = greatest(#0, #1)) type=differential
+                  Join on=(#2 = greatest(#0, #1) AND #3 = least(#0, #1)) type=differential
                     ArrangeBy keys=[[greatest(#0, #1), least(#0, #1)]]
                       Get l0
-                    ArrangeBy keys=[[#1, #0]]
-                      Distinct project=[least(#0, #1), greatest(#0, #1)]
+                    ArrangeBy keys=[[#0, #1]]
+                      Distinct project=[greatest(#0, #1), least(#0, #1)]
                         Get l1
               Get l0
               Get l1
