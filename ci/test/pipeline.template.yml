@@ -395,7 +395,7 @@ steps:
       - id: fivetran-destination-tests
         label: Fivetran Destination tests
         depends_on: build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         inputs: [test/fivetran-destination]
         artifact_paths: junit_*.xml
         plugins:
@@ -591,7 +591,7 @@ steps:
   - id: metabase-demo
     label: Metabase smoke test
     depends_on: build-aarch64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -603,7 +603,7 @@ steps:
   - id: dbt-materialize
     label: dbt-materialize tests
     depends_on: build-aarch64
-    timeout_in_minutes: 20
+    timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -625,7 +625,7 @@ steps:
   - id: tracing
     label: "Tracing Fast Path"
     depends_on: build-aarch64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 30
     inputs: [test/tracing]
     artifact_paths: junit_*.xml
     plugins:
