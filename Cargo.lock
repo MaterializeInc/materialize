@@ -3435,7 +3435,7 @@ dependencies = [
 [[package]]
 name = "mysql_async"
 version = "0.33.0"
-source = "git+https://github.com/MaterializeInc/mysql_async.git?rev=ecc4908e7c98ce1050fc536739c41ec444d03349#ecc4908e7c98ce1050fc536739c41ec444d03349"
+source = "git+https://github.com/MaterializeInc/mysql_async.git?rev=5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc#5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc"
 dependencies = [
  "bytes",
  "crossbeam",
