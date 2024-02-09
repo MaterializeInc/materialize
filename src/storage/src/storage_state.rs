@@ -115,7 +115,7 @@ use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
 };
 use crate::metrics::StorageMetrics;
-use crate::statistics::{SinkStatistics, SourceStatistics};
+use crate::statistics::{AggregatedStatistics, SinkStatistics, SourceStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
 pub mod async_storage_worker;
@@ -217,8 +217,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             sink_write_frontiers: BTreeMap::new(),
             sink_handles: BTreeMap::new(),
             dropped_ids: BTreeSet::new(),
-            source_statistics: BTreeMap::new(),
-            sink_statistics: BTreeMap::new(),
+            aggregated_statistics: AggregatedStatistics::new(
+                timely_worker.index(),
+                timely_worker.peers(),
+            ),
             object_status_updates: Default::default(),
             internal_cmd_tx: command_sequencer,
             async_worker,
@@ -289,11 +291,8 @@ pub struct StorageState {
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: BTreeSet<GlobalId>,
 
-    /// Stats objects shared with operators to allow them to update the metrics
-    /// we report in `StatisticsUpdates` responses.
-    pub source_statistics: BTreeMap<GlobalId, SourceStatistics>,
-    /// The same as `source_statistics`, but for sinks.
-    pub sink_statistics: BTreeMap<GlobalId, SinkStatistics>,
+    /// Statistics for sources and sinks.
+    pub aggregated_statistics: AggregatedStatistics,
 
     /// Status updates reported by health operators.
     ///
@@ -544,7 +543,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         .parameters
                         .statistics_collection_interval
             {
-                self.report_storage_statistics(&response_tx);
+                let mut internal_cmd_tx = command_sequencer.borrow_mut();
+                self.report_storage_statistics(&response_tx, &mut *internal_cmd_tx);
                 last_stats_time = Some(Instant::now());
             }
 
@@ -656,9 +656,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 if let Some(ingestion_description) = maybe_ingestion {
                     // Yank the token of the previously existing source dataflow.Note that this
                     // token also includes any source exports/subsources.
-
                     let maybe_token = self.storage_state.source_tokens.remove(&id);
-
                     if maybe_token.is_none() {
                         // Something has dropped the source. Make sure we don't
                         // accidentally re-create it.
@@ -678,6 +676,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // putting undue pressure on worker 0 we can pick the
                     // designated worker for a source/sink based on `id.hash()`.
                     if self.timely_worker.index() == 0 {
+                        for (id, _) in ingestion_description.source_exports.iter() {
+                            self.storage_state
+                                .aggregated_statistics
+                                .advance_global_epoch(*id);
+                        }
                         async_worker.update_frontiers(id, ingestion_description);
                     }
 
@@ -701,6 +704,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // the internal command fabric, to ensure consistent
                     // ordering of dataflow rendering across all workers.
                     if self.timely_worker.index() == 0 {
+                        self.storage_state
+                            .aggregated_statistics
+                            .advance_global_epoch(id);
                         internal_cmd_tx.broadcast(InternalStorageCommand::RunSinkDataflow(
                             id,
                             sink_description,
@@ -742,18 +748,19 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
-                    let stats = SourceStatistics::new(
-                        *export_id,
-                        self.storage_state.timely_worker_index,
-                        &self.storage_state.metrics.source_statistics,
-                        ingestion_id,
-                        &export.storage_metadata.data_shard,
-                        ingestion_description.desc.envelope.clone(),
-                        resume_uppers[export_id].clone(),
-                    );
                     self.storage_state
-                        .source_statistics
-                        .insert(*export_id, stats);
+                        .aggregated_statistics
+                        .initialize_source(*export_id, || {
+                            SourceStatistics::new(
+                                *export_id,
+                                self.storage_state.timely_worker_index,
+                                &self.storage_state.metrics.source_statistics,
+                                ingestion_id,
+                                &export.storage_metadata.data_shard,
+                                ingestion_description.desc.envelope.clone(),
+                                resume_uppers[export_id].clone(),
+                            )
+                        });
                 }
 
                 for id in ingestion_description.subsource_ids() {
@@ -825,12 +832,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     sink_write_frontier.clear();
                     sink_write_frontier.insert(mz_repr::Timestamp::minimum());
                 }
-                let stats = SinkStatistics::new(
-                    sink_id,
-                    self.storage_state.timely_worker_index,
-                    &self.storage_state.metrics.sink_statistics,
-                );
-                self.storage_state.sink_statistics.insert(sink_id, stats);
+                self.storage_state
+                    .aggregated_statistics
+                    .initialize_sink(sink_id, || {
+                        SinkStatistics::new(
+                            sink_id,
+                            self.storage_state.timely_worker_index,
+                            &self.storage_state.metrics.sink_statistics,
+                        )
+                    });
 
                 crate::render::build_export_dataflow(
                     self.timely_worker,
@@ -844,16 +854,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // Clean up per-source / per-sink state.
                     self.storage_state.source_uppers.remove(id);
                     self.storage_state.source_tokens.remove(id);
-                    self.storage_state.source_statistics.remove(id);
 
                     self.storage_state.sink_tokens.remove(id);
 
-                    // The actual prometheus metrics and other state will be dropped
-                    // when the dataflow shuts down and drop's its `Rc`'s to the stats
-                    // objects. Also, these are always cloned during rendering,
-                    // but not inside dataflows, so we don't have TOCTOU issue here!
-                    self.storage_state.source_statistics.remove(id);
-                    self.storage_state.sink_statistics.remove(id);
+                    self.storage_state.aggregated_statistics.deinitialize(*id);
                 }
             }
             InternalStorageCommand::UpdateConfiguration { storage_parameters } => {
@@ -864,6 +868,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     .storage_configuration
                     .update(storage_parameters);
             }
+            InternalStorageCommand::StatisticsUpdate { sources, sinks } => self
+                .storage_state
+                .aggregated_statistics
+                .ingest(sources, sinks),
         }
     }
 
@@ -910,25 +918,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     /// Report source statistics back to the controller.
-    pub fn report_storage_statistics(&mut self, response_tx: &ResponseSender) {
-        // Check if any observed frontier should advance the reported frontiers.
-        let mut source_stats = vec![];
-        let mut sink_stats = vec![];
-        for (_, stats) in self.storage_state.source_statistics.iter() {
-            if let Some(snapshot) = stats.snapshot() {
-                source_stats.push(snapshot);
-            }
-        }
-        for (_, stats) in self.storage_state.sink_statistics.iter() {
-            if let Some(snapshot) = stats.snapshot() {
-                sink_stats.push(snapshot);
-            }
+    pub fn report_storage_statistics(
+        &mut self,
+        response_tx: &ResponseSender,
+        internal_cmd_tx: &mut dyn InternalCommandSender,
+    ) {
+        let (sources, sinks) = self.storage_state.aggregated_statistics.emit_local();
+        if !sources.is_empty() || !sinks.is_empty() {
+            internal_cmd_tx.broadcast(InternalStorageCommand::StatisticsUpdate { sources, sinks })
         }
 
-        if !source_stats.is_empty() || !sink_stats.is_empty() {
+        let (sources, sinks) = self.storage_state.aggregated_statistics.snapshot();
+        if !sources.is_empty() || !sinks.is_empty() {
             self.send_storage_response(
                 response_tx,
-                StorageResponse::StatisticsUpdates(source_stats, sink_stats),
+                StorageResponse::StatisticsUpdates(sources, sinks),
             );
         }
     }

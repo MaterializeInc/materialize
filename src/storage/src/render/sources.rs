@@ -109,8 +109,8 @@ where
         storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
         source_statistics: storage_state
-            .source_statistics
-            .get(&id)
+            .aggregated_statistics
+            .get_source(&id)
             .expect("statistics initialized")
             .clone(),
         shared_remap_upper: Rc::clone(
