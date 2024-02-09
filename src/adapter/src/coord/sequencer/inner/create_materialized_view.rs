@@ -336,25 +336,15 @@ impl Coordinator {
                         None
                     };
 
-                    let _span_guard =
-                        tracing::debug_span!(target: "optimizer", "optimize").entered();
-
                     let raw_expr = plan.materialized_view.expr.clone();
 
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                     let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                    let global_mir_plan =
-                        optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
-
+                    let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
                     // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan =
-                        optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                    let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                    Ok((
-                        local_mir_plan,
-                        global_mir_plan,
-                        global_lir_plan,
-                    ))
+                    Ok((local_mir_plan, global_mir_plan, global_lir_plan))
                 };
 
                 let stage = match pipeline() {

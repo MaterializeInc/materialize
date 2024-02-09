@@ -284,8 +284,6 @@ impl Coordinator {
                         None
                     };
 
-                    let _span_guard = tracing::debug_span!(target: "optimizer", "optimize").entered();
-
                     let index_plan =
                         optimize::index::Index::new(&plan.name, &plan.index.on, &plan.index.keys);
 

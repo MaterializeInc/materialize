@@ -555,9 +555,6 @@ impl Coordinator {
                         None
                     };
 
-                    let _span_guard =
-                        tracing::debug_span!(target: "optimizer", "optimize").entered();
-
                     let raw_expr = plan.source.clone();
 
                     match optimizer.as_mut() {

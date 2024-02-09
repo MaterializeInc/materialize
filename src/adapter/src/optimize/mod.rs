@@ -115,6 +115,7 @@ where
     /// Like [`Self::optimize`], but additionally ensures that panics occurring
     /// in the [`Self::optimize`] call are caught and demoted to an
     /// [`OptimizerError::Internal`] error.
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
             Ok(result) => {
