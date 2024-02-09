@@ -26,9 +26,9 @@ use mz_storage_types::connections::Connection;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::{Optimizer as TransformOptimizer, StatisticsOracle};
+use mz_transform::StatisticsOracle;
 use timely::progress::Antichain;
-use tracing::{span, warn, Level};
+use tracing::warn;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
@@ -36,8 +36,8 @@ use crate::optimize::dataflows::{
     ExprPrepStyle,
 };
 use crate::optimize::{
-    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
-    OptimizerConfig, OptimizerError,
+    optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
+    OptimizeMode, OptimizerConfig, OptimizerError,
 };
 use crate::session::Session;
 use crate::TimestampContext;
@@ -155,16 +155,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
-            #[allow(deprecated)]
-            let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
-            let expr = optimizer.optimize(expr)?.into_inner();
-
-            // Trace the result of this phase.
-            trace_plan(&expr);
-
-            Ok::<_, OptimizerError>(expr)
-        })?;
+        let expr = optimize_mir_local(expr, &self.typecheck_ctx)?.into_inner();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
