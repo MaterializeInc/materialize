@@ -134,3 +134,34 @@ Source materialize.public.x
   filter=((#1) IS NOT NULL)
 
 EOF
+
+# Confirm that canonicalization of Reduce allows cancelation.
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+SELECT f0, f1, count(*) FROM x GROUP BY f0, f1
+EXCEPT ALL
+SELECT f0, f1, count(*) FROM x GROUP BY f1, f0;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+EOF
+
+# Confirm that canonicalization of Reduce allows re-use.
+query T multiline
+EXPLAIN WITH(arity, join_impls, keys)
+SELECT f0, f1, count(*) FROM x GROUP BY f0, f1
+UNION ALL
+SELECT f0, f1, count(*) FROM x GROUP BY f1, f0;
+----
+Explained Query:
+  Return // { arity: 3, keys: "()" }
+    Union // { arity: 3, keys: "()" }
+      Get l0 // { arity: 3, keys: "([0, 1])" }
+      Get l0 // { arity: 3, keys: "([0, 1])" }
+  With
+    cte l0 =
+      Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3, keys: "([0, 1])" }
+        ReadStorage materialize.public.x // { arity: 2, keys: "()" }
+
+EOF
