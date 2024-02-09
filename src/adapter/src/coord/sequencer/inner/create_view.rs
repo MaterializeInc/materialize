@@ -9,23 +9,50 @@
 
 use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::RelationDesc;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan::{self};
-use tracing::instrument;
+use tracing::{instrument, Span};
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
-    Coordinator, CreateViewFinish, CreateViewOptimize, CreateViewStage, CreateViewValidate,
-    Message, PlanValidity,
+    Coordinator, CreateViewFinish, CreateViewOptimize, CreateViewStage, Message, PlanValidity,
+    StageResult, Staged,
 };
 use crate::error::AdapterError;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext};
+
+impl Staged for CreateViewStage {
+    fn validity(&mut self) -> &mut PlanValidity {
+        match self {
+            Self::Optimize(stage) => &mut stage.validity,
+            Self::Finish(stage) => &mut stage.validity,
+        }
+    }
+
+    async fn stage(
+        self,
+        coord: &mut Coordinator,
+        session: &Session,
+    ) -> Result<StageResult<Box<Self>>, AdapterError> {
+        match self {
+            CreateViewStage::Optimize(stage) => coord.create_view_optimize(stage).await,
+            CreateViewStage::Finish(stage) => coord.create_view_finish(session, stage).await,
+        }
+    }
+
+    fn message(self, ctx: ExecuteContext, span: Span) -> Message {
+        Message::CreateViewStageReady {
+            ctx,
+            span,
+            stage: self,
+        }
+    }
+}
 
 impl Coordinator {
     pub(crate) async fn sequence_create_view(
@@ -34,56 +61,20 @@ impl Coordinator {
         plan: plan::CreateViewPlan,
         resolved_ids: ResolvedIds,
     ) {
-        self.sequence_create_view_stage(
-            ctx,
-            CreateViewStage::Validate(CreateViewValidate { plan, resolved_ids }),
-            OpenTelemetryContext::obtain(),
-        )
-        .await;
-    }
-
-    /// Processes as many `create view` stages as possible.
-    #[instrument(skip_all)]
-    pub(crate) async fn sequence_create_view_stage(
-        &mut self,
-        mut ctx: ExecuteContext,
-        mut stage: CreateViewStage,
-        otel_ctx: OpenTelemetryContext,
-    ) {
-        use CreateViewStage::*;
-
-        // Process the current stage and allow for processing the next.
-        loop {
-            // Always verify plan validity. This is cheap, and prevents programming errors
-            // if we move any stages off thread.
-            if let Some(validity) = stage.validity() {
-                return_if_err!(validity.check(self.catalog()), ctx);
-            }
-
-            (ctx, stage) = match stage {
-                Validate(stage) => {
-                    let next = return_if_err!(self.create_view_validate(ctx.session(), stage), ctx);
-                    (ctx, CreateViewStage::Optimize(next))
-                }
-                Optimize(stage) => {
-                    self.create_view_optimize(ctx, stage, otel_ctx).await;
-                    return;
-                }
-                Finish(stage) => {
-                    let result = self.create_view_finish(&mut ctx, stage).await;
-                    ctx.retire(result);
-                    return;
-                }
-            }
-        }
+        let stage = return_if_err!(
+            self.create_view_validate(ctx.session(), plan, resolved_ids),
+            ctx
+        );
+        self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
     #[instrument(skip_all)]
     fn create_view_validate(
         &mut self,
         session: &Session,
-        CreateViewValidate { plan, resolved_ids }: CreateViewValidate,
-    ) -> Result<CreateViewOptimize, AdapterError> {
+        plan: plan::CreateViewPlan,
+        resolved_ids: ResolvedIds,
+    ) -> Result<CreateViewStage, AdapterError> {
         let plan::CreateViewPlan {
             view: plan::View { expr, .. },
             ambiguous_columns,
@@ -106,68 +97,53 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        Ok(CreateViewOptimize {
+        Ok(CreateViewStage::Optimize(CreateViewOptimize {
             validity,
             plan,
             resolved_ids,
-        })
+        }))
     }
 
     #[instrument(skip_all)]
     async fn create_view_optimize(
         &mut self,
-        ctx: ExecuteContext,
         CreateViewOptimize {
             validity,
             plan,
             resolved_ids,
         }: CreateViewOptimize,
-        otel_ctx: OpenTelemetryContext,
-    ) {
-        // Generate data structures that can be moved to another task where we will perform possibly
-        // expensive optimizations.
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-
-        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+    ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        let id = self.catalog_mut().allocate_user_id().await?;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        // Build an optimizer for this VIEW.
-        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
-
-        let span = tracing::debug_span!("optimize create view task");
-
-        mz_ore::task::spawn_blocking(
+        let span = Span::current();
+        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create view",
             move || {
-                let _guard = span.enter();
-
-                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                let raw_expr = plan.view.expr.clone();
-                let optimized_expr = return_if_err!(optimizer.catch_unwind_optimize(raw_expr), ctx);
-
-                let stage = CreateViewStage::Finish(CreateViewFinish {
-                    validity,
-                    id,
-                    plan,
-                    optimized_expr,
-                    resolved_ids,
-                });
-
-                let _ = internal_cmd_tx.send(Message::CreateViewStageReady {
-                    ctx,
-                    otel_ctx,
-                    stage,
-                });
+                span.in_scope(|| {
+                    // Build an optimizer for this VIEW.
+                    let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                    let raw_expr = plan.view.expr.clone();
+                    let optimized_expr = optimizer.catch_unwind_optimize(raw_expr)?;
+                    Ok(Box::new(CreateViewStage::Finish(CreateViewFinish {
+                        validity,
+                        id,
+                        plan,
+                        optimized_expr,
+                        resolved_ids,
+                    })))
+                })
             },
-        );
+        )))
     }
 
     #[instrument(skip_all)]
     async fn create_view_finish(
         &mut self,
-        ctx: &mut ExecuteContext,
+        session: &Session,
         CreateViewFinish {
             id,
             plan:
@@ -188,7 +164,7 @@ impl Coordinator {
             resolved_ids,
             ..
         }: CreateViewFinish,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
         let ops = itertools::chain(
             drop_ids
                 .iter()
@@ -203,29 +179,28 @@ impl Coordinator {
                     desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
                     optimized_expr,
                     conn_id: if temporary {
-                        Some(ctx.session().conn_id().clone())
+                        Some(session.conn_id().clone())
                     } else {
                         None
                     },
                     resolved_ids: resolved_ids.clone(),
                 }),
-                owner_id: *ctx.session().current_role_id(),
+                owner_id: *session.current_role_id(),
             }),
         )
         .collect::<Vec<_>>();
 
-        match self.catalog_transact(Some(ctx.session()), ops).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedView),
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
-                ctx.session()
-                    .add_notice(AdapterNotice::ObjectAlreadyExists {
-                        name: name.item,
-                        ty: "view",
-                    });
-                Ok(ExecuteResponse::CreatedView)
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "view",
+                });
+                Ok(StageResult::Response(ExecuteResponse::CreatedView))
             }
             Err(err) => Err(err),
         }
