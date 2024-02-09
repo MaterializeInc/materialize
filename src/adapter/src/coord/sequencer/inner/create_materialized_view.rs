@@ -12,11 +12,14 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::CollectionPlan;
+use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan;
+use mz_sql_parser::ast;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
 use tracing::{instrument, Span};
@@ -394,7 +397,7 @@ impl Coordinator {
                     name,
                     materialized_view:
                         plan::MaterializedView {
-                            create_sql,
+                            mut create_sql,
                             expr: raw_expr,
                             cluster_id,
                             non_null_assertions,
@@ -417,6 +420,20 @@ impl Coordinator {
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
         let (as_of, until) = self.select_timestamps(id_bundle, refresh_schedule.as_ref())?;
 
+        // Update the `create_sql` with the selected `as_of`. This is how we make sure the `as_of`
+        // is persisted to the catalog and can be relied on during bootstrapping.
+        if let Some(as_of_ts) = as_of.as_option() {
+            let stmt = mz_sql::parse::parse(&create_sql)
+                .expect("create_sql is valid")
+                .into_element()
+                .ast;
+            let ast::Statement::CreateMaterializedView(mut stmt) = stmt else {
+                panic!("unexpected statement type");
+            };
+            stmt.as_of = Some(as_of_ts.into());
+            create_sql = stmt.to_ast_string_stable();
+        }
+
         let ops = itertools::chain(
             drop_ids
                 .into_iter()
@@ -435,6 +452,7 @@ impl Coordinator {
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule,
+                    initial_as_of: Some(as_of.clone()),
                 }),
                 owner_id: *session.current_role_id(),
             }),
