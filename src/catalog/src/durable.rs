@@ -101,9 +101,11 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Will return an error in the following scenarios:
     ///   - Catalog initialization fails.
     ///   - Catalog migrations fail.
+    ///
+    /// `initial_ts` is used as the initial timestamp for new environments.
     async fn open_savepoint(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
@@ -116,7 +118,6 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// it will fail to open in read only mode.
     async fn open_read_only(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
@@ -124,11 +125,12 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// catalog, if it has not been initialized, and perform any migrations
     /// needed.
     ///
+    /// `initial_ts` is used as the initial timestamp for new environments.
     /// `epoch_lower_bound` is used as a lower bound for the epoch that is used by the returned
     /// catalog.
     async fn open(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,

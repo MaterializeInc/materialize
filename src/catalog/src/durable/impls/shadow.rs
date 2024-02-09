@@ -80,19 +80,19 @@ where
 {
     async fn open_savepoint(
         self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         let stash = self.stash.open_savepoint(
-            boot_ts.clone(),
+            initial_ts.clone(),
             bootstrap_args,
             deploy_generation.clone(),
             epoch_lower_bound,
         );
         let persist = self.persist.open_savepoint(
-            boot_ts,
+            initial_ts,
             bootstrap_args,
             deploy_generation,
             epoch_lower_bound,
@@ -110,11 +110,10 @@ where
 
     async fn open_read_only(
         self: Box<Self>,
-        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        let stash = self.stash.open_read_only(boot_ts.clone(), bootstrap_args);
-        let persist = self.persist.open_read_only(boot_ts, bootstrap_args);
+        let stash = self.stash.open_read_only(bootstrap_args);
+        let persist = self.persist.open_read_only(bootstrap_args);
         let (stash, persist) = futures::future::join(stash, persist).await;
         soft_assert_eq_or_log!(
             stash.is_ok(),
@@ -128,19 +127,19 @@ where
 
     async fn open(
         self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         let stash = self.stash.open(
-            boot_ts.clone(),
+            initial_ts.clone(),
             bootstrap_args,
             deploy_generation.clone(),
             epoch_lower_bound,
         );
         let persist = self.persist.open(
-            boot_ts,
+            initial_ts,
             bootstrap_args,
             deploy_generation,
             epoch_lower_bound,

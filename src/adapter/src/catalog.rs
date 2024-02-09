@@ -615,7 +615,7 @@ impl Catalog {
             stash_config,
         ));
         let storage = openable_storage
-            .open_read_only(now(), &test_bootstrap_args())
+            .open_read_only(&test_bootstrap_args())
             .await?;
         Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
@@ -637,7 +637,7 @@ impl Catalog {
             .await,
         );
         let storage = openable_storage
-            .open_read_only(now(), &test_bootstrap_args())
+            .open_read_only(&test_bootstrap_args())
             .await?;
         Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
     }
@@ -661,7 +661,7 @@ impl Catalog {
             .await,
         );
         let storage = openable_storage
-            .open_read_only(now(), &test_bootstrap_args())
+            .open_read_only(&test_bootstrap_args())
             .await?;
         Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
     }

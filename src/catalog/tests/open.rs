@@ -361,7 +361,7 @@ async fn test_open_read_only(
 ) {
     // Can't open a read-only catalog until it's been initialized.
     let err = Box::new(openable_state1)
-        .open_read_only(SYSTEM_TIME(), &test_bootstrap_args())
+        .open_read_only(&test_bootstrap_args())
         .await
         .unwrap_err();
     match err {
@@ -377,7 +377,7 @@ async fn test_open_read_only(
     assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
 
     let mut read_only_state = Box::new(openable_state3)
-        .open_read_only(SYSTEM_TIME(), &test_bootstrap_args())
+        .open_read_only(&test_bootstrap_args())
         .await
         .unwrap();
     // Read-only catalogs do not increment the epoch.
