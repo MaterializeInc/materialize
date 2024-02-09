@@ -514,7 +514,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_optimize(
         &mut self,
-        mut ctx: ExecuteContext,
+        ctx: ExecuteContext,
         root_otel_ctx: OpenTelemetryContext,
         PeekStageOptimize {
             validity,
@@ -576,10 +576,9 @@ impl Coordinator {
                         Either::Right(optimizer) => {
                             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                            let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, ctx.session(), stats);
                             let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
                             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                            let global_mir_plan = global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut())?;
                             let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
                             Ok(Either::Right(global_lir_plan))
