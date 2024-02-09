@@ -563,23 +563,23 @@ impl Coordinator {
                     match optimizer.as_mut() {
                         // Optimize SELECT statement.
                         Either::Left(optimizer) => {
-                            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                            // HIR ⇒ MIR lowering and MIR optimization (local)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                            // Attach resolved context required to continue the pipeline.
                             let local_mir_plan = local_mir_plan.resolve(timestamp_context, ctx.session(), stats);
-                            let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
-                            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                            let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
+                            // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                            let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
                             Ok(Either::Left(global_lir_plan))
                         }
                         // Optimize COPY TO statement.
                         Either::Right(optimizer) => {
-                            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                            // HIR ⇒ MIR lowering and MIR optimization (local and global)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                            // Attach resolved context required to continue the pipeline.
                             let local_mir_plan = local_mir_plan.resolve(timestamp_context, ctx.session(), stats);
-                            let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
-                            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                            let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
+                            // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                            let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
                             Ok(Either::Right(global_lir_plan))
                         }

@@ -67,7 +67,7 @@ impl std::fmt::Debug for Optimizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Optimizer")
             .field("config", &self.config)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

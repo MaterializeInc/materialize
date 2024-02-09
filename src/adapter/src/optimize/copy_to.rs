@@ -106,7 +106,7 @@ impl Debug for Optimizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OptimizePeek")
             .field("config", &self.config)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -130,20 +130,14 @@ pub struct Resolved<'s> {
     session: &'s Session,
 }
 
-/// The (sealed intermediate) result after:
+/// The (final) result after
 ///
-/// 1. embedding a [`LocalMirPlan`] into a [`MirDataflowDescription`],
+/// 1. embedding a [`LocalMirPlan`] into a `DataflowDescription`,
 /// 2. transitively inlining referenced views,
-/// 3. timestamp resolution, and
-/// 4. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
-#[derive(Clone)]
-pub struct GlobalMirPlan {
-    df_desc: MirDataflowDescription,
-    df_meta: DataflowMetainfo,
-}
-
-/// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
-/// `DataflowDescription` with `LIR` plans.
+/// 3. timestamp resolution,
+/// 4. optimizing the resulting `DataflowDescription` with `MIR` plans.
+/// 5. MIR ⇒ LIR lowering, and
+/// 6. optimizing the resulting `DataflowDescription` with `LIR` plans.
 #[derive(Debug)]
 pub struct GlobalLirPlan {
     df_desc: LirDataflowDescription,
@@ -201,7 +195,7 @@ impl LocalMirPlan<Unresolved> {
 }
 
 impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
-    type To = GlobalMirPlan;
+    type To = GlobalLirPlan;
 
     fn optimize(&mut self, plan: LocalMirPlan<Resolved<'s>>) -> Result<Self::To, OptimizerError> {
         let LocalMirPlan {
@@ -305,20 +299,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             // Collect the list of indexes used by the dataflow at this point.
             trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
         }
-
-        // Return the (sealed) plan at the end of this optimization step.
-        Ok(GlobalMirPlan { df_desc, df_meta })
-    }
-}
-
-impl Optimize<GlobalMirPlan> for Optimizer {
-    type To = GlobalLirPlan;
-
-    fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {
-        let GlobalMirPlan {
-            mut df_desc,
-            df_meta,
-        } = plan;
 
         // Get the single timestamp representing the `as_of` time.
         let as_of = df_desc
