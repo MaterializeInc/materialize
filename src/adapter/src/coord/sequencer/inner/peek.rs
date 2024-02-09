@@ -565,10 +565,9 @@ impl Coordinator {
                         Either::Left(optimizer) => {
                             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                            let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, ctx.session(), stats);
                             let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
                             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                            let global_mir_plan = global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
                             let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
                             Ok(Either::Left(global_lir_plan))
