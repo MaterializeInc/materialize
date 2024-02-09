@@ -166,11 +166,10 @@ impl Coordinator {
                 }
                 Message::CreateViewStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_create_view_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_create_view_stage(ctx, stage, span).await;
                 }
                 Message::CreateMaterializedViewStageReady {
                     ctx,

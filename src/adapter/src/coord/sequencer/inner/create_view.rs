@@ -9,12 +9,11 @@
 
 use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::RelationDesc;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan::{self};
-use tracing::instrument;
+use tracing::{instrument, Instrument, Span};
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -37,18 +36,17 @@ impl Coordinator {
         self.sequence_create_view_stage(
             ctx,
             CreateViewStage::Validate(CreateViewValidate { plan, resolved_ids }),
-            OpenTelemetryContext::obtain(),
+            Span::current(),
         )
         .await;
     }
 
     /// Processes as many `create view` stages as possible.
-    #[instrument(skip_all)]
     pub(crate) async fn sequence_create_view_stage(
         &mut self,
         mut ctx: ExecuteContext,
         mut stage: CreateViewStage,
-        otel_ctx: OpenTelemetryContext,
+        mut span: Span,
     ) {
         use CreateViewStage::*;
 
@@ -60,17 +58,23 @@ impl Coordinator {
                 return_if_err!(validity.check(self.catalog()), ctx);
             }
 
-            (ctx, stage) = match stage {
+            (ctx, stage, span) = match stage {
                 Validate(stage) => {
+                    let span = span.entered();
                     let next = return_if_err!(self.create_view_validate(ctx.session(), stage), ctx);
-                    (ctx, CreateViewStage::Optimize(next))
+                    (ctx, CreateViewStage::Optimize(next), span.exit())
                 }
                 Optimize(stage) => {
-                    self.create_view_optimize(ctx, stage, otel_ctx).await;
+                    self.create_view_optimize(ctx, stage, span.clone())
+                        .instrument(span)
+                        .await;
                     return;
                 }
                 Finish(stage) => {
-                    let result = self.create_view_finish(&mut ctx, stage).await;
+                    let result = self
+                        .create_view_finish(&mut ctx, stage)
+                        .instrument(span)
+                        .await;
                     ctx.retire(result);
                     return;
                 }
@@ -122,7 +126,7 @@ impl Coordinator {
             plan,
             resolved_ids,
         }: CreateViewOptimize,
-        otel_ctx: OpenTelemetryContext,
+        parent_span: Span,
     ) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -136,13 +140,11 @@ impl Coordinator {
         // Build an optimizer for this VIEW.
         let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
-        let span = tracing::debug_span!("optimize create view task");
-
+        let span = Span::current();
         mz_ore::task::spawn_blocking(
             || "optimize create view",
             move || {
                 let _guard = span.enter();
-
                 // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                 let raw_expr = plan.view.expr.clone();
                 let optimized_expr = return_if_err!(optimizer.catch_unwind_optimize(raw_expr), ctx);
@@ -157,8 +159,8 @@ impl Coordinator {
 
                 let _ = internal_cmd_tx.send(Message::CreateViewStageReady {
                     ctx,
-                    otel_ctx,
                     stage,
+                    span: parent_span,
                 });
             },
         );

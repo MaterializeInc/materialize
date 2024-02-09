@@ -251,7 +251,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     CreateViewStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateViewStage,
     },
     CreateMaterializedViewStageReady {
