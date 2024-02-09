@@ -52,7 +52,7 @@ SERVICES = [
         propagate_crashes=False,
         external_cockroach=True,
         # Kills make the shadow catalog not work properly
-        catalog_store="stash",
+        catalog_store="persist",
     ),
     Redpanda(),
     Toxiproxy(),

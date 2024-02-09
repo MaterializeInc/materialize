@@ -94,7 +94,7 @@ SERVICES = [
         external_minio=True,
         sanity_restart=False,
         volumes_extra=["secrets:/share/secrets"],
-        catalog_store="stash",
+        catalog_store="persist",
     ),
     TestdriveService(
         default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
