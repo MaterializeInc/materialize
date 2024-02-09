@@ -50,6 +50,29 @@ pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpErr
         SystemTime::UNIX_EPOCH + Duration::new(secs, nanos)
     };
 
+    let (_dbname, client) = config::connect(request.configuration).await?;
+
+    let exists_stmt = format!(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM mz_tables t
+            LEFT JOIN mz_schemas s
+            ON t.schema_id = s.id
+            WHERE s.name = $1 AND t.name = $2
+        )"#
+    );
+    let exists: bool = client
+        .query_one(&exists_stmt, &[&request.schema_name, &request.table_name])
+        .await
+        .map(|row| row.get(0))
+        .context("checking existence")?;
+
+    // Truncates can happen at any point in time, even if the table hasn't been created yet. We
+    // want to no-op in this case.
+    if !exists {
+        return Ok(());
+    }
+
     let sql = match request.soft {
         None => format!(
             "DELETE FROM {}.{} WHERE {} < $1",
@@ -65,9 +88,11 @@ pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpErr
             escape::escape_identifier(&request.synced_column),
         ),
     };
+    client
+        .execute(&sql, &[&delete_before])
+        .await
+        .context("truncating")?;
 
-    let (_dbname, client) = config::connect(request.configuration).await?;
-    client.execute(&sql, &[&delete_before]).await?;
     Ok(())
 }
 

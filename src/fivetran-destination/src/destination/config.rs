@@ -93,7 +93,7 @@ async fn test_permissions(config: BTreeMap<String, String>) -> Result<(), OpErro
     let (dbname, client) = connect(config).await?;
     let row = client
         .query_one(
-            "SELECT has_database_privilege($1, 'CREATE') AS has_create",
+            "SELECT has_database_privilege($1, 'CREATE') OR mz_is_superuser() AS has_create",
             &[&dbname],
         )
         .await

@@ -11,10 +11,10 @@ use mz_pgrepr::Type;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
 
-use crate::destination::config;
+use crate::destination::{config, FIVETRAN_SYSTEM_COLUMN_DELETE};
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{
-    AlterTableRequest, Column, CreateTableRequest, DescribeTableRequest, Table,
+    AlterTableRequest, Column, CreateTableRequest, DataType, DescribeTableRequest, Table,
 };
 use crate::utils;
 
@@ -102,9 +102,29 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
     let qualified_table_name =
         UnresolvedItemName::qualified(&[schema.clone(), Ident::new(&table.name)?]);
 
+    let mut total_columns = table.columns;
+    // We want to make sure the deleted system column is always provided.
+    //
+    // Note: Instead of creating a map we check existence in the Vec, to retain original order
+    // of the columns from the request.
+    //
+    // TODO(parkmycar): Use an IndexMap here.
+    let contains_delete = total_columns
+        .iter()
+        .any(|col| col.name == FIVETRAN_SYSTEM_COLUMN_DELETE);
+    if !contains_delete {
+        let delete_column = Column {
+            name: FIVETRAN_SYSTEM_COLUMN_DELETE.to_string(),
+            r#type: DataType::Boolean.into(),
+            primary_key: false,
+            decimal: None,
+        };
+        total_columns.push(delete_column);
+    }
+
     let mut defs = vec![];
     let mut primary_key_columns = vec![];
-    for column in table.columns {
+    for column in total_columns {
         let name = escape::escape_identifier(&column.name);
         let mut ty = utils::to_materialize_type(column.r#type())?.to_string();
         if let Some(d) = column.decimal {
@@ -114,7 +134,7 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
         defs.push(format!("{name} {ty}"));
 
         if column.primary_key {
-            primary_key_columns.push(name.clone());
+            primary_key_columns.push(name);
         }
     }
 
@@ -147,6 +167,7 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
 }
 
 #[allow(clippy::unused_async)]
-pub async fn handle_alter_table(_: AlterTableRequest) -> Result<(), OpError> {
-    Err(OpErrorKind::Unsupported("alter_table".to_string()).into())
+pub async fn handle_alter_table(req: AlterTableRequest) -> Result<(), OpError> {
+    let error = format!("alter_table: {req:?}");
+    Err(OpErrorKind::Unsupported(error).into())
 }
