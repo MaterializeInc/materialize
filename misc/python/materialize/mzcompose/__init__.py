@@ -50,6 +50,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_next_listen_batch_retryer_fixed_sleep": "1200ms",
     # -----
     # Persist internals changes: advance coverage
+    "persist_enable_s3_lgalloc_noncc_sizes": "true",
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
     # -----

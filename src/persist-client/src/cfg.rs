@@ -95,6 +95,8 @@ pub struct PersistConfig {
     pub build_version: Version,
     /// Hostname of this persist user. Stored in state and used for debugging.
     pub hostname: String,
+    /// Whether this persist instance is running in a "cc" sized cluster.
+    pub is_cc_active: bool,
     /// A clock to use for all leasing and other non-debugging use.
     pub now: NowFn,
     /// Persist [Config]s that can change value dynamically within the lifetime
@@ -168,6 +170,7 @@ impl PersistConfig {
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         Self {
             build_version: build_info.semver_version(),
+            is_cc_active: false,
             now,
             configs,
             dynamic: Arc::new(DynamicConfig {
@@ -303,6 +306,8 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_EQUALS)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_PREFIX)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
+        .add(&mz_persist::s3::ENABLE_S3_LGALLOC_CC_SIZES)
+        .add(&mz_persist::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
 }
 
 impl PersistConfig {
@@ -541,6 +546,10 @@ impl BlobKnobs for PersistConfig {
 
     fn read_timeout(&self) -> Duration {
         Duration::from_secs(10)
+    }
+
+    fn is_cc_active(&self) -> bool {
+        self.is_cc_active
     }
 }
 

@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_controller_types::{
+    is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
+};
 use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
@@ -5699,8 +5701,4 @@ fn ensure_cluster_is_not_managed(
     } else {
         Ok(())
     }
-}
-
-fn is_cluster_size_v2(size: &str) -> bool {
-    size.ends_with("cc") || size.ends_with('C')
 }
