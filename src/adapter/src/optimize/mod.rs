@@ -215,22 +215,13 @@ pub trait OverrideFrom<T> {
     fn override_from(self, layer: &T) -> Self;
 }
 
-/// Blanket implementation for optional layers.
-impl<S, T> OverrideFrom<Option<T>> for S
-where
-    S: OverrideFrom<T>,
-{
-    fn override_from(self, layer: &Option<T>) -> Self {
-        match layer.as_ref() {
-            Some(layer) => self.override_from(layer),
-            None => self,
-        }
-    }
-}
-
 /// [`OptimizerConfig`] overrides coming from an [`ExplainContext`].
 impl OverrideFrom<ExplainContext> for OptimizerConfig {
     fn override_from(mut self, ctx: &ExplainContext) -> Self {
+        let ExplainContext::Plan(ctx) = ctx else {
+            return self; // Return immediately for all other contexts.
+        };
+
         // Override general parameters.
         self.mode = OptimizeMode::Explain;
         self.replan = ctx.replan;

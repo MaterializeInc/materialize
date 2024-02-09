@@ -38,8 +38,8 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
 };
 use crate::coord::{
-    Coordinator, CopyToContext, ExecuteContext, ExplainContext, Message, PeekStage,
-    PeekStageCopyTo, PeekStageExplain, PeekStageFinish, PeekStageLinearizeTimestamp,
+    Coordinator, CopyToContext, ExecuteContext, ExplainContext, ExplainPlanContext, Message,
+    PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageFinish, PeekStageLinearizeTimestamp,
     PeekStageOptimize, PeekStageRealTimeRecency, PeekStageTimestampReadHold, PeekStageValidate,
     PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
@@ -75,7 +75,7 @@ impl Coordinator {
                 plan,
                 target_cluster,
                 copy_to_ctx: None,
-                explain_ctx: None,
+                explain_ctx: ExplainContext::None,
             }),
         )
         .await;
@@ -133,7 +133,7 @@ impl Coordinator {
                     connection,
                     format_params,
                 }),
-                explain_ctx: None,
+                explain_ctx: ExplainContext::None,
             }),
         )
         .await;
@@ -173,7 +173,7 @@ impl Coordinator {
                 plan,
                 target_cluster,
                 copy_to_ctx: None,
-                explain_ctx: Some(ExplainContext {
+                explain_ctx: ExplainContext::Plan(ExplainPlanContext {
                     broken,
                     config,
                     format,
@@ -251,8 +251,8 @@ impl Coordinator {
                     ctx.retire(result);
                     return;
                 }
-                Explain(stage) => {
-                    let result = self.peek_stage_explain(&mut ctx, stage);
+                ExplainPlan(stage) => {
+                    let result = self.peek_stage_explain_plan(&mut ctx, stage);
                     ctx.retire(result);
                     return;
                 }
@@ -546,14 +546,7 @@ impl Coordinator {
             || "optimize peek",
             move || {
                 let pipeline = || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, AdapterError> {
-                    // In `explain_~` contexts, set the trace-derived dispatch
-                    // as default while optimizing.
-                    let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
-                        let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
-                        Some(tracing::dispatcher::set_default(&dispatch))
-                    } else {
-                        None
-                    };
+                    let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let raw_expr = plan.source.clone();
 
@@ -586,9 +579,9 @@ impl Coordinator {
                 let stage = match pipeline() {
                     Ok(Either::Left(global_lir_plan)) => {
                         let optimizer = optimizer.unwrap_left();
-                        if let Some(explain_ctx) = explain_ctx {
+                        if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                             let (_, df_meta, _) = global_lir_plan.unapply();
-                            PeekStage::Explain(PeekStageExplain {
+                            PeekStage::ExplainPlan(PeekStageExplainPlan {
                                 validity,
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
@@ -624,7 +617,7 @@ impl Coordinator {
                             // execution with the error.
                             return ctx.retire(Err(err.into()));
                         };
-                        let Some(explain_ctx) = explain_ctx else {
+                        let ExplainContext::Plan(explain_ctx) = explain_ctx else {
                             // In `sequence_~` contexts, immediately retire the
                             // execution with the error.
                             return ctx.retire(Err(err.into()));
@@ -635,7 +628,7 @@ impl Coordinator {
                             // and move to the next stage with default
                             // parameters.
                             tracing::error!("error while handling EXPLAIN statement: {}", err);
-                            PeekStage::Explain(PeekStageExplain {
+                            PeekStage::ExplainPlan(PeekStageExplainPlan {
                                 validity,
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
@@ -859,15 +852,15 @@ impl Coordinator {
         )))
     }
 
-    fn peek_stage_explain(
+    fn peek_stage_explain_plan(
         &mut self,
         ctx: &mut ExecuteContext,
-        PeekStageExplain {
+        PeekStageExplainPlan {
             df_meta,
             select_id,
             finishing,
             explain_ctx:
-                ExplainContext {
+                ExplainPlanContext {
                     broken,
                     config,
                     format,
@@ -877,7 +870,7 @@ impl Coordinator {
                     ..
                 },
             ..
-        }: PeekStageExplain,
+        }: PeekStageExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let desc = desc.expect("RelationDesc for SelectPlan in EXPLAIN mode");
 
