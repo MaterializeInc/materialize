@@ -1198,7 +1198,12 @@ impl DurableCatalogState for Connection {
             })
             .await??;
         if let Some(prev) = prev {
-            assert!(next >= prev, "global timestamp must always go up");
+            assert!(
+                next >= prev,
+                "global timestamp must always go up; prev = {:?}, next = {:?}",
+                prev,
+                next
+            );
         }
         Ok(())
     }
