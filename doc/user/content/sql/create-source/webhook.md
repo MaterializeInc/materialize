@@ -44,9 +44,10 @@ Field                  | Type                | Description
 
 |<div style="width:290px">Body format</div> | Type      | Description       |
 --------------------------------------------| --------- |-------------------|
-| Bytes                                     | `bytea`   | Does **no parsing** of the request, and stores the body of a request as it was received. |
-| JSON                                      | `jsonb`   | Parses the body of a request as JSON. If the body is not valid JSON, a response of `400` Bad Request will be returned. |
-| Text                                      | `text`    | Parses the body of a request as `UTF-8` text. If the body is not valid `UTF-8`, a response of `400` Bad Request will be returned. |
+| `BYTES`                                   | `bytea`   | Does **no parsing** of the request, and stores the body of a request as it was received. |
+| `JSON`                                    | `jsonb`   | Parses the body of a request as JSON. If the body is not valid JSON, a response of `400` Bad Request will be returned. |
+| `JSON ARRAY`                              | `jsonb`   | Parses the body of a request as a list of JSON objects, automatically expanding the list of objects to individual rows. Also accepts a single JSON object. If the body is not valid JSON, a response of `400` Bad Request will be returned. |
+| `TEXT`                                    | `text`    | Parses the body of a request as `UTF-8` text. If the body is not valid `UTF-8`, a response of `400` Bad Request will be returned. |
 
 ## Output
 
@@ -254,20 +255,44 @@ function, which enables [temporal filter pushdown](/transform-data/patterns/temp
 ### Handling batch events
 
 The application pushing events to your webhook source may batch multiple events into a single
-HTTP request. You can automatically expand this batch of requests into separate rows, using a
-[`MATERIALIZED VIEW`](/sql/create-materialized-view/) and the [`jsonb_array_elements`](/sql/types/jsonb/#functions)
-function.
+HTTP request. You can automatically expand this batch of requests into separate rows using
+`BODY FORMAT JSON ARRAY`.
 
 ```sql
--- Webhook source that parses request bodies as JSON.
+-- Webhook source that parses request bodies as a JSON array.
 CREATE SOURCE webhook_source_json_batch IN CLUSTER my_cluster FROM WEBHOOK
-  BODY FORMAT JSON
+  BODY FORMAT JSON ARRAY
   INCLUDE HEADERS;
+```
 
--- Materialized view which expands the JSON array into separate rows.
-CREATE MATERIALIZED VIEW expanded_batch_request IN CLUSTER my_compute_cluster AS (
-  SELECT jsonb_array_elements(body), headers FROM webhook_source_json_batch
-);
+If you `POST` a JSON array of three elements to `webhook_source_json_batch`, three rows will get
+appended to the source.
+
+```
+POST webhook_source_json_batch
+[
+  { "event_type": "a" },
+  { "event_type": "b" },
+  { "event_type": "c" }
+]
+
+SELECT COUNT(body) FROM webhook_source_json_batch;
+----
+3
+```
+
+You can also post a single object to the source which will get appended as one row.
+
+```
+POST webhook_source_json_batch
+{ "event_type": "d" }
+
+SELECT body FROM webhook_source_json_batch;
+----
+{ "event_type": "a" }
+{ "event_type": "b" }
+{ "event_type": "c" }
+{ "event_type": "d" }
 ```
 
 ## Request limits
