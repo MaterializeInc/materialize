@@ -386,8 +386,7 @@ pub enum PeekStage {
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
-    OptimizeMir(PeekStageOptimizeMir),
-    OptimizeLir(PeekStageOptimizeLir),
+    Optimize(PeekStageOptimize),
     Finish(PeekStageFinish),
     CopyTo(PeekStageCopyTo),
     Explain(PeekStageExplain),
@@ -400,8 +399,7 @@ impl PeekStage {
             PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::TimestampReadHold(PeekStageTimestampReadHold { validity, .. })
-            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
-            | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. })
             | PeekStage::CopyTo(PeekStageCopyTo { validity, .. })
             | PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
@@ -475,7 +473,7 @@ pub struct PeekStageTimestampReadHold {
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimizeMir {
+pub struct PeekStageOptimize {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
@@ -483,21 +481,6 @@ pub struct PeekStageOptimizeMir {
     target_replica: Option<ReplicaId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimizeLir {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
-    source_ids: BTreeSet<GlobalId>,
-    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-    global_mir_plan: Either<optimize::peek::GlobalMirPlan, optimize::copy_to::GlobalMirPlan>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
     explain_ctx: Option<ExplainContext>,
