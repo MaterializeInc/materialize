@@ -48,7 +48,7 @@ impl ProjectionExtraction {
                 let input_arity = input.arity();
                 let mut outputs: Vec<_> = (0..input_arity).collect();
                 let mut dropped = 0;
-                scalars.retain(|scalar| {
+                scalars.retain_mut(|scalar| {
                     if let MirScalarExpr::Column(col) = scalar {
                         dropped += 1;
                         // We may need to chase down a few levels of indirection;
@@ -56,6 +56,9 @@ impl ProjectionExtraction {
                         outputs.push(outputs[*col]);
                         false // don't retain
                     } else {
+                        // Update any column references in `scalar` to reflect the
+                        // movement of preceding columns.
+                        scalar.permute(&outputs[..]);
                         outputs.push(outputs.len() - dropped);
                         true // retain
                     }
