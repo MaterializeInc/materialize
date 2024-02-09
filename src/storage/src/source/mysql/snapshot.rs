@@ -84,7 +84,7 @@ use crate::metrics::mysql::MySqlSnapshotMetrics;
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 use super::{
-    pack_mysql_row, return_definite_error, validate_mysql_repl_settings, DefiniteError,
+    pack_mysql_row, return_definite_error, table_name, validate_mysql_repl_settings, DefiniteError,
     ReplicationError, RewindRequest, TransientError,
 };
 
@@ -362,6 +362,51 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     }
                 }
 
+                // Verify the schemas of the tables we are snapshotting
+                let cur_schemas: BTreeMap<_, _> = schema_info(
+                    &mut conn,
+                    &SchemaRequest::Tables(
+                        reader_snapshot_table_info
+                            .keys()
+                            .map(|f| (f.0[0].as_str(), f.0[1].as_str()))
+                            .collect(),
+                    ),
+                )
+                .await?
+                .drain(..)
+                .map(|schema| {
+                    (
+                        table_name(&schema.schema_name, &schema.name).unwrap(),
+                        schema,
+                    )
+                })
+                .collect();
+                let mut removed_tables = vec![];
+                for (table, (output_index, table_desc)) in reader_snapshot_table_info.iter() {
+                    if let Err(err) = verify_schema(table, table_desc, &cur_schemas) {
+                        // Put this table into an error state and stop ingesting it
+                        return_definite_error(
+                            err,
+                            &[*output_index],
+                            &mut raw_handle,
+                            data_cap_set,
+                            &mut definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await;
+                        trace!(%id, "timely-{worker_id} stopping snapshot of table {table} \
+                                     due to schema mismatch");
+                        removed_tables.push(table.clone());
+                    }
+                }
+                for table in &removed_tables {
+                    reader_snapshot_table_info.remove(table);
+                }
+                // This worker has nothing else to do
+                if reader_snapshot_table_info.is_empty() {
+                    return Ok(());
+                }
+
                 // We have established a snapshot frontier so we can broadcast the rewind requests
                 for table in reader_snapshot_table_info.keys() {
                     trace!(%id, "timely-{worker_id} producing rewind request for {table}");
@@ -372,19 +417,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     rewinds_handle.give(&rewind_cap_set[0], req).await;
                 }
                 *rewind_cap_set = CapabilitySet::new();
-
-                // Read the schemas of the tables we are snapshotting
-                // TODO: verify the schema matches the expected schema
-                let _ = schema_info(
-                    &mut conn,
-                    &SchemaRequest::Tables(
-                        reader_snapshot_table_info
-                            .keys()
-                            .map(|f| (f.0[0].as_str(), f.0[1].as_str()))
-                            .collect(),
-                    ),
-                )
-                .await?;
 
                 record_table_sizes(
                     &mut conn,
@@ -519,4 +551,27 @@ async fn collect_table_statistics(
     stats.count = count_row;
 
     Ok(stats)
+}
+
+/// Ensures that the specified table is still compatible with the current upstream schema
+/// and that it has not been dropped.
+///
+/// TODO: Implement real compatibility checks and don't error on backwards-compatible
+/// schema changes
+fn verify_schema(
+    table: &UnresolvedItemName,
+    expected_desc: &MySqlTableDesc,
+    upstream_info: &BTreeMap<UnresolvedItemName, MySqlTableDesc>,
+) -> Result<(), DefiniteError> {
+    let current_desc = upstream_info
+        .get(table)
+        .ok_or(DefiniteError::TableDropped)?;
+
+    if current_desc != expected_desc {
+        return Err(DefiniteError::IncompatibleSchema(format!(
+            "expected: {:#?}, actual: {:#?}",
+            expected_desc, current_desc
+        )));
+    }
+    Ok(())
 }
