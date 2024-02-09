@@ -1124,7 +1124,6 @@ async fn execute_stmt<S: ResultSender>(
     let tag = res.tag();
 
     Ok(match res {
-        ExecuteResponse::Canceled => SqlResult::err(client, AdapterError::Canceled).into(),
         ExecuteResponse::CreatedConnection { .. }
         | ExecuteResponse::CreatedDatabase { .. }
         | ExecuteResponse::CreatedSchema { .. }
