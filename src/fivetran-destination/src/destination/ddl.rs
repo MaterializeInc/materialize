@@ -202,7 +202,10 @@ pub async fn handle_alter_table(request: AlterTableRequest) -> Result<(), OpErro
     if columns_match(&request_table, &current_table) {
         Ok(())
     } else {
-        let error = format!("alter_table: {:?}", request_table);
+        let error = format!(
+            "alter_table, request: {:?}, current: {:?}",
+            request_table, current_table
+        );
         Err(OpErrorKind::Unsupported(error).into())
     }
 }
