@@ -265,8 +265,9 @@ where
     // If fast_float returns zero and the input was not an explicitly-specified
     // zero, then we know underflow occurred.
 
-    // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, et al.
-    static ZERO_RE: Lazy<Regex> = Lazy::new(|| Regex::new("(?i-u)^[-+]?0+(\\.0+)?(e|$)").unwrap());
+    // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, 0., .0, et al.
+    static ZERO_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"(?i-u)^[-+]?(0+(\.0*)?|\.0+)(e|$)"#).unwrap());
     // Matches `inf`, `-inf`, `+inf`, `infinity`, et al.
     static INF_RE: Lazy<Regex> = Lazy::new(|| Regex::new("(?i-u)^[-+]?inf").unwrap());
 
