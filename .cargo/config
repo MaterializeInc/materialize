@@ -13,8 +13,9 @@
 # Sync: This target-cpu and list of features should be kept in sync with the ones in ci-builder and
 # xcompile.
 rustflags = [
-    "-C",
-    "link-arg=-Wl,--compress-debug-sections=zlib-gabi",
+    "-Clink-arg=-Wl,--compress-debug-sections=zlib",
+    "-Clink-arg=-Wl,-O2",
+    "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
     "-Ctarget-cpu=x86-64-v3",
     "-Ctarget-feature=+aes",
@@ -31,8 +32,9 @@ rustflags = [
 # xcompile.
 [target."aarch64-unknown-linux-gnu"]
 rustflags = [
-    "-C",
-    "link-arg=-Wl,--compress-debug-sections=zlib-gabi",
+    "-Clink-arg=-Wl,--compress-debug-sections=zlib",
+    "-Clink-arg=-Wl,-O2",
+    "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
     "-Ctarget-cpu=neoverse-n1",
     "-Ctarget-feature=+aes,+sha2",
@@ -43,3 +45,7 @@ rustflags = [
 # Always reserve at least one core so Cargo doesn't pin our CPU
 jobs = -1
 rustflags = ["--cfg=tokio_unstable"]
+
+[profile.ci]
+inherits = "dev"
+debug = "line-tables-only"

@@ -122,6 +122,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "build",
                     "--bin",
                     "clusterd",
+                    "--profile=ci",
                 ],
                 env=env,
             )
@@ -138,6 +139,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "nextest",
                     "run",
                     "--profile=ci",
+                    "--cargo-profile=ci",
                     f"--partition=count:{partition}/{total}",
                     # Most tests don't use 100% of a CPU core, so run two tests per CPU.
                     # TODO(def-): Reenable when #19931 is fixed
