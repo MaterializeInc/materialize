@@ -28,10 +28,12 @@ class PeekPersist(Check):
             for s in [
                 """
                 > INSERT INTO peek_persist VALUES (NULL), (1), (2), (3);
+                > SET statement_timeout = '60s'
                 > UPDATE peek_persist SET f1 = f1 + 1;
             """,
                 """
                 > INSERT INTO peek_persist VALUES (3), (NULL), (1), (2);
+                > SET statement_timeout = '60s'
                 > DELETE FROM peek_persist WHERE f1 = 4;
             """,
             ]
