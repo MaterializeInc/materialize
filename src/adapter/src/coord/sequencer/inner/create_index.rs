@@ -22,7 +22,7 @@ use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateIndexExplain, CreateIndexFinish, CreateIndexOptimize, CreateIndexStage,
-    CreateIndexValidate, ExplainContext, Message, PlanValidity,
+    CreateIndexValidate, ExplainContext, ExplainPlanContext, Message, PlanValidity,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -44,7 +44,7 @@ impl Coordinator {
             CreateIndexStage::Validate(CreateIndexValidate {
                 plan,
                 resolved_ids,
-                explain_ctx: None,
+                explain_ctx: ExplainContext::None,
             }),
             OpenTelemetryContext::obtain(),
         )
@@ -85,7 +85,7 @@ impl Coordinator {
             CreateIndexStage::Validate(CreateIndexValidate {
                 plan,
                 resolved_ids,
-                explain_ctx: Some(ExplainContext {
+                explain_ctx: ExplainContext::Plan(ExplainPlanContext {
                     broken,
                     config,
                     format,
@@ -139,7 +139,7 @@ impl Coordinator {
             CreateIndexStage::Validate(CreateIndexValidate {
                 plan,
                 resolved_ids,
-                explain_ctx: Some(ExplainContext {
+                explain_ctx: ExplainContext::Plan(ExplainPlanContext {
                     broken,
                     config,
                     format,
@@ -252,10 +252,10 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let exported_index_id = if explain_ctx.is_some() {
-            return_if_err!(self.allocate_transient_id(), ctx)
-        } else {
+        let exported_index_id = if let ExplainContext::None = explain_ctx {
             return_if_err!(self.catalog_mut().allocate_user_id().await, ctx)
+        } else {
+            return_if_err!(self.allocate_transient_id(), ctx)
         };
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&explain_ctx);
@@ -275,16 +275,7 @@ impl Coordinator {
                     optimize::index::GlobalMirPlan,
                     optimize::index::GlobalLirPlan,
                 ), AdapterError> {
-                    // In `explain_~` contexts, set the trace-derived dispatch
-                    // as default while optimizing.
-                    let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
-                        let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
-                        Some(tracing::dispatcher::set_default(&dispatch))
-                    } else {
-                        None
-                    };
-
-                    let _span_guard = tracing::debug_span!(target: "optimizer", "optimize").entered();
+                    let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
                         optimize::index::Index::new(&plan.name, &plan.index.on, &plan.index.keys);
@@ -299,7 +290,7 @@ impl Coordinator {
 
                 let stage = match pipeline() {
                     Ok((global_mir_plan, global_lir_plan)) => {
-                        if let Some(explain_ctx) = explain_ctx {
+                        if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                             let (_, df_meta) = global_lir_plan.unapply();
                             CreateIndexStage::Explain(CreateIndexExplain {
                                 validity,
@@ -322,7 +313,7 @@ impl Coordinator {
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
                     Err(err) => {
-                        let Some(explain_ctx) = explain_ctx else {
+                        let ExplainContext::Plan(explain_ctx) = explain_ctx else {
                             // In `sequence_~` contexts, immediately retire the
                             // execution with the error.
                             return ctx.retire(Err(err.into()));
@@ -491,7 +482,7 @@ impl Coordinator {
             plan: plan::CreateIndexPlan { name, index, .. },
             df_meta,
             explain_ctx:
-                ExplainContext {
+                ExplainPlanContext {
                     broken,
                     config,
                     format,

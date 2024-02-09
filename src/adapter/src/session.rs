@@ -1390,11 +1390,11 @@ pub enum RequireLinearization {
     NotRequired,
 }
 
-impl From<&Option<ExplainContext>> for RequireLinearization {
-    fn from(ctx: &Option<ExplainContext>) -> Self {
+impl From<&ExplainContext> for RequireLinearization {
+    fn from(ctx: &ExplainContext) -> Self {
         match ctx {
-            None => RequireLinearization::Required,
-            Some(..) => RequireLinearization::NotRequired,
+            ExplainContext::None => RequireLinearization::Required,
+            _ => RequireLinearization::NotRequired,
         }
     }
 }

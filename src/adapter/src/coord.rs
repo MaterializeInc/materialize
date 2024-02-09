@@ -367,7 +367,7 @@ pub enum RealTimeRecencyContext {
         oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-        explain_ctx: Option<ExplainContext>,
+        explain_ctx: ExplainContext,
     },
 }
 
@@ -386,11 +386,10 @@ pub enum PeekStage {
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
-    OptimizeMir(PeekStageOptimizeMir),
-    OptimizeLir(PeekStageOptimizeLir),
+    Optimize(PeekStageOptimize),
     Finish(PeekStageFinish),
     CopyTo(PeekStageCopyTo),
-    Explain(PeekStageExplain),
+    ExplainPlan(PeekStageExplainPlan),
 }
 
 impl PeekStage {
@@ -400,11 +399,10 @@ impl PeekStage {
             PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::TimestampReadHold(PeekStageTimestampReadHold { validity, .. })
-            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
-            | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. })
             | PeekStage::CopyTo(PeekStageCopyTo { validity, .. })
-            | PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
+            | PeekStage::ExplainPlan(PeekStageExplainPlan { validity, .. }) => Some(validity),
         }
     }
 }
@@ -429,7 +427,7 @@ pub struct PeekStageValidate {
     copy_to_ctx: Option<CopyToContext>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -442,7 +440,7 @@ pub struct PeekStageLinearizeTimestamp {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -456,7 +454,7 @@ pub struct PeekStageRealTimeRecency {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -471,11 +469,11 @@ pub struct PeekStageTimestampReadHold {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimizeMir {
+pub struct PeekStageOptimize {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
@@ -485,22 +483,7 @@ pub struct PeekStageOptimizeMir {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimizeLir {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
-    source_ids: BTreeSet<GlobalId>,
-    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-    global_mir_plan: Either<optimize::peek::GlobalMirPlan, optimize::copy_to::GlobalMirPlan>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -523,12 +506,12 @@ pub struct PeekStageCopyTo {
 }
 
 #[derive(Debug)]
-pub struct PeekStageExplain {
+pub struct PeekStageExplainPlan {
     validity: PlanValidity,
     select_id: GlobalId,
     finishing: RowSetFinishing,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
@@ -556,7 +539,7 @@ pub struct CreateIndexValidate {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -566,7 +549,7 @@ pub struct CreateIndexOptimize {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -585,7 +568,7 @@ pub struct CreateIndexExplain {
     exported_index_id: GlobalId,
     plan: plan::CreateIndexPlan,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
@@ -628,7 +611,30 @@ pub struct CreateViewFinish {
 }
 
 #[derive(Debug)]
-pub struct ExplainContext {
+pub enum ExplainContext {
+    /// The ordinary, non-explain variant of the statement.
+    None,
+    /// The `EXPLAIN <level> PLAN FOR <explainee>` version of the statement.
+    Plan(ExplainPlanContext),
+}
+
+impl ExplainContext {
+    /// If available for this context, wrap the [`OptimizerTrace`] into a
+    /// [`tracing::Dispatch`] and set it as default, returning the resulting
+    /// guard in a `Some(guard)` option.
+    fn dispatch_guard(&self) -> Option<tracing::subscriber::DefaultGuard> {
+        match self {
+            ExplainContext::Plan(explain_ctx) => {
+                let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
+                Some(tracing::dispatcher::set_default(&dispatch))
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ExplainPlanContext {
     pub broken: bool,
     pub config: ExplainConfig,
     pub format: ExplainFormat,
@@ -663,7 +669,7 @@ pub struct CreateMaterializedViewValidate {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -673,7 +679,7 @@ pub struct CreateMaterializedViewOptimize {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -693,7 +699,7 @@ pub struct CreateMaterializedViewExplain {
     exported_sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]

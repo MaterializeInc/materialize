@@ -38,17 +38,15 @@ use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::Optimizer as TransformOptimizer;
 use timely::progress::Antichain;
-use tracing::debug_span;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
-    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
-    OptimizerConfig, OptimizerError,
+    optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
+    OptimizeMode, OptimizerConfig, OptimizerError,
 };
 
 pub struct Optimizer {
@@ -161,16 +159,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        let expr = debug_span!(target: "optimizer", "local").in_scope(|| {
-            #[allow(deprecated)]
-            let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
-            let expr = optimizer.optimize(expr)?.into_inner();
-
-            // Trace the result of this phase.
-            trace_plan(&expr);
-
-            Ok::<_, OptimizerError>(expr)
-        })?;
+        let expr = optimize_mir_local(expr, &self.typecheck_ctx)?.into_inner();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan { expr })
