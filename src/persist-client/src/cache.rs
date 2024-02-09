@@ -83,13 +83,14 @@ impl PersistClientCache {
             Arc::clone(&state_cache),
             pubsub_client.receiver,
         );
+        let isolated_runtime = IsolatedRuntime::new(cfg.isolated_runtime_worker_threads);
 
         PersistClientCache {
             cfg,
             metrics,
             blob_by_uri: Mutex::new(BTreeMap::new()),
             consensus_by_uri: Mutex::new(BTreeMap::new()),
-            isolated_runtime: Arc::new(IsolatedRuntime::new()),
+            isolated_runtime: Arc::new(isolated_runtime),
             state_cache,
             pubsub_sender: pubsub_client.sender,
             _pubsub_receiver_task,

@@ -32,13 +32,9 @@ pub struct IsolatedRuntime {
 
 impl IsolatedRuntime {
     /// Creates a new isolated runtime.
-    pub fn new() -> IsolatedRuntime {
-        // Always use one less core than the machine has available so we don't starve other
-        // critical resources, e.g. environmentd's Coordinator thread.
-        let num_workers = num_cpus::get().saturating_sub(1).max(1);
-
+    pub fn new(worker_threads: usize) -> IsolatedRuntime {
         let runtime = Builder::new_multi_thread()
-            .worker_threads(num_workers)
+            .worker_threads(worker_threads)
             .thread_name_fn(|| {
                 static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
                 let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
@@ -66,6 +62,12 @@ impl IsolatedRuntime {
             .as_ref()
             .expect("exists until drop")
             .spawn_named(name, fut)
+    }
+}
+
+impl Default for IsolatedRuntime {
+    fn default() -> Self {
+        IsolatedRuntime::new(num_cpus::get())
     }
 }
 

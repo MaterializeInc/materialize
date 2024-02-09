@@ -141,6 +141,9 @@ pub struct PersistConfig {
     pub pubsub_state_cache_shard_ref_channel_size: usize,
     /// Backoff after an established connection to Persist PubSub service fails.
     pub pubsub_reconnect_backoff: Duration,
+    /// Number of worker threads to create for the [`crate::IsolatedRuntime`], defaults to the
+    /// number of threads.
+    pub isolated_runtime_worker_threads: usize,
 }
 
 // Impl Deref to ConfigSet for convenience of accessing the dynamic configs.
@@ -195,6 +198,7 @@ impl PersistConfig {
             pubsub_server_connection_channel_size: 25,
             pubsub_state_cache_shard_ref_channel_size: 25,
             pubsub_reconnect_backoff: Duration::from_secs(5),
+            isolated_runtime_worker_threads: num_cpus::get(),
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is

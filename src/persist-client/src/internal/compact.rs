@@ -1195,7 +1195,7 @@ mod tests {
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
-            Arc::new(IsolatedRuntime::new()),
+            Arc::new(IsolatedRuntime::default()),
             req.clone(),
             schemas,
         )
@@ -1277,7 +1277,7 @@ mod tests {
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
-            Arc::new(IsolatedRuntime::new()),
+            Arc::new(IsolatedRuntime::default()),
             req.clone(),
             schemas,
         )
