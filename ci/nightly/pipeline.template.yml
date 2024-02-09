@@ -868,6 +868,11 @@ steps:
       - id: k8s-node-recovery-storage-on-failing
         label: "K8s recovery: storage on failing node"
         timeout_in_minutes: 30
+        # TODO: #25108 (k8s node recovery tests flaky)
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -884,6 +889,12 @@ steps:
       - id: k8s-node-recovery-compute-on-failing
         label: "K8s recovery: compute on failing node"
         timeout_in_minutes: 30
+        # TODO: #25108 (k8s node recovery tests flaky)
+        retry:
+          automatic:
+            - exit_status: 1
+              limit:
+                1
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -900,6 +911,11 @@ steps:
       - id: k8s-node-recovery-replicated-compute-on-failing
         label: "K8s recovery: replicated compute on failing node"
         timeout_in_minutes: 30
+        # TODO: #25108 (k8s node recovery tests flaky)
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -916,6 +932,11 @@ steps:
       - id: k8s-node-recovery-envd-on-failing
         label: "K8s recovery: envd on failing node"
         timeout_in_minutes: 30
+        # TODO: #25108 (k8s node recovery tests flaky)
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
