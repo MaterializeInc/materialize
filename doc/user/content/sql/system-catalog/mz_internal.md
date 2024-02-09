@@ -79,6 +79,53 @@ granted the `mz_monitor` role.
 | `statement_type`          | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
 | `throttled_count`         | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](https://materialize.com/docs/support/).                                                                             |
 
+### `mz_recent_activity_log`
+
+{{< public-preview />}}
+
+{{< warning >}}
+Do not rely on all statements being logged in this view. Materialize
+controls the maximum rate at which statements are sampled, and may change
+this rate at any time.
+{{< /warning >}}
+
+{{< warning >}}
+Entries in this view may be cleared on restart (e.g., during Materialize maintenance windows).
+{{< /warning >}}
+
+The `mz_recent_activity_log` view is similar to
+[`mz_activity_log`](#mz_activity_log), as described above; however, it
+only stores the most recent 3 days of queries. Querying this view is
+typically much faster than querying `mz_activity_log`.
+
+<!-- RELATION_SPEC mz_internal.mz_recent_activity_log -->
+| Field                     | Type                         | Meaning                                                                                                                                                                                                                                                                       |
+|---------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `execution_id`            | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                             |
+| `sample_rate`             | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
+| `cluster_id`              | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                      |
+| `application_name`        | [`text`]                     | The value of the `application_name` session variable at execution time.                                                                                                                                                                                                       |
+| `cluster_name`            | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
+| `transaction_isolation`   | [`text`]                     | The value of the `transaction_isolation` session variable at execution time.                                                                                                                                                                                                  |
+| `execution_timestamp`     | [`uint8`]                    | The logical timestamp at which execution was scheduled.                                                                                                                                                                                                                       |
+| `transient_index_id`      | [`text`]                     | The internal index of the compute dataflow created for the query, if any.                                                                                                                                                                                                     |
+| `params`                  | [`text array`]               | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
+| `began_at`                | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
+| `finished_at`             | [`timestamp with time zone`] | The wall-clock time at which the statement finished executing.                                                                                                                                                                                                                |
+| `finished_status`         | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `errored`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
+| `error_message`           | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
+| `rows_returned`           | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
+| `execution_strategy`      | [`text`]                     | For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow. |
+| `transaction_id`          | [`uint8`]                    | The ID of the transaction that the statement was part of. Note that transaction IDs are only unique per session.                                                                                                                                                              |
+| `prepared_statement_id`   | [`uuid`]                     | An ID that is unique for each prepared statement. For example, if a statement is prepared once and then executed multiple times, all executions will have the same value for this column (but different values for `execution_id`).                                           |
+| `sql`                     | [`text`]                     | The SQL text of the statement.                                                                                                                                                                                                                                                |
+| `prepared_statement_name` | [`text`]                     | The name given by the client library to the prepared statement.                                                                                                                                                                                                               |
+| `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
+| `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
+| `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
+| `statement_type`          | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+| `throttled_count`         | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](https://materialize.com/docs/support/).                                                                             |
+
 
 ### `mz_aws_connections`
 
@@ -1356,7 +1403,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [query hints]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
