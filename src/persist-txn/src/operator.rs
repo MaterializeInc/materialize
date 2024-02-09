@@ -23,11 +23,12 @@ use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
+use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
-    AsyncInputHandle, Event, InputConnection, OperatorBuilder as AsyncOperatorBuilder,
+    AsyncInputHandle, Disconnected, Event, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton,
 };
 use timely::dataflow::channels::pact::Pipeline;
@@ -38,11 +39,11 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
 use timely::{Data, PartialOrder, WorkerConfig};
-use tracing::debug;
+use tracing::{debug, trace};
 
-use crate::txn_cache::TxnsCache;
+use crate::txn_cache::{TxnsCache, TxnsCacheState};
 use crate::txn_read::DataListenNext;
-use crate::{TxnsCodec, TxnsCodecDefault};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///
@@ -108,51 +109,31 @@ where
     G: Scope<Timestamp = T>,
 {
     let unique_id = (name, passthrough.scope().addr()).hashed();
-    let (remap, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
+    let (txns, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
         passthrough.scope(),
         name,
         client_fn(),
         txns_id,
         data_id,
+        unique_id,
+    );
+    // Each of the `txns_frontiers` workers wants the full copy of the txns
+    // shard (modulo filtered for data_id).
+    let txns = txns.broadcast();
+    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C, G>(
+        txns,
+        passthrough,
+        name,
+        client_fn(),
+        txns_id,
+        data_id,
         as_of,
+        until,
         data_key_schema,
         data_val_schema,
         unique_id,
     );
-    // Each of the `txns_frontiers` workers wants the full copy of the remap
-    // information.
-    let remap = remap.broadcast();
-    let (passthrough, frontiers_button) = txns_progress_frontiers::<K, V, T, D, P, C, G>(
-        remap,
-        passthrough,
-        name,
-        data_id,
-        until,
-        unique_id,
-    );
     (passthrough, vec![source_button, frontiers_button])
-}
-
-/// A mapping between the physical upper of a data shard and the largest upper
-/// which is known to logically have the same contents.
-///
-/// Said another way, `[physical_upper,logical_upper)` is known to be empty (in
-/// the "definite" sense).
-///
-/// Invariant: physical_upper <= logical_upper
-///
-/// TODO: I'd much prefer the communication protocol between the two operators
-/// to be exactly remap as defined in the [reclocking design doc]. However, we
-/// can't quite recover exactly the information necessary to construct that at
-/// the moment. Seems worth doing, but in the meantime, intentionally make this
-/// look fairly different (`Stream` of `DataRemapEntry` instead of
-/// `Collection<FromTime>`) to hopefully minimize confusion.
-///
-/// [reclocking design doc]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct DataRemapEntry<T> {
-    physical_upper: T,
-    logical_upper: T,
 }
 
 fn txns_progress_source<K, V, T, D, P, C, G>(
@@ -161,11 +142,8 @@ fn txns_progress_source<K, V, T, D, P, C, G>(
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
-    as_of: T,
-    data_key_schema: Arc<K::Schema>,
-    data_val_schema: Arc<V::Schema>,
     unique_id: u64,
-) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
+) -> (Stream<G, (TxnsEntry, T, i64)>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -179,8 +157,8 @@ where
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
-    let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (mut remap_output, remap_stream) = builder.new_output();
+    let name = format!("{} [{}]", name, unique_id);
+    let (mut txns_output, txns_stream) = builder.new_output();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -189,100 +167,54 @@ where
 
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
-
-        txns_cache.update_gt(&as_of).await;
-        let snap = txns_cache.data_snapshot(data_id, as_of.clone());
-        let data_write = client
-            .open_writer::<K, V, T, D>(
-                data_id,
-                Arc::clone(&data_key_schema),
-                Arc::clone(&data_val_schema),
-                Diagnostics::from_purpose("data read physical upper"),
-            )
-            .await
-            .expect("schema shouldn't change");
-        let empty_to = snap.unblock_read(data_write).await;
-        debug!(
-            "{} starting as_of={:?} empty_to={:?}",
-            name,
-            as_of,
-            empty_to.elements()
-        );
-
-        let mut remap = match empty_to.into_option() {
-            Some(empty_to) => DataRemapEntry {
-                physical_upper: empty_to.clone(),
-                logical_upper: empty_to,
-            },
-            None => return,
+        let mut txns_subscribe = {
+            let cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
+            assert!(cache.buf.is_empty());
+            cache.txns_subscribe
         };
-        debug!("{} emitting {:?}", name, remap);
-        remap_output.give(&cap, remap.clone()).await;
-
         loop {
-            txns_cache.update_ge(&remap.logical_upper).await;
-            txns_cache.compact_to(&remap.logical_upper);
-            cap.downgrade(&remap.logical_upper);
-            let data_listen_next =
-                txns_cache.data_listen_next(&data_id, remap.logical_upper.clone());
-            debug!(
-                "{} data_listen_next at {:?}: {:?}",
-                name, remap, data_listen_next,
-            );
-            match data_listen_next {
-                // We've caught up to the txns upper and we have to wait for it
-                // to advance before asking again.
-                //
-                // Note that we're asking again with the same input, but once
-                // the cache is past remap.logical_upper (as it will be after
-                // this update_gt call), we're guaranteed to get an answer.
-                DataListenNext::WaitForTxnsProgress => {
-                    txns_cache.update_gt(&remap.logical_upper).await;
-                    continue;
-                }
-                // The data shard got a write!
-                DataListenNext::ReadDataTo(new_upper) => {
-                    // A write means both the physical and logical upper advance.
-                    remap = DataRemapEntry {
-                        physical_upper: new_upper.clone(),
-                        logical_upper: new_upper,
-                    };
-                    debug!("{} emitting {:?}", name, remap);
-                    remap_output.give(&cap, remap.clone()).await;
-
-                    continue;
-                }
-                // We know there are no writes in `[logical_upper,
-                // new_progress)`, so advance our output frontier.
-                DataListenNext::EmitLogicalProgress(new_progress) => {
-                    assert!(remap.physical_upper < new_progress);
-                    assert!(remap.logical_upper < new_progress);
-
-                    remap.logical_upper = new_progress;
-                    debug!("{} emitting {:?}", name, remap);
-                    remap_output.give(&cap, remap.clone()).await;
-
-                    continue;
-                }
-                DataListenNext::CompactedTo(since_ts) => {
-                    unreachable!(
-                        "internal logic error: {} unexpectedly compacted past {:?} to {:?}",
-                        data_id, remap.logical_upper, since_ts
-                    )
+            let events = txns_subscribe.next(None).await;
+            for event in events {
+                let parts = match event {
+                    ListenEvent::Progress(frontier) => {
+                        let progress = frontier
+                            .into_option()
+                            .expect("nothing should close the txns shard");
+                        debug!("{} emitting progress {:?}", name, progress);
+                        cap.downgrade(&progress);
+                        continue;
+                    }
+                    ListenEvent::Updates(parts) => parts,
+                };
+                let mut updates = Vec::new();
+                TxnsCache::<T, C>::fetch_parts(
+                    Some(data_id),
+                    &mut txns_subscribe,
+                    parts,
+                    &mut updates,
+                )
+                .await;
+                if !updates.is_empty() {
+                    debug!("{} emitting updates {:?}", name, updates);
+                    txns_output.give_container(&cap, &mut updates).await;
                 }
             }
         }
     });
-    (remap_stream, shutdown_button.press_on_drop())
+    (txns_stream, shutdown_button.press_on_drop())
 }
 
 fn txns_progress_frontiers<K, V, T, D, P, C, G>(
-    remap: Stream<G, DataRemapEntry<T>>,
+    txns: Stream<G, (TxnsEntry, T, i64)>,
     passthrough: Stream<G, P>,
     name: &str,
+    client: impl Future<Output = PersistClient> + 'static,
+    txns_id: ShardId,
     data_id: ShardId,
+    as_of: T,
     until: Antichain<T>,
+    data_key_schema: Arc<K::Schema>,
+    data_val_schema: Arc<V::Schema>,
     unique_id: u64,
 ) -> (Stream<G, P>, PressOnDropButton)
 where
@@ -297,149 +229,197 @@ where
     let name = format!("txns_progress_frontiers({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), passthrough.scope());
     let name = format!(
-        "{} [{}] {}/{} {:.9}",
+        "{} [{}] {}/{}",
         name,
         unique_id,
         passthrough.scope().index(),
         passthrough.scope().peers(),
-        data_id.to_string(),
     );
     let (mut passthrough_output, passthrough_stream) = builder.new_output();
-    let mut remap_input = builder.new_disconnected_input(&remap, Pipeline);
+    let txns_input = builder.new_disconnected_input(&txns, Pipeline);
     let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
 
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+        let client = client.await;
+        let state = TxnsCacheState::new(txns_id, T::minimum(), Some(data_id));
+        let mut txns_cache = TxnsCacheTimely {
+            name: name.clone(),
+            state,
+            input: txns_input,
+            buf: Vec::new(),
+        };
 
-        // None is used to indicate that both uppers are the empty antichain.
-        let mut remap = Some(DataRemapEntry {
-            physical_upper: T::minimum(),
-            logical_upper: T::minimum(),
-        });
-        // NB: The following loop uses `cap.time()`` to track how far we've
-        // progressed in copying along the passthrough input.
+        txns_cache.update_gt(&as_of).await;
+        let snap = txns_cache.state.data_snapshot(data_id, as_of.clone());
+        let data_write = client
+            .open_writer::<K, V, T, D>(
+                data_id,
+                Arc::clone(&data_key_schema),
+                Arc::clone(&data_val_schema),
+                Diagnostics::from_purpose("data read physical upper"),
+            )
+            .await
+            .expect("schema shouldn't change");
+        let empty_to = snap.unblock_read(data_write).await;
+        debug!(
+            "{} {:.9} starting as_of={:?} empty_to={:?}",
+            name,
+            data_id.to_string(),
+            as_of,
+            empty_to.elements()
+        );
+
+        // We've ensured that the data shard's physical upper is past as_of, so
+        // start by passing through data and frontier updates from the input
+        // until it is past the as_of.
+        let mut read_data_to = empty_to;
+        let mut output_progress_exclusive = T::minimum();
         loop {
-            debug!("{} remap {:?}", name, remap);
-            if let Some(r) = remap.as_ref() {
-                assert!(r.physical_upper <= r.logical_upper);
-                // If we've passed through data to at least `physical_upper`,
-                // then it means we can artificially advance the upper of the
-                // output to `logical_upper`. This also indicates that we need
-                // to wait for the next DataRemapEntry. It can either (A) have
-                // the same physical upper or (B) have a larger physical upper.
-                //
-                // - If (A), then we would again satisfy this `physical_upper`
-                //   check, again advance the logical upper again, ...
-                // - If (B), then we'd fall down to the code below, which copies
-                //   the passthrough data until the frontier passes
-                //   `physical_upper`, then loops back up here.
-                if r.physical_upper.less_equal(cap.time()) {
-                    if cap.time() < &r.logical_upper {
-                        cap.downgrade(&r.logical_upper);
+            loop {
+                // This only returns None when there are no more data left. Turn
+                // it into an empty frontier progress so we can re-use the
+                // shutdown code below.
+                let event = passthrough_input
+                    .next()
+                    .await
+                    .unwrap_or_else(|| Event::Progress(Antichain::new()));
+                match event {
+                    // NB: Ignore the data_cap because this input is
+                    // disconnected.
+                    Event::Data(_data_cap, data) => {
+                        // NB: Nothing to do here for `until` because the both
+                        // `shard_source` (before this operator) and
+                        // `mfp_and_decode` (after this operator) do the
+                        // necessary filtering.
+                        for data in data {
+                            debug!(
+                                "{} {:.9} emitting data {:?}",
+                                name,
+                                data_id.to_string(),
+                                data
+                            );
+                            passthrough_output.give(&cap, data).await;
+                        }
                     }
-                    remap = txns_progress_frontiers_read_remap_input(
-                        &name,
-                        &mut remap_input,
-                        r.clone(),
-                    )
-                    .await;
-                    continue;
+                    Event::Progress(progress) => {
+                        // If `until.less_equal(progress)`, it means that all
+                        // subsequent batches will contain only times greater or
+                        // equal to `until`, which means they can be dropped in
+                        // their entirety.
+                        //
+                        // Ideally this check would live in
+                        // `txns_progress_source`, but that turns out to be much
+                        // more invasive (requires replacing lots of `T`s with
+                        // `Antichain<T>`s). Given that we've been thinking
+                        // about reworking the operators, do the easy but more
+                        // wasteful thing for now.
+                        if PartialOrder::less_equal(&until, &progress) {
+                            debug!(
+                                "{} progress {:?} has passed until {:?}",
+                                name,
+                                progress.elements(),
+                                until.elements()
+                            );
+                            return;
+                        }
+                        // We reached the empty frontier! Shut down.
+                        let Some(input_progress_exclusive) = progress.as_option() else {
+                            return;
+                        };
+
+                        // Recall that any reads of the data shard are always
+                        // correct, so given that we've passed through any data
+                        // from the input, that means we're free to pass through
+                        // frontier updates too.
+                        if &output_progress_exclusive < input_progress_exclusive {
+                            output_progress_exclusive.clone_from(input_progress_exclusive);
+                            debug!(
+                                "{} {:.9} downgrading cap to {:?}",
+                                name,
+                                data_id.to_string(),
+                                output_progress_exclusive
+                            );
+                            cap.downgrade(&output_progress_exclusive);
+                        }
+                        if read_data_to.less_equal(&output_progress_exclusive) {
+                            break;
+                        }
+                    }
                 }
             }
 
-            // This only returns None when there are no more data left. Turn it
-            // into an empty frontier progress so we can re-use the shutdown
-            // code below.
-            let event = passthrough_input
-                .next()
-                .await
-                .unwrap_or_else(|| Event::Progress(Antichain::new()));
-            match event {
-                // NB: Ignore the data_cap because this input is disconnected.
-                Event::Data(_data_cap, mut data) => {
-                    // NB: Nothing to do here for `until` because both the
-                    // `shard_source` (before this operator) and
-                    // `mfp_and_decode` (after this operator) do the necessary
-                    // filtering.
-                    debug!("{} emitting data {:?}", name, data);
-                    passthrough_output.give_container(&cap, &mut data).await;
-                }
-                Event::Progress(new_progress) => {
-                    // If `until.less_equal(new_progress)`, it means that all
-                    // subsequent batches will contain only times greater or
-                    // equal to `until`, which means they can be dropped in
-                    // their entirety.
+            // Any time we hit this point, we've emitted everything known to be
+            // physically written to the data shard. Query the txns shard to
+            // find out what to do next given our current progress.
+            loop {
+                txns_cache.update_ge(&output_progress_exclusive).await;
+                txns_cache.compact_to(&output_progress_exclusive);
+                let data_listen_next = txns_cache
+                    .state
+                    .data_listen_next(&data_id, output_progress_exclusive.clone());
+                debug!(
+                    "{} {:.9} data_listen_next at {:?}({:?}): {:?}",
+                    name,
+                    data_id.to_string(),
+                    read_data_to.elements(),
+                    output_progress_exclusive,
+                    data_listen_next,
+                );
+                match data_listen_next {
+                    // We've caught up to the txns upper and we have to wait for
+                    // it to advance before asking again.
                     //
-                    // Ideally this check would live in `txns_progress_source`,
-                    // but that turns out to be much more invasive (requires
-                    // replacing lots of `T`s with `Antichain<T>`s). Given that
-                    // we've been thinking about reworking the operators, do the
-                    // easy but more wasteful thing for now.
-                    if PartialOrder::less_equal(&until, &new_progress) {
-                        debug!(
-                            "{} progress {:?} has passed until {:?}",
-                            name,
-                            new_progress.elements(),
-                            until.elements()
-                        );
-                        return;
+                    // Note that we're asking again with the same input, but
+                    // once the cache is past progress_exclusive (as it will be
+                    // after this update_gt call), we're guaranteed to get an
+                    // answer.
+                    DataListenNext::WaitForTxnsProgress => {
+                        txns_cache.update_gt(&output_progress_exclusive).await;
+                        continue;
                     }
-                    // We reached the empty frontier! Shut down.
-                    let Some(new_progress) = new_progress.into_option() else {
-                        return;
-                    };
-
-                    // Recall that any reads of the data shard are always
-                    // correct, so given that we've passed through any data
-                    // from the input, that means we're free to pass through
-                    // frontier updates too.
-                    if cap.time() < &new_progress {
-                        debug!("{} downgrading cap to {:?}", name, new_progress);
-                        cap.downgrade(&new_progress);
+                    // The data shard got a write! Loop back above and pass
+                    // through data until we see it.
+                    DataListenNext::ReadDataTo(new_target) => {
+                        read_data_to = Antichain::from_elem(new_target);
+                        // TODO: This is a very strong hint that the data shard
+                        // is about to be written to. Because the data shard's
+                        // upper advances sparsely (on write, but not on passage
+                        // of time) which invalidates the "every 1s" assumption
+                        // of the default tuning, we've had to de-tune the
+                        // listen sleeps on the paired persist_source. Maybe we
+                        // use "one state" to wake it up in case pubsub doesn't
+                        // and remove the listen polling entirely? (NB: This
+                        // would have to happen in each worker so that it's
+                        // guaranteed to happen in each process.)
+                        break;
+                    }
+                    // We know there are no writes in
+                    // `[output_progress_exclusive, new_progress)`, so advance
+                    // our output frontier.
+                    DataListenNext::EmitLogicalProgress(new_progress) => {
+                        assert!(output_progress_exclusive < new_progress);
+                        output_progress_exclusive = new_progress;
+                        trace!(
+                            "{} {:.9} downgrading cap to {:?}",
+                            name,
+                            data_id.to_string(),
+                            output_progress_exclusive
+                        );
+                        cap.downgrade(&output_progress_exclusive);
+                        continue;
+                    }
+                    DataListenNext::CompactedTo(since_ts) => {
+                        unreachable!(
+                            "internal logic error: {} unexpectedly compacted past {:?} to {:?}",
+                            data_id, output_progress_exclusive, since_ts
+                        )
                     }
                 }
             }
         }
     });
     (passthrough_stream, shutdown_button.press_on_drop())
-}
-
-async fn txns_progress_frontiers_read_remap_input<T, C>(
-    name: &str,
-    input: &mut AsyncInputHandle<T, Vec<DataRemapEntry<T>>, C>,
-    mut remap: DataRemapEntry<T>,
-) -> Option<DataRemapEntry<T>>
-where
-    T: Timestamp,
-    C: InputConnection<T>,
-{
-    while let Some(event) = input.next().await {
-        let xs = match event {
-            Event::Progress(_) => continue,
-            Event::Data(_cap, xs) => xs,
-        };
-        for x in xs {
-            debug!("{} got remap {:?}", name, x);
-            // Don't assume anything about the ordering.
-            if remap.logical_upper < x.logical_upper {
-                assert!(remap.physical_upper <= x.physical_upper);
-                // TODO: If the physical upper has advanced, that's a very
-                // strong hint that the data shard is about to be written to.
-                // Because the data shard's upper advances sparsely (on write,
-                // but not on passage of time) which invalidates the "every 1s"
-                // assumption of the default tuning, we've had to de-tune the
-                // listen sleeps on the paired persist_source. Maybe we use "one
-                // state" to wake it up in case pubsub doesn't and remove the
-                // listen polling entirely? (NB: This would have to happen in
-                // each worker so that it's guaranteed to happen in each
-                // process.)
-                remap = x;
-            }
-        }
-        return Some(remap);
-    }
-    // remap_input is closed, which indicates the data shard is finished.
-    None
 }
 
 pub(crate) const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
@@ -468,6 +448,74 @@ pub fn txns_data_shard_retry_params(cfg: &ConfigSet) -> RetryParameters {
         initial_backoff: DATA_SHARD_RETRYER_INITIAL_BACKOFF.get(cfg),
         multiplier: DATA_SHARD_RETRYER_MULTIPLIER.get(cfg),
         clamp: DATA_SHARD_RETRYER_CLAMP.get(cfg),
+    }
+}
+
+// NB: The API of this intentionally mirrors TxnsCache and TxnsRead. Consider
+// making them all implement the same trait?
+struct TxnsCacheTimely<T: Timestamp + Lattice + Codec64> {
+    name: String,
+    state: TxnsCacheState<T>,
+    input: AsyncInputHandle<T, Vec<(TxnsEntry, T, i64)>, Disconnected>,
+    buf: Vec<(TxnsEntry, T, i64)>,
+}
+
+impl<T> TxnsCacheTimely<T>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
+    /// See [TxnsCacheState::compact_to].
+    fn compact_to(&mut self, since_ts: &T) {
+        self.state.compact_to(since_ts)
+    }
+
+    /// See [TxnsCache::update_gt].
+    async fn update_gt(&mut self, ts: &T) {
+        debug!("{} update_gt {:?}", self.name, ts);
+        self.update(|progress_exclusive| progress_exclusive > ts)
+            .await;
+        debug_assert!(&self.state.progress_exclusive > ts);
+        debug_assert_eq!(self.state.validate(), Ok(()));
+    }
+
+    /// See [TxnsCache::update_ge].
+    async fn update_ge(&mut self, ts: &T) {
+        debug!("{} update_ge {:?}", self.name, ts);
+        self.update(|progress_exclusive| progress_exclusive >= ts)
+            .await;
+        debug_assert!(&self.state.progress_exclusive >= ts);
+        debug_assert_eq!(self.state.validate(), Ok(()));
+    }
+
+    async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
+        while !done(&self.state.progress_exclusive) {
+            let Some(event) = self.input.next().await else {
+                unreachable!("txns shard unexpectedly closed")
+            };
+            match event {
+                Event::Progress(frontier) => {
+                    let progress = frontier
+                        .into_option()
+                        .expect("nothing should close the txns shard");
+                    debug!("{} got progress {:?}", self.name, progress);
+                    self.state
+                        .push_entries(std::mem::take(&mut self.buf), progress);
+                }
+                Event::Data(_cap, mut entries) => {
+                    debug!("{} got updates {:?}", self.name, entries);
+                    self.buf.append(&mut entries);
+                }
+            }
+        }
+        debug!(
+            "cache correct before {:?} len={} least_ts={:?}",
+            self.state.progress_exclusive,
+            self.state.unapplied_batches.len(),
+            self.state
+                .unapplied_batches
+                .first_key_value()
+                .map(|(_, (_, _, ts))| ts),
+        );
     }
 }
 
@@ -608,7 +656,7 @@ impl DataSubscribe {
     #[cfg(test)]
     pub async fn step_past(&mut self, ts: u64) {
         while self.txns.less_equal(&ts) {
-            tracing::trace!(
+            trace!(
                 "progress at {:?}",
                 self.txns.with_frontier(|x| x.to_owned()).elements()
             );
@@ -789,7 +837,7 @@ mod tests {
         step(&mut subs).await;
 
         // Now register the shard. Also start a new subscription and step the
-        // previous one (plus repeat this for every later step).
+        // previous one (plus repeat this for ever later step).
         txns.register(1, [writer(&client, d0).await]).await.unwrap();
         subs.push(txns.subscribe_task(&client, d0, 5).await);
         step(&mut subs).await;
@@ -820,11 +868,16 @@ mod tests {
         subs.push(txns.subscribe_task(&client, d0, 5).await);
         step(&mut subs).await;
 
-        // Verify that the dataflows can progress to the expected point and that
-        // we read the right thing no matter when the dataflow started.
-        for mut sub in subs {
+        // Verify that the dataflows can progress to the expected point.
+        for sub in subs.iter_mut() {
             let progress = sub.step_past(7).await;
             assert_eq!(progress, 8);
+        }
+
+        // Now verify that we read the right thing no matter when the dataflow
+        // started.
+        for mut sub in subs {
+            sub.step_past(7).await;
             log.assert_eq(d0, 5, 8, sub.finish().await);
         }
     }
@@ -947,8 +1000,14 @@ mod tests {
         }
         let actual = sub.capture.into_iter().collect::<Vec<_>>();
         let expected = vec![
-            EventCore::Messages(3, vec![("2".to_owned(), 3, 1), ("3".to_owned(), 3, 1)]),
-            EventCore::Messages(3, vec![("4".to_owned(), 4, 1)]),
+            EventCore::Messages(
+                3,
+                vec![
+                    ("2".to_owned(), 3, 1),
+                    ("3".to_owned(), 3, 1),
+                    ("4".to_owned(), 4, 1),
+                ],
+            ),
             EventCore::Progress(vec![(0, -1), (3, 1)]),
             EventCore::Progress(vec![(3, -1)]),
         ];
