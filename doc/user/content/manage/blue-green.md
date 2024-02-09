@@ -125,7 +125,7 @@ it is safe to cut over. The following example checks for the presence of pending
         EXCEPT
         SELECT id FROM ready_dataflows
     )
-  SELECT * FROM pending_dataflows
+    SELECT * FROM pending_dataflows
     ```
 
 3. Use the `SWAP` operation to atomically rename your objects in a way that is
