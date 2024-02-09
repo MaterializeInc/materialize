@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
+use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::CollectionPlan;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -34,7 +34,7 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::Session;
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
+use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
 
 #[async_trait::async_trait(?Send)]
 impl Staged for CreateMaterializedViewStage {
@@ -413,6 +413,10 @@ impl Coordinator {
             ..
         }: CreateMaterializedViewFinish,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
+        // Timestamp selection
+        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+        let (as_of, until) = self.select_timestamps(id_bundle, refresh_schedule.as_ref())?;
+
         let ops = itertools::chain(
             drop_ids
                 .into_iter()
@@ -430,44 +434,12 @@ impl Coordinator {
                     cluster_id,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
-                    refresh_schedule: refresh_schedule.clone(),
+                    refresh_schedule,
                 }),
                 owner_id: *session.current_role_id(),
             }),
         )
         .collect::<Vec<_>>();
-
-        // Timestamp selection
-        let as_of = {
-            // Normally, `as_of` should be the least_valid_read.
-            let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-            let mut as_of = self.least_valid_read(&id_bundle);
-            // But for MVs with non-trivial REFRESH schedules, it's important to set the
-            // `as_of` to the first refresh. This is because we'd like queries on the MV to
-            // block until the first refresh (rather than to show an empty MV).
-            if let Some(refresh_schedule) = &refresh_schedule {
-                if let Some(as_of_ts) = as_of.as_option() {
-                    let Some(rounded_up_ts) = refresh_schedule.round_up_timestamp(*as_of_ts) else {
-                        return Err(AdapterError::MaterializedViewWouldNeverRefresh(
-                            refresh_schedule.last_refresh().expect("if round_up_timestamp returned None, then there should be a last refresh"),
-                            *as_of_ts
-                        ));
-                    };
-                    as_of = Antichain::from_elem(rounded_up_ts);
-                } else {
-                    // The `as_of` should never be empty, because then the MV would be unreadable.
-                    soft_panic_or_log!("creating a materialized view with an empty `as_of`");
-                }
-            }
-            as_of
-        };
-
-        // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
-        // (If the `try_step_forward` fails, then no need to set an `until`, because it's not possible to get any data
-        // beyond that last refresh time, because there are no times beyond that time.)
-        let until = refresh_schedule
-            .and_then(|s| s.last_refresh())
-            .and_then(|r| r.try_step_forward());
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -488,10 +460,7 @@ impl Coordinator {
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 df_desc.set_as_of(as_of.clone());
-
-                if let Some(until) = until {
-                    df_desc.until.meet_assign(&Antichain::from_elem(until));
-                }
+                df_desc.until = until;
 
                 // Emit notices.
                 coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
@@ -573,6 +542,48 @@ impl Coordinator {
             Err(err) => Err(err),
         }
         .map(StageResult::Response)
+    }
+
+    /// Select the initial `as_of` and `until` frontiers for a materialized view.
+    fn select_timestamps(
+        &self,
+        id_bundle: CollectionIdBundle,
+        refresh_schedule: Option<&RefreshSchedule>,
+    ) -> Result<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>), AdapterError> {
+        // Normally, `as_of` should be the least_valid_read.
+        let mut as_of = self.least_valid_read(&id_bundle);
+
+        // But for MVs with non-trivial REFRESH schedules, it's important to set the `as_of` to the
+        // first refresh. This is because we'd like queries on the MV to block until the first
+        // refresh (rather than to show an empty MV).
+        if let Some(refresh_schedule) = &refresh_schedule {
+            if let Some(as_of_ts) = as_of.as_option() {
+                if let Some(rounded_up_ts) = refresh_schedule.round_up_timestamp(*as_of_ts) {
+                    as_of = Antichain::from_elem(rounded_up_ts);
+                } else {
+                    let last_refresh = refresh_schedule.last_refresh().expect(
+                        "if round_up_timestamp returned None, then there should be a last refresh",
+                    );
+                    return Err(AdapterError::MaterializedViewWouldNeverRefresh(
+                        last_refresh,
+                        *as_of_ts,
+                    ));
+                }
+            } else {
+                // The `as_of` should never be empty, because then the MV would be unreadable.
+                soft_panic_or_log!("creating a materialized view with an empty `as_of`");
+            }
+        }
+
+        // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
+        // (If the `try_step_forward` fails, then no need to set an `until`, because it's not possible to get any data
+        // beyond that last refresh time, because there are no times beyond that time.)
+        let until_ts = refresh_schedule
+            .and_then(|s| s.last_refresh())
+            .and_then(|r| r.try_step_forward());
+        let until = Antichain::from_iter(until_ts);
+
+        Ok((as_of, until))
     }
 
     #[instrument(skip_all)]
