@@ -95,7 +95,38 @@ by viewing the Workflow graph from a common source or other upstream
 Materialization.
 
 2. Perform your end-to-end application tests on `prod_deploy` objects to ensure
-it is safe to cut over.
+it is safe to cut over. The following example checks for the presence of pending dataflows on a target cluster.
+   ```sql
+    WITH
+    dataflows AS (
+        SELECT mz_indexes.id
+        FROM mz_indexes
+        JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
+        WHERE mz_clusters.name = 'prod_deploy'
+        UNION ALL
+        SELECT mz_materialized_views.id
+        FROM mz_materialized_views
+        JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
+        WHERE mz_clusters.name = 'prod_deploy'
+    ),
+    ready_dataflows AS (
+        SELECT id
+        FROM dataflows d
+        JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = d.id)
+        -- Left join because some dataflows don't have dependencies and therefore
+        -- don't have lag either.
+        LEFT JOIN mz_internal.mz_materialization_lag l ON (l.object_id = d.id)
+        WHERE
+            h.hydrated AND
+            (l.local_lag <= '1s' OR l.local_lag IS NULL)
+    ),
+    pending_dataflows AS (
+        SELECT id FROM dataflows
+        EXCEPT
+        SELECT id FROM ready_dataflows
+    )
+  SELECT * FROM pending_dataflows
+    ```
 
 3. Use the `SWAP` operation to atomically rename your objects in a way that is
 transparent to clients.
