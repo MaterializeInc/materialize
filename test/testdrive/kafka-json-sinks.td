@@ -17,6 +17,15 @@
   );
 
 > CREATE CLUSTER simple_view_sink_cluster SIZE '${arg.default-storage-size}';
+
+! CREATE SINK simple_view_sink
+  IN CLUSTER simple_view_sink_cluster
+  FROM simple_view
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-cols-sink-${testdrive.seed}')
+  FORMAT JSON ARRAY
+  ENVELOPE DEBEZIUM
+contains:JSON ARRAY format in sinks not yet supported
+
 > CREATE SINK simple_view_sink
   IN CLUSTER simple_view_sink_cluster
   FROM simple_view
