@@ -582,9 +582,15 @@ pub trait SourceConnection: Debug + Clone + PartialEq + crate::AlterCompatible {
     fn upstream_name(&self) -> Option<&str>;
 
     /// The schema of this connection's key rows.
+    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
+    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
+    // pipeline.
     fn key_desc(&self) -> RelationDesc;
 
     /// The schema of this connection's value rows.
+    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
+    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
+    // pipeline.
     fn value_desc(&self) -> RelationDesc;
 
     /// The schema of this connection's timestamp type. This will also be the schema of the

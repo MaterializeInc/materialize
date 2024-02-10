@@ -631,7 +631,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (mut external_connection, encoding, available_subsources) = match connection {
+    let (mut external_connection, available_subsources) = match connection {
         CreateSourceConnection::Kafka {
             connection: connection_name,
             options,
@@ -674,8 +674,6 @@ pub fn plan_create_source(
                 // would result in a runtime error for the source.
                 sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
             }
-
-            let encoding = get_encoding(scx, format, &envelope)?;
 
             if !include_metadata.is_empty()
                 && !matches!(
@@ -750,7 +748,7 @@ pub fn plan_create_source(
 
             let connection = GenericSourceConnection::Kafka(connection);
 
-            (connection, Some(encoding), None)
+            (connection, None)
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -978,7 +976,7 @@ pub fn plan_create_source(
                     publication_details,
                 });
 
-            (connection, None, Some(available_subsources))
+            (connection, Some(available_subsources))
         }
         CreateSourceConnection::MySql {
             connection,
@@ -1025,7 +1023,7 @@ pub fn plan_create_source(
                     details,
                 });
 
-            (connection, None, Some(available_subsources))
+            (connection, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let (load_generator, available_subsources) =
@@ -1044,16 +1042,14 @@ pub fn plan_create_source(
                 tick_micros,
             });
 
-            (connection, None, available_subsources)
+            (connection, available_subsources)
         }
         CreateSourceConnection::TestScript { desc_json } => {
             scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_FROM_TESTSCRIPT)?;
             let connection = GenericSourceConnection::from(TestScriptSourceConnection {
                 desc_json: desc_json.clone(),
             });
-            // we just use the encoding from the format and envelope
-            let encoding = get_encoding(scx, format, &envelope)?;
-            (connection, Some(encoding), None)
+            (connection, None)
         }
     };
 
@@ -1140,11 +1136,35 @@ pub fn plan_create_source(
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
+    let encoding = match format {
+        Some(format) => Some(get_encoding(scx, format, &envelope)?),
+        None => None,
+    };
+
     let (key_desc, value_desc) = match &encoding {
         Some(encoding) => {
+            // If we are applying an encoding we need to ensure that the incoming value_desc is a
+            // single column of type bytes.
+            match external_connection.value_desc().typ().columns() {
+                [typ] => match typ.scalar_type {
+                    ScalarType::Bytes => {}
+                    _ => sql_bail!(
+                        "The schema produced by the source is incompatible with format decoding"
+                    ),
+                },
+                _ => sql_bail!(
+                    "The schema produced by the source is incompatible with format decoding"
+                ),
+            }
+
             let (key_desc, value_desc) = encoding.desc()?;
 
-            // TODO(petrosagg): get rid of this logic
+            // TODO(petrosagg): This piece of code seems to be making a statement about the
+            // nullability of the NONE envelope when the source is Kafka. As written, the code
+            // misses opportunities to mark columns as not nullable and is over conservative. For
+            // example in the case of `FORMAT BYTES ENVELOPE NONE` the output is indeed
+            // non-nullable but we will mark it as nullable anyway. This kind of crude reasoning
+            // should be replaced with precise type-level reasoning.
             let key_desc = key_desc.map(|desc| {
                 let is_kafka = matches!(connection, CreateSourceConnection::Kafka { .. });
                 let is_envelope_none = matches!(envelope, ast::SourceEnvelope::None);
@@ -1219,7 +1239,7 @@ pub fn plan_create_source(
             scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
-                CreateSourceFormat::Bare(Format::Avro(_)) => {}
+                Some(CreateSourceFormat::Bare(Format::Avro(_))) => {}
                 _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
             UnplannedSourceEnvelope::CdcV2
@@ -1668,7 +1688,6 @@ fn get_encoding(
     envelope: &ast::SourceEnvelope,
 ) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
     let encoding = match format {
-        CreateSourceFormat::None => sql_bail!("Source format must be specified"),
         CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
         CreateSourceFormat::KeyValue { key, value } => {
             let key = {
