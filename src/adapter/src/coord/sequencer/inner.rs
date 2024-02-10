@@ -1241,10 +1241,11 @@ impl Coordinator {
                                 // problem, so we don't want a notice.
                                 !ids_set.contains(&ObjectId::Item(**dependant_id))
                             })
-                            .map(|dependant_id| {
-                                humanizer
-                                    .humanize_id(*dependant_id)
-                                    .unwrap_or(id.to_string())
+                            .flat_map(|dependant_id| {
+                                // If we are not able to find a name for this ID it probably means
+                                // we have already dropped the compute collection, in which case we
+                                // can ignore it.
+                                humanizer.humanize_id(*dependant_id)
                             })
                             .collect_vec();
                         if !dependants.is_empty() {
