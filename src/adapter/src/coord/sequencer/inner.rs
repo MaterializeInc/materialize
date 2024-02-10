@@ -142,7 +142,7 @@ impl Coordinator {
     ) {
         return_if_err!(stage.validity().check(self.catalog()), ctx);
         let next = stage
-            .stage(self, ctx.session_mut())
+            .stage(self, &mut ctx)
             .instrument(parent_span.clone())
             .await;
         let stage = return_if_err!(next, ctx);

@@ -261,7 +261,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     SubscribeStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: SubscribeStage,
     },
     DrainStatementLog,
@@ -666,29 +666,9 @@ pub struct CreateMaterializedViewExplain {
 
 #[derive(Debug)]
 pub enum SubscribeStage {
-    Validate(SubscribeValidate),
     OptimizeMir(SubscribeOptimizeMir),
-    Timestamp(SubscribeTimestamp),
-    OptimizeLir(SubscribeOptimizeLir),
+    TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
     Finish(SubscribeFinish),
-}
-
-impl SubscribeStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::OptimizeMir(stage) => Some(&mut stage.validity),
-            Self::Timestamp(stage) => Some(&mut stage.validity),
-            Self::OptimizeLir(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct SubscribeValidate {
-    plan: plan::SubscribePlan,
-    target_cluster: TargetCluster,
 }
 
 #[derive(Debug)]
@@ -699,20 +679,12 @@ pub struct SubscribeOptimizeMir {
 }
 
 #[derive(Debug)]
-pub struct SubscribeTimestamp {
+pub struct SubscribeTimestampOptimizeLir {
     validity: PlanValidity,
     plan: plan::SubscribePlan,
     timeline: TimelineContext,
     optimizer: optimize::subscribe::Optimizer,
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
-}
-
-#[derive(Debug)]
-pub struct SubscribeOptimizeLir {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    optimizer: optimize::subscribe::Optimizer,
-    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Resolved>,
 }
 
 #[derive(Debug)]
@@ -835,7 +807,7 @@ pub(crate) trait Staged: Send {
     async fn stage(
         self,
         coord: &mut Coordinator,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError>;
 
     /// Prepares a message for the Coordinator.

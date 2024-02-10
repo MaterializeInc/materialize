@@ -181,11 +181,10 @@ impl Coordinator {
                 }
                 Message::SubscribeStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_subscribe_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;

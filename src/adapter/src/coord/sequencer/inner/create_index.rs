@@ -42,12 +42,14 @@ impl Staged for CreateIndexStage {
     async fn stage(
         self,
         coord: &mut Coordinator,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             CreateIndexStage::Optimize(stage) => coord.create_index_optimize(stage).await,
-            CreateIndexStage::Finish(stage) => coord.create_index_finish(session, stage).await,
-            CreateIndexStage::Explain(stage) => coord.create_index_explain(session, stage),
+            CreateIndexStage::Finish(stage) => {
+                coord.create_index_finish(ctx.session_mut(), stage).await
+            }
+            CreateIndexStage::Explain(stage) => coord.create_index_explain(ctx.session(), stage),
         }
     }
 
