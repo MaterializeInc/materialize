@@ -128,6 +128,9 @@ pub enum MzKafkaError {
     /// SASL authentication required
     #[error("SASL authentication required")]
     SaslAuthenticationRequired,
+    /// SASL authentication required
+    #[error("SASL authentication failed")]
+    SaslAuthenticationFailed,
     /// SSL authentication required
     #[error("SSL authentication required")]
     SslAuthenticationRequired,
@@ -172,6 +175,8 @@ impl FromStr for MzKafkaError {
             broker might require SASL authentication",
         ) {
             Ok(Self::SaslAuthenticationRequired)
+        } else if s.contains("SASL authentication error: Authentication failed") {
+            Ok(Self::SaslAuthenticationFailed)
         } else if s
             .contains("incorrect security.protocol configuration (connecting to a SSL listener?)")
         {
