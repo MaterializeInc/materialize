@@ -136,13 +136,13 @@ impl Coordinator {
     /// tracing.
     pub(crate) async fn sequence_staged<S: Staged + 'static>(
         &mut self,
-        ctx: ExecuteContext,
+        mut ctx: ExecuteContext,
         parent_span: Span,
         mut stage: S,
     ) {
         return_if_err!(stage.validity().check(self.catalog()), ctx);
         let next = stage
-            .stage(self, ctx.session())
+            .stage(self, ctx.session_mut())
             .instrument(parent_span.clone())
             .await;
         let stage = return_if_err!(next, ctx);

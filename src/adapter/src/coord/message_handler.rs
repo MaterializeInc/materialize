@@ -158,11 +158,10 @@ impl Coordinator {
                 }
                 Message::CreateIndexStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.execute_create_index_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::CreateViewStageReady {
                     ctx,

@@ -37,7 +37,7 @@ impl Staged for CreateViewStage {
     async fn stage(
         self,
         coord: &mut Coordinator,
-        session: &Session,
+        session: &mut Session,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             CreateViewStage::Optimize(stage) => coord.create_view_optimize(stage).await,

@@ -246,7 +246,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     CreateIndexStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateIndexStage,
     },
     CreateViewStageReady {
@@ -516,30 +516,9 @@ pub struct PeekStageExplainPlan {
 
 #[derive(Debug)]
 pub enum CreateIndexStage {
-    Validate(CreateIndexValidate),
     Optimize(CreateIndexOptimize),
     Finish(CreateIndexFinish),
     Explain(CreateIndexExplain),
-}
-
-impl CreateIndexStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-            Self::Explain(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateIndexValidate {
-    plan: plan::CreateIndexPlan,
-    resolved_ids: ResolvedIds,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -856,7 +835,7 @@ pub(crate) trait Staged: Send {
     async fn stage(
         self,
         coord: &mut Coordinator,
-        session: &Session,
+        session: &mut Session,
     ) -> Result<StageResult<Box<Self>>, AdapterError>;
 
     /// Prepares a message for the Coordinator.
