@@ -127,10 +127,10 @@ pub enum MzKafkaError {
     AllBrokersDown,
     /// SASL authentication required
     #[error("SASL authentication required")]
-    SASLAuthenticationRequired,
+    SaslAuthenticationRequired,
     /// SSL authentication required
     #[error("SSL authentication required")]
-    SSLAuthenticationRequired,
+    SslAuthenticationRequired,
     /// Unknown topic or partition
     #[error("Unknown topic or partition")]
     UnknownTopicOrPartition,
@@ -150,7 +150,7 @@ impl FromStr for MzKafkaError {
         } else if s.contains("connecting to a SSL listener?") {
             Ok(Self::SSLEncryptionMaybeRequired)
         } else if s.contains("client SSL authentication might be required") {
-            Ok(Self::SSLAuthenticationRequired)
+            Ok(Self::SslAuthenticationRequired)
         } else if s.contains("connecting to a PLAINTEXT broker listener") {
             Ok(Self::SSLUnsupported)
         } else if s.contains("Broker did not provide a certificate") {
@@ -171,11 +171,11 @@ impl FromStr for MzKafkaError {
             "verify that security.protocol is correctly configured, \
             broker might require SASL authentication",
         ) {
-            Ok(Self::SASLAuthenticationRequired)
+            Ok(Self::SaslAuthenticationRequired)
         } else if s
             .contains("incorrect security.protocol configuration (connecting to a SSL listener?)")
         {
-            Ok(Self::SSLAuthenticationRequired)
+            Ok(Self::SslAuthenticationRequired)
         } else if s.contains("probably due to broker version < 0.10") {
             Ok(Self::UnsupportedBrokerVersion)
         } else if s.contains("Disconnected while requesting ApiVersion")
