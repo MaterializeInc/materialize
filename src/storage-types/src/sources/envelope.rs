@@ -12,7 +12,7 @@
 use anyhow::{anyhow, bail};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -106,7 +106,7 @@ impl RustType<ProtoNoneEnvelope> for NoneEnvelope {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct UpsertEnvelope {
     /// Full arity, including the key columns
     pub source_arity: usize,
@@ -114,26 +114,8 @@ pub struct UpsertEnvelope {
     pub style: UpsertStyle,
     /// The indices of the keys in the full value row, used
     /// to deduplicate data in `upsert_core`
+    #[proptest(strategy = "proptest::collection::vec(any::<usize>(), 0..4)")]
     pub key_indices: Vec<usize>,
-}
-
-impl Arbitrary for UpsertEnvelope {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<usize>(),
-            any::<UpsertStyle>(),
-            proptest::collection::vec(any::<usize>(), 1..4),
-        )
-            .prop_map(|(source_arity, style, key_indices)| Self {
-                source_arity,
-                style,
-                key_indices,
-            })
-            .boxed()
-    }
 }
 
 impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {

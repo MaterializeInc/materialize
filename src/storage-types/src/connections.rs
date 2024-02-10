@@ -32,7 +32,7 @@ use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use rdkafka::client::BrokerAddr;
 use rdkafka::config::FromClientConfigAndContext;
@@ -323,30 +323,11 @@ pub struct KafkaTlsConfig {
     pub root_cert: Option<StringOrSecret>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
 pub struct KafkaSaslConfig {
     pub mechanism: String,
     pub username: StringOrSecret,
     pub password: GlobalId,
-}
-
-impl Arbitrary for KafkaSaslConfig {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<String>(),
-            StringOrSecret::arbitrary(),
-            GlobalId::arbitrary(),
-        )
-            .prop_map(|(mechanism, username, password)| KafkaSaslConfig {
-                mechanism,
-                username,
-                password,
-            })
-            .boxed()
-    }
 }
 
 /// Specifies a Kafka broker in a [`KafkaConnection`].
@@ -760,9 +741,10 @@ impl RustType<ProtoKafkaConnection> for KafkaConnection {
 }
 
 /// A connection to a Confluent Schema Registry.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
 pub struct CsrConnection<C: ConnectionAccess = InlinedConnection> {
     /// The URL of the schema registry.
+    #[proptest(strategy = "any_url()")]
     pub url: Url,
     /// Trusted root TLS certificate in PEM format.
     pub tls_root_cert: Option<StringOrSecret>,
@@ -968,31 +950,6 @@ impl RustType<ProtoCsrConnection> for CsrConnection {
     }
 }
 
-impl<C: ConnectionAccess> Arbitrary for CsrConnection<C> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any_url(),
-            any::<Option<StringOrSecret>>(),
-            any::<Option<TlsIdentity>>(),
-            any::<Option<CsrConnectionHttpAuth>>(),
-            any::<Tunnel<C>>(),
-        )
-            .prop_map(
-                |(url, tls_root_cert, tls_identity, http_auth, tunnel)| CsrConnection {
-                    url,
-                    tls_root_cert,
-                    tls_identity,
-                    http_auth,
-                    tunnel,
-                },
-            )
-            .boxed()
-    }
-}
-
 /// A TLS key pair used for client identity.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct TlsIdentity {
@@ -1047,7 +1004,7 @@ impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
 }
 
 /// A connection to a PostgreSQL server.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.
     pub host: String,
@@ -1062,6 +1019,7 @@ pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, authentication, or both.
+    #[proptest(strategy = "any_ssl_mode()")]
     pub tls_mode: SslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
     /// identity.
@@ -1226,51 +1184,6 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
     }
 }
 
-impl<C: ConnectionAccess> Arbitrary for PostgresConnection<C> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<String>(),
-            any::<u16>(),
-            any::<String>(),
-            any::<StringOrSecret>(),
-            any::<Option<GlobalId>>(),
-            any::<Tunnel<C>>(),
-            any_ssl_mode(),
-            any::<Option<StringOrSecret>>(),
-            any::<Option<TlsIdentity>>(),
-        )
-            .prop_map(
-                |(
-                    host,
-                    port,
-                    database,
-                    user,
-                    password,
-                    tunnel,
-                    tls_mode,
-                    tls_root_cert,
-                    tls_identity,
-                )| {
-                    PostgresConnection {
-                        host,
-                        port,
-                        database,
-                        user,
-                        password,
-                        tunnel,
-                        tls_mode,
-                        tls_root_cert,
-                        tls_identity,
-                    }
-                },
-            )
-            .boxed()
-    }
-}
-
 /// Specifies how to tunnel a connection.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
@@ -1361,7 +1274,7 @@ pub fn any_mysql_ssl_mode() -> impl Strategy<Value = MySqlSslMode> {
 }
 
 /// A connection to a MySQL server.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.
     pub host: String,
@@ -1374,6 +1287,7 @@ pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, verify the server's certificate, and identity.
+    #[proptest(strategy = "any_mysql_ssl_mode()")]
     pub tls_mode: MySqlSslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
     /// identity.
@@ -1558,39 +1472,6 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
             tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
         })
-    }
-}
-
-impl<C: ConnectionAccess> Arbitrary for MySqlConnection<C> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<String>(),
-            any::<u16>(),
-            any::<StringOrSecret>(),
-            any::<Option<GlobalId>>(),
-            any::<Tunnel<C>>(),
-            any_mysql_ssl_mode(),
-            any::<Option<StringOrSecret>>(),
-            any::<Option<TlsIdentity>>(),
-        )
-            .prop_map(
-                |(host, port, user, password, tunnel, tls_mode, tls_root_cert, tls_identity)| {
-                    MySqlConnection {
-                        host,
-                        port,
-                        user,
-                        password,
-                        tunnel,
-                        tls_mode,
-                        tls_root_cert,
-                        tls_identity,
-                    }
-                },
-            )
-            .boxed()
     }
 }
 
