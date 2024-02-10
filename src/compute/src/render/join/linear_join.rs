@@ -141,7 +141,7 @@ where
     G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
-    pub(crate) fn render_join(
+    pub(crate) fn render_linear_join(
         &mut self,
         inputs: Vec<CollectionBundle<G, T>>,
         linear_plan: LinearJoinPlan,

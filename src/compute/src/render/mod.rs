@@ -101,7 +101,7 @@
 //! if/when the errors are retracted.
 
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
@@ -123,7 +123,6 @@ use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::{BranchWhen, Operator};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
@@ -139,12 +138,14 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
+use crate::render::plan::flatten_plan;
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
 pub mod context;
 mod errors;
 mod flat_map;
 mod join;
+mod plan;
 mod reduce;
 pub mod sinks;
 mod threshold;
@@ -751,222 +752,22 @@ where
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
-        match plan {
-            Plan::Constant { rows, node_id: _ } => {
-                // Produce both rows and errs to avoid conditional dataflow construction.
-                let (rows, errs) = match rows {
-                    Ok(rows) => (rows, Vec::new()),
-                    Err(e) => (Vec::new(), vec![e]),
-                };
-
-                // We should advance times in constant collections to start from `as_of`.
-                let as_of_frontier = self.as_of_frontier.clone();
-                let until = self.until.clone();
-                let ok_collection = rows
-                    .into_iter()
-                    .filter_map(move |(row, mut time, diff)| {
-                        time.advance_by(as_of_frontier.borrow());
-                        if !until.less_equal(&time) {
-                            Some((
-                                row,
-                                <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
-                                diff,
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .to_stream(&mut self.scope)
-                    .as_collection();
-
-                let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
-                error_time.advance_by(self.as_of_frontier.borrow());
-                let err_collection = errs
-                    .into_iter()
-                    .map(move |e| {
-                        (
-                            DataflowError::from(e),
-                            <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
-                            1,
-                        )
-                    })
-                    .to_stream(&mut self.scope)
-                    .as_collection();
-
-                CollectionBundle::from_collections(ok_collection, err_collection)
-            }
-            Plan::Get {
-                id,
-                keys,
-                plan,
-                node_id: _,
-            } => {
-                // Recover the collection from `self` and then apply `mfp` to it.
-                // If `mfp` happens to be trivial, we can just return the collection.
-                let mut collection = self
-                    .lookup_id(id)
-                    .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
-                match plan {
-                    mz_compute_types::plan::GetPlan::PassArrangements => {
-                        // Assert that each of `keys` are present in `collection`.
-                        assert!(keys
-                            .arranged
-                            .iter()
-                            .all(|(key, _, _)| collection.arranged.contains_key(key)));
-                        assert!(keys.raw <= collection.collection.is_some());
-                        // Retain only those keys we want to import.
-                        collection.arranged.retain(|key, _value| {
-                            keys.arranged.iter().any(|(key2, _, _)| key2 == key)
-                        });
-                        collection
-                    }
-                    mz_compute_types::plan::GetPlan::Arrangement(key, row, mfp) => {
-                        let (oks, errs) = collection.as_collection_core(
-                            mfp,
-                            Some((key, row)),
-                            self.until.clone(),
-                        );
-                        CollectionBundle::from_collections(oks, errs)
-                    }
-                    mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) =
-                            collection.as_collection_core(mfp, None, self.until.clone());
-                        CollectionBundle::from_collections(oks, errs)
-                    }
-                }
-            }
-            Plan::Let {
-                id,
-                value,
-                body,
-                node_id: _,
-            } => {
-                // Render `value` and bind it to `id`. Complain if this shadows an id.
-                let value = self.render_plan(*value);
-                let prebound = self.insert_id(Id::Local(id), value);
-                assert!(prebound.is_none());
-
-                let body = self.render_plan(*body);
-                self.remove_id(Id::Local(id));
-                body
-            }
-            Plan::LetRec { .. } => {
-                unreachable!("LetRec should have been extracted and rendered");
-            }
-            Plan::Mfp {
-                input,
-                mfp,
-                input_key_val,
-                node_id: _,
-            } => {
-                let input = self.render_plan(*input);
-                // If `mfp` is non-trivial, we should apply it and produce a collection.
-                if mfp.is_identity() {
-                    input
-                } else {
-                    let (oks, errs) =
-                        input.as_collection_core(mfp, input_key_val, self.until.clone());
-                    CollectionBundle::from_collections(oks, errs)
-                }
-            }
-            Plan::FlatMap {
-                input,
-                func,
-                exprs,
-                mfp_after: mfp,
-                input_key,
-                node_id: _,
-            } => {
-                let input = self.render_plan(*input);
-                self.render_flat_map(input, func, exprs, mfp, input_key)
-            }
-            Plan::Join {
-                inputs,
-                plan,
-                node_id: _,
-            } => {
-                let inputs = inputs
-                    .into_iter()
-                    .map(|input| self.render_plan(input))
-                    .collect();
-                match plan {
-                    mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
-                        self.render_join(inputs, linear_plan)
-                    }
-                    mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => {
-                        self.render_delta_join(inputs, delta_plan)
-                    }
-                }
-            }
-            Plan::Reduce {
-                input,
-                key_val_plan,
-                plan,
-                input_key,
-                mfp_after,
-                node_id: _,
-            } => {
-                let input = self.render_plan(*input);
-                let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
-                self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
-            }
-            Plan::TopK {
-                input,
-                top_k_plan,
-                node_id: _,
-            } => {
-                let input = self.render_plan(*input);
-                self.render_topk(input, top_k_plan)
-            }
-            Plan::Negate { input, node_id: _ } => {
-                let input = self.render_plan(*input);
-                let (oks, errs) = input.as_specific_collection(None);
-                CollectionBundle::from_collections(oks.negate(), errs)
-            }
-            Plan::Threshold {
-                input,
-                threshold_plan,
-                node_id: _,
-            } => {
-                let input = self.render_plan(*input);
-                self.render_threshold(input, threshold_plan)
-            }
-            Plan::Union {
-                inputs,
-                consolidate_output,
-                node_id: _,
-            } => {
-                let mut oks = Vec::new();
-                let mut errs = Vec::new();
-                for input in inputs.into_iter() {
-                    let (os, es) = self.render_plan(input).as_specific_collection(None);
-                    oks.push(os);
-                    errs.push(es);
-                }
-                let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
-                if consolidate_output {
-                    oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("UnionConsolidation")
-                }
-                let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
-                CollectionBundle::from_collections(oks, errs)
-            }
-            Plan::ArrangeBy {
-                input,
-                forms: keys,
-                input_key,
-                input_mfp,
-                node_id: _,
-            } => {
-                let input = self.render_plan(*input);
-                input.ensure_collections(
-                    keys,
-                    input_key,
-                    input_mfp,
-                    self.until.clone(),
-                    self.enable_specialized_arrangements,
-                )
-            }
+        let mut descend = vec![plan];
+        let mut render = Vec::new();
+        while let Some(plan) = descend.pop() {
+            let (flat_plan, children) = flatten_plan(plan);
+            render.push(flat_plan);
+            descend.extend(children.rev());
         }
+
+        let mut collections = VecDeque::new();
+        while let Some(plan) = render.pop() {
+            let bundle = self.render_flat_plan(plan, &mut collections);
+            collections.push_front(bundle);
+        }
+
+        assert_eq!(collections.len(), 1);
+        collections.pop_front().unwrap()
     }
 }
 
