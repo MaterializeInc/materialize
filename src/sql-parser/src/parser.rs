@@ -3603,9 +3603,20 @@ impl<'a> Parser<'a> {
         if paren {
             let _ = self.consume_token(&Token::RParen);
         }
+
+        let features = if self.parse_keywords(&[FEATURES]) {
+            self.expect_token(&Token::LParen)?;
+            let features = self.parse_comma_separated(Parser::parse_cluster_feature)?;
+            self.expect_token(&Token::RParen)?;
+            features
+        } else {
+            Vec::new()
+        };
+
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
+            features,
         }))
     }
 
@@ -3735,6 +3746,16 @@ impl<'a> Parser<'a> {
         };
         let value = self.parse_optional_option_value()?;
         Ok(ReplicaOption { name, value })
+    }
+
+    fn parse_cluster_feature(&mut self) -> Result<ClusterFeature<Raw>, ParserError> {
+        Ok(ClusterFeature {
+            name: self.parse_cluster_feature_name().map_err(|err| {
+                let msg = "a valid CREATE CLUSTER feature";
+                self.error(err.pos, msg.to_string())
+            })?,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
