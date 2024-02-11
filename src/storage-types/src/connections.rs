@@ -623,6 +623,7 @@ impl KafkaConnection {
         let consumer: BaseConsumer<_> = self
             .create_with_context(storage_configuration, context, &BTreeMap::new())
             .await?;
+        let consumer = Arc::new(consumer);
 
         let timeout = storage_configuration
             .parameters
@@ -639,10 +640,10 @@ impl KafkaConnection {
         // The downside of this approach is it produces a generic error message like
         // "metadata fetch error" with no additional details. The real networking
         // error is buried in the librdkafka logs, which are not visible to users.
-        let result = mz_ore::task::spawn_blocking(
-            || "kafka_get_metadata",
-            move || consumer.fetch_metadata(None, timeout),
-        )
+        let result = mz_ore::task::spawn_blocking(|| "kafka_get_metadata", {
+            let consumer = Arc::clone(&consumer);
+            move || consumer.fetch_metadata(None, timeout)
+        })
         .await?;
         match result {
             Ok(_) => Ok(()),
@@ -658,6 +659,11 @@ impl KafkaConnection {
                     MzKafkaError::Internal(_) => new,
                     _ => cur,
                 });
+
+                // Don't drop the consumer until after we've drained the errors
+                // channel. Dropping the consumer can introduce spurious errors.
+                // See #24901.
+                drop(consumer);
 
                 match main_err {
                     Some(err) => Err(err.into()),
