@@ -25,6 +25,15 @@ use tokio::runtime::{Builder, Runtime};
 /// separate OS threads, the scheduler is able to context switch
 /// out of any problematic tasks, preserving liveness for the rest
 /// of the process.
+///
+/// Note: Even though the work done by this runtime might be "blocking" or
+/// CPU bound we should not use the [`tokio::task::spawn_blocking`] API.
+/// There can be issues during shutdown if tasks are currently running on the
+/// blocking thread pool [1], and the blocking thread pool generally creates
+/// many more threads than are physically available. This can pin CPU usage
+/// to 100% starving other important threads like the Coordinator.
+///
+/// [1]: <https://github.com/MaterializeInc/materialize/pull/13955>
 #[derive(Debug)]
 pub struct IsolatedRuntime {
     inner: Option<Runtime>,
@@ -51,6 +60,9 @@ impl IsolatedRuntime {
     }
 
     /// Spawns a task onto this runtime.
+    ///
+    /// Note: We purposefully do not use the [`tokio::task::spawn_blocking`] API here, see the doc
+    /// comment on [`IsolatedRuntime`] for explanation.
     pub fn spawn_named<N, S, F>(&self, name: N, fut: F) -> JoinHandle<F::Output>
     where
         S: AsRef<str>,
