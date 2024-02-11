@@ -42,7 +42,7 @@ SELECT '.0'::float::text
 query T
 SELECT '-.0'::float::text
 ----
-0
+-0
 
 query T
 SELECT '+.0'::float::text
@@ -57,7 +57,7 @@ SELECT '+0.'::float::text
 query T
 SELECT '-0.'::float::text
 ----
-0
+-0
 
 query error invalid input syntax
 SELECT '++0'::float::text
