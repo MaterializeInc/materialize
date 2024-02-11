@@ -252,7 +252,7 @@ table:
 
 SQL type                     | Conversion
 -----------------------------|-------------------------------------
-[`array`][`arrays`]          | Values are converted to JSON arrays. Multidimensional arrays are flattened into a single dimension following row-major order.
+[`array`][`arrays`]          | Values are converted to JSON arrays.
 [`bigint`]                   | Values are converted to JSON numbers.
 [`boolean`]                  | Values are converted to `true` or `false`.
 [`integer`]                  | Values are converted to JSON numbers.

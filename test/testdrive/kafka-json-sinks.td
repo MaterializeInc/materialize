@@ -126,7 +126,13 @@ contains:column "a" specified more than once
 
 > CREATE TYPE int4_map_map AS MAP (KEY TYPE = text, VALUE TYPE = int4_map);
 
-> CREATE MATERIALIZED VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
+> CREATE MATERIALIZED VIEW complex_type_view AS
+  SELECT
+    '{{1,2},{3,4}}'::int4_list_list c1,
+    '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2,
+    ARRAY[ARRAY[1, 2], ARRAY[3, 4], ARRAY[5, 6]] c3,
+    ARRAY[]::int[] c4,
+    ARRAY[ARRAY[ARRAY['a'], ARRAY['b']], ARRAY[ARRAY['c'], ARRAY['d']]] c5;
 
 > CREATE CLUSTER complex_type_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK complex_type_sink
@@ -137,7 +143,7 @@ contains:column "a" specified more than once
   ENVELOPE DEBEZIUM
 
 $ kafka-verify-data format=json sink=materialize.public.complex_type_sink key=false
-{"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}}}
+{"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}, "c3": [[1, 2], [3, 4], [5,6]], "c4": [], "c5": [[["a"], ["b"]], [["c"], ["d"]]]}}
 
 # testdrive will not automatically clean up types, so we need to do that ourselves
 
