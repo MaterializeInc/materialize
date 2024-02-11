@@ -363,6 +363,11 @@ pub struct Args {
     /// the flag takes precedence over the Launch Darkly param.
     #[clap(long, env = "PERSIST_TXN_TABLES", parse(try_from_str))]
     persist_txn_tables: Option<PersistTxnTablesImpl>,
+    /// The number of worker threads created for the IsolatedRuntime used for
+    /// storage related tasks. A negative value will subtract from the number
+    /// of threads returned by [`num_cpus::get`].
+    #[clap(long, env = "PERSIST_ISOLATED_RUNTIME_THREADS")]
+    persist_isolated_runtime_threads: Option<isize>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -788,13 +793,28 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
-    let persist_config = PersistConfig::new(
+    let mut persist_config = PersistConfig::new(
         &mz_environmentd::BUILD_INFO,
         now.clone(),
         mz_sql::session::vars::all_dyn_configs(),
     );
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+
+    match args.persist_isolated_runtime_threads {
+        // Use the default.
+        None | Some(0) => (),
+        Some(x @ ..=-1) => {
+            let threads = num_cpus::get().saturating_add_signed(x).max(1);
+            persist_config.isolated_runtime_worker_threads = threads;
+        }
+        Some(x @ 1..) => {
+            let threads = usize::try_from(x).expect("pattern matched a positive value");
+            persist_config.isolated_runtime_worker_threads = threads;
+        }
+        // We can remove this branch once we upgrade to 1.75
+        Some(_) => unreachable!("isize is technically non-exhaustive"),
+    };
 
     let _server = runtime.spawn_named(
         || "persist::rpc::server",
