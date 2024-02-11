@@ -254,9 +254,9 @@ function, which enables [temporal filter pushdown](/transform-data/patterns/temp
 
 ### Handling batch events
 
-The application pushing events to your webhook source may batch multiple events into a single
-HTTP request. You can automatically expand this batch of requests into separate rows using
-`BODY FORMAT JSON ARRAY`.
+The application pushing events to your webhook source may batch multiple events
+into a single HTTP request. You can automatically expand this batch of requests
+into separate rows using `BODY FORMAT JSON ARRAY`.
 
 ```sql
 -- Webhook source that parses request bodies as a JSON array.
@@ -265,28 +265,33 @@ CREATE SOURCE webhook_source_json_batch IN CLUSTER my_cluster FROM WEBHOOK
   INCLUDE HEADERS;
 ```
 
-If you `POST` a JSON array of three elements to `webhook_source_json_batch`, three rows will get
-appended to the source.
+If you `POST` a JSON array of three elements to `webhook_source_json_batch`,
+three rows will get appended to the source.
 
-```
+```bash
 POST webhook_source_json_batch
 [
   { "event_type": "a" },
   { "event_type": "b" },
   { "event_type": "c" }
 ]
+```
 
+```sql
 SELECT COUNT(body) FROM webhook_source_json_batch;
 ----
 3
 ```
 
-You can also post a single object to the source which will get appended as one row.
+You can also post a single object to the source, which will get appended as one
+row.
 
-```
+```bash
 POST webhook_source_json_batch
 { "event_type": "d" }
+```
 
+```sql
 SELECT body FROM webhook_source_json_batch;
 ----
 { "event_type": "a" }
@@ -299,11 +304,11 @@ SELECT body FROM webhook_source_json_batch;
 
 Webhook sources apply the following limits to received requests:
 
-* Maximum size of the request body is `2MB`. Requests larger than this will fail
-  with 413 Payload Too Large.
-* Maximum number of concurrent connections is 250, across all webhook sources.
-  Trying to connect when the server is at the maximum will return 429 Too Many
-  Requests.
+* The maximum size of the request body is **`2MB`**. Requests larger than this
+  will fail with `413 Payload Too Large`.
+* The maximum number of concurrent connections is **250**, across all webhook
+  sources. Trying to connect when the server is at the capacity will return
+  `429 Too Many Requests`.
 * Requests that contain a header name specified more than once will be rejected
   with `401 Unauthorized`.
 
