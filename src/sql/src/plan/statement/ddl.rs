@@ -1905,7 +1905,8 @@ fn get_encoding_inner(
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json { .. } => DataEncodingInner::Json,
+        Format::Json { array: false } => DataEncodingInner::Json,
+        Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sources"),
         Format::Text => DataEncodingInner::Text,
     }))
 }
@@ -2833,7 +2834,8 @@ fn kafka_sink_builder(
                 csr_connection,
             }
         }
-        Some(Format::Json { .. }) => KafkaSinkFormat::Json,
+        Some(Format::Json { array: false }) => KafkaSinkFormat::Json,
+        Some(Format::Json { array: true }) => bail_unsupported!("JSON ARRAY format in sinks"),
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
         None => bail_unsupported!("sink without format"),
     };

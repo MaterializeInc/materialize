@@ -1908,7 +1908,8 @@ impl<'a> Parser<'a> {
             };
             Format::Csv { columns, delimiter }
         } else if self.parse_keyword(JSON) {
-            Format::Json { array: false }
+            let array = self.parse_keyword(ARRAY);
+            Format::Json { array }
         } else if self.parse_keyword(TEXT) {
             Format::Text
         } else if self.parse_keyword(BYTES) {
