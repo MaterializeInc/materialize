@@ -256,7 +256,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     CreateMaterializedViewStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateMaterializedViewStage,
     },
     SubscribeStageReady {
@@ -608,30 +608,9 @@ pub struct ExplainPlanContext {
 
 #[derive(Debug)]
 pub enum CreateMaterializedViewStage {
-    Validate(CreateMaterializedViewValidate),
     Optimize(CreateMaterializedViewOptimize),
     Finish(CreateMaterializedViewFinish),
     Explain(CreateMaterializedViewExplain),
-}
-
-impl CreateMaterializedViewStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-            Self::Explain(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateMaterializedViewValidate {
-    plan: plan::CreateMaterializedViewPlan,
-    resolved_ids: ResolvedIds,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
