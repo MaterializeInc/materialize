@@ -1,0 +1,9 @@
+{{$version := .Get 0}}
+{{$releasePages := where $.Site.RegularPages "Section" "releases"}}
+{{$releasePage := (index (where $releasePages ".File.ContentBaseName" $version) 0)}}
+{{$isReleased := $releasePage.Params.released}}
+{{$releaseDate := $releasePage.Params.date}}
+
+{{if not $isReleased}}
+{{.Inner | .Page.RenderString}}
+{{end}}

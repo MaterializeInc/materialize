@@ -1,4 +1,10 @@
 {{/*  Converts data/sql_funcs.yml into table. */}}
+
+{{$releasedVersions := dict}}
+{{range (where $.Site.RegularPages "Section" "releases")}}
+  {{$releasedVersions = merge $releasedVersions (dict .File.ContentBaseName .) }}
+{{end}}
+
 {{ range $.Site.Data.sql_funcs }}
 
 {{ if not (isset $.Params 0) }}
@@ -45,6 +51,18 @@
 
       {{ if .side_effecting }}
         <br><br><b>Note:</b> This function is <a href="#side-effecting-functions">side-effecting</a>.
+      {{ end }}
+
+      {{ $versionAdded := index . "version-added" }}
+      {{ if $versionAdded }}
+        {{ $releasePage := index $releasedVersions $versionAdded }}
+        {{ if not $releasePage.Params.released }}
+          <br><br>
+          <b>Unreleased: </b> This function will be released in
+          <a href="{{ printf "/releases/%s" $versionAdded | relURL }}"><strong>{{$versionAdded}}</strong></a>.
+          It may not be available in your region yet.
+          The release is scheduled to complete by <strong>{{dateFormat "January 2, 2006" $releasePage.Params.date}}</strong>.
+        {{ end }}
       {{ end }}
     </td>
   </tr>
