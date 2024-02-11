@@ -1054,6 +1054,38 @@ div.json_widget {
     .sql_output {
         margin: 16px;
     }
+
+    .log_output {
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 10px;
+        max-height: 150px;
+        overflow-y: auto;
+        margin-top: 10px;
+    }
+
+    .input_container-text select.text-input {
+        appearance: none;
+        background-color: #F7F7F8;
+        border: 1px solid #E0DEE3;
+        border-radius: 8px;
+        padding: 8px;
+        font-size: 16px;
+        color: #BCB9C0;
+        cursor: pointer;
+    }
+
+    .input_container-text select.text-input:focus {
+        outline: none;
+        border-color: #aca9b8;
+    }
+
+    .light & select.text-input {
+        background-color: #F7F7F8;
+    }
+    .dark & select.text-input {
+        background-color: #000000;
+    }
 }
 
 .notify_button {

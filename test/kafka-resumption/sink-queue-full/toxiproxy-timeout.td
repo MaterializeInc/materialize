@@ -7,12 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT k1, k2, v1, v2, _fivetran_deleted FROM test.tester.test_deletes
-k1  k2  v1     v2               _fivetran_deleted
--------------------------------------------------
-1   a   12.78  "{\"x\":\"y\"}"  true
-1   b   91.28  {}               false
-2   a   34.21  null             false
-
-> SELECT COUNT(DISTINCT(_fivetran_synced)) FROM test.tester.test_deletes
-2
+$ http-request method=POST url=http://toxiproxy:8474/proxies/kafka/toxics content-type=application/json
+{
+  "name": "kafka",
+  "type": "timeout",
+  "attributes": { "timeout": 30000 }
+}

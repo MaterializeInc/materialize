@@ -18,7 +18,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem};
+use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -38,17 +38,16 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
 };
 use crate::coord::{
-    Coordinator, CopyToContext, ExecuteContext, ExplainContext, Message, PeekStage,
-    PeekStageCopyTo, PeekStageExplain, PeekStageFinish, PeekStageLinearizeTimestamp,
-    PeekStageOptimizeLir, PeekStageOptimizeMir, PeekStageRealTimeRecency,
-    PeekStageTimestampReadHold, PeekStageValidate, PlanValidity, RealTimeRecencyContext,
-    TargetCluster,
+    Coordinator, CopyToContext, ExecuteContext, ExplainContext, ExplainPlanContext, Message,
+    PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageFinish, PeekStageLinearizeTimestamp,
+    PeekStageOptimize, PeekStageRealTimeRecency, PeekStageTimestampReadHold, PeekStageValidate,
+    PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::ResultExt;
@@ -76,7 +75,7 @@ impl Coordinator {
                 plan,
                 target_cluster,
                 copy_to_ctx: None,
-                explain_ctx: None,
+                explain_ctx: ExplainContext::None,
             }),
         )
         .await;
@@ -134,7 +133,7 @@ impl Coordinator {
                     connection,
                     format_params,
                 }),
-                explain_ctx: None,
+                explain_ctx: ExplainContext::None,
             }),
         )
         .await;
@@ -174,11 +173,12 @@ impl Coordinator {
                 plan,
                 target_cluster,
                 copy_to_ctx: None,
-                explain_ctx: Some(ExplainContext {
+                explain_ctx: ExplainContext::Plan(ExplainPlanContext {
                     broken,
                     config,
                     format,
                     stage,
+                    replan: None,
                     desc: Some(desc),
                     optimizer_trace,
                 }),
@@ -234,15 +234,10 @@ impl Coordinator {
                             .await,
                         ctx
                     );
-                    (ctx, PeekStage::OptimizeMir(next))
+                    (ctx, PeekStage::Optimize(next))
                 }
-                OptimizeMir(stage) => {
-                    self.peek_stage_optimize_mir(ctx, root_otel_ctx.clone(), stage)
-                        .await;
-                    return;
-                }
-                OptimizeLir(stage) => {
-                    self.peek_stage_optimize_lir(ctx, root_otel_ctx.clone(), stage)
+                Optimize(stage) => {
+                    self.peek_stage_optimize(ctx, root_otel_ctx.clone(), stage)
                         .await;
                     return;
                 }
@@ -256,8 +251,8 @@ impl Coordinator {
                     ctx.retire(result);
                     return;
                 }
-                Explain(stage) => {
-                    let result = self.peek_stage_explain(&mut ctx, stage);
+                ExplainPlan(stage) => {
+                    let result = self.peek_stage_explain_plan(&mut ctx, stage);
                     ctx.retire(result);
                     return;
                 }
@@ -284,11 +279,8 @@ impl Coordinator {
             .instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
-        let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
-            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
-        } else {
-            optimize::OptimizerConfig::from(self.catalog().system_config())
-        };
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&explain_ctx);
 
         let optimizer = match copy_to_ctx {
             None => {
@@ -480,7 +472,7 @@ impl Coordinator {
             optimizer,
             explain_ctx,
         }: PeekStageTimestampReadHold,
-    ) -> Result<PeekStageOptimizeMir, AdapterError> {
+    ) -> Result<PeekStageOptimize, AdapterError> {
         let cluster_id = match optimizer.as_ref() {
             Either::Left(optimizer) => optimizer.cluster_id(),
             Either::Right(optimizer) => optimizer.cluster_id(),
@@ -507,7 +499,7 @@ impl Coordinator {
             )
             .await?;
 
-        Ok(PeekStageOptimizeMir {
+        Ok(PeekStageOptimize {
             validity,
             plan,
             source_ids,
@@ -520,11 +512,11 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn peek_stage_optimize_mir(
+    async fn peek_stage_optimize(
         &mut self,
         ctx: ExecuteContext,
         root_otel_ctx: OpenTelemetryContext,
-        PeekStageOptimizeMir {
+        PeekStageOptimize {
             validity,
             plan,
             source_ids,
@@ -533,102 +525,110 @@ impl Coordinator {
             determination,
             mut optimizer,
             explain_ctx,
-        }: PeekStageOptimizeMir,
+        }: PeekStageOptimize,
     ) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
+        let timestamp_context = determination.timestamp_context.clone();
         let stats = self
             .statistics_oracle(
                 ctx.session(),
                 &source_ids,
-                &determination.timestamp_context.antichain(),
+                &timestamp_context.antichain(),
                 true,
             )
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
 
         mz_ore::task::spawn_blocking(
-            || "optimize peek (MIR)",
+            || "optimize peek",
             move || {
-                let pipeline = ||
-                 -> Result<
-                    Either<optimize::peek::GlobalMirPlan, optimize::copy_to::GlobalMirPlan>,
-                    AdapterError,
-                > {
-                    // In `explain_~` contexts, set the trace-derived dispatch
-                    // as default while optimizing.
-                    let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
-                        let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
-                        Some(tracing::dispatcher::set_default(&dispatch))
-                    } else {
-                        None
-                    };
-
-                    let _span_guard =
-                        tracing::debug_span!(target: "optimizer", "optimize").entered();
+                let pipeline = || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, AdapterError> {
+                    let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let raw_expr = plan.source.clone();
-
-                    // Trace the pipeline input under `optimize/raw`.
-                    tracing::debug_span!(target: "optimizer", "raw").in_scope(|| {
-                        trace_plan(&raw_expr);
-                    });
 
                     match optimizer.as_mut() {
                         // Optimize SELECT statement.
                         Either::Left(optimizer) => {
-                            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                            // HIR ⇒ MIR lowering and MIR optimization (local)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                            let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
-                            let global_mir_plan =
-                                optimizer.catch_unwind_optimize(local_mir_plan)?;
+                            // Attach resolved context required to continue the pipeline.
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, ctx.session(), stats);
+                            // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                            let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
-                            Ok(Either::Left(global_mir_plan))
+                            Ok(Either::Left(global_lir_plan))
                         }
                         // Optimize COPY TO statement.
                         Either::Right(optimizer) => {
-                            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                            // HIR ⇒ MIR lowering and MIR optimization (local and global)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                            let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
-                            let global_mir_plan =
-                                optimizer.catch_unwind_optimize(local_mir_plan)?;
+                            // Attach resolved context required to continue the pipeline.
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, ctx.session(), stats);
+                            // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                            let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
-                            Ok(Either::Right(global_mir_plan))
+                            Ok(Either::Right(global_lir_plan))
                         }
                     }
                 };
 
                 let stage = match pipeline() {
-                    Ok(global_mir_plan) => PeekStage::OptimizeLir(PeekStageOptimizeLir {
-                        validity,
-                        plan,
-                        source_ids,
-                        id_bundle,
-                        target_replica,
-                        optimizer,
-                        global_mir_plan,
-                        explain_ctx,
-                        determination,
-                    }),
+                    Ok(Either::Left(global_lir_plan)) => {
+                        let optimizer = optimizer.unwrap_left();
+                        if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                            let (_, df_meta, _) = global_lir_plan.unapply();
+                            PeekStage::ExplainPlan(PeekStageExplainPlan {
+                                validity,
+                                select_id: optimizer.select_id(),
+                                finishing: optimizer.finishing().clone(),
+                                df_meta,
+                                explain_ctx,
+                            })
+                        } else {
+                            PeekStage::Finish(PeekStageFinish {
+                                validity,
+                                plan,
+                                id_bundle,
+                                target_replica,
+                                source_ids,
+                                determination,
+                                optimizer,
+                                global_lir_plan,
+                            })
+                        }
+                    }
+                    Ok(Either::Right(global_lir_plan)) => {
+                        let optimizer = optimizer.unwrap_right();
+                        PeekStage::CopyTo(PeekStageCopyTo {
+                            validity,
+                            optimizer,
+                            global_lir_plan,
+                        })
+                    }
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
                     Err(err) => {
-                        let Some(explain_ctx) = explain_ctx else {
+                        let Some(optimizer) = optimizer.left() else {
+                            // In `COPY TO` contexts, immediately retire the
+                            // execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        };
+                        let ExplainContext::Plan(explain_ctx) = explain_ctx else {
                             // In `sequence_~` contexts, immediately retire the
                             // execution with the error.
                             return ctx.retire(Err(err.into()));
                         };
-
-                        let optimizer = optimizer.unwrap_left();
 
                         if explain_ctx.broken {
                             // In `EXPLAIN BROKEN` contexts, just log the error
                             // and move to the next stage with default
                             // parameters.
                             tracing::error!("error while handling EXPLAIN statement: {}", err);
-                            PeekStage::Explain(PeekStageExplain {
+                            PeekStage::ExplainPlan(PeekStageExplainPlan {
                                 validity,
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
@@ -643,6 +643,7 @@ impl Coordinator {
                     }
                 };
 
+                // Ignore errors if the coordinator has shut down.
                 let _ = internal_cmd_tx.send(Message::PeekStageReady {
                     ctx,
                     otel_ctx: root_otel_ctx,
@@ -715,147 +716,6 @@ impl Coordinator {
                 },
             )),
         }
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn peek_stage_optimize_lir(
-        &mut self,
-        mut ctx: ExecuteContext,
-        root_otel_ctx: OpenTelemetryContext,
-        PeekStageOptimizeLir {
-            validity,
-            plan,
-            id_bundle,
-            target_replica,
-            determination,
-            source_ids,
-            mut optimizer,
-            global_mir_plan,
-            explain_ctx,
-        }: PeekStageOptimizeLir,
-    ) {
-        // Generate data structures that can be moved to another task where we will perform possibly
-        // expensive optimizations.
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-
-        let timestamp_context = determination.clone().timestamp_context;
-
-        mz_ore::task::spawn_blocking(
-            || "optimize peek (LIR)",
-            move || {
-                let pipeline =
-                    || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, AdapterError> {
-                        // In `explain_~` contexts, set the trace-derived dispatch
-                        // as default while optimizing.
-                        let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
-                            let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
-                            Some(tracing::dispatcher::set_default(&dispatch))
-                        } else {
-                            None
-                        };
-
-                        let _span_guard =
-                            tracing::debug_span!(target: "optimizer", "optimize").entered();
-
-                        match optimizer.as_mut() {
-                            // Optimize SELECT statement.
-                            Either::Left(optimizer) => {
-                                let global_mir_plan = global_mir_plan.unwrap_left();
-
-                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                                let global_mir_plan = global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
-                                let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
-
-                                Ok(Either::Left(global_lir_plan))
-                            }
-                            // Optimize COPY TO statement.
-                            Either::Right(optimizer) => {
-                                let global_mir_plan = global_mir_plan.unwrap_right();
-
-                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                                let global_mir_plan = global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut())?;
-                                let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
-
-                                Ok(Either::Right(global_lir_plan))
-                            }
-                        }
-                    };
-
-                let stage = match pipeline() {
-                    Ok(Either::Left(global_lir_plan)) => {
-                        let optimizer = optimizer.unwrap_left();
-                        if let Some(explain_ctx) = explain_ctx {
-                            let (_, df_meta, _) = global_lir_plan.unapply();
-                            PeekStage::Explain(PeekStageExplain {
-                                validity,
-                                select_id: optimizer.select_id(),
-                                finishing: optimizer.finishing().clone(),
-                                df_meta,
-                                explain_ctx,
-                            })
-                        } else {
-                            PeekStage::Finish(PeekStageFinish {
-                                validity,
-                                plan,
-                                id_bundle,
-                                target_replica,
-                                source_ids,
-                                determination,
-                                optimizer,
-                                global_lir_plan,
-                            })
-                        }
-                    }
-                    Ok(Either::Right(global_lir_plan)) => {
-                        let optimizer = optimizer.unwrap_right();
-                        PeekStage::CopyTo(PeekStageCopyTo {
-                            validity,
-                            optimizer,
-                            global_lir_plan,
-                        })
-                    }
-                    // Internal optimizer errors are handled differently
-                    // depending on the caller.
-                    Err(err) => {
-                        let Some(optimizer) = optimizer.left() else {
-                            // In `COPY TO` contexts, immediately retire the
-                            // execution with the error.
-                            return ctx.retire(Err(err.into()));
-                        };
-                        let Some(explain_ctx) = explain_ctx else {
-                            // In `sequence_~` contexts, immediately retire the
-                            // execution with the error.
-                            return ctx.retire(Err(err.into()));
-                        };
-
-                        if explain_ctx.broken {
-                            // In `EXPLAIN BROKEN` contexts, just log the error
-                            // and move to the next stage with default
-                            // parameters.
-                            tracing::error!("error while handling EXPLAIN statement: {}", err);
-                            PeekStage::Explain(PeekStageExplain {
-                                validity,
-                                select_id: optimizer.select_id(),
-                                finishing: optimizer.finishing().clone(),
-                                df_meta: Default::default(),
-                                explain_ctx,
-                            })
-                        } else {
-                            // In regular `EXPLAIN` contexts, immediately retire
-                            // the execution with the error.
-                            return ctx.retire(Err(err.into()));
-                        }
-                    }
-                };
-
-                // Ignore errors if the coordinator has shut down.
-                let _ = internal_cmd_tx.send(Message::PeekStageReady {
-                    ctx,
-                    otel_ctx: root_otel_ctx,
-                    stage,
-                });
-            },
-        );
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -992,24 +852,25 @@ impl Coordinator {
         )))
     }
 
-    fn peek_stage_explain(
+    fn peek_stage_explain_plan(
         &mut self,
         ctx: &mut ExecuteContext,
-        PeekStageExplain {
+        PeekStageExplainPlan {
             df_meta,
             select_id,
             finishing,
             explain_ctx:
-                ExplainContext {
+                ExplainPlanContext {
                     broken,
                     config,
                     format,
                     stage,
                     desc,
                     optimizer_trace,
+                    ..
                 },
             ..
-        }: PeekStageExplain,
+        }: PeekStageExplainPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let desc = desc.expect("RelationDesc for SelectPlan in EXPLAIN mode");
 

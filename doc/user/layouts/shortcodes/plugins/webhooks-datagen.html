@@ -1,0 +1,227 @@
+<div id="webhooks-datagen" class="json_widget">
+  <div class="input_container">
+    <div class="input_container-text">
+      <input type="text" placeholder="Webhook URL" id="webhookURL" class="text-input" />
+    </div>
+  </div>
+  <div class="input_container">
+    <div class="input_container-text">
+      <input type="password" placeholder="Secret (Step 1.)" id="authPassword" class="text-input" />
+    </div>
+  </div>
+  <div class="input_container">
+    <div class="input_container-text">
+      <button id="startButton" class="btn">Generate webhook events!</button>
+      <button id="stopButton" class="btn" style="display: none">Stop</button>
+    </div>
+  </div>
+  <div class="input_container">
+    <div class="input_container-text">
+      <select id="useCaseSelect" class="text-input">
+        <option value="">Select a Faker.js module</option>
+        <option value="sensorData">Sensor data</option>
+        <option value="userActivity">User activity</option>
+        <option value="ecommerceTransaction">E-commerce transaction</option>
+      </select>
+    </div>
+  </div>
+  <div>
+    <div class="json">
+      <textarea placeholder="JSON schema" id="jsonSchema" rows="5" cols="30" class="json-textarea">
+{
+  "sensor_id": "faker.datatype.number({ max: 100, min: 1})",
+  "timestamp": "faker.date.between('2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z')",
+  "location": {
+      "latitude": "faker.datatype.number({ max: 90, min: -90})",
+      "longitude": "faker.datatype.number({ max: 180, min: -180})"
+  },
+  "temperature": "faker.datatype.float({ min: 20, max: 95 })"
+}
+      </textarea>
+      <div id="jsonError" class="error" style="display: none"></div>
+    </div>
+    <div class="log_output" id="logOutput" style="display: none"></div>
+  </div>
+</div>
+
+<script type="module">
+  import { faker } from 'https://esm.sh/@faker-js/faker@8.4.0';
+
+  const webhookURLInput = document.getElementById("webhookURL");
+  const authPasswordInput = document.getElementById("authPassword");
+  const jsonSchemaTextarea = document.getElementById("jsonSchema");
+  const startButton = document.getElementById("startButton");
+  const stopButton = document.getElementById("stopButton");
+  const jsonErrorDiv = document.getElementById("jsonError");
+  const logOutputDiv = document.getElementById("logOutput");
+
+  let logs = [];
+  let isGenerating = false;
+  let generationInterval;
+
+  document.addEventListener("DOMContentLoaded", function () {
+    formatJSON(); // Format JSON when the page is loaded
+  });
+
+  function validateJson(jsonString) {
+    try {
+      JSON.parse(jsonString);
+      jsonErrorDiv.style.display = "none";
+      return true;
+    } catch (error) {
+      jsonErrorDiv.style.display = "block";
+      jsonErrorDiv.textContent = "Invalid JSON format";
+      return false;
+    }
+  }
+
+  function isFakerPathValid(path) {
+    return path
+      .split(".")
+      .reduce((acc, curr) => (acc && acc[curr] ? acc[curr] : null), faker);
+  }
+
+  function generateDataAndSend() {
+    const generatedData = JSON.parse(
+      jsonSchemaTextarea.value.replace(/"faker\.(.+?)"/g, (_, match) => {
+        try {
+          const fakerValue = eval(`faker.${match}`);
+          return JSON.stringify(fakerValue);
+        } catch (error) {
+          console.error("Error while generating faker data:", error);
+          return '"Error"';
+        }
+      })
+    );
+    logs.unshift(`Sent: ${JSON.stringify(generatedData)}`); // Prepend log messages
+    logOutputDiv.innerHTML = logs
+      .map((log, index) => `<p key="${index}">${log}</p>`)
+      .join("");
+
+    // Update the log display here
+    updateLogDisplay();
+
+    console.log("URL:", webhookURLInput.value);
+    console.log("Headers:", {
+      "Content-Type": "application/json",
+      "X-API-KEY": authPasswordInput.value,
+    });
+    console.log("Body:", JSON.stringify(generatedData));
+
+    fetch(webhookURLInput.value, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": authPasswordInput.value,
+      },
+      body: JSON.stringify(generatedData),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        return response;
+      })
+      .then((data) => {
+        // Handle response data if needed
+      })
+      .catch((error) => {
+        console.error("There was a problem with the fetch operation:", error);
+        logs.unshift(`Error: ${error.message}`); // Prepend error messages
+        logOutputDiv.innerHTML = logs
+          .map((log, index) => `<p key="${index}">${log}</p>`)
+          .join("");
+        // Update the log display when an error occurs
+        updateLogDisplay();
+      });
+  }
+
+  function startGeneration() {
+    if (!webhookURLInput.value || !authPasswordInput.value) {
+      alert("Webhook URL and Auth Password cannot be empty!");
+      return;
+    }
+    if (validateJson(jsonSchemaTextarea.value)) {
+      isGenerating = true;
+      generationInterval = setInterval(generateDataAndSend, 1000);
+      startButton.style.display = "none";
+      stopButton.style.display = "inline-block";
+    }
+  }
+
+  function stopGeneration() {
+    isGenerating = false;
+    clearInterval(generationInterval);
+    startButton.style.display = "inline-block";
+    stopButton.style.display = "none";
+    generationInterval = null;
+  }
+
+  // Hide logOutputDiv if there are no logs
+  function updateLogDisplay() {
+    logOutputDiv.style.display = logs.length > 0 ? "block" : "none";
+  }
+
+  startButton.addEventListener("click", startGeneration);
+  stopButton.addEventListener("click", stopGeneration);
+  updateLogDisplay();
+
+  // Added code for JSON formatting when the textarea loses focus
+  jsonSchemaTextarea.addEventListener("blur", formatJSON);
+
+  function formatJSON() {
+    const jsonString = jsonSchemaTextarea.value.trim();
+    try {
+      const formattedJSON = JSON.stringify(JSON.parse(jsonString), null, 2);
+      jsonSchemaTextarea.value = formattedJSON;
+    } catch (error) {
+      // Handle the error if the JSON is not valid:
+      console.error("Error while formatting JSON:", error);
+    }
+  }
+
+  document.getElementById('useCaseSelect').addEventListener('change', function() {
+    const selectedUseCase = this.value;
+    const schema = schemas[selectedUseCase];
+    if (schema) {
+      jsonSchemaTextarea.value = schema;
+      formatJSON(); // Automatically format the selected JSON schema
+    }
+  });
+
+  const schemas = {
+    sensorData: `{
+      "sensor_id": "faker.datatype.number({ max: 100, min: 1})",
+      "timestamp": "faker.date.between('2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z')",
+      "location": {
+          "latitude": "faker.datatype.number({ max: 90, min: -90})",
+          "longitude": "faker.datatype.number({ max: 180, min: -180})"
+      },
+      "temperature": "faker.datatype.float({ min: 20, max: 95 })"
+    }`,
+    userActivity: `{
+      "user_id": "faker.datatype.uuid()",
+      "event": "faker.helpers.arrayElement(['page_view', 'click', 'scroll', 'navigation'])",
+      "timestamp": "faker.date.recent()",
+      "page": {
+        "url": "faker.internet.url()",
+        "title": "faker.lorem.words()"
+      },
+      "interaction": {
+        "element": "faker.lorem.word()",
+        "time_spent": "faker.datatype.number({ min: 1, max: 120 })"
+      }
+    }`,
+    ecommerceTransaction: `{
+      "user_id": "faker.datatype.uuid()",
+      "event": "faker.helpers.arrayElement(['add_to_cart', 'remove_from_cart', 'purchase', 'view_product'])",
+      "timestamp": "faker.date.recent()",
+      "product": {
+        "id": "faker.datatype.uuid()",
+        "name": "faker.commerce.productName()",
+        "category": "faker.commerce.department()",
+        "price": "faker.commerce.price()"
+      }
+    }`
+  };
+</script>

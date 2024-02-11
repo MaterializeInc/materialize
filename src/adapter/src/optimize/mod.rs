@@ -64,13 +64,27 @@ use std::panic::AssertUnwindSafe;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_expr::{EvalError, OptimizedMirRelationExpr, UnmaterializableFunc};
+use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
-use mz_repr::explain::ExplainConfig;
+use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
+use mz_transform::typecheck::SharedContext as TypecheckContext;
 use mz_transform::TransformError;
+
+// Alias types
+// -----------
+
+/// A type for a [`DataflowDescription`] backed by `Mir~` plans. Used internally
+/// by the optimizer implementations.
+type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
+/// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
+/// by the optimizer implementations.
+type LirDataflowDescription = DataflowDescription<Plan>;
+
+// Core API
+// --------
 
 /// A trait that represents an optimization stage.
 ///
@@ -101,6 +115,7 @@ where
     /// Like [`Self::optimize`], but additionally ensures that panics occurring
     /// in the [`Self::optimize`] call are caught and demoted to an
     /// [`OptimizerError::Internal`] error.
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
             Ok(result) => {
@@ -133,11 +148,19 @@ where
     }
 }
 
+// Optimizer configuration
+// -----------------------
+
 // Feature flags for the optimizer.
 #[derive(Clone, Debug)]
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.
     pub mode: OptimizeMode,
+    /// If the [`GlobalId`] is set the optimizer works in "replan" mode.
+    ///
+    /// This means that it will not consider catalog items (more specifically
+    /// indexes) with [`GlobalId`] greater or equal than the one provided here.
+    pub replan: Option<GlobalId>,
     /// Enable fast path optimization.
     pub enable_fast_path: bool,
     /// Enable consolidation of unions that happen immediately after negate.
@@ -153,13 +176,11 @@ pub struct OptimizerConfig {
     /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
     /// [`peek::Optimizer`].
     pub persist_fast_path_limit: usize,
-    /// Enable outer join lowering implemented in #22343.
+    /// Bound from [`SystemVars::enable_new_outer_join_lowering`].
     pub enable_new_outer_join_lowering: bool,
-    /// Enable eager delta joins.
+    /// Bound from [`SystemVars::enable_eager_delta_joins`].
     pub enable_eager_delta_joins: bool,
-    /// Enable fusion of MFPs in reductions.
-    ///
-    /// The fusion happens in MIR ⇒ LIR lowering.
+    /// Bound from [`SystemVars::enable_reduce_mfp_fusion`].
     pub enable_reduce_mfp_fusion: bool,
 }
 
@@ -175,6 +196,7 @@ impl From<&SystemVars> for OptimizerConfig {
     fn from(vars: &SystemVars) -> Self {
         Self {
             mode: OptimizeMode::Execute,
+            replan: None,
             enable_fast_path: true, // Always enable fast path if available.
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_specialized_arrangements: vars.enable_specialized_arrangements(),
@@ -186,19 +208,35 @@ impl From<&SystemVars> for OptimizerConfig {
     }
 }
 
-impl From<(&SystemVars, &ExplainConfig)> for OptimizerConfig {
-    fn from((vars, explain_config): (&SystemVars, &ExplainConfig)) -> Self {
-        // Construct base config from vars.
-        let mut config = Self::from(vars);
-        // We are calling this constructor from an 'Explain' mode context.
-        config.mode = OptimizeMode::Explain;
-        config.enable_fast_path = !explain_config.no_fast_path;
+/// A trait used to implement layered config construction.
+pub trait OverrideFrom<T> {
+    /// Override the configuration represented by [`Self`] with values
+    /// from the given `layer`.
+    fn override_from(self, layer: &T) -> Self;
+}
+
+/// [`OptimizerConfig`] overrides coming from an [`ExplainContext`].
+impl OverrideFrom<ExplainContext> for OptimizerConfig {
+    fn override_from(mut self, ctx: &ExplainContext) -> Self {
+        let ExplainContext::Plan(ctx) = ctx else {
+            return self; // Return immediately for all other contexts.
+        };
+
+        // Override general parameters.
+        self.mode = OptimizeMode::Explain;
+        self.replan = ctx.replan;
+        self.enable_fast_path = !ctx.config.no_fast_path;
+
         // Override feature flags that can be enabled in the EXPLAIN config.
-        if let Some(explain_flag) = explain_config.enable_new_outer_join_lowering {
-            config.enable_new_outer_join_lowering = explain_flag;
+        if let Some(explain_flag) = ctx.config.enable_new_outer_join_lowering {
+            self.enable_new_outer_join_lowering = explain_flag;
         }
+        if let Some(explain_flag) = ctx.config.enable_eager_delta_joins {
+            self.enable_eager_delta_joins = explain_flag;
+        }
+
         // Return final result.
-        config
+        self
     }
 }
 
@@ -210,12 +248,8 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
     }
 }
 
-/// A type for a [`DataflowDescription`] backed by `Mir~` plans. Used internally
-/// by the optimizer implementations.
-type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
-/// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
-/// by the optimizer implementations.
-type LirDataflowDescription = DataflowDescription<Plan>;
+// OptimizerError
+// ===============
 
 /// Error types that can be generated during optimization.
 #[derive(Debug, thiserror::Error)]
@@ -271,6 +305,24 @@ impl From<anyhow::Error> for OptimizerError {
     }
 }
 
+// Tracing helpers
+// ---------------
+
+#[tracing::instrument(target = "optimizer", level = "debug", name = "local", skip_all)]
+fn optimize_mir_local(
+    expr: MirRelationExpr,
+    typecheck_ctx: &TypecheckContext,
+) -> Result<OptimizedMirRelationExpr, OptimizerError> {
+    #[allow(deprecated)]
+    let optimizer = mz_transform::Optimizer::logical_optimizer(typecheck_ctx);
+    let expr = optimizer.optimize(expr)?;
+
+    // Trace the result of this phase.
+    mz_repr::explain::trace_plan(expr.as_inner());
+
+    Ok::<_, OptimizerError>(expr)
+}
+
 macro_rules! trace_plan {
     (at: $span:literal, $plan:expr) => {
         tracing::debug_span!(target: "optimizer", $span).in_scope(|| {
@@ -280,3 +332,5 @@ macro_rules! trace_plan {
 }
 
 use trace_plan;
+
+use crate::coord::ExplainContext;

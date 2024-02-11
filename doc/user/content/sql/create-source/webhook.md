@@ -13,7 +13,7 @@ menu:
 {{< public-preview />}}
 
 {{% create-source/intro %}}
-Webhook sources expose a [public URL](#webhook-url) that allow your applications to push webhook events into Materialize.
+Webhook sources expose a [public URL](#webhook-url) that allows your applications to push webhook events into Materialize.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -44,9 +44,10 @@ Field                  | Type                | Description
 
 |<div style="width:290px">Body format</div> | Type      | Description       |
 --------------------------------------------| --------- |-------------------|
-| Bytes                                     | `bytea`   | Does **no parsing** of the request, and stores the body of a request as it was received. |
-| JSON                                      | `jsonb`   | Parses the body of a request as JSON. If the body is not valid JSON, a response of `400` Bad Request will be returned. |
-| Text                                      | `text`    | Parses the body of a request as `UTF-8` text. If the body is not valid `UTF-8`, a response of `400` Bad Request will be returned. |
+| `BYTES`                                   | `bytea`   | Does **no parsing** of the request, and stores the body of a request as it was received. |
+| `JSON`                                    | `jsonb`   | Parses the body of a request as JSON. If the body is not valid JSON, a response of `400` Bad Request will be returned. |
+| `JSON ARRAY`                              | `jsonb`   | Parses the body of a request as a list of JSON objects, automatically expanding the list of objects to individual rows. Also accepts a single JSON object. If the body is not valid JSON, a response of `400` Bad Request will be returned. |
+| `TEXT`                                    | `text`    | Parses the body of a request as `UTF-8` text. If the body is not valid `UTF-8`, a response of `400` Bad Request will be returned. |
 
 ## Output
 
@@ -262,6 +263,7 @@ into separate rows using `BODY FORMAT JSON ARRAY`.
 CREATE SOURCE webhook_source_json_batch IN CLUSTER my_cluster FROM WEBHOOK
   BODY FORMAT JSON ARRAY
   INCLUDE HEADERS;
+```
 
 If you `POST` a JSON array of three elements to `webhook_source_json_batch`,
 three rows will get appended to the source.

@@ -104,7 +104,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{soft_panic_or_log, stack};
+use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
@@ -135,7 +135,7 @@ use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
+use tracing::{debug, info, info_span, instrument, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
@@ -163,7 +163,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, 
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
-use mz_catalog::durable::OpenableDurableCatalogState;
+use mz_catalog::durable::{DurableCatalogState, OpenableDurableCatalogState};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
@@ -217,7 +217,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
-    LinearizeReads(Vec<PendingReadTxn>),
+    LinearizeReads,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
     RealTimeRecencyTimestamp {
@@ -295,7 +295,7 @@ impl Message {
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::RemovePendingPeeks { .. } => "remove_pending_peeks",
-            Message::LinearizeReads(_) => "linearize_reads",
+            Message::LinearizeReads => "linearize_reads",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
             Message::RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
@@ -367,7 +367,7 @@ pub enum RealTimeRecencyContext {
         oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-        explain_ctx: Option<ExplainContext>,
+        explain_ctx: ExplainContext,
     },
 }
 
@@ -386,11 +386,10 @@ pub enum PeekStage {
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
-    OptimizeMir(PeekStageOptimizeMir),
-    OptimizeLir(PeekStageOptimizeLir),
+    Optimize(PeekStageOptimize),
     Finish(PeekStageFinish),
     CopyTo(PeekStageCopyTo),
-    Explain(PeekStageExplain),
+    ExplainPlan(PeekStageExplainPlan),
 }
 
 impl PeekStage {
@@ -400,11 +399,10 @@ impl PeekStage {
             PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::TimestampReadHold(PeekStageTimestampReadHold { validity, .. })
-            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
-            | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. })
             | PeekStage::CopyTo(PeekStageCopyTo { validity, .. })
-            | PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
+            | PeekStage::ExplainPlan(PeekStageExplainPlan { validity, .. }) => Some(validity),
         }
     }
 }
@@ -429,7 +427,7 @@ pub struct PeekStageValidate {
     copy_to_ctx: Option<CopyToContext>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -442,7 +440,7 @@ pub struct PeekStageLinearizeTimestamp {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -456,7 +454,7 @@ pub struct PeekStageRealTimeRecency {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -471,11 +469,11 @@ pub struct PeekStageTimestampReadHold {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimizeMir {
+pub struct PeekStageOptimize {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
@@ -485,22 +483,7 @@ pub struct PeekStageOptimizeMir {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimizeLir {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
-    source_ids: BTreeSet<GlobalId>,
-    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-    global_mir_plan: Either<optimize::peek::GlobalMirPlan, optimize::copy_to::GlobalMirPlan>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -523,12 +506,12 @@ pub struct PeekStageCopyTo {
 }
 
 #[derive(Debug)]
-pub struct PeekStageExplain {
+pub struct PeekStageExplainPlan {
     validity: PlanValidity,
     select_id: GlobalId,
     finishing: RowSetFinishing,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
@@ -556,7 +539,7 @@ pub struct CreateIndexValidate {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -566,7 +549,7 @@ pub struct CreateIndexOptimize {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -585,7 +568,7 @@ pub struct CreateIndexExplain {
     exported_index_id: GlobalId,
     plan: plan::CreateIndexPlan,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
@@ -628,11 +611,35 @@ pub struct CreateViewFinish {
 }
 
 #[derive(Debug)]
-pub struct ExplainContext {
+pub enum ExplainContext {
+    /// The ordinary, non-explain variant of the statement.
+    None,
+    /// The `EXPLAIN <level> PLAN FOR <explainee>` version of the statement.
+    Plan(ExplainPlanContext),
+}
+
+impl ExplainContext {
+    /// If available for this context, wrap the [`OptimizerTrace`] into a
+    /// [`tracing::Dispatch`] and set it as default, returning the resulting
+    /// guard in a `Some(guard)` option.
+    fn dispatch_guard(&self) -> Option<tracing::subscriber::DefaultGuard> {
+        match self {
+            ExplainContext::Plan(explain_ctx) => {
+                let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
+                Some(tracing::dispatcher::set_default(&dispatch))
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ExplainPlanContext {
     pub broken: bool,
     pub config: ExplainConfig,
     pub format: ExplainFormat,
     pub stage: ExplainStage,
+    pub replan: Option<GlobalId>,
     pub desc: Option<RelationDesc>,
     pub optimizer_trace: OptimizerTrace,
 }
@@ -662,7 +669,7 @@ pub struct CreateMaterializedViewValidate {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -672,7 +679,7 @@ pub struct CreateMaterializedViewOptimize {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -692,7 +699,7 @@ pub struct CreateMaterializedViewExplain {
     exported_sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
@@ -1022,6 +1029,10 @@ impl PendingReadTxn {
     pub fn timestamp_context(&self) -> &TimestampContext<mz_repr::Timestamp> {
         &self.timestamp_context
     }
+
+    pub(crate) fn take_context(self) -> ExecuteContext {
+        self.txn.take_context()
+    }
 }
 
 #[derive(Debug)]
@@ -1032,8 +1043,11 @@ enum PendingRead {
         txn: PendingTxn,
     },
     ReadThenWrite {
-        /// Channel used to alert the transaction that the read has been linearized.
-        tx: oneshot::Sender<()>,
+        /// Context used to send a response back to the client.
+        ctx: ExecuteContext,
+        /// Channel used to alert the transaction that the read has been linearized and send back
+        /// `ctx`.
+        tx: oneshot::Sender<Option<ExecuteContext>>,
     },
 }
 
@@ -1042,7 +1056,7 @@ impl PendingRead {
     ///
     /// If it is necessary to finalize an execute, return the state necessary to do so
     /// (execution context and result)
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
         match self {
             PendingRead::Read {
@@ -1063,9 +1077,9 @@ impl PendingRead {
 
                 Some((ctx, response))
             }
-            PendingRead::ReadThenWrite { tx, .. } => {
+            PendingRead::ReadThenWrite { ctx, tx, .. } => {
                 // Ignore errors if the caller has hung up.
-                let _ = tx.send(());
+                let _ = tx.send(Some(ctx));
                 None
             }
         }
@@ -1075,6 +1089,18 @@ impl PendingRead {
         match self {
             PendingRead::Read { .. } => "read",
             PendingRead::ReadThenWrite { .. } => "read_then_write",
+        }
+    }
+
+    pub(crate) fn take_context(self) -> ExecuteContext {
+        match self {
+            PendingRead::Read { txn, .. } => txn.ctx,
+            PendingRead::ReadThenWrite { ctx, tx, .. } => {
+                // Inform the transaction that we've taken their context.
+                // Ignore errors if the caller has hung up.
+                let _ = tx.send(None);
+                ctx
+            }
         }
     }
 }
@@ -1206,7 +1232,7 @@ impl ExecuteContext {
     }
 
     /// Retire the execution, by sending a message to the coordinator.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
         let Self {
             tx,
@@ -1262,7 +1288,7 @@ pub struct Coordinator {
     group_commit_tx: appends::GroupCommitNotifier,
 
     /// Channel for strict serializable reads ready to commit.
-    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
+    strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -1308,6 +1334,9 @@ pub struct Coordinator {
 
     /// A map from client connection ids to a pending real time recency timestamps.
     pending_real_time_recency_timestamp: BTreeMap<ConnectionId, RealTimeRecencyContext>,
+
+    /// A map from client connection ids to pending linearize read transaction.
+    pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
 
     /// A map from active subscribes to the subscribe description.
     active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
@@ -1384,7 +1413,7 @@ impl Coordinator {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
-    #[tracing::instrument(level = "info", skip_all)]
+    #[instrument(name = "coord::bootstrap", skip_all)]
     pub(crate) async fn bootstrap(
         &mut self,
         builtin_migration_metadata: BuiltinMigrationMetadata,
@@ -1890,6 +1919,7 @@ impl Coordinator {
             builtin_updates_fut,
             Box::pin(secrets_cleanup_fut),
         ])
+        .instrument(info_span!("coord::bootstrap::final"))
         .await;
 
         info!("coordinator init: bootstrap complete");
@@ -1905,6 +1935,7 @@ impl Coordinator {
     /// demand, is more efficient as it reduces the number of writes to durable storage. It also
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
+    #[instrument(skip_all)]
     async fn bootstrap_storage_collections(&mut self) {
         // Reset the txns and table shards to a known set of invariants.
         //
@@ -2005,6 +2036,7 @@ impl Coordinator {
     ///
     /// This method does not perform timestamp selection for the dataflows, nor does it create them
     /// in the compute controller. Both of these steps happen later during bootstrapping.
+    #[instrument(skip_all)]
     fn bootstrap_dataflow_plans(
         &mut self,
         ordered_catalog_entries: &[CatalogEntry],
@@ -2365,7 +2397,7 @@ impl Coordinator {
     fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
-        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
+        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
@@ -2505,12 +2537,19 @@ impl Coordinator {
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
                             pending_read_txns.push(pending_read_txn);
                         }
-                        Message::LinearizeReads(pending_read_txns)
+                        for (conn_id, pending_read_txn) in pending_read_txns {
+                            let prev = self.pending_linearize_read_txns.insert(conn_id, pending_read_txn);
+                            soft_assert_or_log!(
+                                prev.is_none(),
+                                "connections can not have multiple concurrent reads, prev: {prev:?}"
+                            )
+                        }
+                        Message::LinearizeReads
                     }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     _ = self.advance_timelines_interval.tick() => {
-                        let span = info_span!(parent: None, "advance_timelines_interval");
+                        let span = info_span!(parent: None, "coord::advance_timelines_interval");
                         span.follows_from(Span::current());
                         Message::GroupCommitInitiate(span, None)
                     },
@@ -2630,7 +2669,7 @@ impl Coordinator {
         &self.active_conns
     }
 
-    #[tracing::instrument(level = "debug", skip(self, ctx_extra))]
+    #[instrument(level = "debug", skip(self, ctx_extra))]
     pub(crate) fn retire_execution(
         &mut self,
         reason: StatementEndedExecutionReason,
@@ -2642,7 +2681,7 @@ impl Coordinator {
     }
 
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
             .instance_snapshot(instance)
@@ -2756,7 +2795,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         controller_persist_txn_tables,
-        storage,
+        mut storage,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -2813,32 +2852,47 @@ pub fn serve(
         let aws_privatelink_availability_zones = aws_privatelink_availability_zones
             .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
+        let pg_timestamp_oracle_config = timestamp_oracle_url
+            .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
+        let initial_timestamps =
+            get_initial_oracle_timestamps(&mut storage, &pg_timestamp_oracle_config).await?;
+
+        // A candidate for the boot_ts. Catalog::open will further advance this,
+        // based on the "now" timestamp, if/when needed.
+        let previous_ts = initial_timestamps
+            .get(&Timeline::EpochMilliseconds)
+            .expect("missing EpochMillisseconds timestamp")
+            .clone();
+
         info!("coordinator init: opening catalog");
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
-            Catalog::open(mz_catalog::config::Config {
-                storage,
-                metrics_registry: &metrics_registry,
-                storage_usage_retention_period,
-                state: mz_catalog::config::StateConfig {
-                    unsafe_mode,
-                    all_features,
-                    build_info,
-                    environment_id: environment_id.clone(),
-                    now: now.clone(),
-                    skip_migrations: false,
-                    cluster_replica_sizes,
-                    builtin_cluster_replica_size,
-                    system_parameter_defaults,
-                    remote_system_parameters,
-                    availability_zones,
-                    egress_ips,
-                    aws_principal_context,
-                    aws_privatelink_availability_zones,
-                    connection_context,
-                    active_connection_count,
-                    http_host_name,
+            Catalog::open(
+                mz_catalog::config::Config {
+                    storage,
+                    metrics_registry: &metrics_registry,
+                    storage_usage_retention_period,
+                    state: mz_catalog::config::StateConfig {
+                        unsafe_mode,
+                        all_features,
+                        build_info,
+                        environment_id: environment_id.clone(),
+                        now: now.clone(),
+                        skip_migrations: false,
+                        cluster_replica_sizes,
+                        builtin_cluster_replica_size,
+                        system_parameter_defaults,
+                        remote_system_parameters,
+                        availability_zones,
+                        egress_ips,
+                        aws_principal_context,
+                        aws_privatelink_availability_zones,
+                        connection_context,
+                        active_connection_count,
+                        http_host_name,
+                    },
                 },
-            })
+                previous_ts,
+            )
             .await?;
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
@@ -2852,7 +2906,6 @@ pub fn serve(
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
         let segment_client_clone = segment_client.clone();
-        let span = tracing::Span::current();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
 
@@ -2861,8 +2914,6 @@ pub fn serve(
         // use the same impl!
         let timestamp_oracle_impl = catalog.system_config().timestamp_oracle_impl();
 
-        let pg_timestamp_oracle_config = timestamp_oracle_url
-            .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
             // of them are locked in right when an oracle is first opened!
@@ -2871,9 +2922,7 @@ pub fn serve(
             pg_timestamp_oracle_params.apply(config);
         }
 
-        let initial_timestamps =
-            get_initial_oracle_timestamps(&catalog, &pg_timestamp_oracle_config).await?;
-
+        let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
             // prevent a stack overflow we allocate a stack three times as big as the default
@@ -2881,6 +2930,7 @@ pub fn serve(
             .stack_size(3 * stack::STACK_SIZE)
             .name("coordinator".to_string())
             .spawn(move || {
+                let span = info_span!(parent: parent_span, "coord::coordinator").entered();
                 let catalog = Arc::new(catalog);
 
                 let mut timestamp_oracles = BTreeMap::new();
@@ -2924,6 +2974,7 @@ pub fn serve(
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),
                     pending_real_time_recency_timestamp: BTreeMap::new(),
+                    pending_linearize_read_txns: BTreeMap::new(),
                     active_subscribes: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -2947,7 +2998,6 @@ pub fn serve(
                 let bootstrap = handle.block_on(async {
                     coord
                         .bootstrap(builtin_migration_metadata, builtin_table_updates)
-                        .instrument(span)
                         .await?;
                     coord
                         .controller
@@ -2960,6 +3010,7 @@ pub fn serve(
                     Ok(())
                 });
                 let ok = bootstrap.is_ok();
+                drop(span);
                 bootstrap_tx
                     .send(bootstrap)
                     .expect("bootstrap_rx is not dropped until it receives this message");
@@ -3014,10 +3065,15 @@ pub fn serve(
 // initializes oracles on bootstrap, once we have fully migrated to the new
 // postgres/crdb-backed oracle.
 async fn get_initial_oracle_timestamps(
-    catalog: &Catalog,
+    storage: &mut Box<dyn DurableCatalogState>,
     pg_timestamp_oracle_config: &Option<PostgresTimestampOracleConfig>,
 ) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
-    let catalog_oracle_timestamps = catalog.get_all_persisted_timestamps().await?;
+    let catalog_oracle_timestamps: BTreeMap<_, _> = storage
+        .get_timestamps()
+        .await?
+        .into_iter()
+        .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
+        .collect();
     let debug_msg = || {
         catalog_oracle_timestamps
             .iter()
@@ -3069,7 +3125,7 @@ async fn get_initial_oracle_timestamps(
     Ok(initial_timestamps)
 }
 
-#[tracing::instrument(level = "info", skip_all)]
+#[instrument(skip_all)]
 pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,

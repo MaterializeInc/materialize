@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::time::Duration;
 
+use crate::transaction::MAX_INSERT_ARGUMENTS;
 use crate::{
     AppendBatch, Data, DebugStashFactory, Stash, StashCollection, StashError, StashFactory,
     TableTransaction, Timestamp, TypedCollection, INSERT_BATCH_SPLIT_SIZE,
@@ -570,7 +571,12 @@ async fn test_stash_batch_large_number_updates() {
     Stash::with_debug_stash(|mut stash| async move {
         let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();
         let mut batch = make_batch(&col, &mut stash).await.unwrap();
-        for i in 0..500_000 {
+        // Back of the envelope math would produce 12 batches of updates.
+        //
+        // Each update statement takes 4 arguments, so we have a total of
+        // MAX_INSERT_ARGUMENTS * 4 * 3 arguments, leading to 12 batches of updates.
+        for i in 0..(MAX_INSERT_ARGUMENTS * 3) {
+            let i = i.into();
             col.append_to_batch(&mut batch, &i, &(i + 1), 1);
         }
         append(&mut stash, vec![batch]).await.unwrap();

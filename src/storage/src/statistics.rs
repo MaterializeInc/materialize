@@ -38,6 +38,10 @@ pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) envelope_state_bytes: UIntGaugeVec,
     pub(crate) envelope_state_records: UIntGaugeVec,
     pub(crate) rehydration_latency_ms: IntGaugeVec,
+
+    // statistics that are not yet exposed to users.
+    pub(crate) upstream_values: UIntGaugeVec,
+    pub(crate) committed_values: UIntGaugeVec,
 }
 
 impl SourceStatisticsMetricDefs {
@@ -83,6 +87,16 @@ impl SourceStatisticsMetricDefs {
                 help: "The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id", "envelope"],
             )),
+            upstream_values: registry.register(metric!(
+                name: "mz_source_upstream_values",
+                help: "The total number of _values_ (source-defined unit) present in upstream.",
+                var_labels: ["source_id", "worker_id", "shard_id"],
+            )),
+            committed_values: registry.register(metric!(
+                name: "mz_source_committed_values",
+                help: "The total number of _values_ (source-defined unit) we have fully processed, and storage and committed.",
+                var_labels: ["source_id", "worker_id", "shard_id"],
+            )),
         }
     }
 }
@@ -98,6 +112,10 @@ pub struct SourceStatisticsMetrics {
     pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) envelope_state_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+
+    // statistics that are not yet exposed to users.
+    pub(crate) upstream_values: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) committed_values: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -161,8 +179,18 @@ impl SourceStatisticsMetrics {
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
-                shard,
+                shard.clone(),
                 envelope.to_string(),
+            ]),
+            upstream_values: defs.upstream_values.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            committed_values: defs.committed_values.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
             ]),
         }
     }
@@ -479,6 +507,22 @@ impl SourceStatistics {
             .expect("Rehydration took more than ~584 million years!");
         cur.1.rehydration_latency_ms = Some(value);
         cur.2.rehydration_latency_ms.set(value);
+    }
+
+    /// Set the `upstream_values` stat to the given value.
+    pub fn set_upstream_values(&self, value: u64) {
+        let cur = self.stats.borrow_mut();
+        // Not yet exposed to users.
+        // cur.1.upstream_values = value;
+        cur.2.upstream_values.set(value);
+    }
+
+    /// Set the `committed_values` stat to the given value.
+    pub fn set_committed_values(&self, value: u64) {
+        let cur = self.stats.borrow_mut();
+        // Not yet exposed to users.
+        // cur.1.committed_values = value;
+        cur.2.committed_values.set(value);
     }
 }
 

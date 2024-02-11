@@ -287,10 +287,6 @@ def is_on_release_version() -> bool:
     return any(MzVersion.is_valid_version_string(git_tag) for git_tag in git_tags)
 
 
-def is_on_main_branch() -> bool:
-    return get_branch_name() == "main"
-
-
 def contains_commit(commit_sha: str, target: str = "HEAD") -> bool:
     command = ["git", "merge-base", "--is-ancestor", commit_sha, target]
     return_code = spawn.run_and_get_return_code(command)
@@ -333,6 +329,7 @@ def get_commit_message(commit_sha: str) -> str | None:
 
 
 def get_branch_name() -> str:
+    """This may not work on Buildkite; consider using the same function from build_context."""
     command = ["git", "branch", "--show-current"]
     return spawn.capture(command).strip()
 

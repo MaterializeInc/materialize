@@ -70,6 +70,7 @@ class CreateTable(Check):
                 > SELECT f2 FROM create_table1 WHERE f2 = 1234;
                 1234
 
+                > SET statement_timeout = '120s'
                 > DELETE FROM create_table1 WHERE f1 = 999;
 
                 > SHOW CREATE TABLE create_table2;

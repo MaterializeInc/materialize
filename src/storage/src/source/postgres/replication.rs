@@ -73,6 +73,7 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
@@ -88,7 +89,8 @@ use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use once_cell::sync::Lazy;
@@ -97,6 +99,8 @@ use postgres_protocol::message::backend::{
 };
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -109,6 +113,7 @@ use tracing::{error, trace};
 use crate::metrics::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, TransientError};
+use crate::source::types::ProgressStatisticsUpdate;
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
@@ -148,16 +153,20 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
+    Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);
-    let mut builder = AsyncOperatorBuilder::new(op_name, scope);
+    let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (mut data_output, data_stream) = builder.new_output();
     let (upper_output, upper_stream) = builder.new_output();
     let (mut definite_error_handle, definite_errors) = builder.new_output();
+
+    let (mut stats_output, stats_stream) = builder.new_output();
+
     let mut rewind_input = builder.new_input_for_many(
         rewind_stream,
         Exchange::new(move |_| slot_reader),
@@ -171,7 +180,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let table_info = reader_table_info;
         Box::pin(async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
+            let [data_cap_set, upper_cap_set, definite_error_cap_set, stats_cap]: &mut [_; 4] =
                 caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
@@ -261,6 +270,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &connection.publication,
                 *data_cap_set[0].time(),
                 committed_uppers.as_mut(),
+                &mut stats_output,
+                &stats_cap[0],
             )
             .await?;
 
@@ -419,6 +430,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     (
         replication_updates,
         upper_stream,
+        stats_stream,
         errors,
         button.press_on_drop(),
     )
@@ -437,6 +449,12 @@ async fn raw_stream<'a>(
     publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
+    stats_output: &'a mut AsyncOutputHandle<
+        MzOffset,
+        Vec<ProgressStatisticsUpdate>,
+        TeeCore<MzOffset, Vec<ProgressStatisticsUpdate>>,
+    >,
+    stats_cap: &'a Capability<MzOffset>,
 ) -> Result<
     Result<
         impl AsyncStream<
@@ -479,18 +497,36 @@ async fn raw_stream<'a>(
         Err(err) => return Err(err.into()),
     };
 
+    // According to the documentation [1] we must check that the slot LSN matches our
+    // expectations otherwise we risk getting silently fast-forwarded to a future LSN. In order
+    // to avoid a TOCTOU issue we must do this check after starting the replication stream. We
+    // cannot use the replication client to do that because it's already in CopyBoth mode.
+    // [1] https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION-SLOT-LOGICAL
+    let min_resume_lsn = super::fetch_slot_resume_lsn(&metadata_client, slot).await?;
+
+    let progress_stat_shared_value = Arc::new(Mutex::new(None));
+    let progress_stat_task_value = Arc::clone(&progress_stat_shared_value);
+    let max_lsn_task_handle =
+        mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+
+            loop {
+                interval.tick().await;
+                let lsn_or_err = super::fetch_max_lsn(&metadata_client).await;
+                *progress_stat_task_value.lock().expect("poisoned") = Some(lsn_or_err);
+            }
+        })
+        .abort_on_drop();
+
     let stream = async_stream::try_stream!({
+        // Ensure we don't pre-drop the task
+        let _max_lsn_task_handle = max_lsn_task_handle;
+
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;
 
         let mut stream = pin!(LogicalReplicationStream::new(copy_stream));
 
-        // According to the documentation [1] we must check that the slot LSN matches our
-        // expectations otherwise we risk getting silently fast-forwarded to a future LSN. In order
-        // to avoid a TOCTOU issue we must do this check after starting the replication stream. We
-        // cannot use the replication client to do that because it's already in CopyBoth mode.
-        // [1] https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION-SLOT-LOGICAL
-        let min_resume_lsn = super::fetch_slot_resume_lsn(&metadata_client, slot).await?;
         if !(resume_lsn == MzOffset::from(0) || min_resume_lsn <= resume_lsn) {
             let err = TransientError::OvercompactedReplicationSlot {
                 available_lsn: min_resume_lsn,
@@ -532,6 +568,24 @@ async fn raw_stream<'a>(
                     .standby_status_update(lsn, lsn, lsn, ts, 0)
                     .await?;
                 last_feedback = Instant::now();
+
+                // This is separate to ensure clippy doesn't get mad about a lock being held across
+                // an await point.
+                let upstream_stat = { progress_stat_shared_value.lock().expect("poisoned").take() };
+                if let Some(upstream_stat) = upstream_stat {
+                    let upstream_stat = upstream_stat?;
+                    stats_output
+                        .give(
+                            stats_cap,
+                            ProgressStatisticsUpdate {
+                                // Similar to the kafka source, we don't subtract 1 from the upper as we want to report the
+                                // _number of bytes_ we have processed/in upstream.
+                                upstream_values: upstream_stat.offset,
+                                committed_values: last_committed_upper.offset,
+                            },
+                        )
+                        .await;
+                }
             }
         }
     });

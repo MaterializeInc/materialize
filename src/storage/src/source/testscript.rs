@@ -19,7 +19,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::SourceRender;
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -55,6 +55,7 @@ impl SourceRender for TestScriptSourceConnection {
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
+        Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name, scope.clone());
@@ -104,6 +105,9 @@ impl SourceRender for TestScriptSourceConnection {
             stream.as_collection(),
             None,
             status,
+            // Testscript sources don't report progress statistics, as there is no need for them
+            // currently.
+            timely::dataflow::operators::generic::operator::empty(scope),
             vec![button.press_on_drop()],
         )
     }

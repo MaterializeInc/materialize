@@ -91,8 +91,17 @@ pub struct DataflowBuilder<'a> {
     /// This can also be used to grab a handle to the storage abstraction, through
     /// its `storage_mut()` method.
     pub compute: ComputeInstanceSnapshot,
-    /// Indexes to be ignored even if they are present in the catalog.
-    pub ignored_indexes: BTreeSet<GlobalId>,
+    /// If set, indicates that the `DataflowBuilder` operates in "replan" mode
+    /// and should consider only catalog items that are strictly less than the
+    /// given [`GlobalId`].
+    ///
+    /// In particular, indexes with higher [`GlobalId`] that are present in the
+    /// catalog will be ignored.
+    ///
+    /// Bound from [`OptimizerConfig::replan`].
+    pub replan: Option<GlobalId>,
+    /// Bound from [`OptimizerConfig::enable_eager_delta_joins`].
+    enable_eager_delta_joins: bool,
     /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
 }
@@ -142,17 +151,24 @@ pub fn dataflow_import_id_bundle<P>(
 
 impl<'a> DataflowBuilder<'a> {
     pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
+        let system_vars = catalog.system_config();
         Self {
             catalog,
             compute,
-            ignored_indexes: Default::default(),
+            replan: None,
+            enable_eager_delta_joins: system_vars.enable_eager_delta_joins(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
 
-    #[allow(dead_code)] // We will need this for `EXPLAIN REPLAN <item>` statements.
-    pub fn ignore_indexes(&mut self, indexes: impl Iterator<Item = GlobalId>) {
-        self.ignored_indexes.extend(indexes);
+    // TODO(aalexandrov): strictly speaking it should be better if we can make
+    // `config: &OptimizerConfig` a field in the enclosing builder. However,
+    // before we can do that we should make sure that nobody outside of the
+    // optimizer is using a DataflowBuilder instance.
+    pub(super) fn with_config(mut self, config: &OptimizerConfig) -> Self {
+        self.replan = config.replan;
+        self.enable_eager_delta_joins = config.enable_eager_delta_joins;
+        self
     }
 
     /// Imports the view, source, or table with `id` into the provided
@@ -279,7 +295,7 @@ impl<'a> DataflowBuilder<'a> {
             dataflow,
             self,
             &mz_transform::EmptyStatisticsOracle,
-            self.catalog.system_config().enable_eager_delta_joins(),
+            self.enable_eager_delta_joins,
         )?;
 
         Ok(dataflow_metainfo)

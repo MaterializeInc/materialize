@@ -14,6 +14,7 @@ use crate::catalog::consistency::CatalogInconsistencies;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_repr::GlobalId;
 use serde::Serialize;
+use tracing::instrument;
 
 #[derive(Debug, Default, Serialize, PartialEq)]
 pub struct CoordinatorInconsistencies {
@@ -35,6 +36,7 @@ impl CoordinatorInconsistencies {
 
 impl Coordinator {
     /// Checks the [`Coordinator`] to make sure we're internally consistent.
+    #[instrument(name = "coord::check_consistency")]
     pub fn check_consistency(&self) -> Result<(), CoordinatorInconsistencies> {
         let mut inconsistencies = CoordinatorInconsistencies::default();
 

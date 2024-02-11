@@ -123,8 +123,7 @@ dependencies = [
 [[package]]
 name = "arrow2"
 version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a4c5b03335bc1cb0fd9f5297f8fd3bbfd6fb04f3cb0bc7d6c91b7128cb8336a"
+source = "git+https://github.com/MaterializeInc/arrow2.git?branch=parquet_binary_next_iter#61e271a3f70bc993f8b7854b73e8fee099803d1c"
 dependencies = [
  "ahash",
  "arrow-format",
@@ -3435,7 +3434,7 @@ dependencies = [
 [[package]]
 name = "mysql_async"
 version = "0.33.0"
-source = "git+https://github.com/MaterializeInc/mysql_async.git?rev=ecc4908e7c98ce1050fc536739c41ec444d03349#ecc4908e7c98ce1050fc536739c41ec444d03349"
+source = "git+https://github.com/MaterializeInc/mysql_async.git?rev=5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc#5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc"
 dependencies = [
  "bytes",
  "crossbeam",
@@ -3739,7 +3738,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.87.0-dev"
+version = "0.88.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3853,7 +3852,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.87.0-dev"
+version = "0.88.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -4004,7 +4003,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.87.0-dev"
+version = "0.88.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4222,7 +4221,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.87.0-dev"
+version = "0.88.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4704,6 +4703,7 @@ dependencies = [
  "mz-ssh-util",
  "once_cell",
  "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -4929,7 +4929,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.87.0-dev"
+version = "0.88.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5191,6 +5191,7 @@ dependencies = [
  "postgres-openssl",
  "postgres_array",
  "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -5744,7 +5745,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.87.0-dev"
+version = "0.88.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -5896,6 +5897,7 @@ dependencies = [
  "once_cell",
  "prometheus",
  "proptest",
+ "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
@@ -6066,7 +6068,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.87.0-dev"
+version = "0.88.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",

@@ -247,6 +247,26 @@ true
   WHERE m.name = 'mv7' AND t.name = 't4'
 true
 
+# Test that the warmup optimization works, i.e. a REFRESH MV can hydrate prior
+# to the next refresh time.
+
+> CREATE TABLE t5 (x int)
+> CREATE MATERIALIZED VIEW mv8
+  IN CLUSTER refresh_cluster
+  WITH (REFRESH AT CREATION, REFRESH AT mz_now()::string::int8 + 1000000)
+  AS SELECT * FROM t5
+> SELECT * FROM mv8
+
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 2)
+
+> SELECT r.name, h.hydrated
+  FROM mz_internal.mz_hydration_statuses h
+  JOIN mz_materialized_views m ON (m.id = h.object_id)
+  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  WHERE m.name = 'mv8'
+r1 true
+r2 true
+
 ######## Cleanup ########
 > DROP DATABASE materialized_view_refresh_options CASCADE;
 > DROP CLUSTER refresh_cluster CASCADE;

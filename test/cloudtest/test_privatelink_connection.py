@@ -10,7 +10,7 @@
 from textwrap import dedent
 
 import pytest
-from pg8000.dbapi import ProgrammingError
+from pg8000.dbapi import DatabaseError, ProgrammingError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.exists import exists, not_exists
@@ -47,6 +47,11 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         "ALTER SYSTEM SET max_aws_privatelink_connections = 5",
+        port="internal",
+        user="mz_system",
+    )
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET enable_default_kafka_aws_private_link = true",
         port="internal",
         user="mz_system",
     )
@@ -99,6 +104,21 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     assert principal == (
         f"arn:aws:iam::123456789000:role/mz_eb5cb59b-e2fe-41f3-87ca-d2176a495345_{aws_connection_id}"
     )
+
+    # Validate default privatelink connections for kafka
+    mz.environmentd.sql(
+        dedent(
+            """\
+            CREATE CONNECTION kafkaconn_alt TO KAFKA (
+                AWS PRIVATELINK privatelinkconn (PORT 9092),
+                SECURITY PROTOCOL PLAINTEXT
+            ) WITH (VALIDATE = false);
+            """
+        )
+    )
+    mz.environmentd.sql_query(
+        "SELECT id FROM mz_connections WHERE name = 'kafkaconn_alt'"
+    )[0][0]
 
     mz.environmentd.sql(
         dedent(
@@ -160,7 +180,42 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
             )
         )
 
-    mz.environmentd.sql("DROP CONNECTION kafkaconn")
-    mz.environmentd.sql("DROP CONNECTION privatelinkconn")
+    with pytest.raises(
+        DatabaseError,
+        match="invalid CONNECTION: can only set one of BROKER, BROKERS, or AWS PRIVATELINK",
+    ):
+        mz.environmentd.sql(
+            dedent(
+                """\
+                CREATE CONNECTION kafkaconn2_alt TO KAFKA (
+                    AWS PRIVATELINK privatelinkconn (PORT 9092),
+                    BROKERS (
+                        'customer-hostname-3:9092' USING AWS PRIVATELINK privatelinkconn (PORT 9093)
+                    ),
+                    SECURITY PROTOCOL PLAINTEXT
+                ) WITH (VALIDATE = false);
+                """
+            )
+        )
+    with pytest.raises(
+        ProgrammingError,
+        match="invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka",
+    ):
+        mz.environmentd.sql(
+            dedent(
+                """\
+            CREATE CONNECTION pg TO POSTGRES (
+                HOST 'postgres',
+                DATABASE postgres,
+                USER postgres,
+                AWS PRIVATELINK privatelinkconn ( PORT 1234 ),
+                PORT 1234
+            ) WITH (VALIDATE = false);
+            """
+            )
+        )
+
+    mz.environmentd.sql("DROP CONNECTION kafkaconn CASCADE")
+    mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
 
     not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")

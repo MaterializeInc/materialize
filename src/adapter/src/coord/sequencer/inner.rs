@@ -48,9 +48,9 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee, IndexOption,
-    MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
-    SideEffectingFunc, UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, IndexOption, MutationKind,
+    Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
+    UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
@@ -72,7 +72,7 @@ use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizer
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, OwnedMutexGuard};
-use tracing::{warn, Span};
+use tracing::{instrument, warn, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
@@ -214,7 +214,7 @@ impl Coordinator {
         })
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
@@ -319,7 +319,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
@@ -407,7 +407,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
@@ -467,7 +467,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_database(
         &mut self,
         session: &mut Session,
@@ -494,7 +494,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_schema(
         &mut self,
         session: &mut Session,
@@ -522,7 +522,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_role(
         &mut self,
         conn_id: Option<&ConnectionId>,
@@ -539,7 +539,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_table(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -624,7 +624,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_secret(
         &mut self,
         session: &mut Session,
@@ -678,7 +678,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_sink(
         &mut self,
         ctx: ExecuteContext,
@@ -814,7 +814,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_create_type(
         &mut self,
         session: &Session,
@@ -846,6 +846,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_comment_on(
         &mut self,
         session: &Session,
@@ -860,6 +861,7 @@ impl Coordinator {
         Ok(ExecuteResponse::Comment)
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_drop_objects(
         &mut self,
         session: &Session,
@@ -1081,6 +1083,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_drop_owned(
         &mut self,
         session: &Session,
@@ -1238,10 +1241,11 @@ impl Coordinator {
                                 // problem, so we don't want a notice.
                                 !ids_set.contains(&ObjectId::Item(**dependant_id))
                             })
-                            .map(|dependant_id| {
-                                humanizer
-                                    .humanize_id(*dependant_id)
-                                    .unwrap_or(id.to_string())
+                            .flat_map(|dependant_id| {
+                                // If we are not able to find a name for this ID it probably means
+                                // we have already dropped the compute collection, in which case we
+                                // can ignore it.
+                                humanizer.humanize_id(*dependant_id)
                             })
                             .collect_vec();
                         if !dependants.is_empty() {
@@ -1438,6 +1442,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(vec![row]))
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_inspect_shard(
         &self,
         session: &Session,
@@ -1461,6 +1466,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
     }
 
+    #[instrument(skip_all)]
     pub(super) fn sequence_set_variable(
         &self,
         session: &mut Session,
@@ -1589,7 +1595,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1641,20 +1647,22 @@ impl Coordinator {
             )) if ctx.session().vars().transaction_isolation()
                 == &IsolationLevel::StrictSerializable =>
             {
-                self.strict_serializable_reads_tx
-                    .send(PendingReadTxn {
-                        txn: PendingRead::Read {
-                            txn: PendingTxn {
-                                ctx,
-                                response,
-                                action,
-                            },
+                let conn_id = ctx.session().conn_id().clone();
+                let pending_read_txn = PendingReadTxn {
+                    txn: PendingRead::Read {
+                        txn: PendingTxn {
+                            ctx,
+                            response,
+                            action,
                         },
-                        timestamp_context: determination.timestamp_context,
-                        created: Instant::now(),
-                        num_requeues: 0,
-                        otel_ctx: OpenTelemetryContext::obtain(),
-                    })
+                    },
+                    timestamp_context: determination.timestamp_context,
+                    created: Instant::now(),
+                    num_requeues: 0,
+                    otel_ctx: OpenTelemetryContext::obtain(),
+                };
+                self.strict_serializable_reads_tx
+                    .send((conn_id, pending_read_txn))
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
             }
@@ -1699,7 +1707,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
@@ -1794,6 +1802,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_explain_plan(
         &mut self,
         ctx: ExecuteContext,
@@ -1801,7 +1810,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         match &plan.explainee {
-            Explainee::Statement(stmt) => match stmt {
+            plan::Explainee::Statement(stmt) => match stmt {
                 plan::ExplaineeStatement::CreateMaterializedView { .. } => {
                     self.explain_create_materialized_view(ctx, plan).await;
                 }
@@ -1812,13 +1821,19 @@ impl Coordinator {
                     self.explain_peek(ctx, plan, target_cluster).await;
                 }
             },
-            Explainee::MaterializedView(_) => {
+            plan::Explainee::MaterializedView(_) => {
                 let result = self.explain_materialized_view(&ctx, plan);
                 ctx.retire(result);
             }
-            Explainee::Index(_) => {
+            plan::Explainee::Index(_) => {
                 let result = self.explain_index(&ctx, plan);
                 ctx.retire(result);
+            }
+            plan::Explainee::ReplanMaterializedView(_) => {
+                self.explain_replan_materialized_view(ctx, plan).await;
+            }
+            plan::Explainee::ReplanIndex(_) => {
+                self.explain_replan_index(ctx, plan).await;
             }
         };
     }
@@ -1826,25 +1841,18 @@ impl Coordinator {
     fn explain_materialized_view(
         &mut self,
         ctx: &ExecuteContext,
-        plan: plan::ExplainPlanPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::ExplainPlanPlan {
+        plan::ExplainPlanPlan {
             stage,
             format,
             config,
             explainee,
-        } = plan;
-
-        let Explainee::MaterializedView(id) = explainee else {
-            // This is currently asserted in the `sequence_explain_plan` code that
-            // calls this method.
-            unreachable!()
+        }: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::Explainee::MaterializedView(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
         };
-
         let CatalogItem::MaterializedView(_) = self.catalog().get_entry(&id).item() else {
-            // This is currently asserted in the planner. However, this
-            // assumption might change when we make changes for #18089.
-            unreachable!()
+            unreachable!() // Asserted in `plan_explain_plan`.
         };
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
@@ -1896,25 +1904,18 @@ impl Coordinator {
     fn explain_index(
         &mut self,
         ctx: &ExecuteContext,
-        plan: plan::ExplainPlanPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::ExplainPlanPlan {
+        plan::ExplainPlanPlan {
             stage,
             format,
             config,
             explainee,
-        } = plan;
-
-        let Explainee::Index(id) = explainee else {
-            // This is currently asserted in the `sequence_explain_plan` code that
-            // calls this method.
-            unreachable!()
+        }: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::Explainee::Index(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
         };
-
         let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
-            // This is currently asserted in the planner. However, this
-            // assumption might change when we make changes for #18089.
-            unreachable!()
+            unreachable!() // Asserted in `plan_explain_plan`.
         };
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
@@ -1959,6 +1960,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
+    #[instrument(skip_all)]
     pub async fn sequence_explain_timestamp(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2129,6 +2131,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_explain_timestamp_finish_inner(
         &mut self,
         session: &mut Session,
@@ -2175,6 +2178,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_insert(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2277,6 +2281,7 @@ impl Coordinator {
     /// read. This works by doing a Peek then queuing a SendDiffs. No writes
     /// or read-then-writes can occur between the Peek and SendDiff otherwise a
     /// serializability violation could occur.
+    #[instrument(skip_all)]
     pub(super) async fn sequence_read_then_write(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2499,10 +2504,6 @@ impl Coordinator {
                     }
                 }
                 ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
-                resp @ ExecuteResponse::Canceled => {
-                    ctx.retire(Ok(resp));
-                    return;
-                }
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),
@@ -2565,13 +2566,15 @@ impl Coordinator {
             // the read and write.
             if let Some(timestamp_context) = timestamp_context {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                let result = strict_serializable_reads_tx.send(PendingReadTxn {
-                    txn: PendingRead::ReadThenWrite { tx },
+                let conn_id = ctx.session().conn_id().clone();
+                let pending_read_txn = PendingReadTxn {
+                    txn: PendingRead::ReadThenWrite { ctx, tx },
                     timestamp_context,
                     created: Instant::now(),
                     num_requeues: 0,
                     otel_ctx: OpenTelemetryContext::obtain(),
-                });
+                };
+                let result = strict_serializable_reads_tx.send((conn_id, pending_read_txn));
                 // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
                 if let Err(e) = result {
                     warn!(
@@ -2582,13 +2585,21 @@ impl Coordinator {
                 }
                 let result = rx.await;
                 // It is not an error for these results to be ready after `tx` has been dropped.
-                if let Err(e) = result {
-                    warn!(
-                        "tx used to linearize read in read then write transaction dropped before we could send: {:?}",
-                        e
-                    );
-                    return;
-                }
+                ctx = match result {
+                    Ok(Some(ctx)) => ctx,
+                    Ok(None) => {
+                        // Coordinator took our context and will handle responding to the client.
+                        // This usually indicates that our transaction was aborted.
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "tx used to linearize read in read then write transaction dropped before we could send: {:?}",
+                            e
+                        );
+                        return;
+                    }
+                };
             }
 
             match diffs {
@@ -2612,6 +2623,7 @@ impl Coordinator {
         });
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
         session: &mut Session,
@@ -2631,6 +2643,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
         session: &mut Session,
@@ -2652,6 +2665,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_schema_swap(
         &mut self,
         session: &mut Session,
@@ -2707,6 +2721,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
+    #[instrument(skip_all)]
     pub(super) fn sequence_alter_index_reset_options(
         &mut self,
         plan: plan::AlterIndexResetOptionsPlan,
@@ -2721,6 +2736,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
+    #[instrument(skip_all)]
     pub(super) fn set_index_compaction_window(
         &mut self,
         id: GlobalId,
@@ -2737,6 +2753,7 @@ impl Coordinator {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_role(
         &mut self,
         session: &Session,
@@ -2818,6 +2835,7 @@ impl Coordinator {
         Ok(response)
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_secret(
         &mut self,
         session: &Session,
@@ -2832,6 +2850,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_connection(
         &mut self,
         ctx: ExecuteContext,
@@ -2853,6 +2872,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     async fn sequence_rotate_keys(
         &mut self,
         session: &Session,
@@ -2877,6 +2897,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     async fn sequence_alter_connection_options(
         &mut self,
         mut ctx: ExecuteContext,
@@ -3018,7 +3039,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn sequence_alter_connection_stage_finish(
         &mut self,
         session: &mut Session,
@@ -3125,6 +3146,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_source(
         &mut self,
         session: &Session,
@@ -3680,6 +3702,7 @@ impl Coordinator {
         Ok(Vec::from(payload))
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_system_set(
         &mut self,
         session: &Session,
@@ -3704,6 +3727,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_system_reset(
         &mut self,
         session: &Session,
@@ -3719,6 +3743,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_system_reset_all(
         &mut self,
         session: &Session,
@@ -3774,6 +3799,7 @@ impl Coordinator {
     }
 
     // Returns the name of the portal to execute.
+    #[instrument(skip_all)]
     pub(super) fn sequence_execute(
         &mut self,
         session: &mut Session,
@@ -3791,6 +3817,7 @@ impl Coordinator {
         session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), revision)
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_grant_privileges(
         &mut self,
         session: &Session,
@@ -3808,6 +3835,7 @@ impl Coordinator {
         .await
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_revoke_privileges(
         &mut self,
         session: &Session,
@@ -3825,6 +3853,7 @@ impl Coordinator {
         .await
     }
 
+    #[instrument(skip_all)]
     async fn sequence_update_privileges(
         &mut self,
         session: &Session,
@@ -3933,6 +3962,7 @@ impl Coordinator {
         res
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_default_privileges(
         &mut self,
         session: &Session,
@@ -3979,6 +4009,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredDefaultPrivileges)
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_grant_role(
         &mut self,
         session: &Session,
@@ -4023,6 +4054,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::GrantedRole)
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_revoke_role(
         &mut self,
         session: &Session,
@@ -4067,6 +4099,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::RevokedRole)
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_alter_owner(
         &mut self,
         session: &Session,
@@ -4135,6 +4168,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::AlteredObject(object_type))
     }
 
+    #[instrument(skip_all)]
     pub(super) async fn sequence_reassign_owned(
         &mut self,
         session: &Session,

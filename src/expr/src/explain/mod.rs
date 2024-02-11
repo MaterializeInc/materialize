@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::time::Duration;
 
-use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{separated, Indent, IndentLike};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
@@ -212,7 +211,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
     }
 
     // helper struct: a generator of fresh local ids
-    let mut id_gen = id_gen(expr)?.peekable();
+    let mut id_gen = id_gen(expr).peekable();
 
     let mut wrap_in_let = |input: &mut MirRelationExpr| {
         match input {
@@ -262,17 +261,17 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
 
 // Create an [`Iterator`] for [`LocalId`] values that are guaranteed to be
 // fresh within the scope of the given [`MirRelationExpr`].
-fn id_gen(expr: &MirRelationExpr) -> Result<impl Iterator<Item = LocalId>, RecursionLimitError> {
+fn id_gen(expr: &MirRelationExpr) -> impl Iterator<Item = LocalId> {
     let mut max_id = 0_u64;
 
-    expr.visit_post(&mut |expr| {
+    expr.visit_pre(|expr| {
         match expr {
             MirRelationExpr::Let { id, .. } => max_id = std::cmp::max(max_id, id.into()),
             _ => (),
         };
-    })?;
+    });
 
-    Ok((max_id + 1..).map(LocalId::new))
+    (max_id + 1..).map(LocalId::new)
 }
 
 impl ScalarOps for MirScalarExpr {

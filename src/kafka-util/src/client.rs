@@ -273,12 +273,24 @@ enum BrokerRewriteHandle {
     FailedDefaultSshTunnel(String),
 }
 
+/// Tunneling clients
+/// used for re-writing ports / hosts
+#[derive(Clone)]
+pub enum TunnelConfig {
+    /// Tunnel config option for SSH tunnels
+    Ssh(SshTunnelConfig),
+    /// Re-writes internal hosts using the value, used for privatelink
+    StaticHost(String),
+    /// Performs no re-writes
+    None,
+}
+
 /// A client context that supports rewriting broker addresses.
 #[derive(Clone)]
 pub struct TunnelingClientContext<C> {
     inner: C,
     rewrites: Arc<Mutex<BTreeMap<BrokerAddr, BrokerRewriteHandle>>>,
-    default_tunnel: Option<SshTunnelConfig>,
+    default_tunnel: TunnelConfig,
     ssh_tunnel_manager: SshTunnelManager,
     ssh_timeout_config: SshTimeoutConfig,
     runtime: Handle,
@@ -295,7 +307,7 @@ impl<C> TunnelingClientContext<C> {
         TunnelingClientContext {
             inner,
             rewrites: Arc::new(Mutex::new(BTreeMap::new())),
-            default_tunnel: None,
+            default_tunnel: TunnelConfig::None,
             ssh_tunnel_manager,
             ssh_timeout_config,
             runtime,
@@ -306,8 +318,8 @@ impl<C> TunnelingClientContext<C> {
     ///
     /// Connections to brokers that aren't specified in other rewrites will be rewritten to connect to
     /// `rewrite_host` and `rewrite_port` instead.
-    pub fn set_default_ssh_tunnel(&mut self, tunnel: SshTunnelConfig) {
-        self.default_tunnel = Some(tunnel);
+    pub fn set_default_tunnel(&mut self, tunnel: TunnelConfig) {
+        self.default_tunnel = tunnel;
     }
 
     /// Adds an SSH tunnel for a specific broker.
@@ -426,7 +438,7 @@ where
         match rewrite {
             None | Some(BrokerRewriteHandle::FailedDefaultSshTunnel(_)) => {
                 match &self.default_tunnel {
-                    Some(default_tunnel) => {
+                    TunnelConfig::Ssh(default_tunnel) => {
                         // Multiple users could all run `connect` at the same time; only one ssh
                         // tunnel will ever be connected, and only one will be inserted into the
                         // map.
@@ -487,7 +499,11 @@ where
                             }
                         }
                     }
-                    None => addr,
+                    TunnelConfig::StaticHost(host) => BrokerAddr {
+                        host: host.to_owned(),
+                        port: addr.port,
+                    },
+                    TunnelConfig::None => addr,
                 }
             }
             Some(rewrite) => return_rewrite(&rewrite),

@@ -19,11 +19,10 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_ore::soft_assert_or_log;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
-use tracing::{info, trace};
+use tracing::{info, instrument, trace};
 use uuid::Uuid;
 
 use mz_adapter_types::connection::ConnectionId;
@@ -55,6 +54,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
+use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -231,7 +231,7 @@ impl Catalog {
     ///
     /// Return a set containing all dropped notices. Note that if for some
     /// reason we end up with two identical notices being dropped by the same
-    /// call, the result will only contain only one instance of that notice.
+    /// call, the result will contain only one instance of that notice.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn drop_plans_and_metainfos(
         &mut self,
@@ -290,10 +290,25 @@ impl Catalog {
             }
         }
 
-        soft_assert_or_log!(
-            dropped_notices.iter().all(|n| Arc::strong_count(n) == 1),
-            "all dropped_notices entries have `Arc::strong_count(_) == 1`"
-        );
+        if dropped_notices.iter().any(|n| Arc::strong_count(n) != 1) {
+            use mz_ore::str::{bracketed, separated};
+            let bad_notices = dropped_notices.iter().filter(|n| Arc::strong_count(n) != 1);
+            let bad_notices = bad_notices.map(|n| {
+                format!(
+                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {})",
+                    n.id,
+                    n.kind,
+                    n.dependencies,
+                    Arc::strong_count(n)
+                )
+            });
+            let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
+            soft_panic_or_log!(
+                "all dropped_notices entries have `Arc::strong_count(_) == 1`; \
+                 bad_notices = {bad_notices}; \
+                 drop_ids = {drop_ids:?}"
+            );
+        }
 
         return dropped_notices;
     }
@@ -659,31 +674,37 @@ impl Catalog {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
-        let (catalog, _, _, _) = Catalog::open(Config {
-            storage,
-            metrics_registry,
-            // when debugging, no reaping
-            storage_usage_retention_period: None,
-            state: StateConfig {
-                unsafe_mode: true,
-                all_features: false,
-                build_info: &DUMMY_BUILD_INFO,
-                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-                now,
-                skip_migrations: true,
-                cluster_replica_sizes: Default::default(),
-                builtin_cluster_replica_size: "1".into(),
-                system_parameter_defaults: Default::default(),
-                remote_system_parameters: None,
-                availability_zones: vec![],
-                egress_ips: vec![],
-                aws_principal_context: None,
-                aws_privatelink_availability_zones: None,
-                http_host_name: None,
-                connection_context: ConnectionContext::for_tests(secrets_reader),
-                active_connection_count,
+        // Used as a lower boundary of the boot_ts, but it's ok to use now() for
+        // debugging/testing.
+        let previous_ts = now().into();
+        let (catalog, _, _, _) = Catalog::open(
+            Config {
+                storage,
+                metrics_registry,
+                // when debugging, no reaping
+                storage_usage_retention_period: None,
+                state: StateConfig {
+                    unsafe_mode: true,
+                    all_features: false,
+                    build_info: &DUMMY_BUILD_INFO,
+                    environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                    now,
+                    skip_migrations: true,
+                    cluster_replica_sizes: Default::default(),
+                    builtin_cluster_replica_size: "1".into(),
+                    system_parameter_defaults: Default::default(),
+                    remote_system_parameters: None,
+                    availability_zones: vec![],
+                    egress_ips: vec![],
+                    aws_principal_context: None,
+                    aws_privatelink_availability_zones: None,
+                    http_host_name: None,
+                    connection_context: ConnectionContext::for_tests(secrets_reader),
+                    active_connection_count,
+                },
             },
-        })
+            previous_ts,
+        )
         .await?;
         Ok(catalog)
     }
@@ -1156,7 +1177,7 @@ impl Catalog {
         }
     }
 
-    #[tracing::instrument(name = "catalog::transact", level = "debug", skip_all)]
+    #[instrument(name = "catalog::transact", skip_all)]
     pub async fn transact<F, R>(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
@@ -1244,7 +1265,7 @@ impl Catalog {
         })
     }
 
-    #[tracing::instrument(name = "catalog::transact_inner", level = "debug", skip_all)]
+    #[instrument(name = "catalog::transact_inner", skip_all)]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,

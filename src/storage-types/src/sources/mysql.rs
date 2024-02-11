@@ -13,18 +13,19 @@ use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
 
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
 use once_cell::sync::Lazy;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::any;
+use proptest::strategy::Strategy;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
 use uuid::Uuid;
-
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
-use mz_timely_util::order::Partitioned;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
@@ -37,7 +38,7 @@ include!(concat!(
     "/mz_storage_types.sources.mysql.rs"
 ));
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
     pub connection: C::MySql,
@@ -59,25 +60,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
             connection: r.resolve_connection(connection).unwrap_mysql(),
             details,
         }
-    }
-}
-
-impl<C: ConnectionAccess> Arbitrary for MySqlSourceConnection<C> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<C::MySql>(),
-            any::<GlobalId>(),
-            any::<MySqlSourceDetails>(),
-        )
-            .prop_map(|(connection, connection_id, details)| Self {
-                connection,
-                connection_id,
-                details,
-            })
-            .boxed()
     }
 }
 
@@ -137,26 +119,28 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlSourceDetails {
+    #[proptest(
+        strategy = "proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 0..4)"
+    )]
     pub tables: Vec<mz_mysql_util::MySqlTableDesc>,
+    /// The initial 'gtid_executed' set for the source. This is used as the effective
+    /// snapshot point, to ensure consistency if the source is interrupted but commits
+    /// one or more tables before the initial snapshot of all tables is complete.
+    #[proptest(strategy = "any_gtidset()")]
+    pub initial_gtid_set: String,
 }
 
-impl Arbitrary for MySqlSourceDetails {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 1..4)
-            .prop_map(|tables| Self { tables })
-            .boxed()
-    }
+fn any_gtidset() -> impl Strategy<Value = String> {
+    any::<(u128, u64)>().prop_map(|(uuid, tx_id)| format!("{}:{}", Uuid::from_u128(uuid), tx_id))
 }
 
 impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
     fn into_proto(&self) -> ProtoMySqlSourceDetails {
         ProtoMySqlSourceDetails {
             tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+            initial_gtid_set: self.initial_gtid_set.clone(),
         }
     }
 
@@ -167,6 +151,7 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
                 .into_iter()
                 .map(mz_mysql_util::MySqlTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
+            initial_gtid_set: proto.initial_gtid_set,
         })
     }
 }

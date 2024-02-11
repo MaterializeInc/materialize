@@ -40,13 +40,14 @@ use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Value, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateMaterializedViewStatement, ExplainPlanStatement, Explainee, InsertStatement,
 };
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{debug_span, Instrument};
+use tracing::{debug_span, instrument, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::{
@@ -344,7 +345,7 @@ impl Coordinator {
     }
 
     /// Handles an execute command.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::handle_execute", skip_all, fields(session = session.uuid().to_string()))]
     pub(crate) async fn handle_execute(
         &mut self,
         portal_name: String,
@@ -446,7 +447,7 @@ impl Coordinator {
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    #[instrument(name = "coord::handle_execute_inner", skip_all, fields(stmt = stmt.to_ast_string_redacted()))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Arc<Statement<Raw>>,
@@ -911,8 +912,15 @@ impl Coordinator {
                 maybe_ctx = Some(ctx);
             }
 
+            // Cancel reads waiting on being linearized. There is at most one linearized read per
+            // session.
+            if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
+                let ctx = pending_read_txn.take_context();
+                maybe_ctx = Some(ctx);
+            }
+
             if let Some(ctx) = maybe_ctx {
-                ctx.retire(Ok(ExecuteResponse::Canceled));
+                ctx.retire(Err(AdapterError::Canceled));
             }
 
             // Inform the target session (if it asks) about the cancellation.

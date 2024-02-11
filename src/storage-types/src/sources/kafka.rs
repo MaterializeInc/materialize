@@ -19,7 +19,7 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
 use once_cell::sync::Lazy;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -36,14 +36,16 @@ include!(concat!(
     "/mz_storage_types.sources.kafka.rs"
 ));
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::Kafka,
     pub connection_id: GlobalId,
     pub topic: String,
     // Map from partition -> starting offset
+    #[proptest(strategy = "proptest::collection::btree_map(any::<i32>(), any::<i64>(), 0..4)")]
     pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
+    #[proptest(strategy = "proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4)")]
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
     pub topic_metadata_refresh_interval: Duration,
 }
@@ -218,46 +220,6 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
         }
 
         Ok(())
-    }
-}
-
-impl<C: ConnectionAccess> Arbitrary for KafkaSourceConnection<C>
-where
-    <<C as ConnectionAccess>::Kafka as Arbitrary>::Strategy: 'static,
-{
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<C::Kafka>(),
-            any::<GlobalId>(),
-            any::<String>(),
-            proptest::collection::btree_map(any::<i32>(), any::<i64>(), 1..4),
-            any::<Option<String>>(),
-            proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4),
-            any::<Duration>(),
-        )
-            .prop_map(
-                |(
-                    connection,
-                    connection_id,
-                    topic,
-                    start_offsets,
-                    group_id_prefix,
-                    metadata_columns,
-                    topic_metadata_refresh_interval,
-                )| KafkaSourceConnection {
-                    connection,
-                    connection_id,
-                    topic,
-                    start_offsets,
-                    group_id_prefix,
-                    metadata_columns,
-                    topic_metadata_refresh_interval,
-                },
-            )
-            .boxed()
     }
 }
 

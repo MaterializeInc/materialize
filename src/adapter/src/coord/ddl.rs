@@ -47,7 +47,7 @@ use mz_storage_types::controller::StorageError;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
-use tracing::{event, warn, Level};
+use tracing::{event, info_span, instrument, warn, Instrument, Level};
 
 use crate::catalog::{CatalogState, Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
@@ -70,7 +70,7 @@ pub struct CatalogTxn<'a, T> {
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::catalog_transact", skip_all)]
     pub(crate) async fn catalog_transact(
         &mut self,
         session: Option<&Session>,
@@ -86,6 +86,7 @@ impl Coordinator {
 
     /// Same as [`Self::catalog_transact_with`] but runs builtin table updates concurrently with
     /// any side effects (e.g. creating collections).
+    #[instrument(name = "coord::catalog_transact_with_side_effects", skip_all)]
     pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
         &'c mut self,
         session: Option<&Session>,
@@ -102,13 +103,21 @@ impl Coordinator {
         let side_effects_fut = side_effect(self);
 
         // Run our side effects concurrently with the table updates.
-        let ((), ()) = futures::future::join(side_effects_fut, table_updates).await;
+        let ((), ()) = futures::future::join(
+            side_effects_fut.instrument(info_span!(
+                "coord::catalog_transact_with_side_effects::side_effects_fut"
+            )),
+            table_updates.instrument(info_span!(
+                "coord::catalog_transact_with_side_effects::table_updates"
+            )),
+        )
+        .await;
 
         Ok(result)
     }
 
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::catalog_transact_conn", skip_all)]
     pub(crate) async fn catalog_transact_conn(
         &mut self,
         conn_id: Option<&ConnectionId>,
@@ -121,6 +130,7 @@ impl Coordinator {
 
     /// Executes a Catalog transaction with handling if the provided `Session` is in a SQL
     /// transaction that is executing DDL.
+    #[instrument(name = "coord::catalog_transact_with_ddl_transaction", skip_all)]
     pub(crate) async fn catalog_transact_with_ddl_transaction(
         &mut self,
         session: &mut Session,
@@ -189,7 +199,7 @@ impl Coordinator {
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
     /// [`DataflowDesc`]: mz_compute_types::dataflows::DataflowDesc
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::catalog_transact_with", skip_all)]
     pub(crate) async fn catalog_transact_with<'a, F, R>(
         &mut self,
         conn_id: Option<&ConnectionId>,
@@ -666,6 +676,7 @@ impl Coordinator {
                 self.update_http_config();
             }
         }
+        .instrument(info_span!("coord::catalog_transact_with::finalize"))
         .await;
 
         let conn = conn_id.and_then(|id| self.active_conns.get(id));

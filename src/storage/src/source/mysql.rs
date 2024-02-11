@@ -81,7 +81,7 @@ use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::SourceRender;
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod replication;
@@ -104,6 +104,7 @@ impl SourceRender for MySqlSourceConnection {
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
+        Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
         // Determine which collections need to be snapshot and which already have been.
@@ -136,12 +137,15 @@ impl SourceRender for MySqlSourceConnection {
             );
         }
 
+        let metrics = config.metrics.get_mysql_metrics(config.id);
+
         let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
             scope.clone(),
             config.clone(),
             self.clone(),
             subsource_resume_uppers.clone(),
             table_info.clone(),
+            metrics.snapshot_metrics.clone(),
         );
 
         let (repl_updates, uppers, repl_err, repl_token) = replication::render(
@@ -151,6 +155,7 @@ impl SourceRender for MySqlSourceConnection {
             subsource_resume_uppers,
             table_info,
             &rewinds,
+            metrics,
         );
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
@@ -180,6 +185,9 @@ impl SourceRender for MySqlSourceConnection {
             updates,
             Some(uppers),
             health,
+            // TODO(guswynn): add progress statistics updates once the core mysql impl is fully
+            // fleshed out.
+            timely::dataflow::operators::generic::operator::empty(scope),
             vec![snapshot_token, repl_token],
         )
     }
@@ -217,6 +225,10 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
+    #[error("table was dropped")]
+    TableDropped,
+    #[error("incompatible schema change: {0}")]
+    IncompatibleSchema(String),
     #[error("received a gtid set from the server that violates our requirements: {0}")]
     UnsupportedGtidState(String),
     #[error("received out of order gtids for source {0} at transaction-id {1}")]

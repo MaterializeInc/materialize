@@ -1807,10 +1807,12 @@ impl MirRelationExpr {
     /// Leaves `self` in an unusable state, so this should only be used if `self` is about to be
     /// dropped or otherwise overwritten.
     pub fn destroy_carefully(&mut self) {
-        #[allow(deprecated)] // Having `maybe_grow` and no limit is the point here
-        self.visit_mut_post_nolimit(&mut |e| {
-            e.take_dangerous();
-        });
+        let mut todo = vec![self.take_dangerous()];
+        while let Some(mut expr) = todo.pop() {
+            for child in expr.children_mut() {
+                todo.push(child.take_dangerous());
+            }
+        }
     }
 
     /// Computes the size (total number of nodes) and maximum depth of a MirRelationExpr for
@@ -1891,14 +1893,11 @@ impl MirRelationExpr {
     /// iteration.
     ///
     /// Note that if a binding references itself, that is also returned.
-    pub fn recursive_ids(
-        ids: &[LocalId],
-        values: &[MirRelationExpr],
-    ) -> Result<BTreeSet<LocalId>, RecursionLimitError> {
+    pub fn recursive_ids(ids: &[LocalId], values: &[MirRelationExpr]) -> BTreeSet<LocalId> {
         let mut used_across_iterations = BTreeSet::new();
         let mut defined = BTreeSet::new();
         for (binding_id, value) in itertools::zip_eq(ids.iter(), values.iter()) {
-            value.visit_post(&mut |expr| {
+            value.visit_pre(|expr| {
                 if let MirRelationExpr::Get {
                     id: Local(get_id), ..
                 } = expr
@@ -1912,10 +1911,10 @@ impl MirRelationExpr {
                         used_across_iterations.insert(*get_id);
                     }
                 }
-            })?;
+            });
             defined.insert(*binding_id);
         }
-        Ok(used_across_iterations)
+        used_across_iterations
     }
 
     /// Replaces `LetRec` nodes with a stack of `Let` nodes.

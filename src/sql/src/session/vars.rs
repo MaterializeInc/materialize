@@ -607,7 +607,7 @@ pub const PERSIST_TXN_TABLES: ServerVar<PersistTxnTablesImpl> = ServerVar {
 
 const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
     name: UncasedStr::new("timestamp_oracle"),
-    value: TimestampOracleImpl::Catalog,
+    value: TimestampOracleImpl::Postgres,
     description: "Backing implementation of TimestampOracle.",
     internal: true,
 };
@@ -2075,6 +2075,13 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_default_kafka_aws_private_link,
+        desc: "the top-level Aws Privatelink feature for kafka connections",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_time_at_time_zone,
         desc: "use of AT TIME ZONE or timezone() with time type",
         default: false,
@@ -2116,13 +2123,6 @@ feature_flags!(
         default: false,
         internal: true,
         enable_for_item_parsing: false,
-    },
-    {
-        name: enable_cc_cluster_sizes,
-        desc: "use of 'cc' cluster sizes",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
     },
     {
         name: enable_off_thread_optimization,

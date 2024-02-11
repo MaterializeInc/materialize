@@ -82,6 +82,27 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR INDEX foo
 ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: Index(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
+EXPLAIN OPTIMIZED PLAN FOR REPLAN VIEW foo
+----
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN VIEW foo
+=>
+ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: ReplanView(Name(UnresolvedItemName([Ident("foo")]))) })
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN FOR REPLAN MATERIALIZED VIEW foo
+----
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN MATERIALIZED VIEW foo
+=>
+ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: ReplanMaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN FOR REPLAN INDEX foo
+----
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN INDEX foo
+=>
+ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: ReplanIndex(Name(UnresolvedItemName([Ident("foo")]))) })
+
+parse-statement
 EXPLAIN OPTIMIZED PLAN WITH(types) FOR VIEW foo
 ----
 EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR VIEW foo

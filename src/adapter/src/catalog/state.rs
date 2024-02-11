@@ -809,6 +809,58 @@ impl CatalogState {
         })
     }
 
+    pub(crate) fn deserialize_plan(
+        &self,
+        id: GlobalId,
+        create_sql: String,
+        force_if_exists_skip: bool,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        // TODO - The `None` needs to be changed if we ever allow custom
+        // logical compaction windows in user-defined objects.
+        let pcx = PlanContext::zero()
+            .with_planning_id(id)
+            .with_ignore_if_exists_errors(force_if_exists_skip);
+        let mut session_catalog = self.for_system_session();
+        self.parse_plan(
+            id,
+            create_sql,
+            Some(&pcx),
+            false,
+            None,
+            &mut session_catalog,
+        )
+    }
+
+    /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds)`.
+    #[tracing::instrument(level = "info", skip(self, pcx))]
+    pub(crate) fn parse_plan(
+        &self,
+        id: GlobalId,
+        create_sql: String,
+        pcx: Option<&PlanContext>,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<CompactionWindow>,
+        catalog: &mut ConnCatalog,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        // Enable catalog features that might be required during planning in
+        // [Catalog::open]. Existing catalog items might have been created while
+        // a specific feature flag was turned on, so we need to ensure that this
+        // is also the case during catalog rehydration in order to avoid panics.
+        //
+        // WARNING / CONTRACT:
+        // 1. Features used in this method that related to parsing / planning
+        //    should be `enable_for_item_parsing` set to `true`.
+        // 2. After this step, feature flag configuration must not be
+        //    overridden.
+        catalog.system_vars_mut().enable_for_item_parsing();
+
+        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
+        let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
+        let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
+
+        return Ok((plan, resolved_ids));
+    }
+
     pub(crate) fn deserialize_item(
         &self,
         id: GlobalId,
@@ -816,8 +868,7 @@ impl CatalogState {
     ) -> Result<CatalogItem, AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
         // logical compaction windows in user-defined objects.
-        let mut pcx = PlanContext::zero();
-        pcx.set_planning_id(id);
+        let pcx = PlanContext::zero().with_planning_id(id);
         self.parse_item(id, create_sql, Some(&pcx), false, None)
     }
 
@@ -832,22 +883,16 @@ impl CatalogState {
         custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
-        // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while
-        // a specific feature flag was turned on, so we need to ensure that this
-        // is also the case during catalog rehydration in order to avoid panics.
-        //
-        // WARNING / CONTRACT:
-        // 1. Features used in this method that related to parsing / planning
-        //    should be `enable_for_item_parsing` set to `true`.
-        // 2. After this step, feature flag configuration must not be
-        //    overridden.
-        session_catalog.system_vars_mut().enable_for_item_parsing();
 
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
-        let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let plan =
-            mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let (plan, resolved_ids) = self.parse_plan(
+            id,
+            create_sql,
+            pcx,
+            is_retained_metrics_object,
+            custom_logical_compaction_window,
+            &mut session_catalog,
+        )?;
+
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: Some(table.create_sql),

@@ -8,36 +8,36 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_cc_cluster_sizes = false;
+ALTER SYSTEM SET allowed_cluster_replica_sizes = "1";
 ALTER SYSTEM SET disk_cluster_replicas_default = false;
 
 # Cannot create clusters with cc cluster size naming schemes
 ! CREATE CLUSTER c SIZE '1cc';
-contains:use of 'cc' cluster sizes is not supported
+contains:unknown cluster replica size 1cc
 
 ! CREATE CLUSTER c SIZE '512C';
-contains:use of 'cc' cluster sizes is not supported
+contains:unknown cluster replica size 512C
 
 # Nor can we create an unmanaged replica directly
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
 
 ! CREATE CLUSTER c REPLICAS (r1 (SIZE '1cc'))
-contains:use of 'cc' cluster sizes is not supported
+contains:unknown cluster replica size 1cc
 
 # The existing cluster names are fine
 > CREATE CLUSTER c SIZE '1';
 
 # But ensure we cannot ALTER our way to a cc name either
 ! ALTER CLUSTER c SET (SIZE '1cc');
-contains:use of 'cc' cluster sizes is not supported
+contains:unknown cluster replica size 1cc
 
 > DROP CLUSTER c
 
 # Now flip the flag and test that we can create clusters
 # with this naming scheme.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_cc_cluster_sizes = true
+ALTER SYSTEM RESET allowed_cluster_replica_sizes;
 
 > CREATE CLUSTER c SIZE '1cc';
 > SELECT disk FROM mz_clusters WHERE name = 'c'

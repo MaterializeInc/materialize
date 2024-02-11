@@ -172,8 +172,9 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
-# Waiting on https://github.com/blackbeam/mysql_async/pull/288
-mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "ecc4908e7c98ce1050fc536739c41ec444d03349" }
+# Waiting on https://github.com/blackbeam/mysql_async/pull/288 and
+# https://github.com/blackbeam/mysql_async/pull/289
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
@@ -215,6 +216,9 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 # Removes dependencies required for WASM support that create duplicated deps.
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+
+# To pick up https://github.com/MaterializeInc/arrow2/commit/61e271a3f70bc993f8b7854b73e8fee099803d1c
+arrow2 = { git = "https://github.com/MaterializeInc/arrow2.git", branch = "parquet_binary_next_iter" }
 
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.

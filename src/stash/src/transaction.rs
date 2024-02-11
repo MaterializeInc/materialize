@@ -43,7 +43,7 @@ pub const INSERT_BATCH_SPLIT_SIZE: usize = 2 * 1024 * 1024;
 /// [`tokio_postgres`] has a maximum number of arguments it supports when executing a query. This
 /// is the limit at which to split a batch to make sure we don't try to include too many elements
 /// in any one update.
-const MAX_INSERT_ARGUMENTS: u16 = u16::MAX / 4;
+pub(crate) const MAX_INSERT_ARGUMENTS: u16 = u16::MAX / 4;
 
 impl Stash {
     /// Transactionally executes closure `f`.

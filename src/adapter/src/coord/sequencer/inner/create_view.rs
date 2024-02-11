@@ -14,6 +14,7 @@ use mz_repr::RelationDesc;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan::{self};
+use tracing::instrument;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -27,7 +28,6 @@ use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext};
 
 impl Coordinator {
-    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_view(
         &mut self,
         ctx: ExecuteContext,
@@ -43,7 +43,7 @@ impl Coordinator {
     }
 
     /// Processes as many `create view` stages as possible.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub(crate) async fn sequence_create_view_stage(
         &mut self,
         mut ctx: ExecuteContext,
@@ -78,6 +78,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     fn create_view_validate(
         &mut self,
         session: &Session,
@@ -112,6 +113,7 @@ impl Coordinator {
         })
     }
 
+    #[instrument(skip_all)]
     async fn create_view_optimize(
         &mut self,
         ctx: ExecuteContext,
@@ -162,6 +164,7 @@ impl Coordinator {
         );
     }
 
+    #[instrument(skip_all)]
     async fn create_view_finish(
         &mut self,
         ctx: &mut ExecuteContext,

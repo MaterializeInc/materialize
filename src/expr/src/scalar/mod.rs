@@ -558,8 +558,7 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute(&mut self, permutation: &[usize]) {
-        #[allow(deprecated)]
-        self.visit_mut_post_nolimit(&mut |e| {
+        self.visit_pre_mut(|e| {
             if let MirScalarExpr::Column(old_i) = e {
                 *old_i = permutation[*old_i];
             }
@@ -572,8 +571,7 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute_map(&mut self, permutation: &BTreeMap<usize, usize>) {
-        #[allow(deprecated)]
-        self.visit_mut_post_nolimit(&mut |e| {
+        self.visit_pre_mut(|e| {
             if let MirScalarExpr::Column(old_i) = e {
                 *old_i = permutation[old_i];
             }
@@ -587,8 +585,7 @@ impl MirScalarExpr {
     }
 
     pub fn support_into(&self, support: &mut BTreeSet<usize>) {
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_pre(|e| {
             if let MirScalarExpr::Column(i) = e {
                 support.insert(*i);
             }
@@ -1858,8 +1855,7 @@ impl MirScalarExpr {
     /// `UnmaterializableFunc::MzNow`.
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_pre(|e| {
             if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
                 contains = true;
             }
@@ -1870,8 +1866,7 @@ impl MirScalarExpr {
     /// True iff the expression contains an `UnmaterializableFunc`.
     pub fn contains_unmaterializable(&self) -> bool {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_pre(|e| {
             if let MirScalarExpr::CallUnmaterializable(_) = e {
                 contains = true;
             }
@@ -1883,8 +1878,7 @@ impl MirScalarExpr {
     /// list.
     pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| match e {
+        self.visit_pre(|e| match e {
             MirScalarExpr::CallUnmaterializable(f) if !exceptions.contains(f) => contains = true,
             _ => (),
         });
@@ -1894,8 +1888,7 @@ impl MirScalarExpr {
     /// True iff the expression contains a `Column`.
     pub fn contains_column(&self) -> bool {
         let mut contains = false;
-        #[allow(deprecated)]
-        self.visit_post_nolimit(&mut |e| {
+        self.visit_pre(|e| {
             if let MirScalarExpr::Column(_) = e {
                 contains = true;
             }
@@ -1903,12 +1896,13 @@ impl MirScalarExpr {
         contains
     }
 
-    pub fn size(&self) -> Result<usize, RecursionLimitError> {
+    /// The size of the expression as a tree.
+    pub fn size(&self) -> usize {
         let mut size = 0;
-        self.visit_post(&mut |_: &MirScalarExpr| {
+        self.visit_pre(&mut |_: &MirScalarExpr| {
             size += 1;
-        })?;
-        Ok(size)
+        });
+        size
     }
 }
 
@@ -2117,7 +2111,7 @@ impl MirScalarExpr {
     }
 
     /// Visits all subexpressions in DFS preorder.
-    pub fn visit_pre<F>(&self, f: &mut F)
+    pub fn visit_pre<F>(&self, mut f: F)
     where
         F: FnMut(&Self),
     {
@@ -2125,6 +2119,15 @@ impl MirScalarExpr {
         while let Some(e) = worklist.pop() {
             f(e);
             worklist.extend(e.children().rev());
+        }
+    }
+
+    /// Iterative pre-order visitor.
+    pub fn visit_pre_mut<F: FnMut(&mut Self)>(&mut self, mut f: F) {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            f(expr);
+            worklist.extend(expr.children_mut().rev());
         }
     }
 }

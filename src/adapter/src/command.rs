@@ -260,8 +260,6 @@ pub enum ExecuteResponse {
     AlteredRole,
     /// The system configuration was altered.
     AlteredSystemConfiguration,
-    /// The query was canceled.
-    Canceled,
     /// The requested cursor was closed.
     ClosedCursor,
     /// The provided comment was created.
@@ -447,7 +445,6 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::AlteredSystemConfiguration => {
                 Ok(ExecuteResponse::AlteredSystemConfiguration)
             }
-            ExecuteResponseKind::Canceled => Ok(ExecuteResponse::Canceled),
             ExecuteResponseKind::ClosedCursor => Ok(ExecuteResponse::ClosedCursor),
             ExecuteResponseKind::Comment => Ok(ExecuteResponse::Comment),
             ExecuteResponseKind::Copied => Err(()),
@@ -511,7 +508,6 @@ impl ExecuteResponse {
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
             AlteredRole => Some("ALTER ROLE".into()),
             AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
-            Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
             Comment => Some("COMMENT".into()),
             Copied(n) => Some(format!("COPY {}", n)),

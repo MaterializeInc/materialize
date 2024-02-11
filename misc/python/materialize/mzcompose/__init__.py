@@ -45,8 +45,9 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_dangerous_functions": "true",  # former name of 'enable_unsafe_functions'
     # -----
     # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
-    "persist_next_listen_batch_retryer_clamp": "100ms",
-    "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
+    "persist_next_listen_batch_retryer_clamp": "16s",
+    "persist_next_listen_batch_retryer_initial_backoff": "100ms",
+    "persist_next_listen_batch_retryer_fixed_sleep": "1200ms",
     # -----
     # Persist internals changes: advance coverage
     "persist_streaming_compaction_enabled": "true",
@@ -60,7 +61,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "disk_cluster_replicas_default": "true",
     "enable_alter_swap": "true",
     "enable_assert_not_null": "true",
-    "enable_cc_cluster_sizes": "true",
     "enable_columnation_lgalloc": "true",
     "enable_comment": "true",
     "enable_disk_cluster_replicas": "true",

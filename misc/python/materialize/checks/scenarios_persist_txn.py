@@ -19,30 +19,37 @@ class PersistTxnToggle(Scenario):
     def actions(self) -> list[Action]:
         return [
             StartMz(
-                self, additional_system_parameter_defaults={"persist_txn_tables": "off"}
+                self,
+                additional_system_parameter_defaults={"persist_txn_tables": "off"},
+                catalog_store="persist",
             ),
             Initialize(self),
             KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "eager"},
+                catalog_store="persist",
             ),
             Manipulate(self, phase=1),
             KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "lazy"},
+                catalog_store="persist",
             ),
             Manipulate(self, phase=2),
             KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "eager"},
+                catalog_store="persist",
             ),
             Validate(self),
             KillMz(capture_logs=True),
             StartMz(
-                self, additional_system_parameter_defaults={"persist_txn_tables": "off"}
+                self,
+                additional_system_parameter_defaults={"persist_txn_tables": "off"},
+                catalog_store="persist",
             ),
             Validate(self),
         ]
@@ -60,12 +67,14 @@ class PersistTxnFencing(Scenario):
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "off"},
                 mz_service="mz_txn_tables_off",
+                catalog_store="persist",
             ),
             Manipulate(self, phase=1, mz_service="mz_txn_tables_off"),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "eager"},
                 mz_service="mz_txn_tables_eager",
+                catalog_store="persist",
             ),
             Manipulate(self, phase=2, mz_service="mz_txn_tables_eager"),
             Validate(self, mz_service="mz_txn_tables_eager"),
@@ -73,6 +82,7 @@ class PersistTxnFencing(Scenario):
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "lazy"},
                 mz_service="mz_txn_tables_lazy",
+                catalog_store="persist",
             ),
             Validate(self, mz_service="mz_txn_tables_lazy"),
             # Since we are creating Mz instances with a non-default name,

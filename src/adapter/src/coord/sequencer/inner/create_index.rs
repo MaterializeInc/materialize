@@ -16,22 +16,23 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
+use tracing::instrument;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateIndexExplain, CreateIndexFinish, CreateIndexOptimize, CreateIndexStage,
-    CreateIndexValidate, ExplainContext, Message, PlanValidity,
+    CreateIndexValidate, ExplainContext, ExplainPlanContext, Message, PlanValidity,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
 impl Coordinator {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn sequence_create_index(
         &mut self,
         ctx: ExecuteContext,
@@ -43,14 +44,14 @@ impl Coordinator {
             CreateIndexStage::Validate(CreateIndexValidate {
                 plan,
                 resolved_ids,
-                explain_ctx: None,
+                explain_ctx: ExplainContext::None,
             }),
             OpenTelemetryContext::obtain(),
         )
         .await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn explain_create_index(
         &mut self,
         ctx: ExecuteContext,
@@ -84,11 +85,66 @@ impl Coordinator {
             CreateIndexStage::Validate(CreateIndexValidate {
                 plan,
                 resolved_ids,
-                explain_ctx: Some(ExplainContext {
+                explain_ctx: ExplainContext::Plan(ExplainPlanContext {
                     broken,
                     config,
                     format,
                     stage,
+                    replan: None,
+                    desc: None,
+                    optimizer_trace,
+                }),
+            }),
+            OpenTelemetryContext::obtain(),
+        )
+        .await;
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn explain_replan_index(
+        &mut self,
+        ctx: ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+    ) {
+        let plan::Explainee::ReplanIndex(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
+        };
+        let CatalogItem::Index(item) = self.catalog().get_entry(&id).item() else {
+            unreachable!() // Asserted in `plan_explain_plan`.
+        };
+
+        let state = self.catalog().state();
+        let plan_result = state.deserialize_plan(id, item.create_sql.clone(), true);
+        let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
+
+        let plan::Plan::CreateIndex(plan) = plan else {
+            unreachable!() // We are parsing the `create_sql` of an `Index` item.
+        };
+
+        // It is safe to assume that query optimization will always succeed, so
+        // for now we statically assume `broken = false`.
+        let broken = false;
+
+        // Create an OptimizerTrace instance to collect plans emitted when
+        // executing the optimizer pipeline.
+        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+
+        self.execute_create_index_stage(
+            ctx,
+            CreateIndexStage::Validate(CreateIndexValidate {
+                plan,
+                resolved_ids,
+                explain_ctx: ExplainContext::Plan(ExplainPlanContext {
+                    broken,
+                    config,
+                    format,
+                    stage,
+                    replan: Some(id),
                     desc: None,
                     optimizer_trace,
                 }),
@@ -99,7 +155,7 @@ impl Coordinator {
     }
 
     /// Processes as many `create index` stages as possible.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub(crate) async fn execute_create_index_stage(
         &mut self,
         mut ctx: ExecuteContext,
@@ -140,6 +196,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     fn create_index_validate(
         &mut self,
         session: &Session,
@@ -170,6 +227,7 @@ impl Coordinator {
         })
     }
 
+    #[instrument(skip_all)]
     async fn create_index_optimize(
         &mut self,
         ctx: ExecuteContext,
@@ -194,16 +252,13 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let exported_index_id = if explain_ctx.is_some() {
-            return_if_err!(self.allocate_transient_id(), ctx)
-        } else {
+        let exported_index_id = if let ExplainContext::None = explain_ctx {
             return_if_err!(self.catalog_mut().allocate_user_id().await, ctx)
-        };
-        let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
-            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
         } else {
-            optimize::OptimizerConfig::from(self.catalog().system_config())
+            return_if_err!(self.allocate_transient_id(), ctx)
         };
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&explain_ctx);
 
         // Build an optimizer for this INDEX.
         let mut optimizer = optimize::index::Optimizer::new(
@@ -220,16 +275,7 @@ impl Coordinator {
                     optimize::index::GlobalMirPlan,
                     optimize::index::GlobalLirPlan,
                 ), AdapterError> {
-                    // In `explain_~` contexts, set the trace-derived dispatch
-                    // as default while optimizing.
-                    let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
-                        let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
-                        Some(tracing::dispatcher::set_default(&dispatch))
-                    } else {
-                        None
-                    };
-
-                    let _span_guard = tracing::debug_span!(target: "optimizer", "optimize").entered();
+                    let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
                         optimize::index::Index::new(&plan.name, &plan.index.on, &plan.index.keys);
@@ -244,7 +290,7 @@ impl Coordinator {
 
                 let stage = match pipeline() {
                     Ok((global_mir_plan, global_lir_plan)) => {
-                        if let Some(explain_ctx) = explain_ctx {
+                        if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                             let (_, df_meta) = global_lir_plan.unapply();
                             CreateIndexStage::Explain(CreateIndexExplain {
                                 validity,
@@ -267,7 +313,7 @@ impl Coordinator {
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
                     Err(err) => {
-                        let Some(explain_ctx) = explain_ctx else {
+                        let ExplainContext::Plan(explain_ctx) = explain_ctx else {
                             // In `sequence_~` contexts, immediately retire the
                             // execution with the error.
                             return ctx.retire(Err(err.into()));
@@ -302,6 +348,7 @@ impl Coordinator {
         );
     }
 
+    #[instrument(skip_all)]
     async fn create_index_finish(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -426,6 +473,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     fn create_index_explain(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -434,7 +482,7 @@ impl Coordinator {
             plan: plan::CreateIndexPlan { name, index, .. },
             df_meta,
             explain_ctx:
-                ExplainContext {
+                ExplainPlanContext {
                     broken,
                     config,
                     format,

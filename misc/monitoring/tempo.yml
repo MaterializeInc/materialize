@@ -15,6 +15,7 @@ distributor:
     otlp:
       protocols:
         grpc:
+          max_recv_msg_size_mib: 20
 
 ingester:
   max_block_duration: 5m

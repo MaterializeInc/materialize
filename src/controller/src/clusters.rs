@@ -35,7 +35,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tracing::{error, warn};
+use tracing::{error, instrument, warn};
 
 use crate::Controller;
 
@@ -506,6 +506,7 @@ where
     }
 
     /// Remove orphaned replicas.
+    #[instrument(skip_all)]
     pub async fn remove_orphaned_replicas(
         &mut self,
         next_user_replica_id: u64,
