@@ -5,7 +5,6 @@ menu:
   main:
     parent: "webhooks"
     name: "Amazon EventBridge"
-    weight: 5
 aliases:
   - /sql/create-source/webhook/#connecting-with-amazon-eventbridge
 ---

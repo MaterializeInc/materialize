@@ -5,9 +5,6 @@ menu:
   main:
     parent: "webhooks"
     name: "HubSpot"
-    weight: 20
-aliases:
-  - /sql/create-source/webhook/#connecting-with-hubspot
 ---
 
 This guide walks through the steps to ingest data from [HubSpot](https://www.hubspot.com/)
@@ -17,7 +14,7 @@ into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 Ensure that you have:
 
-- A HubSpot account with [operations package](https://www.hubspot.com/pricing/operations).
+- A HubSpot account with an [Operations Hub subscription](https://www.hubspot.com/pricing/operations).
 
 ## Step 1. (Optional) Create a cluster
 
@@ -37,7 +34,8 @@ To validate requests between HubSpot and Materialize, you must create a [secret]
 CREATE SECRET hubspot_webhook_secret AS '<secret_value>';
 ```
 
-Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
+Change the `<secret_value>` to a unique value that only you know and store it in
+a secure location.
 
 ## Step 3. Set up a webhook source
 
@@ -82,29 +80,33 @@ you define a `CHECK` statement with your webhook sources.
 {{< /warning >}}
 
 The `CHECK` clause defines how to validate each request. At the time of writing,
-HubSpot supports API key authentication, which you can use to validate requests
-with the `CHECK` clause.
+HubSpot supports API key authentication, which you can use to validate
+requests.
 
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
-This enables a simple and rudimentary way to grant authorization to your webhook source.
+This enables a simple and rudimentary way to grant authorization to your webhook
+source.
 
 ## Step 4. Create a webhook workflow in HubSpot
 
-A [webhook in HubSpot](https://knowledge.hubspot.com/workflows/how-do-i-use-webhooks-with-hubspot-workflows) is a workflow action that sends data to a webhook URL. You can create a webhook workflow in HubSpot to send data to the webhook source you created in the previous step.
+A [webhook in HubSpot](https://knowledge.hubspot.com/workflows/how-do-i-use-webhooks-with-hubspot-workflows)
+is a workflow action that sends data to a webhook URL. You can create a webhook
+workflow in HubSpot to send data to the webhook source you created in the
+previous step.
 
 1. In HubSpot, go to **Automation > Workflows**.
 
-1. Click the **name** of the workflow you want to add the webhook to or create a new one.
+1. Click the **Name** of the workflow you want to add the webhook to, or create a new one.
 
-1. Click the **+ icon** to add an action.
+1. Click the **+** icon to add an action.
 
 1. In the right panel, search for **Send a webhook**.
 
-1. Click the Method dropdown menu, then select POST.
+1. Click the **Method** dropdown menu, then select `POST`.
 
-1. Enter the URL from the [Step 3](#step-3-set-up-a-webhook-source).
+1. Enter the URL from **Step 3.**.
 
-1. Authenticate the request using the **API key** option. Use the secret created in the [Step 2](#step-2-create-a-secret).
+1. Authenticate the request using the **API key** option. Use the secret created in **Step 2.**.
 
 1. For the **API Key Name**, enter `authorization`. This is the key used in the `CHECK` clause of the webhook source.
 
@@ -113,32 +115,27 @@ A [webhook in HubSpot](https://knowledge.hubspot.com/workflows/how-do-i-use-webh
 ## Step 5. Configure the request body in HubSpot
 
 The request body is the data that HubSpot sends to the webhook URL. You can
-configure the request body to send the data you want to ingest into Materialize.
+configure the request body to send the data you want to ingest into
+Materialize.
 
-1. In HubSpot, go to your webhook workflow created in the previous step.
+1. In HubSpot, go to the webhook workflow created in **Step 4.**.
 
-1. Go to the **Request body** section.
-
-1. Click **Customize request body**.
+1. Go to the **Request body** section, and click **Customize request body**.
 
 1. In the **Request body** section, click **Add property**.
 
 1. From the dropdown menu, select the property you want to send to Materialize.
+   Repeat this step for each property you want to send to Materialize.
 
-1. Repeat this step for each property you want to send to Materialize.
+1. Click **Test Mapping** to validate that the webhook is working. If **Test Mapping** fails and throws a `failed to validate the request` error, this means that the secret is not correct. To fix this:
 
-1. Click **Test Mapping** and validate the webhook is working.
+    1. In **HubSpot**, go to the webhook workflow.
+    1. Go to the **Authentication** section.
+    1. Enter the secret created in **Step 2.**.
+    1. Verify that the **API Key Name** is `authorization`.
+    1. Click **Save**.
 
 1. After a succesful test, click **Save**.
-
-  {{< note >}}
-  If **Test Mapping** fails in and throws a *"failed to validate the request"* error, it means the shared secret is not right. To fix this, follow this steps:
- 1. In **HubSpot**, go to your webhook workflow created in the previous step.
- 1. Go to the **Authentication** section.
- 1. Enter the secret created in the [Step 2](#step-2-create-a-secret).
- 1. Verify that the **API Key Name** is `authorization`.
- 1. Click **Save**.
-  {{< /note >}}
 
 ## Step 6. Validate incoming data
 

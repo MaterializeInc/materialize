@@ -5,7 +5,6 @@ menu:
   main:
     parent: "webhooks"
     name: "SnowcatCloud"
-    weight: 10
 ---
 
 This guide walks through the steps to ingest data from [SnowcatCloud](https://www.snowcatcloud.com/)
