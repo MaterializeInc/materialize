@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 use mz_persist_client::read::{Cursor, ReadHandle};
@@ -700,6 +701,11 @@ pub trait StorageController: Debug {
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    fn real_time_recent_timestamp(
+        &self,
+        source_ids: BTreeSet<GlobalId>,
+    ) -> BoxFuture<'static, Self::Timestamp>;
 }
 
 /// State maintained about individual exports.

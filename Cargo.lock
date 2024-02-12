@@ -6275,6 +6275,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "differential-dataflow",
+ "futures",
  "http 0.2.9",
  "itertools",
  "maplit",

@@ -527,8 +527,8 @@ where
         &self,
         source_ids: impl Iterator<Item = GlobalId>,
     ) -> BoxFuture<'static, T> {
-        // Dummy implementation
-        Box::pin(async { T::minimum() })
+        self.storage
+            .real_time_recent_timestamp(source_ids.collect())
     }
 }
 

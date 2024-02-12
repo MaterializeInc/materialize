@@ -2601,6 +2601,14 @@ where
 
         Ok(())
     }
+
+    fn real_time_recent_timestamp(
+        &self,
+        _source_ids: BTreeSet<GlobalId>,
+    ) -> BoxFuture<'static, Self::Timestamp> {
+        // Dummy implementation
+        Box::pin(async { Self::Timestamp::minimum() })
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
