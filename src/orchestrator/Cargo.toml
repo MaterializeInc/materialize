@@ -22,7 +22,7 @@ serde = "1.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
-protobuf-src = "1.1.0"
+protobuf-src = { git = "https://github.com/def-/rust-protobuf-native.git" }
 tonic-build = "0.9.2"
 
 [package.metadata.cargo-udeps.ignore]

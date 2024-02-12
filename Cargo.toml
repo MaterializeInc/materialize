@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "fuzz",
     "src/adapter",
     "src/adapter-types",
     "src/alloc",
