@@ -5,7 +5,6 @@ menu:
   main:
     parent: "webhooks"
     name: "Amazon EventBridge"
-    weight: 5
 aliases:
   - /sql/create-source/webhook/#connecting-with-amazon-eventbridge
 ---
@@ -133,8 +132,8 @@ efficiently remove duplicates. For more details, refer to the webhook source
 
 ## Next steps
 
-With Materialize ingesting your Stripe data, you can start exploring it,
+With Materialize ingesting your Amazon EventBridge data, you can start exploring it,
 computing real-time results that stay up-to-date as new data arrives, and
 serving results efficiently. For more details, check out the
-[Stripe documentation](https://stripe.com/docs/webhooks) and the
+[Amazon EventBridge documentation](https://docs.aws.amazon.com/eventbridge/) and the
 [webhook source reference documentation](/sql/create-source/webhook/).

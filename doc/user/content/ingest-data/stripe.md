@@ -5,7 +5,6 @@ menu:
   main:
     parent: "webhooks"
     name: "Stripe"
-    weight: 15
 aliases:
   - /sql/create-source/webhook/#connecting-with-stripe
 ---

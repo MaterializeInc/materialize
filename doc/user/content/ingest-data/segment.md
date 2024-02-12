@@ -5,7 +5,6 @@ menu:
   main:
     parent: "webhooks"
     name: "Segment"
-    weight: 10
 aliases:
   - /sql/create-source/webhook/#connecting-with-segment
 ---
