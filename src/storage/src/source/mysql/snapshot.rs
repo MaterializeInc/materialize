@@ -97,8 +97,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{trace, warn};
 
-use mz_mysql_util::{query_sys_var, SchemaRequest};
-use mz_mysql_util::{schema_info, MySqlTableDesc};
+use mz_mysql_util::query_sys_var;
+use mz_mysql_util::MySqlTableDesc;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
@@ -109,10 +109,11 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::metrics::mysql::MySqlSnapshotMetrics;
+use crate::source::mysql::verify_schemas;
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 use super::{
-    pack_mysql_row, return_definite_error, table_name, validate_mysql_repl_settings, DefiniteError,
+    pack_mysql_row, return_definite_error, validate_mysql_repl_settings, DefiniteError,
     ReplicationError, RewindRequest, TransientError,
 };
 
@@ -135,6 +136,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let (mut raw_handle, raw_data) = builder.new_output();
     let (mut rewinds_handle, rewinds) = builder.new_output();
+    // Captures DefiniteErrors that affect the entire source, including all subsources
     let (mut definite_error_handle, definite_errors) = builder.new_output();
 
     // A global view of all exports that need to be snapshot by all workers. Note that this affects
@@ -213,9 +215,29 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .await?;
 
                 trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
-                lock_conn
+                match lock_conn
                     .query_drop(format!("LOCK TABLES {lock_clauses}"))
-                    .await?;
+                    .await
+                {
+                    // Handle the case where a table we are snapshotting has been dropped or renamed.
+                    Err(mysql_async::Error::Server(mysql_async::ServerError {
+                        code,
+                        message,
+                        ..
+                    })) if code == 1146 => {
+                        let err = DefiniteError::TableDropped(message);
+                        return Ok(return_definite_error(
+                            err,
+                            &all_outputs,
+                            &mut raw_handle,
+                            data_cap_set,
+                            &mut definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await);
+                    }
+                    e => e?,
+                };
 
                 // Record the frontier of future GTIDs based on the executed GTID set at the start
                 // of the snapshot
@@ -288,44 +310,34 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 trace!(%id, "timely-{worker_id} started transaction");
 
                 // Verify the schemas of the tables we are snapshotting
-                let cur_schemas: BTreeMap<_, _> = schema_info(
+                let mut removed_tables = vec![];
+                for (table, err) in verify_schemas(
                     &mut conn,
-                    &SchemaRequest::Tables(
-                        reader_snapshot_table_info
-                            .keys()
-                            .map(|f| (f.0[0].as_str(), f.0[1].as_str()))
-                            .collect(),
-                    ),
+                    &reader_snapshot_table_info
+                        .iter()
+                        .map(|(table, (_, desc))| (table, desc))
+                        .collect::<Vec<_>>(),
                 )
                 .await?
-                .drain(..)
-                .map(|schema| {
-                    (
-                        table_name(&schema.schema_name, &schema.name).unwrap(),
-                        schema,
-                    )
-                })
-                .collect();
-                let mut removed_tables = vec![];
-                for (table, (output_index, table_desc)) in reader_snapshot_table_info.iter() {
-                    if let Err(err) = verify_schema(table, table_desc, &cur_schemas) {
-                        // Put this table into an error state and stop ingesting it
-                        return_definite_error(
-                            err,
-                            &[*output_index],
-                            &mut raw_handle,
-                            data_cap_set,
-                            &mut definite_error_handle,
-                            definite_error_cap_set,
+                {
+                    let (output_index, _) = reader_snapshot_table_info.get(table).unwrap();
+                    // Publish the error for this table and stop ingesting it
+                    raw_handle
+                        .give(
+                            &data_cap_set[0],
+                            (
+                                (*output_index, Err(err.clone())),
+                                GtidPartition::minimum(),
+                                1,
+                            ),
                         )
                         .await;
-                        trace!(%id, "timely-{worker_id} stopping snapshot of table {table} \
-                                     due to schema mismatch");
-                        removed_tables.push(table.clone());
-                    }
+                    trace!(%id, "timely-{worker_id} stopping snapshot of table {table} \
+                                    due to schema mismatch");
+                    removed_tables.push(table.clone());
                 }
-                for table in &removed_tables {
-                    reader_snapshot_table_info.remove(table);
+                for table in removed_tables {
+                    reader_snapshot_table_info.remove(&table);
                 }
                 // This worker has nothing else to do
                 if reader_snapshot_table_info.is_empty() {
@@ -476,27 +488,4 @@ async fn collect_table_statistics(
     stats.count = count_row;
 
     Ok(stats)
-}
-
-/// Ensures that the specified table is still compatible with the current upstream schema
-/// and that it has not been dropped.
-///
-/// TODO: Implement real compatibility checks and don't error on backwards-compatible
-/// schema changes
-fn verify_schema(
-    table: &UnresolvedItemName,
-    expected_desc: &MySqlTableDesc,
-    upstream_info: &BTreeMap<UnresolvedItemName, MySqlTableDesc>,
-) -> Result<(), DefiniteError> {
-    let current_desc = upstream_info
-        .get(table)
-        .ok_or(DefiniteError::TableDropped)?;
-
-    if current_desc != expected_desc {
-        return Err(DefiniteError::IncompatibleSchema(format!(
-            "expected: {:#?}, actual: {:#?}",
-            expected_desc, current_desc
-        )));
-    }
-    Ok(())
 }

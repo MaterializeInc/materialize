@@ -66,6 +66,7 @@ use mz_mysql_util::{
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
@@ -74,7 +75,7 @@ use mz_timely_util::builder_async::{
 };
 
 use crate::metrics::mysql::MySqlSourceMetrics;
-use crate::source::mysql::GtidReplicationPartitions;
+use crate::source::mysql::{verify_schemas, GtidReplicationPartitions};
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
@@ -115,6 +116,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
     let (mut data_output, data_stream) = builder.new_output();
     let (upper_output, upper_stream) = builder.new_output();
+    // Captures DefiniteErrors that affect the entire source, including all subsources
     let (mut definite_error_handle, definite_errors) = builder.new_output();
     let mut rewind_input = builder.new_input_for_many(
         rewind_stream,
@@ -290,6 +292,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let mut table_id_map = BTreeMap::<u64, UnresolvedItemName>::new();
             let mut skipped_table_ids = BTreeSet::<u64>::new();
 
+            let mut errored_tables: BTreeSet<UnresolvedItemName> = BTreeSet::new();
+
             let mut final_row = Row::default();
 
             let mut next_gtid: Option<GtidPartition> = None;
@@ -333,7 +337,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             upper_cap_set.downgrade(&*new_upper);
 
                             rewinds.retain(|_, (_, req)| {
-                                !PartialOrder::less_than(&req.snapshot_upper, &new_upper)
+                                // We need to retain the rewind requests whose snapshot_upper has
+                                // at least one timestamp such that new_upper is less than that
+                                // timestamp
+                                req.snapshot_upper.iter().any(|ts| new_upper.less_than(ts))
                             });
 
                             trace!(%id, "timely-{worker_id} pending rewinds after \
@@ -388,8 +395,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             }
                             _ => unreachable!(),
                         };
-
-                        trace!(%id, "timely-{worker_id} received rows event: {data:?}");
+                        if errored_tables.contains(table) {
+                            continue;
+                        }
 
                         let (output_index, table_desc) = &table_info[table];
                         let new_gtid = next_gtid
@@ -462,15 +470,168 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         upper_cap_set.downgrade(&*new_upper);
 
                         rewinds.retain(|_, (_, req)| {
-                            !PartialOrder::less_than(&req.snapshot_upper, &new_upper)
+                            // We need to retain the rewind requests whose snapshot_upper has
+                            // at least one timestamp such that new_upper is less than that
+                            // timestamp
+                            req.snapshot_upper.iter().any(|ts| new_upper.less_than(ts))
                         });
                         trace!(%id, "timely-{worker_id} pending rewinds \
                                      after filtering: {rewinds:?}");
                     }
+                    // From the MySQL docs: 'A Query_event is created for each query that modifies
+                    // the database, unless the query is logged row-based.' This means that we can
+                    // expect any DDL changes to be represented as QueryEvents, which we must parse
+                    // to figure out if any of the tables we care about have been affected.
+                    Some(EventData::QueryEvent(event)) => {
+                        let query = event.query();
+                        trace!(%id, "timely-{worker_id} received query event {query:?}");
+                        let current_schema = event.schema();
+
+                        let table_ident = |name: &str| {
+                            let stripped = name.replace('`', "");
+                            let mut name_iter = stripped.split('.');
+                            match (name_iter.next(), name_iter.next()) {
+                                (Some(t_name), None) => table_name(&current_schema, t_name),
+                                (Some(schema_name), Some(t_name)) => {
+                                    table_name(schema_name, t_name)
+                                }
+                                _ => Err(TransientError::Generic(anyhow::anyhow!(
+                                    "Invalid table name from QueryEvent: {}",
+                                    name
+                                ))),
+                            }
+                        };
+
+                        let new_gtid = next_gtid.as_ref().expect("gtid cap should be set");
+
+                        // MySQL does not permit transactional DDL, so luckily we don't need to
+                        // worry about tracking BEGIN/COMMIT query events. We only need to look
+                        // for DDL changes that affect the schema of the tables we care about.
+                        let mut query_iter = query.split_ascii_whitespace();
+                        let first = query_iter.next();
+                        let second = query_iter.next();
+                        if let (Some(first), Some(second)) = (first, second) {
+                            // Detect `ALTER TABLE <tbl>`, `RENAME TABLE <tbl>` statements
+                            if (first.eq_ignore_ascii_case("alter")
+                                | first.eq_ignore_ascii_case("rename"))
+                                && second.eq_ignore_ascii_case("table")
+                            {
+                                let table = table_ident(query_iter.next().ok_or_else(|| {
+                                    TransientError::Generic(anyhow::anyhow!(
+                                        "Invalid DDL query: {}",
+                                        query
+                                    ))
+                                })?)?;
+                                if table_info.contains_key(&table) {
+                                    trace!(%id, "timely-{worker_id} DDL change detected \
+                                                 for {table:?}");
+                                    let (output_index, table_desc) = &table_info[&table];
+                                    let mut conn = connection_config
+                                        .connect(
+                                            &format!("timely-{worker_id} MySQL "),
+                                            &config.config.connection_context.ssh_tunnel_manager,
+                                        )
+                                        .await?;
+                                    if let Some((err_table, err)) =
+                                        verify_schemas(&mut conn, &[(&table, table_desc)])
+                                            .await?
+                                            .drain(..)
+                                            .next()
+                                    {
+                                        assert_eq!(
+                                            err_table, &table,
+                                            "Unexpected table verification error"
+                                        );
+                                        trace!(%id, "timely-{worker_id} DDL change \
+                                                    verification error for {table:?}: {err:?}");
+                                        let gtid_cap = data_cap_set.delayed(new_gtid);
+                                        data_output
+                                            .give(
+                                                &gtid_cap,
+                                                ((*output_index, Err(err)), new_gtid.clone(), 1),
+                                            )
+                                            .await;
+                                        errored_tables.insert(table.clone());
+                                    }
+                                }
+                            // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements. Since
+                            // this can drop multiple tables we just check all tables we care about
+                            } else if first.eq_ignore_ascii_case("drop")
+                                && second.eq_ignore_ascii_case("table")
+                            {
+                                let mut conn = connection_config
+                                    .connect(
+                                        &format!("timely-{worker_id} MySQL "),
+                                        &config.config.connection_context.ssh_tunnel_manager,
+                                    )
+                                    .await?;
+                                for (dropped_table, err) in verify_schemas(
+                                    &mut conn,
+                                    &table_info
+                                        .iter()
+                                        .filter(|(t, _)| !errored_tables.contains(t))
+                                        .map(|(t, d)| (t, &d.1))
+                                        .collect::<Vec<_>>(),
+                                )
+                                .await?
+                                .drain(..)
+                                {
+                                    if table_info.contains_key(dropped_table)
+                                        && !errored_tables.contains(dropped_table)
+                                    {
+                                        trace!(%id, "timely-{worker_id} DDL change \
+                                                        dropped table: {dropped_table:?}: {err:?}");
+                                        let (output_index, _) = &table_info[&dropped_table];
+                                        let gtid_cap = data_cap_set.delayed(new_gtid);
+                                        data_output
+                                            .give(
+                                                &gtid_cap,
+                                                ((*output_index, Err(err)), new_gtid.clone(), 1),
+                                            )
+                                            .await;
+                                        errored_tables.insert(dropped_table.clone());
+                                    }
+                                }
+
+                            // Detect `TRUNCATE [TABLE] <tbl>` statements
+                            } else if first.eq_ignore_ascii_case("truncate") {
+                                let table = if second.eq_ignore_ascii_case("table") {
+                                    table_ident(query_iter.next().ok_or_else(|| {
+                                        TransientError::Generic(anyhow::anyhow!(
+                                            "Invalid DDL query: {}",
+                                            query
+                                        ))
+                                    })?)?
+                                } else {
+                                    table_ident(second)?
+                                };
+                                if table_info.contains_key(&table) {
+                                    trace!(%id, "timely-{worker_id} TRUNCATE detected \
+                                                for {table:?}");
+                                    let (output_index, _) = &table_info[&table];
+                                    let gtid_cap = data_cap_set.delayed(new_gtid);
+                                    data_output
+                                        .give(
+                                            &gtid_cap,
+                                            (
+                                                (
+                                                    *output_index,
+                                                    Err(DefiniteError::TableTruncated(
+                                                        table.to_ast_string(),
+                                                    )),
+                                                ),
+                                                new_gtid.clone(),
+                                                1,
+                                            ),
+                                        )
+                                        .await;
+                                    errored_tables.insert(table);
+                                }
+                            }
+                        };
+                    }
                     _ => {
                         // TODO: Handle other event types
-                        // We definitely need to handle 'query' events and parse them for DDL changes
-                        // that might affect the schema of the tables we care about.
                     }
                 }
             }

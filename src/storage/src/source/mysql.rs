@@ -69,10 +69,11 @@ use uuid::Uuid;
 
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlError, MySqlTableDesc,
+    schema_info, MySqlConn, MySqlError, MySqlTableDesc, SchemaRequest,
 };
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, Diff, Row, ScalarType};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
@@ -225,8 +226,10 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
-    #[error("table was dropped")]
-    TableDropped,
+    #[error("table was truncated: {0}")]
+    TableTruncated(String),
+    #[error("table was dropped: {0}")]
+    TableDropped(String),
     #[error("incompatible schema change: {0}")]
     IncompatibleSchema(String),
     #[error("received a gtid set from the server that violates our requirements: {0}")]
@@ -483,5 +486,68 @@ async fn validate_mysql_repl_settings(conn: &mut mysql_async::Conn) -> Result<()
     ensure_full_row_binlog_format(conn).await?;
     ensure_replication_commit_order(conn).await?;
 
+    Ok(())
+}
+
+/// Given a list of tables and their expected schemas, retrieve the current schema for each table
+/// and verify they are compatible with the expected schema.
+///
+/// Returns a vec of tables that have incompatible schema changes.
+async fn verify_schemas<'a>(
+    conn: &mut MySqlConn,
+    expected: &[(&'a UnresolvedItemName, &MySqlTableDesc)],
+) -> Result<Vec<(&'a UnresolvedItemName, DefiniteError)>, MySqlError> {
+    // Get the current schema for each requested table from mysql
+    let cur_schemas: BTreeMap<_, _> = schema_info(
+        conn,
+        &SchemaRequest::Tables(
+            expected
+                .iter()
+                .map(|(f, _)| (f.0[0].as_str(), f.0[1].as_str()))
+                .collect(),
+        ),
+    )
+    .await?
+    .drain(..)
+    .map(|schema| {
+        (
+            table_name(&schema.schema_name, &schema.name).unwrap(),
+            schema,
+        )
+    })
+    .collect();
+
+    Ok(expected
+        .into_iter()
+        .filter_map(|(table, desc)| {
+            if let Err(err) = verify_schema(table, desc, &cur_schemas) {
+                Some((*table, err))
+            } else {
+                None
+            }
+        })
+        .collect())
+}
+
+/// Ensures that the specified table is still compatible with the current upstream schema
+/// and that it has not been dropped.
+///
+/// TODO: Implement real compatibility checks and don't error on backwards-compatible
+/// schema changes
+fn verify_schema(
+    table: &UnresolvedItemName,
+    expected_desc: &MySqlTableDesc,
+    upstream_info: &BTreeMap<UnresolvedItemName, MySqlTableDesc>,
+) -> Result<(), DefiniteError> {
+    let current_desc = upstream_info
+        .get(table)
+        .ok_or_else(|| DefiniteError::TableDropped(table.to_ast_string()))?;
+
+    if current_desc != expected_desc {
+        return Err(DefiniteError::IncompatibleSchema(format!(
+            "expected: {:#?}, actual: {:#?}",
+            expected_desc, current_desc
+        )));
+    }
     Ok(())
 }
