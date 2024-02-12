@@ -12,6 +12,7 @@ use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
 
+use crate::CollectionIdBundle;
 use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
@@ -30,6 +31,7 @@ use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
 use smallvec::SmallVec;
+use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
@@ -209,6 +211,9 @@ pub enum AdapterError {
     /// never be queryable. This can happen when the only specified refreshes are further back in
     /// the past than the initial compaction window of the materialized view.
     MaterializedViewWouldNeverRefresh(Timestamp, Timestamp),
+    /// A CREATE MATERIALIZED VIEW statement tried to acquire a read hold at a REFRESH AT time,
+    /// but was unable to get a precise read hold.
+    InputNotReadableAtRefreshAtTime(Timestamp, Vec<(Antichain<Timestamp>, CollectionIdBundle)>),
 }
 
 impl AdapterError {
@@ -306,6 +311,14 @@ impl AdapterError {
             AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_INTROSPECTION_CLUSTER.name).then(||
                 format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
             ),
+            AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, earliest_possible) => {
+                Some(format!(
+                    "the requested REFRESH AT time is {}, \
+                    while the following input collections are readable at no earlier than the following times: {:?}",
+                    oracle_read_ts,
+                    earliest_possible,
+                ))
+            }
             _ => None,
         }
     }
@@ -483,6 +496,7 @@ impl AdapterError {
             AdapterError::ConnectionValidation(_) => SqlState::SYSTEM_ERROR,
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
             AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
+            AdapterError::InputNotReadableAtRefreshAtTime(_, _) => SqlState::DATA_EXCEPTION,
         }
     }
 
@@ -690,6 +704,12 @@ impl fmt::Display for AdapterError {
                     f,
                     "all the specified refreshes of the materialized view would be too far in the past, and thus they \
                     would never happen"
+                )
+            }
+            AdapterError::InputNotReadableAtRefreshAtTime(_, _) => {
+                write!(
+                    f,
+                    "REFRESH AT requested for a time where not all the inputs are readable"
                 )
             }
         }

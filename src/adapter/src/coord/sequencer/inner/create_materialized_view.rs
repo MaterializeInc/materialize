@@ -203,7 +203,10 @@ impl Coordinator {
         let plan::CreateMaterializedViewPlan {
             materialized_view:
                 plan::MaterializedView {
-                    expr, cluster_id, ..
+                    expr,
+                    cluster_id,
+                    refresh_schedule,
+                    ..
                 },
             ambiguous_columns,
             ..
@@ -239,6 +242,34 @@ impl Coordinator {
             replica_id: None,
             role_metadata: session.role_metadata().clone(),
         };
+
+        // Acquire read holds at all the REFRESH AT times.
+        // Note that we already acquired a possibly non-precise read hold at mz_now() in the purification,
+        // if any of the REFRESH options involve mz_now(). But now we can acquire precise read holds, because by now
+        // the REFRESH AT expressions have been evaluated, so we can handle something like
+        // `mz_now()::text::int8 + 10000`;
+        if let Some(refresh_schedule) = refresh_schedule {
+            if !refresh_schedule.ats.is_empty() {
+                let ids = self
+                    .index_oracle(*cluster_id)
+                    .sufficient_collections(resolved_ids.0.iter());
+                for refresh_at_ts in &refresh_schedule.ats {
+                    match self.acquire_precise_read_holds_auto_cleanup(
+                        session,
+                        *refresh_at_ts,
+                        &ids,
+                    ) {
+                        Ok(()) => {}
+                        Err(earliest_possible) => {
+                            return Err(AdapterError::InputNotReadableAtRefreshAtTime(
+                                *refresh_at_ts,
+                                earliest_possible,
+                            ));
+                        }
+                    };
+                }
+            }
+        }
 
         Ok(CreateMaterializedViewStage::Optimize(
             CreateMaterializedViewOptimize {

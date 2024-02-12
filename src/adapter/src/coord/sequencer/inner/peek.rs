@@ -1003,7 +1003,8 @@ impl Coordinator {
                 });
             }
         } else if let Some((timestamp, bundle)) = potential_read_holds {
-            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle);
+            self.acquire_precise_read_holds_auto_cleanup(session, timestamp, bundle)
+                .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems

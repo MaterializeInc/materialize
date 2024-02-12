@@ -975,7 +975,7 @@ statement ok
 SET transaction_isolation = 'strict serializable'
 
 ## MV that has refreshes only in the past
-query error db error: ERROR: all the specified refreshes of the materialized view would be too far in the past, and thus they would never happen
+query error db error: ERROR: REFRESH AT requested for a time where not all the inputs are readable
 CREATE MATERIALIZED VIEW mv_no_refresh
 WITH (REFRESH AT '2000-01-01 10:00')
 AS SELECT * FROM t2;
@@ -1039,3 +1039,41 @@ EXPLAIN SELECT * FROM mv5;
 
 statement ok
 EXPLAIN TIMESTAMP FOR SELECT * FROM mv5;
+
+## Stacked REFRESH MVs -- both have their first and only refresh in the future, at similar times
+statement ok
+CREATE MATERIALIZED VIEW mv6 WITH (REFRESH AT mz_now()::text::int8 + 3000) AS
+SELECT x-y+z from t2;
+
+statement ok
+CREATE MATERIALIZED VIEW mv7 WITH (REFRESH AT mz_now()::text::int8 + 3000) AS
+SELECT * from mv6;
+
+query I
+SELECT * FROM mv7
+----
+NULL
+NULL
+NULL
+2
+11
+30
+70
+100
+
+# We now insert something into the underlying table. This shouldn't be visible in mv6, because mv6's refresh shouldn't
+# be later than mv7's refresh.
+statement ok
+INSERT INTO t2 VALUES (0, 0, 0);
+
+query I
+SELECT * FROM mv6
+----
+NULL
+NULL
+NULL
+2
+11
+30
+70
+100
