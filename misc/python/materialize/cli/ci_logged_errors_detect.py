@@ -66,7 +66,9 @@ ERROR_RE = re.compile(
 # separately.
 # Example 1: launchdarkly-materialized-1  | thread 'coordinator' panicked at [...]
 # Example 2: [pod/environmentd-0/environmentd] thread 'coordinator' panicked at [...]
-PANIC_START_RE = re.compile(rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) thread '.*' panicked at ")
+PANIC_START_RE = re.compile(
+    rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) thread '.*' panicked at "
+)
 # Example 1: launchdarkly-materialized-1  | global timestamp must always go up
 # Example 2: [pod/environmentd-0/environmentd] Unknown collection identifier u2082
 SERVICES_LOG_LINE_RE = re.compile(rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) (?P<msg>.*)$")
@@ -282,53 +284,68 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     return len(unknown_errors)
 
 
-def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
+def get_error_logs(log_file_names: list[str]) -> list[ErrorLog]:
     error_logs = []
-    for log_file in log_files:
-        with open(log_file, "r+") as f:
+    for log_file_name in log_file_names:
+        with open(log_file_name, "r+") as f:
             try:
                 data = mmap.mmap(f.fileno(), 0)
             except ValueError:
                 # empty file, ignore
                 continue
-            for match in ERROR_RE.finditer(data):
-                if IGNORE_RE.search(match.group(0)):
-                    continue
-                # environmentd segfaults during normal shutdown in coverage builds, see #20016
-                # Ignoring this in regular ways would still be quite spammy.
-                if (
-                    b"environmentd" in match.group(0)
-                    and b"segfault at" in match.group(0)
-                    and ui.env_is_truthy("CI_COVERAGE_ENABLED")
-                ):
-                    continue
-                error_logs.append(ErrorLog(match.group(0), log_file))
-            open_panics = {}
-            for line in iter(data.readline, b""):
-                line = line.rstrip(b"\n")
-                if match := PANIC_START_RE.match(line):
-                    service = match.group("service")
-                    assert (
-                        service not in open_panics
-                    ), f"Two panics of same service {service} interleaving: {line}"
-                    open_panics[service] = line
-                elif open_panics:
-                    if match := SERVICES_LOG_LINE_RE.match(line):
-                        # Handling every services.log line here, filter to
-                        # handle only the ones which are currently in a panic
-                        # handler:
-                        if panic_start := open_panics.get(match.group("service")):
-                            del open_panics[match.group("service")]
-                            if IGNORE_RE.search(match.group(0)):
-                                continue
-                            error_logs.append(
-                                ErrorLog(
-                                    panic_start + b" " + match.group("msg"), log_file
-                                )
-                            )
-            assert not open_panics, f"Panic log never finished: {open_panics}"
+
+            error_logs.extend(_collect_errors_in_logs(data, log_file_name))
+            error_logs.extend(_collect_panics_in_logs(data, log_file_name))
 
     return error_logs
+
+
+def _collect_errors_in_logs(data: mmap, log_file_name: str) -> list[ErrorLog]:
+    collected_errors = []
+
+    for match in ERROR_RE.finditer(data):
+        if IGNORE_RE.search(match.group(0)):
+            continue
+        # environmentd segfaults during normal shutdown in coverage builds, see #20016
+        # Ignoring this in regular ways would still be quite spammy.
+        if (
+            b"environmentd" in match.group(0)
+            and b"segfault at" in match.group(0)
+            and ui.env_is_truthy("CI_COVERAGE_ENABLED")
+        ):
+            continue
+        collected_errors.append(ErrorLog(match.group(0), log_file_name))
+
+    return collected_errors
+
+
+def _collect_panics_in_logs(data: mmap, log_file_name: str) -> list[ErrorLog]:
+    collected_panics = []
+
+    open_panics = {}
+    for line in iter(data.readline, b""):
+        line = line.rstrip(b"\n")
+        if match := PANIC_START_RE.match(line):
+            service = match.group("service")
+            assert (
+                service not in open_panics
+            ), f"Two panics of same service {service} interleaving: {line}"
+            open_panics[service] = line
+        elif open_panics:
+            if match := SERVICES_LOG_LINE_RE.match(line):
+                # Handling every services.log line here, filter to
+                # handle only the ones which are currently in a panic
+                # handler:
+                if panic_start := open_panics.get(match.group("service")):
+                    del open_panics[match.group("service")]
+                    if IGNORE_RE.search(match.group(0)):
+                        continue
+                    collected_panics.append(
+                        ErrorLog(panic_start + b" " + match.group("msg"), log_file_name)
+                    )
+    assert not open_panics, f"Panic log never finished: {open_panics}"
+
+    return collected_panics
 
 
 def sanitize_text(text: str, max_length: int = 4000) -> str:
