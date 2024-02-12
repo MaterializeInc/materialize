@@ -573,7 +573,9 @@ impl<'a> Parser<'a> {
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
-            Token::Keyword(ROW) => self.parse_row_expr(),
+            Token::Keyword(ROW) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_row_expr()
+            }
             Token::Keyword(TRIM) => self.parse_trim_expr(),
             Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_position_expr()
