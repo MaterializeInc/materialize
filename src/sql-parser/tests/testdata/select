@@ -193,6 +193,16 @@ SELECT ROW(1, 2)
 ----
 SELECT ROW(1, 2)
 
+parse-statement roundtrip
+SELECT ROW
+----
+SELECT row
+
+parse-statement roundtrip
+SELECT ROW + 1
+----
+SELECT row + 1
+
 parse-statement
 SELECT id, fname, lname FROM customer WHERE id = 1 LIMIT 5
 ----
