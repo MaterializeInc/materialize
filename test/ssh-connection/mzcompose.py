@@ -29,17 +29,7 @@ SERVICES = [
     Postgres(),
     TestCerts(),
     Redpanda(),
-    MySql(
-        additional_args=[
-            "--log-bin=mysql-bin",
-            "--gtid_mode=ON",
-            "--enforce_gtid_consistency=ON",
-            "--binlog-format=row",
-            "--log-slave-updates",
-            "--binlog-row-image=full",
-            "--server-id=1",
-        ]
-    ),
+    MySql(),
 ]
 
 

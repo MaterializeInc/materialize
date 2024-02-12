@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from collections.abc import Iterable
 
 from materialize.mzcompose.service import (
     Service,
@@ -24,7 +23,15 @@ class MySql(Service):
         image: str = "mysql:8.0.35",
         port: int = 3306,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
-        additional_args: Iterable[str] = tuple(),
+        additional_args: list[str] = [
+            "--log-bin=mysql-bin",
+            "--gtid_mode=ON",
+            "--enforce_gtid_consistency=ON",
+            "--binlog-format=row",
+            "--log-slave-updates",
+            "--binlog-row-image=full",
+            "--server-id=1",
+        ],
     ) -> None:
         super().__init__(
             name=name,
