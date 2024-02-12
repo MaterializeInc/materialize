@@ -17,6 +17,7 @@ from textwrap import dedent
 from materialize import buildkite
 from materialize.docker import is_image_tag_of_version
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.services.mysql import MySql
 from materialize.version_list import (
     ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
     get_commits_of_accepted_regressions_between_versions,
@@ -28,7 +29,7 @@ from materialize.version_list import (
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
 from scenarios import *  # noqa: F401 F403
-from scenarios import Scenario
+from scenarios import MySqlStreaming, Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
 from scenarios_customer import *  # noqa: F401 F403
 from scenarios_optbench import *  # noqa: F401 F403
@@ -105,6 +106,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     KgenService(),
     Postgres(),
+    MySql(),
     Balancerd(),
     # Overridden below
     Materialized(),
@@ -371,10 +373,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             [s for s in all_subclasses(root_scenario) if not s.__subclasses__()],
             key=repr,
         )
+
+        # TODO: #25124 (correctness issue with streaming)
+        selected_scenarios.remove(MySqlStreaming)
     else:
         selected_scenarios = [root_scenario]
 
-    dependencies = ["postgres"]
+    dependencies = ["postgres", "mysql"]
 
     if args.redpanda:
         dependencies += ["redpanda"]

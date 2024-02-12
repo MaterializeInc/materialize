@@ -1424,6 +1424,144 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
         )
 
 
+class MySqlCdc(Scenario):
+    pass
+
+
+class MySqlInitialLoad(MySqlCdc):
+    """Measure the time it takes to read 1M existing records from MySQL
+    when creating a materialized source"""
+
+    def shared(self) -> Action:
+        return TdAction(
+            f"""
+$ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
+
+SET @i:=0;
+CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
+INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.n()};
+"""
+        )
+
+    def before(self) -> Action:
+        return TdAction(
+            """
+> DROP SOURCE IF EXISTS mz_source_mysqlcdc;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
+            """
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> CREATE SECRET IF NOT EXISTS mysqlpass AS '${{arg.mysql-root-password}}'
+> CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysqlpass
+  )
+
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
+> CREATE SOURCE mz_source_mysqlcdc
+  IN CLUSTER source_cluster
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.pk_table)
+  /* A */
+
+> SELECT count(*) FROM pk_table
+  /* B */
+{self.n()}
+            """
+        )
+
+
+class MySqlStreaming(MySqlCdc):
+    """Measure the time it takes to ingest records from MySQL post-snapshot"""
+
+    SCALE = 5
+
+    def shared(self) -> Action:
+        return TdAction(
+            """
+$ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
+
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
+"""
+        )
+
+    def before(self) -> Action:
+        return TdAction(
+            f"""
+> DROP SOURCE IF EXISTS s1;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE;
+
+$ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
+
+> CREATE SECRET IF NOT EXISTS mysqlpass AS '${{arg.mysql-root-password}}'
+> CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysqlpass
+  )
+
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
+> CREATE SOURCE s1
+  IN CLUSTER source_cluster
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.t1)
+            """
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        insertions = "\n".join(
+            [
+                dedent(
+                    f"""
+                    SET @i:=0;
+                    INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {round(self.n()/1000)};
+                    COMMIT;
+                    """
+                )
+                for i in range(0, 1000)
+            ]
+        )
+
+        return Td(
+            f"""
+> SELECT 1;
+  /* A */
+1
+
+$ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+
+$ mysql-execute name=mysql
+USE public;
+{insertions}
+
+> SELECT count(*) FROM t1
+  /* B */
+{self.n()}
+            """
+        )
+
+
 class Coordinator(Scenario):
     """Feature benchmarks pertaining to the coordinator."""
 
