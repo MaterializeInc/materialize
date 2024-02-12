@@ -3283,6 +3283,7 @@ impl BinaryFunc {
             | BinaryFunc::AddTimestampTzInterval
             | BinaryFunc::AddDateInterval
             | BinaryFunc::AddDateTime
+            | BinaryFunc::AddDateInt32
             | BinaryFunc::AddTimeInterval
             | BinaryFunc::AddNumeric => (true, true),
             BinaryFunc::BitAndInt16
@@ -3331,6 +3332,7 @@ impl BinaryFunc {
             | BinaryFunc::SubTimestampTzInterval
             | BinaryFunc::SubDate
             | BinaryFunc::SubDateInterval
+            | BinaryFunc::SubDateInt32
             | BinaryFunc::SubTime
             | BinaryFunc::SubTimeInterval
             | BinaryFunc::SubNumeric => (true, true),
