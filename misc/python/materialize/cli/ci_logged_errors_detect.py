@@ -324,7 +324,6 @@ def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
                             )
             assert not open_panics, f"Panic log never finished: {open_panics}"
 
-    # TODO: Only report multiple errors once?
     return error_logs
 
 
