@@ -54,6 +54,49 @@ impl CollectionIdBundle {
         }
     }
 
+    /// Returns a new bundle with the identifiers that are present in both `self` and `other`.
+    pub fn intersection(&self, other: &CollectionIdBundle) -> CollectionIdBundle {
+        // Attend to storage ids.
+        let storage_ids = self
+            .storage_ids
+            .intersection(&other.storage_ids)
+            .cloned()
+            .collect();
+
+        // Intersect ComputeInstanceIds.
+        let self_compute_instances = self.compute_ids.keys().collect::<BTreeSet<_>>();
+        let other_compute_instances = other.compute_ids.keys().collect::<BTreeSet<_>>();
+        let compute_instances = self_compute_instances
+            .intersection(&other_compute_instances)
+            .cloned();
+
+        // For each ComputeInstanceId, intersect `self` with `other`.
+        let compute_ids = compute_instances
+            .map(|compute_instance_id| {
+                let self_compute_ids = self
+                    .compute_ids
+                    .get(compute_instance_id)
+                    .expect("id is in intersection, so should be found");
+                let other_compute_ids = other
+                    .compute_ids
+                    .get(compute_instance_id)
+                    .expect("id is in intersection, so should be found");
+                (
+                    compute_instance_id.clone(),
+                    self_compute_ids
+                        .intersection(other_compute_ids)
+                        .cloned()
+                        .collect(),
+                )
+            })
+            .collect();
+
+        CollectionIdBundle {
+            storage_ids,
+            compute_ids,
+        }
+    }
+
     /// Extends a `CollectionIdBundle` with the contents of another `CollectionIdBundle`.
     pub fn extend(&mut self, other: &CollectionIdBundle) {
         self.storage_ids.extend(&other.storage_ids);

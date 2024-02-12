@@ -110,9 +110,15 @@ impl<T: Eq + Hash + Ord> ReadHolds<T> {
     }
 
     /// Extends a `ReadHolds` with the contents of another `ReadHolds`.
-    pub fn extend(&mut self, other: ReadHolds<T>) {
-        for (time, id_bundle) in other.holds {
-            self.holds.entry(time).or_default().extend(&id_bundle);
+    /// Asserts that the newly added read holds don't coincide with any of the existing read holds in self.
+    pub fn extend_with_new(&mut self, other: ReadHolds<T>) {
+        for (time, other_id_bundle) in other.holds {
+            let self_id_bundle = self.holds.entry(time).or_default();
+            assert!(
+                self_id_bundle.intersection(&other_id_bundle).is_empty(),
+                "extend_with_new encountered duplicate read holds",
+            );
+            self_id_bundle.extend(&other_id_bundle);
         }
     }
 
@@ -214,7 +220,7 @@ impl crate::coord::Coordinator {
                             .or_default()
                             .extend(id_bundle);
                     }
-                    read_holds.extend(new_read_holds);
+                    read_holds.extend_with_new(new_read_holds);
                 }
                 TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent => {
                     id_bundles.entry(None).or_default().extend(&id_bundle);
