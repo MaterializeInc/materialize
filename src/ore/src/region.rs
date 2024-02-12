@@ -157,6 +157,9 @@ impl<T> LgAllocRegion<T> {
 ///
 /// The implementation does not drop its elements, but forgets them instead. Do not use where
 /// this is not intended, i.e., outside `Copy` types or columnation regions.
+///
+/// NOTE: We plan to deprecate this type soon. Users should switch to different types or the raw
+/// `lgalloc` API instead.
 #[derive(Debug)]
 pub enum Region<T> {
     /// A possibly empty heap-allocated region, represented as a vector.
@@ -227,8 +230,8 @@ impl<T> Region<T> {
     #[inline(always)]
     pub fn new_mmap(capacity: usize) -> Result<Region<T>, lgalloc::AllocError> {
         lgalloc::allocate(capacity).map(|(ptr, capacity, handle)| {
-            // SAFETY: memory points to suitable memory.
-            // It is UB to call `from_raw_parts` with a pointer not allocated from the system
+            // SAFETY: `ptr` points to suitable memory.
+            // It is UB to call `from_raw_parts` with a pointer not allocated from the global
             // allocator, but we accept this here because we promise never to reallocate the vector.
             let inner =
                 ManuallyDrop::new(unsafe { Vec::from_raw_parts(ptr.as_ptr(), 0, capacity) });
@@ -322,6 +325,9 @@ impl<T> Region<T> {
     /// Obtain a mutable reference to the inner vector representation.
     ///
     /// Unsafe because the caller has to make sure that the vector will not reallocate.
+    /// Otherwise, the vector representation could try to reallocate the underlying memory
+    /// using the global allocator, which would cause problems because the memory might not
+    /// have originated from it. This is undefined behavior.
     #[inline]
     unsafe fn as_mut_vec(&mut self) -> &mut Vec<T> {
         match self {
@@ -333,6 +339,8 @@ impl<T> Region<T> {
 
 impl<T: Clone> Region<T> {
     /// Extend the region from a slice.
+    ///
+    /// Panics if the region does not have sufficient capacity.
     #[inline]
     pub fn extend_from_slice(&mut self, slice: &[T]) {
         assert!(self.capacity() - self.len() >= slice.len());
@@ -364,7 +372,8 @@ impl<T> Drop for Region<T> {
     fn drop(&mut self) {
         match self {
             Region::Heap(vec) => {
-                // SAFETY: Don't drop the elements, drop the vec.
+                // SAFETY: Don't drop the elements, drop the vec, in line with the documentation
+                // of the `Region` type.
                 unsafe { vec.set_len(0) }
             }
             Region::MMap(_) => {}
@@ -374,8 +383,7 @@ impl<T> Drop for Region<T> {
 
 impl<T> Drop for MMapRegion<T> {
     fn drop(&mut self) {
-        // Forget reasoning: The vector points to the mapped region, which frees the
-        // allocation. Don't drop elements, don't drop vec.
+        // Similar to dropping Region: Drop the allocation, don't drop the `inner` vector.
         lgalloc::deallocate(self.handle.take().unwrap());
     }
 }
