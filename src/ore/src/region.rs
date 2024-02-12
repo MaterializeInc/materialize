@@ -245,7 +245,7 @@ impl<T> Region<T> {
     /// The capacity of the returned region must be at least as large as the requested capacity,
     /// but can be larger if the implementation requires it.
     ///
-    /// Returns a [`Region::MMapRegion`] if possible, and falls back to [`Region::Heap`] otherwise.
+    /// Returns a [`Region::MMap`] if possible, and falls back to [`Region::Heap`] otherwise.
     #[must_use]
     pub fn new_auto(capacity: usize) -> Region<T> {
         match Region::new_mmap(capacity) {
