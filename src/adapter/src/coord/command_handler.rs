@@ -629,7 +629,7 @@ impl Coordinator {
         //   - In the handler for `Message::PurifiedStatementReady`, before we handle the purified statement.
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
-        match stmt {
+        let (stmt, resolved_ids) = match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
             stmt @ (Statement::CreateSource(_)
@@ -680,13 +680,17 @@ impl Coordinator {
                         tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }
                 });
+                return;
             }
 
             // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
             // automatically as part of purification
-            Statement::CreateSubsource(_) => ctx.retire(Err(AdapterError::Unsupported(
-                "CREATE SUBSOURCE statements",
-            ))),
+            Statement::CreateSubsource(_) => {
+                ctx.retire(Err(AdapterError::Unsupported(
+                    "CREATE SUBSOURCE statements",
+                )));
+                return;
+            }
 
             Statement::CreateMaterializedView(mut cmvs) => {
                 let mz_now = match self
@@ -723,10 +727,7 @@ impl Coordinator {
 
                 // (Purifying CreateMaterializedView doesn't happen async, so no need to send
                 // `Message::PurifiedStatementReady` here.)
-                match self.plan_statement(ctx.session(), purified_stmt, &params, &resolved_ids) {
-                    Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
-                    Err(e) => ctx.retire(Err(e)),
-                }
+                (purified_stmt, resolved_ids)
             }
 
             Statement::ExplainPlan(ExplainPlanStatement {
@@ -761,17 +762,16 @@ impl Coordinator {
                     explainee: Explainee::CreateMaterializedView(Box::new(cmvs), broken),
                 });
 
-                match self.plan_statement(ctx.session(), purified_stmt, &params, &resolved_ids) {
-                    Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
-                    Err(e) => ctx.retire(Err(e)),
-                }
+                (purified_stmt, resolved_ids)
             }
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
-                Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
-                Err(e) => ctx.retire(Err(e)),
-            },
+            _ => (stmt, resolved_ids),
+        };
+
+        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+            Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+            Err(e) => ctx.retire(Err(e)),
         }
     }
 
