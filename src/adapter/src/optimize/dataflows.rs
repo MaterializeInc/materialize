@@ -43,7 +43,7 @@ use tracing::warn;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::optimize::{view, Optimize, OptimizeMode, OptimizerConfig, OptimizerError};
+use crate::optimize::{view, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::viewable_variables;
 
@@ -308,7 +308,7 @@ impl<'a> DataflowBuilder<'a> {
         df_desc: &mut DataflowDesc,
         config: &OptimizerConfig,
     ) -> Result<(), OptimizerError> {
-        if config.mode == OptimizeMode::Explain {
+        if config.reoptimize_imported_views {
             for desc in df_desc.objects_to_build.iter_mut().rev() {
                 if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
                     // Skip descriptions that do not reference proper views.

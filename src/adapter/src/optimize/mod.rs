@@ -189,6 +189,9 @@ pub struct OptimizerConfig {
     /// This means that it will not consider catalog items (more specifically
     /// indexes) with [`GlobalId`] greater or equal than the one provided here.
     pub replan: Option<GlobalId>,
+    /// Reoptimize imported views when building and optimizing a
+    /// [`DataflowDescription`] in the global MIR optimization phase.
+    pub reoptimize_imported_views: bool,
     /// Enable fast path optimization.
     pub enable_fast_path: bool,
     /// Enable consolidation of unions that happen immediately after negate.
@@ -220,6 +223,7 @@ impl From<&SystemVars> for OptimizerConfig {
         Self {
             mode: OptimizeMode::Execute,
             replan: None,
+            reoptimize_imported_views: false,
             enable_fast_path: true, // Always enable fast path if available.
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
@@ -254,6 +258,7 @@ where
 impl OverrideFrom<OptimizerFeatureOverrides> for OptimizerConfig {
     fn override_from(mut self, overrides: &OptimizerFeatureOverrides) -> Self {
         if let Some(feature_value) = overrides.enable_new_outer_join_lowering {
+            self.reoptimize_imported_views = true;
             self.enable_new_outer_join_lowering = feature_value;
         }
         if let Some(feature_value) = overrides.enable_eager_delta_joins {
@@ -277,6 +282,7 @@ impl OverrideFrom<ExplainContext> for OptimizerConfig {
 
         // Override feature flags that can be enabled in the EXPLAIN config.
         if let Some(explain_flag) = ctx.config.enable_new_outer_join_lowering {
+            self.reoptimize_imported_views = true;
             self.enable_new_outer_join_lowering = explain_flag;
         }
         if let Some(explain_flag) = ctx.config.enable_eager_delta_joins {
