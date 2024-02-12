@@ -66,12 +66,15 @@ ERROR_RE = re.compile(
 # separately.
 # Example 1: launchdarkly-materialized-1  | thread 'coordinator' panicked at [...]
 # Example 2: [pod/environmentd-0/environmentd] thread 'coordinator' panicked at [...]
-PANIC_START_RE = re.compile(
+PANIC_IN_SERVICE_START_RE = re.compile(
     rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) thread '.*' panicked at "
 )
 # Example 1: launchdarkly-materialized-1  | global timestamp must always go up
 # Example 2: [pod/environmentd-0/environmentd] Unknown collection identifier u2082
 SERVICES_LOG_LINE_RE = re.compile(rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) (?P<msg>.*)$")
+
+PANIC_WITHOUT_SERVICE_START_RE = re.compile(rb"^thread '.*' panicked at ")
+PANIC_ENDED_RE = re.compile(rb"note: Some details are omitted")
 
 # Expected failures, don't report them
 IGNORE_RE = re.compile(
@@ -289,18 +292,19 @@ def get_error_logs(log_file_names: list[str]) -> list[ErrorLog]:
     for log_file_name in log_file_names:
         with open(log_file_name, "r+") as f:
             try:
-                data = mmap.mmap(f.fileno(), 0)
+                data: Any = mmap.mmap(f.fileno(), 0)
             except ValueError:
                 # empty file, ignore
                 continue
 
             error_logs.extend(_collect_errors_in_logs(data, log_file_name))
-            error_logs.extend(_collect_panics_in_logs(data, log_file_name))
+            error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
+            error_logs.extend(_collect_loose_panics_in_logs(data, log_file_name))
 
     return error_logs
 
 
-def _collect_errors_in_logs(data: mmap, log_file_name: str) -> list[ErrorLog]:
+def _collect_errors_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
     collected_errors = []
 
     for match in ERROR_RE.finditer(data):
@@ -319,13 +323,13 @@ def _collect_errors_in_logs(data: mmap, log_file_name: str) -> list[ErrorLog]:
     return collected_errors
 
 
-def _collect_panics_in_logs(data: mmap, log_file_name: str) -> list[ErrorLog]:
+def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
     collected_panics = []
 
     open_panics = {}
     for line in iter(data.readline, b""):
         line = line.rstrip(b"\n")
-        if match := PANIC_START_RE.match(line):
+        if match := PANIC_IN_SERVICE_START_RE.match(line):
             service = match.group("service")
             assert (
                 service not in open_panics
@@ -344,6 +348,33 @@ def _collect_panics_in_logs(data: mmap, log_file_name: str) -> list[ErrorLog]:
                         ErrorLog(panic_start + b" " + match.group("msg"), log_file_name)
                     )
     assert not open_panics, f"Panic log never finished: {open_panics}"
+
+    return collected_panics
+
+
+def _collect_loose_panics_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
+    collected_panics = []
+
+    open_panic: str | None = None
+    end_of_panic_reached = True
+
+    for line in iter(data.readline, b""):
+        line = line.rstrip(b"\n")
+        if PANIC_WITHOUT_SERVICE_START_RE.match(line):
+            assert open_panic is None, "A panic is already pending"
+            open_panic = line
+            end_of_panic_reached = False
+        elif open_panic is not None:
+            if end_of_panic_reached:
+                collected_panics.append(
+                    ErrorLog(open_panic + " " + line, log_file_name)
+                )
+                open_panic = None
+            else:
+                if PANIC_ENDED_RE.search(line):
+                    end_of_panic_reached = True
+
+    assert open_panic is None, f"Panic log never finished: {open_panic}"
 
     return collected_panics
 
