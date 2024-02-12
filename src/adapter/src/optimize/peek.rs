@@ -222,7 +222,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         let mut df_desc = MirDataflowDescription::new(debug_name.to_string());
 
         df_builder.import_view_into_dataflow(&self.select_id, &expr, &mut df_desc)?;
-        df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
+        df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         // Resolve all unmaterializable function calls except mz_now(), because
         // we don't yet have a timestamp.

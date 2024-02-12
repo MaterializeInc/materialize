@@ -190,6 +190,7 @@ If
 Ignore
 Ilike
 Implementations
+Imported
 In
 Include
 Index
@@ -329,6 +330,7 @@ Regex
 Region
 Registry
 Rename
+Reoptimize
 Repeatable
 Replace
 Replan

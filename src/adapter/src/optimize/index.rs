@@ -151,7 +151,7 @@ impl Optimize<Index> for Optimizer {
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
-        df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
+        df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         for desc in df_desc.objects_to_build.iter_mut() {
             prep_relation_expr(&mut desc.plan, ExprPrepStyle::Index)?;

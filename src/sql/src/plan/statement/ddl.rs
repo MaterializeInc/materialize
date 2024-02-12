@@ -3280,6 +3280,7 @@ generate_extracted_config!(
 
 generate_extracted_config!(
     ClusterFeature,
+    (ReoptimizeImportedViews, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None))
 );
@@ -3355,11 +3356,13 @@ pub fn plan_create_cluster(
 
         // Plan OptimizerFeatureOverrides.
         let ClusterFeatureExtracted {
+            reoptimize_imported_views,
             enable_eager_delta_joins,
             enable_new_outer_join_lowering,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
+            reoptimize_imported_views,
             enable_eager_delta_joins,
             enable_new_outer_join_lowering,
             ..Default::default()
