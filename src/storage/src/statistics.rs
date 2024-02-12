@@ -20,7 +20,7 @@ use mz_ore::metrics::{
     MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_types::sources::SourceEnvelope;
 use prometheus::core::{AtomicI64, AtomicU64};
 use timely::progress::frontier::Antichain;

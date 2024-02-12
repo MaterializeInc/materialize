@@ -21,7 +21,7 @@ use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::TimestampManipulation;
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::client::PackableStats;
+use mz_storage_client::statistics::PackableStats;
 use timely::progress::ChangeBatch;
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
