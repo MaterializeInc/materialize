@@ -17,27 +17,24 @@
 use std::fmt;
 
 use itertools::Itertools;
-
 use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
+    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
+    TableFactor, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 
-use crate::names::{
-    Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
-};
+use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
 
 /// Normalizes a single identifier.
 pub fn ident(ident: Ident) -> String {
-    ident.as_str().into()
+    ident.into_string()
 }
 
 /// Normalizes a single identifier.
@@ -51,13 +48,11 @@ pub fn column_name(id: Ident) -> ColumnName {
 }
 
 /// Normalizes an unresolved object name.
-pub fn unresolved_object_name(
-    mut name: UnresolvedObjectName,
-) -> Result<PartialObjectName, PlanError> {
+pub fn unresolved_item_name(mut name: UnresolvedItemName) -> Result<PartialItemName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
     }
-    let out = PartialObjectName {
+    let out = PartialItemName {
         item: ident(
             name.0
                 .pop()
@@ -93,14 +88,17 @@ pub fn unresolved_schema_name(
 ///
 /// Qualified operators outside of the pg_catalog schema are rejected.
 pub fn op(op: &Op) -> Result<&str, PlanError> {
-    if !op.namespace.is_empty()
-        && (op.namespace.len() != 1 || op.namespace[0].as_str() != "pg_catalog")
-    {
-        sql_bail!(
-            "operator does not exist: {}.{}",
-            op.namespace.iter().map(|n| n.to_string()).join("."),
-            op.op,
-        )
+    if let Some(namespace) = &op.namespace {
+        if namespace.len() != 0
+            && (namespace.len() != 1
+                || namespace[0].as_str() != mz_repr::namespaces::PG_CATALOG_SCHEMA)
+        {
+            sql_bail!(
+                "operator does not exist: {}.{}",
+                namespace.iter().map(|n| n.to_string()).join("."),
+                op.op,
+            )
+        }
     }
     Ok(&op.op)
 }
@@ -129,29 +127,30 @@ impl From<SqlValueOrSecret> for Option<Value> {
     }
 }
 
-/// Unnormalizes an object name.
+/// Unnormalizes an item name.
 ///
-/// This is the inverse of the [`unresolved_object_name`] function.
-pub fn unresolve(name: FullObjectName) -> UnresolvedObjectName {
+/// This is the inverse of the [`unresolved_item_name`] function.
+pub fn unresolve(name: FullItemName) -> UnresolvedItemName {
+    // TODO(parkmycar): Refactor FullItemName to use `Ident`.
     let mut out = vec![];
     if let RawDatabaseSpecifier::Name(n) = name.database {
-        out.push(Ident::new(n));
+        out.push(Ident::new_unchecked(n));
     }
-    out.push(Ident::new(name.schema));
-    out.push(Ident::new(name.item));
-    UnresolvedObjectName(out)
+    out.push(Ident::new_unchecked(name.schema));
+    out.push(Ident::new_unchecked(name.item));
+    UnresolvedItemName(out)
 }
 
-/// Converts an `UnresolvedObjectName` to a `FullObjectName` if the
-/// `UnresolvedObjectName` is fully specified. Otherwise returns an error.
-pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, PlanError> {
+/// Converts an `UnresolvedItemName` to a `FullItemName` if the
+/// `UnresolvedItemName` is fully specified. Otherwise returns an error.
+pub fn full_name(mut raw_name: UnresolvedItemName) -> Result<FullItemName, PlanError> {
     match raw_name.0.len() {
-        3 => Ok(FullObjectName {
+        3 => Ok(FullItemName {
             item: ident(raw_name.0.pop().unwrap()),
             schema: ident(raw_name.0.pop().unwrap()),
             database: RawDatabaseSpecifier::Name(ident(raw_name.0.pop().unwrap())),
         }),
-        2 => Ok(FullObjectName {
+        2 => Ok(FullItemName {
             item: ident(raw_name.0.pop().unwrap()),
             schema: ident(raw_name.0.pop().unwrap()),
             database: RawDatabaseSpecifier::Ambient,
@@ -165,51 +164,40 @@ pub fn full_name(mut raw_name: UnresolvedObjectName) -> Result<FullObjectName, P
 /// The resulting statement will not depend upon any session parameters, nor
 /// specify any non-default options (like `TEMPORARY`, `IF NOT EXISTS`, etc).
 ///
-/// The goal is to construct a backwards-compatible description of the object.
+/// The goal is to construct a backwards-compatible description of the item.
 /// SQL is the most stable part of Materialize, so SQL is used to describe the
-/// objects that are persisted in the catalog.
+/// items that are persisted in the catalog.
 pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement<Aug>,
 ) -> Result<String, PlanError> {
-    let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(scx.allocate_full_name(
-            unresolved_object_name(name.clone())?,
-        )?))
+    let allocate_name = |name: &UnresolvedItemName| -> Result<_, PlanError> {
+        Ok(unresolve(
+            scx.allocate_full_name(unresolved_item_name(name.clone())?)?,
+        ))
     };
 
-    let allocate_temporary_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
+    let allocate_temporary_name = |name: &UnresolvedItemName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_temporary_full_name(
-            unresolved_object_name(name.clone())?,
+            unresolved_item_name(name.clone())?,
         )))
     };
 
-    fn normalize_function_name(
-        scx: &StatementContext,
-        name: &mut UnresolvedObjectName,
-    ) -> Result<(), PlanError> {
-        let item = scx.resolve_function(name.clone())?;
-        *name = unresolve(scx.catalog.resolve_full_name(item.name()));
-        Ok(())
-    }
-
-    struct QueryNormalizer<'a> {
-        scx: &'a StatementContext<'a>,
+    struct QueryNormalizer {
         ctes: Vec<Ident>,
         err: Option<PlanError>,
     }
 
-    impl<'a> QueryNormalizer<'a> {
-        fn new(scx: &'a StatementContext<'a>) -> QueryNormalizer<'a> {
+    impl QueryNormalizer {
+        fn new() -> QueryNormalizer {
             QueryNormalizer {
-                scx,
                 ctes: vec![],
                 err: None,
             }
         }
     }
 
-    impl<'a, 'ast> VisitMut<'ast, Aug> for QueryNormalizer<'a> {
+    impl<'ast> VisitMut<'ast, Aug> for QueryNormalizer {
         fn visit_query_mut(&mut self, query: &'ast mut Query<Aug>) {
             let n = self.ctes.len();
             match &query.ctes {
@@ -218,7 +206,7 @@ pub fn create_statement(
                         self.ctes.push(cte.alias.name.clone());
                     }
                 }
-                CteBlock::MutuallyRecursive(ctes) => {
+                CteBlock::MutuallyRecursive(MutRecBlock { options: _, ctes }) => {
                     for cte in ctes.iter() {
                         self.ctes.push(cte.name.clone());
                     }
@@ -229,11 +217,6 @@ pub fn create_statement(
         }
 
         fn visit_function_mut(&mut self, func: &'ast mut Function<Aug>) {
-            if let Err(e) = normalize_function_name(self.scx, &mut func.name) {
-                self.err = Some(e);
-                return;
-            }
-
             match &mut func.args {
                 FunctionArgs::Star => (),
                 FunctionArgs::Args { args, order_by } => {
@@ -250,29 +233,10 @@ pub fn create_statement(
             }
         }
 
-        fn visit_table_function_mut(&mut self, func: &'ast mut TableFunction<Aug>) {
-            if let Err(e) = normalize_function_name(self.scx, &mut func.name) {
-                self.err = Some(e);
-                return;
-            }
-
-            match &mut func.args {
-                FunctionArgs::Star => (),
-                FunctionArgs::Args { args, order_by } => {
-                    for arg in args {
-                        self.visit_expr_mut(arg);
-                    }
-                    for expr in order_by {
-                        self.visit_order_by_expr_mut(expr);
-                    }
-                }
-            }
-        }
-
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
             match table_factor {
                 TableFactor::Table { name, alias, .. } => {
-                    self.visit_object_name_mut(name);
+                    self.visit_item_name_mut(name);
                     if let Some(alias) = alias {
                         self.visit_table_alias_mut(alias);
                     }
@@ -321,7 +285,7 @@ pub fn create_statement(
             with_options: _,
         }) => {
             *name = allocate_name(name)?;
-            let mut normalizer = QueryNormalizer::new(scx);
+            let mut normalizer = QueryNormalizer::new();
             for c in columns {
                 normalizer.visit_column_def_mut(c);
             }
@@ -337,19 +301,32 @@ pub fn create_statement(
             constraints: _,
             if_not_exists,
             temporary,
+            with_options: _,
         }) => {
             *name = if *temporary {
                 allocate_temporary_name(name)?
             } else {
                 allocate_name(name)?
             };
-            let mut normalizer = QueryNormalizer::new(scx);
+            let mut normalizer = QueryNormalizer::new();
             for c in columns {
                 normalizer.visit_column_def_mut(c);
             }
             if let Some(err) = normalizer.err {
                 return Err(err);
             }
+            *if_not_exists = false;
+        }
+
+        Statement::CreateWebhookSource(CreateWebhookSourceStatement {
+            name,
+            if_not_exists,
+            include_headers: _,
+            body_format: _,
+            validate_using: _,
+            in_cluster: _,
+        }) => {
+            *name = allocate_name(name)?;
             *if_not_exists = false;
         }
 
@@ -362,7 +339,9 @@ pub fn create_statement(
             if_not_exists,
             ..
         }) => {
-            *name = allocate_name(name)?;
+            if let Some(name) = name {
+                *name = allocate_name(name)?;
+            }
             *if_not_exists = false;
         }
 
@@ -382,7 +361,7 @@ pub fn create_statement(
                 allocate_name(name)?
             };
             {
-                let mut normalizer = QueryNormalizer::new(scx);
+                let mut normalizer = QueryNormalizer::new();
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
                     return Err(err);
@@ -397,10 +376,11 @@ pub fn create_statement(
             columns: _,
             in_cluster: _,
             query,
+            with_options: _,
         }) => {
             *name = allocate_name(name)?;
             {
-                let mut normalizer = QueryNormalizer::new(scx);
+                let mut normalizer = QueryNormalizer::new();
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
                     return Err(err);
@@ -417,7 +397,7 @@ pub fn create_statement(
             if_not_exists,
             ..
         }) => {
-            let mut normalizer = QueryNormalizer::new(scx);
+            let mut normalizer = QueryNormalizer::new();
             if let Some(key_parts) = key_parts {
                 for key_part in key_parts {
                     normalizer.visit_expr_mut(key_part);
@@ -431,7 +411,7 @@ pub fn create_statement(
 
         Statement::CreateType(CreateTypeStatement { name, as_type }) => {
             *name = allocate_name(name)?;
-            let mut normalizer = QueryNormalizer::new(scx);
+            let mut normalizer = QueryNormalizer::new();
             normalizer.visit_create_type_as_mut(as_type);
             if let Some(err) = normalizer.err {
                 return Err(err);
@@ -447,11 +427,20 @@ pub fn create_statement(
         }
         Statement::CreateConnection(CreateConnectionStatement {
             name,
-            connection: _,
+            connection_type: _,
+            values,
+            with_options,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
+
+            values.sort();
+
+            // Validation only occurs once during planning and should not be
+            // considered part of the statement's AST/canonical representation.
+            with_options
+                .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate);
         }
 
         _ => unreachable!(),
@@ -479,34 +468,51 @@ pub fn create_statement(
 /// - `Default($v)` is an optional parameter that sets the default value of the
 ///   field to `$v`. `$v` must be convertible to `$t` using `.into`. This also
 ///   converts the struct's type from `Option<$t>` to `<$t>`.
+/// - `AllowMultiple` is an optional parameter that, when specified, allows
+///   the given option to appear multiple times in the `WITH` clause. This
+///   also converts the struct's type from `$t` to `Vec<$t>`.
 macro_rules! generate_extracted_config {
     // No default specified, have remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None)], $(
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)], $(
             $tail
         ),*);
     };
     // No default specified, no remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None)]);
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)]);
     };
     // Default specified, have remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)], $(
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)], $(
             $tail
         ),*);
     };
     // Default specified, no remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr))) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)]);
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)]);
     };
-    ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr))+]) => {
+    // AllowMultiple specified, have remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple), $($tail:tt),*) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)], $(
+            $tail
+        ),*);
+    };
+    // AllowMultiple specified, no remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple)) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)]);
+    };
+    ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr, $allow_multiple:literal))+]) => {
         paste::paste! {
             #[derive(Debug)]
             pub struct [<$option_ty Extracted>] {
-                seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
+                pub(crate) seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
                 $(
-                    pub(crate) [<$option_name:snake>]: $t,
+                    pub(crate) [<$option_name:snake>]: generate_extracted_config!(
+                        @ifty $allow_multiple,
+                        Vec::<$t>,
+                        $t
+                    ),
                 )*
             }
 
@@ -515,7 +521,11 @@ macro_rules! generate_extracted_config {
                     [<$option_ty Extracted>] {
                         seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>::new(),
                         $(
-                            [<$option_name:snake>]: $t::from($v),
+                            [<$option_name:snake>]: <generate_extracted_config!(
+                                @ifty $allow_multiple,
+                                Vec::<$t>,
+                                $t
+                            )>::from($v),
                         )*
                     }
                 }
@@ -527,15 +537,19 @@ macro_rules! generate_extracted_config {
                     use [<$option_ty Name>]::*;
                     let mut extracted = [<$option_ty Extracted>]::default();
                     for option in v {
-                        if !extracted.seen.insert(option.name.clone()) {
-                            sql_bail!("{} specified more than once", option.name.to_ast_string());
-                        }
                         match option.name {
                             $(
                                 $option_name => {
-                                    extracted.[<$option_name:snake>] =
-                                        <$t>::try_from_value(option.value)
-                                            .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
+                                    if !$allow_multiple && !extracted.seen.insert(option.name.clone()) {
+                                        sql_bail!("{} specified more than once", option.name.to_ast_string());
+                                    }
+                                    let val = <$t>::try_from_value(option.value)
+                                        .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
+                                    generate_extracted_config!(
+                                        @ifexpr $allow_multiple,
+                                        extracted.[<$option_name:snake>].push(val),
+                                        extracted.[<$option_name:snake>] = val
+                                    );
                                 }
                             )*
                         }
@@ -547,6 +561,20 @@ macro_rules! generate_extracted_config {
     };
     ($option_ty:ty, $($h:tt),+) => {
         generate_extracted_config!{$option_ty, [], $($h),+}
+    };
+    // Helper `if` constructs to conditionally generate expressions and types
+    // based on the value of $allow_multiple.
+    (@ifexpr false, $lhs:expr, $rhs:expr) => {
+        $rhs
+    };
+    (@ifexpr true, $lhs:expr, $rhs:expr) => {
+        $lhs
+    };
+    (@ifty false, $lhs:ty, $rhs:ty) => {
+        $rhs
+    };
+    (@ifty true, $lhs:ty, $rhs:ty) => {
+        $lhs
     };
 }
 

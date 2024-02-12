@@ -1,0 +1,178 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (
+  x int,
+  y int
+);
+
+statement ok
+CREATE TABLE t2 (
+  y int,
+  z int
+);
+
+statement ok
+CREATE VIEW v AS SELECT x, sum(z) FROM t1 JOIN t2 USING(y) GROUP BY x
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT x, sum(z) FROM t1 JOIN t2 USING(y) GROUP BY x
+
+statement ok
+CREATE INDEX ON t1(y);
+
+# EXPLAIN and EXPLAIN REPLAN should coincide.
+query T multiline
+EXPLAIN
+MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Reduce group_by=[#0] aggregates=[sum(#1)]
+    Project (#0, #3)
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          Filter (#1) IS NOT NULL
+            ReadStorage materialize.public.t1
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            ReadStorage materialize.public.t2
+
+Source materialize.public.t1
+  filter=((#1) IS NOT NULL)
+Source materialize.public.t2
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# EXPLAIN and EXPLAIN REPLAN should coincide.
+query T multiline
+EXPLAIN
+REPLAN MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Reduce group_by=[#0] aggregates=[sum(#1)]
+    Project (#0, #3)
+      Join on=(#1 = #2) type=differential
+        ArrangeBy keys=[[#1]]
+          Filter (#1) IS NOT NULL
+            ReadStorage materialize.public.t1
+        ArrangeBy keys=[[#0]]
+          Filter (#0) IS NOT NULL
+            ReadStorage materialize.public.t2
+
+Source materialize.public.t1
+  filter=((#1) IS NOT NULL)
+Source materialize.public.t2
+  filter=((#0) IS NOT NULL)
+
+EOF
+
+# EXPLAIN CREATE should differ from the above two.
+query T multiline
+EXPLAIN
+CREATE MATERIALIZED VIEW mv AS SELECT x, sum(z) FROM t1 JOIN t2 USING(y) GROUP BY x;
+----
+materialize.public.mv:
+  Reduce group_by=[#0] aggregates=[sum(#1)]
+    Project (#0, #3)
+      Filter (#1) IS NOT NULL
+        Join on=(#1 = #2) type=differential
+          ArrangeBy keys=[[#1]]
+            ReadIndex on=t1 t1_y_idx=[differential join]
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              ReadStorage materialize.public.t2
+
+Source materialize.public.t2
+  filter=((#0) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t1_y_idx (differential join)
+
+EOF
+
+statement ok
+CREATE INDEX v_idx ON v(x);
+
+# EXPLAIN and EXPLAIN REPLAN should coincide.
+query T multiline
+EXPLAIN
+INDEX v_idx;
+----
+materialize.public.v_idx:
+  ArrangeBy keys=[[#0]]
+    ReadGlobalFromSameDataflow materialize.public.v
+
+materialize.public.v:
+  Reduce group_by=[#0] aggregates=[sum(#1)]
+    Project (#0, #3)
+      Filter (#1) IS NOT NULL
+        Join on=(#1 = #2) type=differential
+          ArrangeBy keys=[[#1]]
+            ReadIndex on=t1 t1_y_idx=[differential join]
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              ReadStorage materialize.public.t2
+
+Source materialize.public.t2
+  filter=((#0) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t1_y_idx (differential join)
+
+EOF
+
+# EXPLAIN and EXPLAIN REPLAN should coincide.
+query T multiline
+EXPLAIN
+REPLAN INDEX v_idx;
+----
+materialize.public.v_idx:
+  ArrangeBy keys=[[#0]]
+    ReadGlobalFromSameDataflow materialize.public.v
+
+materialize.public.v:
+  Reduce group_by=[#0] aggregates=[sum(#1)]
+    Project (#0, #3)
+      Filter (#1) IS NOT NULL
+        Join on=(#1 = #2) type=differential
+          ArrangeBy keys=[[#1]]
+            ReadIndex on=t1 t1_y_idx=[differential join]
+          ArrangeBy keys=[[#0]]
+            Filter (#0) IS NOT NULL
+              ReadStorage materialize.public.t2
+
+Source materialize.public.t2
+  filter=((#0) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.t1_y_idx (differential join)
+
+EOF
+
+# EXPLAIN CREATE should differ from the above two.
+query T multiline
+EXPLAIN
+CREATE INDEX ON v(x);
+----
+materialize.public.v_x_idx:
+  ArrangeBy keys=[[#0]]
+    ReadIndex on=v v_idx=[plan root (no new arrangement)]
+
+Used Indexes:
+  - materialize.public.v_idx (plan root (no new arrangement), index export)
+
+Notices:
+  - Notice: The current index is identical to materialize.public.v_idx, which is also defined on v(x).
+    Hint: Please drop all indexes except the first index created on v(x) and recreate all dependent objects.
+
+EOF

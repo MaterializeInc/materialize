@@ -162,7 +162,7 @@ mod tests {
 
     static INPUT: &[u8] = b"theanswertolifetheuniverseandeverythingis42theanswertolifetheuniverseandeverythingis4theanswertolifetheuniverseandeverythingis2";
 
-    #[test]
+    #[mz_ore::test]
     fn null_compress_and_decompress() {
         let codec = Codec::Null;
         let mut stream = INPUT.to_vec();
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(INPUT, stream.as_slice());
     }
 
-    #[test]
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `deflateInit2_` on OS `linux`
     fn deflate_compress_and_decompress() {
         let codec = Codec::Deflate;
@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[cfg(feature = "snappy")]
-    #[test]
+    #[mz_ore::test]
     fn snappy_compress_and_decompress() {
         let codec = Codec::Snappy;
         let mut stream = INPUT.to_vec();

@@ -17,20 +17,22 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-if [[ $# -lt 1 ]]; then
-    die "usage: $0 DOCKER-HUB-USERNAME [arguments for mzimage]"
+if [[ $# -lt 2 ]]; then
+    die "usage: $0 DOCKER-HUB-USERNAME TAG [arguments for mzimage]"
 fi
 username=$1
+shift
+tag=$1
 shift
 
 for image in environmentd clusterd; do
     bin/mzimage acquire --arch=x86_64 "$image" "$@"
-    docker tag "$(bin/mzimage spec --arch=x86_64 "$image" "$@")" "$username/$image"
-    docker push "$username/$image"
+    docker tag "$(bin/mzimage spec --arch=x86_64 "$image" "$@")" "$username/$image:$tag"
+    docker push "$username/$image:$tag"
 done
 
 echo "Deploy this build to staging by running:"
 echo
-echo "    $ bin/mz --profile=staging login --endpoint=https://staging.cloud.materialize.com"
-echo "    $ bin/mz --profile=staging region enable aws/us-east-1 --version $username:latest"
+echo "    $ bin/mz profile init --endpoint=https://staging.console.materialize.com --profile=staging"
+echo "    $ bin/mz region enable --version $username:$tag --region=aws/us-east-1 --profile=staging"
 echo

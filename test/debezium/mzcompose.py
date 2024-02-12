@@ -7,18 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Debezium,
-    Kafka,
-    Materialized,
-    MySql,
-    Postgres,
-    SchemaRegistry,
-    SqlServer,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 prerequisites = ["zookeeper", "kafka", "schema-registry", "debezium", "materialized"]
 
@@ -38,15 +36,14 @@ SERVICES = [
 def workflow_postgres(c: Composition) -> None:
     c.up(*prerequisites, "postgres")
 
-    c.run("testdrive", "postgres/debezium-postgres.td.initialize")
-    c.run("testdrive", "postgres/*.td")
+    c.run_testdrive_files("postgres/debezium-postgres.td.initialize")
+    c.run_testdrive_files("postgres/*.td")
 
 
 def workflow_sql_server(c: Composition) -> None:
     c.up(*prerequisites, "sql-server")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--var=sa-password={SqlServer.DEFAULT_SA_PASSWORD}",
         "sql-server/*.td",
     )
@@ -55,8 +52,7 @@ def workflow_sql_server(c: Composition) -> None:
 def workflow_mysql(c: Composition) -> None:
     c.up(*prerequisites, "mysql")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         "mysql/*.td",
     )

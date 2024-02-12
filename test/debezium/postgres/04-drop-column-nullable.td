@@ -15,13 +15,13 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_drop_column (f1 INTEGER PRIMARY KEy, col_null_no_default INTEGER, col_null_default INTEGER DEFAULT 999);
 INSERT INTO alter_drop_column VALUES (123, 234, 345);
 
-$ schema-registry-wait subject=postgres.public.alter_drop_column-value
+$ schema-registry-wait topic=postgres.public.alter_drop_column
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_drop_column
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_drop_column')

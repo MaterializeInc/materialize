@@ -13,5 +13,11 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+if [ "$BUILDKITE_COMMAND_EXIT_STATUS" -ne "0" ] || [ "$BUILDKITE_LAST_HOOK_EXIT_STATUS" -ne "0" ]; then
+   ci_unimportant_heading "Buildkite job failure reported, terminating the Buildkite agent in case it is tainted"
+   # Supposedly the 'official' way of terminating the buildkite agent
+   kill -s SIGTERM "$(/bin/pidof buildkite-agent)"
+fi
+
 ci_unimportant_heading "cloudtest: Resetting..."
 bin/ci-builder run stable test/cloudtest/reset

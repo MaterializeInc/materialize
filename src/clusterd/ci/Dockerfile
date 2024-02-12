@@ -7,12 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update \
-    && apt-get -qy install ca-certificates curl ssh tini \
-    && groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize
+MZFROM prod-base
 
 COPY clusterd entrypoint.sh /usr/local/bin/
 

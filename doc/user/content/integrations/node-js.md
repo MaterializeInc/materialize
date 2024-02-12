@@ -34,125 +34,41 @@ async function main() {
 main();
 ```
 
-## Stream
+## Create tables
 
-To take full advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, you can use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
+Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
 
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
-
-```js
-const { Client } = require('pg');
-
-async function main() {
-  const client = new Client({
-    user: MATERIALIZE_USERNAME,
-    password: MATERIALIZE_PASSWORD,
-    host: MATERIALIZE_HOST,
-    port: 6875,
-    database: "materialize",
-    ssl: true,
-  });
-  await client.connect();
-
-  await client.query('BEGIN');
-  await client.query('DECLARE c CURSOR FOR SUBSCRIBE my_view');
-
-  while (true) {
-    const res = await client.query('FETCH ALL c');
-    console.log(res.rows);
-  }
-}
-
-main();
-```
-
-The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `res.rows` is an array of view update objects. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
-
-```js
-[
-    ...
-    {
-        mz_timestamp: '1627225629000',
-        mz_diff: '1',
-        my_column_one: 'ABC',
-        my_column_two: 'new_value'
-    },
-    {
-        mz_timestamp: '1627225629000',
-        mz_diff: '-1',
-        my_column_one: 'ABC',
-        my_column_two: 'old_value'
-    },
-    ...
-]
-```
-
-An `mz_diff` value of `-1` indicates that Materialize is deleting one row with the included values. An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
-
-<!--- NOT PUBLISHABLE UNTIL https://github.com/brianc/node-postgres/pull/2573 is merged
-### Using pg-query-stream
-
-```js
-const { Client } = require('pg');
-const QueryStream = require('pg-query-stream');
-
-const client = new Client('postgres://materialize@localhost:6875/materialize');
-
-client.connect((err, client) => {
-  if (err) {
-    throw err;
-  }
-  const stream = client.query(new QueryStream('SUBSCRIBE avg_bid', []));
-  stream.pipe(process.stdout);
-});
-```
---->
-
-## Query
-
-Querying Materialize is identical to querying a PostgreSQL database: Node.js executes the query, and Materialize returns the state of the view, source, or table at that point in time.
-
-Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
-
-To query a view `my_view` using a `SELECT` statement:
+To create a table named `countries` in Materialize:
 
 ```js
 const { Client } = require('pg');
 
 const client = new Client({
-  user: MATERIALIZE_USERNAME,
-  password: MATERIALIZE_PASSWORD,
-  host: MATERIALIZE_HOST,
-  port: 6875,
-  database: 'materialize',
-  ssl: true
+    user: MATERIALIZE_USERNAME,
+    password: MATERIALIZE_PASSWORD,
+    host: MATERIALIZE_HOST,
+    port: 6875,
+    database: 'materialize',
+    ssl: true
 });
 
+const createTableSQL = `
+    CREATE TABLE IF NOT EXISTS countries (
+        code CHAR(2),
+        name TEXT
+    );
+`;
+
 async function main() {
-  await client.connect();
-  const res = await client.query('SELECT * FROM my_view');
-  console.log(res.rows);
-};
+    await client.connect();
+    const res = await client.query(createTableSQL);
+    console.log(res);
+}
 
 main();
 ```
 
-For more details, see the  [`node-postgres` query](https://node-postgres.com/features/queries) and [pg.Result](https://node-postgres.com/api/result) documentation.
-
-## Push data to a source
-
-Materialize processes live streams of data and maintains query results up-to-date as new data arrives, relying on external systems (like PostgreSQL, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system**. Materialize connects to the intermediary system as a [source](/sql/create-source/) and reads streaming updates from it.
-
-The table below lists the intermediary systems a Node.js application can use to feed data into Materialize:
-
-Intermediary System | Notes
--------------|-------------
-**Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Kafka source](/sql/create-source/json-kafka/) to consume them. This is recommended for scenarios where low-latency and high-throughput are important.
-**PostgreSQL** | Send data from Node.js to PostgreSQL, and create a [PostgreSQL source](/sql/create-source/postgres/) that consumes a replication stream from the database based on its write-ahead log. This is recommended for Node.js apps that already use PostgreSQL and fast-changing transactional data to the stream.
-
 ## Insert data into tables
-
-Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
 
 **Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize:
 
@@ -180,6 +96,37 @@ async function main() {
 main();
 ```
 
+## Query
+
+Querying Materialize is identical to querying a PostgreSQL database: Node.js executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+
+To query the `countries` table:
+
+```js
+const { Client } = require('pg');
+
+const client = new Client({
+  user: MATERIALIZE_USERNAME,
+  password: MATERIALIZE_PASSWORD,
+  host: MATERIALIZE_HOST,
+  port: 6875,
+  database: 'materialize',
+  ssl: true
+});
+
+async function main() {
+  await client.connect();
+  const res = await client.query('SELECT * FROM countries');
+  console.log(res.rows);
+};
+
+main();
+```
+
+For more details, see the [`node-postgres` query](https://node-postgres.com/features/queries) and [pg.Result](https://node-postgres.com/api/result) documentation.
+
 ## Manage sources, views, and indexes
 
 Typically, you create sources, views, and indexes when deploying Materialize, but it's also possible to use a Node.js app to execute common DDL statements.
@@ -201,7 +148,7 @@ const client = new Client({
 async function main() {
     await client.connect();
     const res = await client.query(
-        `CREATE SOURCE counter FROM LOAD GENERATOR COUNTER`
+        `CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;`
         );
     console.log(res);
 }
@@ -228,11 +175,9 @@ const client = new Client({
 async function main() {
     await client.connect();
     const res = await client.query(
-        `CREATE VIEW market_orders_2 AS
-            SELECT
-                val->>'symbol' AS symbol,
-                (val->'bid_price')::float AS bid_price
-            FROM (SELECT text::jsonb AS val FROM market_orders_raw)`
+        `CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS
+            SELECT sum(counter)
+        FROM counter;`
         );
     console.log(res);
 }
@@ -240,7 +185,89 @@ async function main() {
 main();
 ```
 
-For more information, see [`CREATE VIEW`](/sql/create-view/).
+For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
+
+## Stream
+
+To take full advantage of incrementally updated materialized views from a Node.js application, instead of [querying](#query) Materialize for the state of a view at a point in time, you can use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
+
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+
+```js
+const { Client } = require('pg');
+
+async function main() {
+  const client = new Client({
+    user: MATERIALIZE_USERNAME,
+    password: MATERIALIZE_PASSWORD,
+    host: MATERIALIZE_HOST,
+    port: 6875,
+    database: "materialize",
+    ssl: true,
+  });
+  await client.connect();
+
+  await client.query('BEGIN');
+  await client.query('DECLARE c CURSOR FOR SUBSCRIBE counter_sum WITH (SNAPSHOT = FALSE)');
+
+  while (true) {
+    const res = await client.query('FETCH ALL c');
+    console.log(res.rows);
+  }
+}
+
+main();
+```
+
+The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `res.rows` is an array of view update objects. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
+
+```js
+[
+    ...
+    {
+        mz_timestamp: '1627225629000',
+        mz_diff: '1',
+        sum: 'value_1',
+    },
+    {
+        mz_timestamp: '1627225629000',
+        mz_diff: '-1',
+        sum: 'value_2',
+    },
+    ...
+]
+```
+
+An `mz_diff` value of `-1` indicates that Materialize is deleting one row with the included values. An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
+
+<!--- NOT PUBLISHABLE UNTIL https://github.com/brianc/node-postgres/pull/2573 is merged
+### Using pg-query-stream
+
+```js
+const { Client } = require('pg');
+const QueryStream = require('pg-query-stream');
+
+const client = new Client('postgres://materialize@localhost:6875/materialize');
+
+client.connect((err, client) => {
+  if (err) {
+    throw err;
+  }
+  const stream = client.query(new QueryStream('SUBSCRIBE avg_bid', []));
+  stream.pipe(process.stdout);
+});
+```
+--->
+
+## Clean up
+
+To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
+
+```sql
+DROP MATERIALIZED VIEW IF EXISTS counter_sum;
+DROP SOURCE IF EXISTS counter;
+DROP TABLE IF EXISTS countries;
+```
 
 ## Node.js ORMs
 

@@ -13,6 +13,8 @@
 # metadata. This test uses that new sequence field to show that we can now handle messages
 # that seem to go backwards in time (by LSN).
 
+$ nop
+
 # [btv] uncomment if we bring back classic debezium mode
 # $ set pg-dbz-schema={
 #     "type": "record",
@@ -83,9 +85,10 @@
 # {"before": null, "after": {"row":{"val": "too late"}}, "source": {"lsn": {"long": 1}, "sequence": {"string": "[\"1\", \"1\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 # > CREATE CONNECTION kafka_conn
-#   TO KAFKA (BROKER '${testdrive.kafka-addr}');
+#   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 # > CREATE SOURCE pg_dbz
+#   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}')
 #   FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
 #   ENVELOPE DEBEZIUM

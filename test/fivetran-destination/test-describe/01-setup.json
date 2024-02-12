@@ -1,0 +1,14 @@
+{
+  "create_table": {
+    "test_describe": {
+      "columns": {
+        "k1": "INT",
+        "k2": "STRING",
+        "v1": "DECIMAL",
+        "v2": "JSON"
+      },
+      "primary_key": ["k1", "k2"]
+    }
+  },
+  "describe_table": ["test_describe"]
+}

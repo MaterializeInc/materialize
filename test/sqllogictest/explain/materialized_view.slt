@@ -1,0 +1,200 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE TABLE accounts(id int, balance int);
+
+
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv AS
+  SELECT * FROM accounts WHERE balance = 100;
+
+
+mode cockroach
+
+
+# baseline explain (no index used)
+query T multiline
+EXPLAIN MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Filter (#1 = 100)
+    ReadStorage materialize.public.accounts
+
+Source materialize.public.accounts
+  filter=((#1 = 100))
+
+EOF
+
+
+statement ok
+CREATE INDEX accounts_balance_idx ON accounts(balance);
+
+
+# ensure that the index is still not used
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Filter (#1 = 100)
+    ReadStorage materialize.public.accounts
+
+Source materialize.public.accounts
+  filter=((#1 = 100))
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Get::Collection materialize.public.accounts
+    raw=true
+
+Source materialize.public.accounts
+  filter=((#1 = 100))
+
+EOF
+
+# re-create the view so it can pick up the index
+statement ok
+CREATE OR REPLACE MATERIALIZED VIEW mv AS
+  SELECT * FROM accounts WHERE balance = 100;
+
+
+# ensure that the index is now used by the view
+query T multiline
+EXPLAIN MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Project (#0, #1)
+    ReadIndex on=materialize.public.accounts accounts_balance_idx=[lookup value=(100)]
+
+Used Indexes:
+  - materialize.public.accounts_balance_idx (lookup)
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1, #0)
+      lookup={ relation=0, key=[#1] }
+      stream={ key=[#0], thinning=() }
+    source={ relation=1, key=[#0] }
+    Get::PassArrangements materialize.public.accounts
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      types=[integer?, integer?]
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer]
+      Constant
+        - (100)
+
+Used Indexes:
+  - materialize.public.accounts_balance_idx (lookup)
+
+EOF
+
+# rename the index
+statement ok
+ALTER INDEX accounts_balance_idx RENAME TO accounts_balance_index;
+
+
+# ensure that the index is still used by the view
+query T multiline
+EXPLAIN OPTIMiZED PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Project (#0, #1)
+    ReadIndex on=materialize.public.accounts accounts_balance_index=[lookup value=(100)]
+
+Used Indexes:
+  - materialize.public.accounts_balance_index (lookup)
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1, #0)
+      lookup={ relation=0, key=[#1] }
+      stream={ key=[#0], thinning=() }
+    source={ relation=1, key=[#0] }
+    Get::PassArrangements materialize.public.accounts
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      types=[integer?, integer?]
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer]
+      Constant
+        - (100)
+
+Used Indexes:
+  - materialize.public.accounts_balance_index (lookup)
+
+EOF
+
+
+# drop the index
+statement ok
+DROP INDEX accounts_balance_index;
+
+
+# The index is still used by the view
+query T multiline
+EXPLAIN MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Project (#0, #1)
+    ReadIndex on=materialize.public.accounts [DELETED INDEX]=[lookup value=(100)]
+
+Used Indexes:
+  - [DELETED INDEX] (lookup)
+
+EOF
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv;
+----
+materialize.public.mv:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1, #0)
+      lookup={ relation=0, key=[#1] }
+      stream={ key=[#0], thinning=() }
+    source={ relation=1, key=[#0] }
+    Get::PassArrangements materialize.public.accounts
+      raw=false
+      arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      types=[integer?, integer?]
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer]
+      Constant
+        - (100)
+
+Used Indexes:
+  - [DELETED INDEX] (lookup)
+
+EOF

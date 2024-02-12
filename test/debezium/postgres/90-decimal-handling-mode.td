@@ -15,13 +15,13 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_precise (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_precise VALUES (1234567.890);
 
-$ schema-registry-wait subject=postgres.public.decimal_handling_mode_precise-value
+$ schema-registry-wait topic=postgres.public.decimal_handling_mode_precise
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE decimal_handling_mode_precise
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_precise')
@@ -49,19 +49,20 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.bootstrap.servers": "kafka:9092",
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
-  "decimal.handling.mode": "double"
+  "decimal.handling.mode": "double",
+  "topic.prefix": "postgres"
 }
 
 # PUT requests do not take effect immediately, we need to sleep
 
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_unsafe.mz_sleep(10)
 <null>
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_double (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_double VALUES (2234567.890);
 
-$ schema-registry-wait subject=postgres.public.decimal_handling_mode_double-value
+$ schema-registry-wait topic=postgres.public.decimal_handling_mode_double
 
 > CREATE SOURCE decimal_handling_mode_double
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_double')
@@ -90,17 +91,18 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
   "provide.transaction.metadata": "true",
-  "decimal.handling.mode": "string"
+  "decimal.handling.mode": "string",
+  "topic.prefix": "postgres"
 }
 
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_unsafe.mz_sleep(10)
 <null>
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_string (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_string VALUES (3234567.890);
 
-$ schema-registry-wait subject=postgres.public.decimal_handling_mode_string-value
+$ schema-registry-wait topic=postgres.public.decimal_handling_mode_string
 
 > CREATE SOURCE decimal_handling_mode_string
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_string')
@@ -128,8 +130,9 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "database.history.kafka.bootstrap.servers": "kafka:9092",
   "database.history.kafka.topic": "schema-changes.history",
   "truncate.handling.mode": "include",
-  "decimal.handling.mode": "precise"
+  "decimal.handling.mode": "precise",
+  "topic.prefix": "postgres"
 }
 
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_unsafe.mz_sleep(10)
 <null>

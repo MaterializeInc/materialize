@@ -10,16 +10,16 @@
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 
-$ schema-registry-wait subject=sql-server.dbo.types_table-value
+$ schema-registry-wait topic=sql-server.test.dbo.types_table
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE types_table
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.types_table')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.types_table')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
@@ -33,4 +33,4 @@ $ schema-registry-wait subject=sql-server.dbo.types_table-value
 
 
 > SELECT pg_typeof(decimal_col), pg_typeof(datetimeoffset_col), pg_typeof(datetime2_col), pg_typeof(smalldatetime_col), pg_typeof(bit_col) FROM types_table;
-numeric text bigint timestamp boolean
+numeric text bigint "timestamp without time zone" boolean

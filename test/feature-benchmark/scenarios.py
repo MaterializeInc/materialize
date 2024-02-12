@@ -7,9 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
+import re
 from math import ceil, floor
-from typing import List
+from textwrap import dedent
 
 from parameterized import parameterized_class  # type: ignore
 
@@ -23,7 +23,9 @@ from materialize.feature_benchmark.scenario import (
     BenchmarkingSequence,
     Scenario,
     ScenarioBig,
+    ScenarioDisabled,
 )
+from materialize.mz_version import MzVersion
 
 
 class FastPath(Scenario):
@@ -36,15 +38,45 @@ class FastPathFilterNoIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view and return"""
 
     SCALE = 7
+    FIXED_SCALE = True  # OOM with 10**8 = 100M records
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > CREATE DEFAULT INDEX ON v1;
+
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            """
+> /* A */ SELECT 1;
+1
+> /* B */ SELECT * FROM v1 WHERE f2 < 0;
+"""
+        )
+
+
+class MFPPushdown(Scenario):
+    """Test MFP pushdown -- WHERE clause with a suitable condition and no index defined."""
+
+    SCALE = 7
+    FIXED_SCALE = True  # OOM with 10**8 = 100M records
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -65,7 +97,7 @@ true
 class FastPathFilterIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view using an index and return"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -86,11 +118,13 @@ true
 
     def benchmark(self) -> MeasurementSource:
         hundred_selects = "\n".join(
-            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
+            "> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
         )
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;
@@ -109,7 +143,7 @@ true
 class FastPathOrderByLimit(FastPath):
     """Benchmark the case SELECT * FROM materialized_view ORDER BY <key> LIMIT <i>"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -134,6 +168,33 @@ true
   /* B */
 """
             + "\n".join([str(x) for x in range(self.n() - 1000, self.n())])
+        )
+
+
+class FastPathLimit(FastPath):
+    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by #21615"""
+
+    def init(self) -> list[Action]:
+        return [
+            TdAction(
+                f"""
+                > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {self.n()})
+                """
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            dedent(
+                """
+                > SELECT 1;
+                  /* A */
+                1
+                > SELECT * FROM v1 LIMIT 100
+                  /* B */
+                """
+            )
+            + "\n".join([str(x) for x in range(1, 101)])
         )
 
 
@@ -180,6 +241,8 @@ class InsertBatch(DML):
 > CREATE TABLE t1 (f1 INTEGER)
   /* A */
 
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 {inserts}
@@ -214,7 +277,7 @@ class InsertMultiRow(DML):
 class Update(DML):
     """Measure the time it takes for an UPDATE statement to return to client"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -344,7 +407,7 @@ true
 
 
 class CountDistinct(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -372,7 +435,7 @@ true
 
 
 class MinMax(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -399,8 +462,42 @@ true
         )
 
 
+class MinMaxMaintained(Dataflow):
+    """Benchmark MinMax as an indexed view, which renders a dataflow for incremental
+    maintenance, in contrast with one-shot SELECT processing"""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2
+  /* A */
+
+> CREATE VIEW v2 AS SELECT MIN(f1), MAX(f1) AS f1 FROM v1
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
+  /* B */
+0 {self.n()-1}
+"""
+        )
+
+
 class GroupBy(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -427,6 +524,40 @@ true
         )
 
 
+class GroupByMaintained(Dataflow):
+    """Benchmark GroupBy as an indexed view, which renders a dataflow for incremental
+    maintenance, in contrast with one-shot SELECT processing"""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+
+> SELECT COUNT(*) = {self.n()} FROM v1
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2;
+  /* A */
+
+> CREATE VIEW v2 AS SELECT COUNT(*), MIN(f1_min), MAX(f1_max) FROM (SELECT f2, MIN(f1) AS f1_min, MAX(f1) AS f1_max FROM v1 GROUP BY f2)
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
+  /* B */
+{self.n()} 0 {self.n()-1}
+"""
+        )
+
+
 class CrossJoin(Dataflow):
     def init(self) -> Action:
         return self.view_ten()
@@ -444,6 +575,80 @@ class CrossJoin(Dataflow):
 true
 """
         )
+
+
+class AccumulateReductions(Dataflow):
+    """Benchmark the accumulation of reductions."""
+
+    def before(self) -> Action:
+        return TdAction(
+            """
+> DROP TABLE IF EXISTS t CASCADE;
+> CREATE TABLE t (a int, b int, c int, d int);
+
+> CREATE MATERIALIZED VIEW data AS
+  SELECT a, a AS b FROM generate_series(1, 10000000) AS a
+  UNION ALL
+  SELECT a, b FROM t;
+
+> INSERT INTO t (a, b) VALUES (1, 1);
+> INSERT INTO t (a, b) VALUES (0, 0);
+
+> DROP CLUSTER IF EXISTS idx_cluster CASCADE;
+> CREATE CLUSTER idx_cluster SIZE '1-8G', REPLICATION FACTOR 1;
+
+> CREATE VIEW accumulable AS
+  SELECT
+    a,
+    sum(a) AS sum_a, count(a) as cnt_a,
+    sum(b) AS sum_b, count(b) as cnt_b
+  FROM data
+  GROUP BY a;
+"""
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        sql = """
+> SELECT 1
+  /* A */
+1
+
+> CREATE INDEX i_accumulable IN CLUSTER idx_cluster ON accumulable(a);
+
+> SET CLUSTER = idx_cluster;
+
+? EXPLAIN SELECT count(*) FROM accumulable;
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (0) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] // { arity: 1 }
+        Project () // { arity: 0 }
+          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // { arity: 5 }
+
+Used Indexes:
+  - materialize.public.i_accumulable (*** full scan ***)
+
+> SELECT count(*) FROM accumulable;
+  /* B */
+10000001
+
+> SET CLUSTER = default;
+"""
+
+        if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
+            sql = remove_arity_information_from_explain(sql)
+
+        return Td(sql)
 
 
 class Retraction(Dataflow):
@@ -486,7 +691,7 @@ class CreateIndex(Dataflow):
     it takes for a SELECT query that would use the index to return rows.
     """
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -521,7 +726,7 @@ class CreateIndex(Dataflow):
 
 
 class DeltaJoin(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -538,7 +743,7 @@ class DeltaJoin(Dataflow):
   /* A */
 1
 
-# Delta joins require 2+ tables
+# Delta joins require 3+ tables
 > SELECT COUNT(*) FROM v1 AS a1 , v1 AS a2 , v1 AS a3 WHERE a1.f1 = a2.f1 AND a2.f1 = a3.f1
   /* B */
 {self.n()}
@@ -546,8 +751,41 @@ class DeltaJoin(Dataflow):
         )
 
 
+class DeltaJoinMaintained(Dataflow):
+    """Benchmark DeltaJoin as an indexed view with table-based data initialization, where the
+    empty frontier is not emitted, in contrast with one-shot SELECT processing based on data
+    initialized as a constant view"""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2;
+  /* A */
+
+# Delta joins require 3+ tables
+> CREATE VIEW v2 AS SELECT COUNT(*) FROM v1 AS a1 , v1 AS a2 , v1 AS a3 WHERE a1.f1 = a2.f1 AND a2.f1 = a3.f1
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
+  /* B */
+{self.n()}
+"""
+        )
+
+
 class DifferentialJoin(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -618,7 +856,7 @@ class Finish(Scenario):
 class FinishOrderByLimit(Finish):
     """Benchmark ORDER BY + LIMIT without the benefit of an index"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -665,11 +903,15 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
         return Td(
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
+  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}')
   FORMAT BYTES
   ENVELOPE NONE
@@ -700,18 +942,22 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 
     def benchmark(self) -> MeasurementSource:
         return Td(
-            """
+            f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
-    URL '${testdrive.schema-registry-url}'
+    URL '${{testdrive.schema-registry-url}}'
   );
 
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-upsert-${testdrive.seed}')
+  IN CLUSTER source_cluster
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-upsert-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
   /* A */
@@ -742,15 +988,19 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
   /* A */
 
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > CREATE SOURCE s1
+  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT
@@ -762,7 +1012,13 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         )
 
 
-class KafkaRestart(Scenario):
+class KafkaRestart(ScenarioDisabled):
+    """This scenario dates from the pre-persistence era where the entire topic was re-ingested from scratch.
+    With presistence however, no reingestion takes place and the scenario exhibits extreme variability.
+    Instead of re-ingestion, we are measuring mostly the speed of COUNT(*), further obscured by
+    the one second timestamp granularity
+    """
+
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
@@ -780,14 +1036,18 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > CREATE SOURCE s1
+  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT;
@@ -797,7 +1057,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 {self.n()}
 
 # Give time for any background tasks (e.g. compaction) to settle down
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_unsafe.mz_sleep(10)
 <null>
 """
         )
@@ -825,7 +1085,7 @@ class KafkaRestartBig(ScenarioBig):
 
     SCALE = 8
 
-    def shared(self) -> List[Action]:
+    def shared(self) -> list[Action]:
         return [
             TdAction("$ kafka-create-topic topic=kafka-recovery-big partitions=8"),
             # Ingest 10 ** SCALE records
@@ -858,12 +1118,16 @@ class KafkaRestartBig(ScenarioBig):
 
     def init(self) -> Action:
         return TdAction(
-            """
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            f"""
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}')
+  IN CLUSTER source_cluster
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${{testdrive.seed}}')
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT;
@@ -897,10 +1161,10 @@ class KafkaEnvelopeNoneBytesScalability(ScenarioBig):
     source but rather just a non-memory-consuming view on top of it.
     """
 
-    def shared(self) -> List[Action]:
+    def shared(self) -> list[Action]:
         return [
             TdAction(
-                f"""
+                """
 $ kafka-create-topic topic=kafka-scalability partitions=8
 """
             ),
@@ -920,11 +1184,15 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
         return Td(
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
-> CREATE CONNECTION s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
+  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
@@ -965,14 +1233,19 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def init(self) -> Action:
         return TdAction(
             f"""
-> CREATE CONNECTION IF NOT EXISTS kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+>[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${{testdrive.schema-registry-url}}';
 
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > CREATE SOURCE source1
+  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
@@ -984,21 +1257,29 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 
     def benchmark(self) -> MeasurementSource:
         return Td(
-            """
+            f"""
 > DROP SINK IF EXISTS sink1;
 > DROP SOURCE IF EXISTS sink1_check CASCADE;
   /* A */
 
-> CREATE SINK sink1 FROM source1
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
+> DROP CLUSTER IF EXISTS sink_cluster CASCADE
+> CREATE CLUSTER sink_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
+> CREATE SINK sink1
+  IN CLUSTER sink_cluster
+  FROM source1
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+$ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await-key-schema=true
+
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
 > CREATE SOURCE sink1_check
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
+  IN CLUSTER source_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
@@ -1039,8 +1320,9 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
+            """
 > DROP SOURCE IF EXISTS mz_source_pgcdc;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
             """
         )
 
@@ -1056,7 +1338,10 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
     PASSWORD SECRET pgpass
   )
 
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > CREATE SOURCE mz_source_pgcdc
+  IN CLUSTER source_cluster
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
   FOR TABLES ("pk_table")
   /* A */
@@ -1075,7 +1360,7 @@ class PgCdcStreaming(PgCdc):
 
     def shared(self) -> Action:
         return TdAction(
-            f"""
+            """
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -1090,6 +1375,7 @@ CREATE PUBLICATION p1 FOR ALL TABLES;
         return TdAction(
             f"""
 > DROP SOURCE IF EXISTS s1;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE IF EXISTS t1;
@@ -1105,7 +1391,10 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
     PASSWORD SECRET pgpass
   )
 
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > CREATE SOURCE s1
+  IN CLUSTER source_cluster
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'p1')
   FOR TABLES ("t1")
             """
@@ -1144,10 +1433,12 @@ class QueryLatency(Coordinator):
     """Measure the time it takes to run SELECT 1 queries"""
 
     def benchmark(self) -> MeasurementSource:
-        selects = "\n".join(f"> SELECT 1\n1\n" for i in range(0, self.n()))
+        selects = "\n".join("> SELECT 1\n1\n" for i in range(0, self.n()))
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;
@@ -1170,8 +1461,8 @@ class ConnectionLatency(Coordinator):
 
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
-            f"""
-$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
+            """
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 SELECT 1;
 """
             for i in range(0, self.n())
@@ -1179,6 +1470,8 @@ SELECT 1;
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;
@@ -1205,7 +1498,7 @@ class StartupEmpty(Startup):
         return [
             Lambda(lambda e: e.RestartMz()),
             Td(
-                f"""
+                """
 > SELECT 1;
   /* B */
 1
@@ -1218,15 +1511,18 @@ class StartupLoaded(Scenario):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
     SCALE = 1.2  # 25 objects of each kind
+    FIXED_SCALE = (
+        True  # Can not scale to 100s of objects, so --size=+N will have no effect
+    )
 
     def shared(self) -> Action:
         return TdAction(
             self.schema()
-            + f"""
+            + """
 $ kafka-create-topic topic=startup-time
 
-$ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
-{{"f2": 1}}
+$ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
+{"f2": 1}
 """
         )
 
@@ -1237,7 +1533,11 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
         )
         create_sources = "\n".join(
             f"""
+> DROP CLUSTER IF EXISTS source{i}_cluster CASCADE;
+> CREATE CLUSTER source{i}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > CREATE SOURCE source{i}
+  IN CLUSTER source{i}_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-startup-time-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
@@ -1255,7 +1555,11 @@ $ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
 
         create_sinks = "\n".join(
             f"""
-> CREATE SINK sink{i} FROM source{i}
+> DROP CLUSTER IF EXISTS sink{i}_cluster;
+> CREATE CLUSTER sink{i}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE SINK sink{i}
+  IN CLUSTER sink{i}_cluster
+  FROM source{i}
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
@@ -1273,9 +1577,12 @@ ALTER SYSTEM SET max_materialized_views = {self.n() * 2};
 ALTER SYSTEM SET max_sources = {self.n() * 2};
 ALTER SYSTEM SET max_sinks = {self.n() * 2};
 ALTER SYSTEM SET max_tables = {self.n() * 2};
+ALTER SYSTEM SET max_clusters = {self.n() * 6};
 
-> CREATE CONNECTION IF NOT EXISTS s1_kafka_conn
-  TO KAFKA (BROKER '${{testdrive.kafka-addr}}')
+> DROP OWNED BY materialize CASCADE;
+
+>[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -1312,3 +1619,70 @@ ALTER SYSTEM SET max_tables = {self.n() * 2};
 """
             ),
         ]
+
+
+class HydrateIndex(Scenario):
+    """Measure the time it takes for an index to hydrate when a cluster comes online."""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                """
+> CREATE CLUSTER idx_cluster SIZE '16', REPLICATION FACTOR 1
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        sql = f"""
+> DROP TABLE IF EXISTS t1 CASCADE
+> CREATE TABLE t1 (f1 INTEGER, f2 INTEGER)
+> ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 0)
+> CREATE INDEX i1 IN CLUSTER idx_cluster ON t1(f1)
+> INSERT INTO t1 (f1) SELECT {self.unique_values()} FROM {self.join()}
+> UPDATE t1 SET f1 = f1 + 100000
+> UPDATE t1 SET f1 = f1 + 1000000
+> UPDATE t1 SET f1 = f1 + 10000000
+> UPDATE t1 SET f1 = f1 + 100000000
+> UPDATE t1 SET f1 = f1 + 1000000000
+> SELECT 1
+  /* A */
+1
+> ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 1)
+> SET CLUSTER = idx_cluster
+? EXPLAIN SELECT COUNT(*) FROM t1
+Explained Query:
+  Return // {{ arity: 1 }}
+    Union // {{ arity: 1 }}
+      Get l0 // {{ arity: 1 }}
+      Map (0) // {{ arity: 1 }}
+        Union // {{ arity: 0 }}
+          Negate // {{ arity: 0 }}
+            Project () // {{ arity: 0 }}
+              Get l0 // {{ arity: 1 }}
+          Constant // {{ arity: 0 }}
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] // {{ arity: 1 }}
+        Project () // {{ arity: 0 }}
+          ReadIndex on=t1 i1=[*** full scan ***] // {{ arity: 2 }}
+
+Used Indexes:
+  - materialize.public.i1 (*** full scan ***)
+
+> SELECT COUNT(*) FROM t1
+  /* B */
+{self._n}
+> SET CLUSTER = default
+"""
+
+        if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
+            sql = remove_arity_information_from_explain(sql)
+
+        return Td(sql)
+
+
+def remove_arity_information_from_explain(sql: str) -> str:
+    return re.sub(r" // { arity: \d+ }", "", sql)

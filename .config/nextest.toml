@@ -1,8 +1,8 @@
 [profile.default]
-slow-timeout = { period = "60s", terminate-after = 2 }
+slow-timeout = { period = "90s", terminate-after = 2 }
 
 [profile.default-miri]
-slow-timeout = { period = "600s", terminate-after = 2 }
+slow-timeout = { period = "1200s", terminate-after = 2 }
 
 # For a given configuration parameter, the first override to match wins. Keep
 # these sorted in order from most specific to least specific.
@@ -12,12 +12,28 @@ filter = "package(mz-environmentd) and test(test_pgtest)"
 threads-required = 8
 slow-timeout = { period = "300s", terminate-after = 2 }
 
+# TODO(def-): Remove others than mz-environmentd after #19931 is fixed
 [[profile.default.overrides]]
-filter = "package(mz-environmentd)"
+filter = "package(mz-environmentd) or (package(mz-adapter) and (test(test_compare_builtins_postgres) or test(test_effective_search_path) or test(test_catalog_revision) or test(test_get_privileges) or test(test_large_catalog_item) or test(test_pg_views_forbidden_types) or test(test_normalized_create) or test(test_builtin_migration_child_migrations) or test(test_builtin_migration_topological_sort) or test(test_builtin_migration_multi_child_migrations) or test(test_builtin_migration_no_migrations) or test(test_smoketest_all_builtins) or test(test_minimal_qualification))) or (package(mz-catalog) and (test(test_stash_is_initialized) or test(test_debug_stash_open)))"
 threads-required = 8
+slow-timeout = { period = "120s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-stash) and (test(proptest_stash_migrate_json_to_proto) or test(test_stash_batch_large_number_updates))"
 slow-timeout = { period = "120s", terminate-after = 2 }
 
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false
 failure-output = "immediate-final"
+
+[profile.coverage]
+slow-timeout = { period = "480s", terminate-after = 2 }
+junit = { path = "junit_cargo-test.xml" }
+fail-fast = false
+failure-output = "immediate-final"
+
+[[profile.coverage.overrides]]
+filter = "package(mz-environmentd)"
+threads-required = 8
+slow-timeout = { period = "800s", terminate-after = 2 }

@@ -24,25 +24,35 @@ $ kafka-ingest format=avro topic=topic1 schema=${schema} repeat=1
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER source0_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source0
+  IN CLUSTER source0_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic0-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
+> CREATE CLUSTER source1_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source1
+  IN CLUSTER source1_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-> CREATE SINK sink0 FROM source0
+> CREATE CLUSTER sink0_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK sink0
+  IN CLUSTER sink0_cluster
+  FROM source0
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK sink1 FROM source1
+> CREATE CLUSTER sink1_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK sink1
+  IN CLUSTER sink1_cluster
+  FROM source1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

@@ -9,92 +9,75 @@
 
 //! Logic related to the creation of dataflow sinks.
 
-use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::implementations::ord::ColValSpine;
+use differential_dataflow::trace::implementations::ord_neu::ColValSpine;
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::dataflow::Scope;
-use tracing::warn;
-
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format};
-use mz_ore::now::NowFn;
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
-use mz_storage_client::source::persist_source;
-use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sinks::{
+use mz_storage_operators::persist_source;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
 };
+use mz_timely_util::builder_async::PressOnDropButton;
+use timely::dataflow::operators::Leave;
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, Stream};
+use tracing::warn;
 
-use crate::storage_state::{SinkToken, StorageState};
+use crate::healthcheck::HealthStatusMessage;
+use crate::storage_state::StorageState;
 
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the sink and its errors as requested
 /// by the original `CREATE SINK` statement.
-pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
-    scope: &mut G,
+pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
+    scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &mut StorageState,
-    tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-    import_ids: BTreeSet<GlobalId>,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
-) {
+) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
     let sink_render = get_sink_render_for(&sink.connection);
 
-    // put together tokens that belong to the export
-    let mut needed_tokens = Vec::new();
-    for import_id in import_ids {
-        if let Some(token) = tokens.get(&import_id) {
-            needed_tokens.push(Rc::clone(token))
-        }
-    }
+    let mut tokens = vec![];
 
-    let (ok_collection, err_collection, source_token) = persist_source::persist_source(
+    let snapshot_mode = if sink.with_snapshot {
+        SnapshotMode::Include
+    } else {
+        SnapshotMode::Exclude
+    };
+    let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
         scope,
         sink.from,
         Arc::clone(&storage_state.persist_clients),
         sink.from_storage_metadata.clone(),
-        Some(sink.as_of.frontier.clone()),
+        Some(sink.as_of.clone()),
+        snapshot_mode,
         timely::progress::Antichain::new(),
         None,
         None,
-        // Copy the logic in DeltaJoin/Get/Join to start.
-        |_timer, count| count > 1_000_000,
     );
-    needed_tokens.push(source_token);
+    tokens.extend(persist_tokens);
 
     let ok_collection =
         apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
 
-    let healthchecker_args = HealthcheckerArgs {
-        persist_clients: Arc::clone(&storage_state.persist_clients),
-        persist_location: sink.from_storage_metadata.persist_location.clone(),
-        status_shard_id: sink.status_id,
-        now_fn: storage_state.now.clone(),
-    };
-
-    let sink_token = sink_render.render_continuous_sink(
+    let (health, sink_tokens) = sink_render.render_continuous_sink(
         storage_state,
         sink,
         sink_id,
         ok_collection,
         err_collection.as_collection(),
-        healthchecker_args,
     );
 
-    if let Some(sink_token) = sink_token {
-        needed_tokens.push(sink_token);
-    }
+    tokens.extend(sink_tokens);
 
-    storage_state
-        .sink_tokens
-        .insert(sink_id, SinkToken::new(Box::new(needed_tokens)));
+    (health.leave(), tokens)
 }
 
 #[allow(clippy::borrowed_box)]
@@ -174,7 +157,10 @@ where
     // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
     let collection = match sink.envelope {
-        Some(SinkEnvelope::Debezium) => {
+        SinkEnvelope::Debezium => {
+            // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
+            // TODO(#17413): Revisit with cluster unification.
+            #[allow(clippy::disallowed_methods)]
             let combined = combine_at_timestamp(
                 keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Debezium"),
             );
@@ -204,7 +190,10 @@ where
             });
             collection
         }
-        Some(SinkEnvelope::Upsert) => {
+        SinkEnvelope::Upsert => {
+            // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
+            // TODO(#17413): Revisit with cluster unification.
+            #[allow(clippy::disallowed_methods)]
             let combined = combine_at_timestamp(
                 keyed.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Upsert"),
             );
@@ -220,22 +209,9 @@ where
             });
             collection
         }
-        None => keyed.map(|(key, value)| (key, Some(value))),
     };
 
     collection
-}
-
-/// Args for creating a healthchecker.  Not done inline because it requires async.
-pub struct HealthcheckerArgs {
-    /// persist_clients
-    pub persist_clients: Arc<PersistClientCache>,
-    /// location of persist
-    pub persist_location: PersistLocation,
-    /// id of status shard for updates
-    pub status_shard_id: Option<ShardId>,
-    /// now_fn
-    pub now_fn: NowFn,
 }
 
 /// A type that can be rendered as a dataflow sink.
@@ -257,8 +233,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-        healthchecker_args: HealthcheckerArgs,
-    ) -> Option<Rc<dyn Any>>
+    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
     where
         G: Scope<Timestamp = Timestamp>;
 }

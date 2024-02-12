@@ -25,7 +25,7 @@ pub async fn run_connect(
     let url = cmd.args.string("url")?;
     cmd.args.done()?;
 
-    let (client, _) = postgres_client(&url).await?;
+    let (client, _) = postgres_client(&url, state.default_timeout).await?;
     state.postgres_clients.insert(name.clone(), client);
     Ok(ControlFlow::Continue)
 }

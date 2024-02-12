@@ -8,18 +8,15 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import Optional
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Toxiproxy,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -33,8 +30,11 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.workflow("sink-networking")
-    c.workflow("source-resumption")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 #
@@ -53,8 +53,7 @@ def workflow_sink_networking(c: Composition) -> None:
         ]
     ):
         c.up("toxiproxy")
-        c.run(
-            "testdrive",
+        c.run_testdrive_files(
             "--no-reset",
             "--max-errors=1",
             f"--seed={seed}{i}",
@@ -78,36 +77,40 @@ def workflow_source_resumption(c: Composition) -> None:
     ):
         c.up("materialized", "zookeeper", "kafka", "clusterd")
 
-        c.run("testdrive", "source-resumption/setup.td")
-        c.run("testdrive", "source-resumption/verify.td")
-        assert (
-            find_source_resume_upper(
-                c,
-                "0",
-            )
-            == None
-        )
+        c.run_testdrive_files("source-resumption/setup.td")
+        c.run_testdrive_files("source-resumption/verify.td")
+
+        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # assert (
+        #    find_source_resume_upper(
+        #        c,
+        #        "0",
+        #    )
+        #    == None
+        # )
 
         c.kill("clusterd")
         c.up("clusterd")
         c.sleep(10)
 
         # Verify the same data is query-able, and that we can make forward progress
-        c.run("testdrive", "source-resumption/verify.td")
-        c.run("testdrive", "source-resumption/re-ingest-and-verify.td")
+        c.run_testdrive_files("source-resumption/verify.td")
+        c.run_testdrive_files("source-resumption/re-ingest-and-verify.td")
 
         # the first clusterd instance ingested 3 messages, so our
         # upper is at the 4th offset (0-indexed)
-        assert (
-            find_source_resume_upper(
-                c,
-                "0",
-            )
-            == 3
-        )
+
+        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # assert (
+        #    find_source_resume_upper(
+        #        c,
+        #        "0",
+        #    )
+        #    == 3
+        # )
 
 
-def find_source_resume_upper(c: Composition, partition_id: str) -> Optional[int]:
+def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:
     metrics = c.exec("clusterd", "curl", "localhost:6878/metrics", capture=True).stdout
 
     if metrics is None:
@@ -122,3 +125,31 @@ def find_source_resume_upper(c: Composition, partition_id: str) -> Optional[int]
                 return int(value)
 
     return None
+
+
+def workflow_sink_queue_full(c: Composition) -> None:
+    """Similar to the sink-networking workflow, but with 11 million rows (more then the 11 million defined as queue.buffering.max.messages) and only creating the sink after these rows are ingested into Mz. Triggers #24936"""
+    seed = random.getrandbits(16)
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
+    for i, failure_mode in enumerate(
+        [
+            "toxiproxy-close-connection.td",
+            "toxiproxy-limit-connection.td",
+            "toxiproxy-timeout.td",
+            "toxiproxy-timeout-hold.td",
+        ]
+    ):
+        c.up("toxiproxy")
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            f"--seed={seed}{i}",
+            f"--temp-dir=/share/tmp/kafka-resumption-{seed}{i}",
+            "sink-queue-full/setup.td",
+            f"sink-queue-full/{failure_mode}",
+            "sink-queue-full/during.td",
+            "sink-queue-full/toxiproxy-restore-connection.td",
+            "sink-queue-full/verify-success.td",
+            "sink-queue-full/cleanup.td",
+        )
+        c.kill("toxiproxy")

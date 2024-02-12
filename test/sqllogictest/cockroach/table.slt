@@ -22,6 +22,11 @@ halt
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 SET DATABASE = ""
 

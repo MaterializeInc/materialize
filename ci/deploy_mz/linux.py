@@ -11,19 +11,25 @@ import os
 from pathlib import Path
 
 from materialize import mzbuild, spawn
+from materialize.mz_version import MzCliVersion
 
 from . import deploy_util
-from .deploy_util import APT_BUCKET, VERSION
+from .deploy_util import APT_BUCKET, MZ_CLI_VERSION
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."))
+    repo = mzbuild.Repository(Path("."), coverage=False)
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
-    print(f"--- Checking version")
-    assert repo.rd.cargo_workspace.crates["mz"].version == VERSION
+    print("--- Checking version")
+    assert (
+        MzCliVersion.parse_without_prefix(
+            repo.rd.cargo_workspace.crates["mz"].version_string
+        )
+        == MZ_CLI_VERSION
+    )
 
-    print(f"--- Building mz")
+    print("--- Building mz")
     deps = repo.resolve_dependencies([repo.images["mz"]])
     deps.ensure()
     # Extract the mz binary from the Docker image.
@@ -47,8 +53,8 @@ def main() -> None:
     print(f"--- Uploading {target} binary tarball")
     deploy_util.deploy_tarball(target, mz)
 
-    print(f"--- Publishing Debian package")
-    filename = f"mz_{VERSION}_{repo.rd.arch.go_str()}.deb"
+    print("--- Publishing Debian package")
+    filename = f"mz_{MZ_CLI_VERSION.str_without_prefix()}_{repo.rd.arch.go_str()}.deb"
     print(f"Publishing {filename}")
     spawn.runv(
         [
@@ -56,7 +62,8 @@ def main() -> None:
             "--no-build",
             "--no-strip",
             "--deb-version",
-            str(VERSION),
+            MZ_CLI_VERSION.str_without_prefix(),
+            '--deb-revision=""',
             "-p",
             "mz",
             "-o",

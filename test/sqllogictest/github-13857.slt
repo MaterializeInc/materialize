@@ -9,8 +9,13 @@
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/13857
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement ok
-DROP CLUSTER default CASCADE
+DROP CLUSTER quickstart CASCADE
 
 statement ok
 CREATE CLUSTER test
@@ -21,7 +26,7 @@ SET CLUSTER = 'test'
 
 # Give read holds a chance to be updated
 statement ok
-SELECT mz_internal.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(2)
 
 statement ok
 DROP CLUSTER test CASCADE

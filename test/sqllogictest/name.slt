@@ -1,0 +1,154 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# <
+
+query T
+SELECT 'a'::name < 'b'::name
+----
+true
+
+query T
+SELECT 'b'::name < 'a'::name
+----
+false
+
+query T
+SELECT 'a'::name < 'a'::name
+----
+false
+
+# <=
+
+query T
+SELECT 'a'::name <= 'b'::name
+----
+true
+
+query T
+SELECT 'b'::name <= 'a'::name
+----
+false
+
+query T
+SELECT 'a'::name <= 'a'::name
+----
+true
+
+# >
+
+query T
+SELECT 'a'::name > 'b'::name
+----
+false
+
+query T
+SELECT 'b'::name > 'a'::name
+----
+true
+
+query T
+SELECT 'a'::name > 'a'::name
+----
+false
+
+# >=
+
+query T
+SELECT 'a'::name >= 'b'::name
+----
+false
+
+query T
+SELECT 'b'::name >= 'a'::name
+----
+true
+
+query T
+SELECT 'a'::name >= 'a'::name
+----
+true
+
+# =
+
+# <=
+
+query T
+SELECT 'a'::name = 'b'::name
+----
+false
+
+query T
+SELECT 'b'::name = 'a'::name
+----
+false
+
+query T
+SELECT 'a'::name = 'a'::name
+----
+true
+
+# <>
+
+# <=
+
+query T
+SELECT 'a'::name <> 'b'::name
+----
+true
+
+query T
+SELECT 'b'::name <> 'a'::name
+----
+true
+
+query T
+SELECT 'a'::name <> 'a'::name
+----
+false
+
+# pg_typeof
+
+query T
+SELECT pg_typeof('joe'::name);
+----
+name
+
+# casting
+
+query T
+SELECT 'hello world'::name
+----
+hello world
+
+query T
+SELECT 'hello world'::name::text
+----
+hello world
+
+query T
+SELECT 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'::name;
+----
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+query T
+SELECT 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'::name;
+----
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# The Hebrew character Aleph (א) has a length of 2 bytes.
+query T
+SELECT 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxא'::name;
+----
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxא
+
+query T
+SELECT 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxא'::name;
+----
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

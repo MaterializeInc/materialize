@@ -10,6 +10,6 @@
 # by the Apache License, Version 2.0.
 #
 # ci-logged-errors-detect - Detect errors in log files during CI and find
-# associated open Github issues in Materialize repository.
+# associated open GitHub issues in Materialize repository.
 
 exec "$(dirname "$0")"/pyactivate -m materialize.cli.ci_logged_errors_detect "$@"

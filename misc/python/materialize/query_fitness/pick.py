@@ -35,6 +35,7 @@ def dump_slt(conn: pg8000.Connection, query: str) -> None:
     cursor.execute("ROLLBACK")
     cursor.execute(query)
     row = cursor.fetchone()
+    assert row is not None
     cols = len(row)
     colspec = "I" * cols
     print(

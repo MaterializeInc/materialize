@@ -1,0 +1,40 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "proto/src/proto.proto";
+
+package mz_dyncfg;
+
+// A batch of value updates to [Config]s in a [ConfigSet].
+//
+// This may be sent across processes to apply the same value updates, but may
+// not be durably written down.
+//
+// Intentionally not named with the usual Proto prefix because we pass this
+// around directly.
+message ConfigUpdates {
+    repeated ProtoConfigVal updates = 1;
+}
+
+
+// A single config value.
+//
+// This may be sent across processes, but may not be durably written down.
+message ProtoConfigVal {
+    string name = 1;
+    oneof val {
+        bool bool = 2;
+        uint32 u32 = 6;
+        uint64 usize = 3;
+        string string = 4;
+        mz_proto.ProtoDuration duration = 5;
+    }
+}

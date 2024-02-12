@@ -15,7 +15,7 @@
 
 use super::*;
 
-#[test]
+#[mz_test_macro::test]
 fn metrics_registry() {
     let reg = MetricsRegistry::new();
     let counter: IntCounter = reg.register(metric!(
@@ -28,7 +28,7 @@ fn metrics_registry() {
     assert_eq!(readings.len(), 1);
 }
 
-#[test]
+#[mz_test_macro::test]
 fn thirdparty_metric_vecs() {
     let reg = MetricsRegistry::new();
     let cv: raw::IntCounterVec = reg.register(metric!(

@@ -74,38 +74,70 @@ Explained Query:
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[integer]
         Get::PassArrangements l0
           raw=true
       Reduce::Distinct
         val_plan
           project=()
         key_plan=id
-        Join::Linear
-          linear_stage[1]
-            closure
-              project=(#0)
-              filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
-            lookup={ relation=0, key=[] }
-            stream={ key=[], thinning=(#0, #1) }
-          linear_stage[0]
-            lookup={ relation=2, key=[#0] }
-            stream={ key=[#0], thinning=() }
-          source={ relation=1, key=[#0] }
+        Join::Delta
+          plan_path[0]
+            delta_stage[1]
+              closure
+                project=(#0)
+                filter=(((#2 = 1997-07-06) OR (date_to_timestamp(#1) = (#3 - 7 days))))
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#2], thinning=(#0, #1) }
+            delta_stage[0]
+              lookup={ relation=1, key=[] }
+              stream={ key=[], thinning=(#0, #1) }
+            source={ relation=0, key=[] }
+          plan_path[1]
+            delta_stage[1]
+              closure
+                project=(#0)
+                filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
+              lookup={ relation=0, key=[] }
+              stream={ key=[], thinning=(#0, #1) }
+            delta_stage[0]
+              lookup={ relation=2, key=[#0] }
+              stream={ key=[#0], thinning=() }
+            source={ relation=1, key=[] }
+          plan_path[2]
+            delta_stage[1]
+              closure
+                project=(#0)
+                filter=(((#3 = 1997-07-06) OR (date_to_timestamp(#2) = (#1 - 7 days))))
+              lookup={ relation=0, key=[] }
+              stream={ key=[], thinning=(#0, #1) }
+            delta_stage[0]
+              lookup={ relation=1, key=[#0] }
+              stream={ key=[#0], thinning=(#1) }
+            source={ relation=2, key=[#0] }
           ArrangeBy
             raw=true
             arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+            types=[date, date]
             Get::Collection materialize.public.lineitem
               project=(#1, #2)
               raw=true
-          Reduce::Distinct
-            val_plan
-              project=()
-            key_plan=id
-            Get::PassArrangements l0
-              raw=true
+          ArrangeBy
+            input_key=[#0]
+            raw=false
+            arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+            arrangements[1]={ key=[#0], permutation=id, thinning=() }
+            types=[integer]
+            Reduce::Distinct
+              val_plan
+                project=()
+              key_plan=id
+              Get::PassArrangements l0
+                raw=true
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+            types=[integer, date]
             Get::Collection materialize.public.orders
               filter=((#0) IS NOT NULL)
               raw=true
@@ -119,6 +151,7 @@ Explained Query:
         ArrangeBy
           raw=true
           arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          types=[integer]
           Get::Collection materialize.public.lineitem
             project=(#0)
             raw=true

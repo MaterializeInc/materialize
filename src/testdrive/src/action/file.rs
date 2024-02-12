@@ -55,7 +55,7 @@ fn build_path(cmd: &mut BuiltinCommand) -> Result<String, anyhow::Error> {
 
 pub async fn run_append(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let path = build_path(&mut cmd)?;
     let compression = build_compression(&mut cmd)?;
@@ -93,7 +93,7 @@ pub async fn run_append(
 
 pub async fn run_delete(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let path = build_path(&mut cmd)?;
     cmd.args.done()?;

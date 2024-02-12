@@ -20,55 +20,22 @@
 //! `mz_ore` wrapper either.
 #![allow(clippy::disallowed_types)]
 
-use differential_dataflow::lattice::Lattice;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
 
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-
-use mz_compute_client::controller::ComputeInstanceId;
-
+use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
+use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
+use mz_compute_types::ComputeInstanceId;
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_client::controller::ReadPolicy;
+use mz_storage_types::read_policy::ReadPolicy;
+use timely::progress::Antichain;
+use tracing::instrument;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
+use crate::session::Session;
 use crate::util::ResultExt;
-
-/// Information about the read capability requirements of a collection.
-///
-/// This type tracks both a default policy, as well as various holds that may
-/// be expressed, as by transactions to ensure collections remain readable.
-pub(crate) struct ReadCapability<T = mz_repr::Timestamp>
-where
-    T: timely::progress::Timestamp,
-{
-    /// The default read policy for the collection when no holds are present.
-    pub(crate) base_policy: ReadPolicy<T>,
-    /// Holds expressed by transactions, that should prevent compaction.
-    pub(crate) holds: MutableAntichain<T>,
-}
-
-impl<T: timely::progress::Timestamp> From<ReadPolicy<T>> for ReadCapability<T> {
-    fn from(base_policy: ReadPolicy<T>) -> Self {
-        Self {
-            base_policy,
-            holds: MutableAntichain::new(),
-        }
-    }
-}
-
-impl<T: timely::progress::Timestamp> ReadCapability<T> {
-    /// Acquires the effective read policy, reflecting both the base policy and any holds.
-    pub(crate) fn policy(&self) -> ReadPolicy<T> {
-        // TODO: This could be "optimized" when `self.holds.frontier` is empty.
-        ReadPolicy::Multiple(vec![
-            ReadPolicy::ValidFrom(self.holds.frontier().to_owned()),
-            self.base_policy.clone(),
-        ])
-    }
-}
 
 /// Relevant information for acquiring or releasing a bundle of read holds.
 #[derive(Clone, Debug)]
@@ -182,14 +149,14 @@ impl crate::coord::Coordinator {
     pub(crate) async fn initialize_storage_read_policies(
         &mut self,
         ids: Vec<GlobalId>,
-        compaction_window_ms: Option<Timestamp>,
+        compaction_window: CompactionWindow,
     ) {
         self.initialize_read_policies(
             &CollectionIdBundle {
                 storage_ids: ids.into_iter().collect(),
                 compute_ids: BTreeMap::new(),
             },
-            compaction_window_ms,
+            compaction_window,
         )
         .await;
     }
@@ -203,7 +170,7 @@ impl crate::coord::Coordinator {
         &mut self,
         ids: Vec<GlobalId>,
         instance: ComputeInstanceId,
-        compaction_window_ms: Option<Timestamp>,
+        compaction_window: CompactionWindow,
     ) {
         let mut compute_ids: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
         compute_ids.insert(instance, ids.into_iter().collect());
@@ -212,7 +179,7 @@ impl crate::coord::Coordinator {
                 storage_ids: BTreeSet::new(),
                 compute_ids,
             },
-            compaction_window_ms,
+            compaction_window,
         )
         .await;
     }
@@ -222,11 +189,11 @@ impl crate::coord::Coordinator {
     /// This should be called only after a collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::initialize_read_policies", skip_all)]
     pub(crate) async fn initialize_read_policies(
         &mut self,
         id_bundle: &CollectionIdBundle,
-        compaction_window_ms: Option<Timestamp>,
+        compaction_window: CompactionWindow,
     ) {
         let mut compute_policy_updates: BTreeMap<ComputeInstanceId, Vec<_>> = BTreeMap::new();
         let mut storage_policy_updates = Vec::new();
@@ -237,7 +204,7 @@ impl crate::coord::Coordinator {
             match timeline_context {
                 TimelineContext::TimelineDependent(timeline) => {
                     let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
-                    let read_ts = oracle.read_ts();
+                    let read_ts = oracle.read_ts().await;
                     let new_read_holds = self.initialize_read_holds(read_ts, &id_bundle);
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(&timeline).await;
@@ -259,7 +226,7 @@ impl crate::coord::Coordinator {
         for (time, id_bundle) in id_bundles {
             for (compute_instance, compute_ids) in id_bundle.compute_ids {
                 for id in compute_ids {
-                    let mut read_capability = Self::default_read_capability(compaction_window_ms);
+                    let mut read_capability: ReadCapability<Timestamp> = compaction_window.into();
                     if let Some(time) = &time {
                         read_capability
                             .holds
@@ -274,7 +241,7 @@ impl crate::coord::Coordinator {
             }
 
             for id in id_bundle.storage_ids {
-                let mut read_capability = Self::default_read_capability(compaction_window_ms);
+                let mut read_capability: ReadCapability<Timestamp> = compaction_window.into();
                 if let Some(time) = &time {
                     read_capability
                         .holds
@@ -297,16 +264,6 @@ impl crate::coord::Coordinator {
             .set_read_policy(storage_policy_updates);
     }
 
-    fn default_read_capability(
-        compaction_window_ms: Option<Timestamp>,
-    ) -> ReadCapability<Timestamp> {
-        let policy = match compaction_window_ms {
-            Some(time) => ReadPolicy::lag_writes_by(time),
-            None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-        };
-        policy.into()
-    }
-
     pub(crate) fn update_storage_base_read_policies(
         &mut self,
         base_policies: Vec<(GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
@@ -323,21 +280,39 @@ impl crate::coord::Coordinator {
         self.controller.storage.set_read_policy(policies)
     }
 
+    pub(crate) fn update_compute_base_read_policies(
+        &mut self,
+        mut base_policies: Vec<(ComputeInstanceId, GlobalId, ReadPolicy<mz_repr::Timestamp>)>,
+    ) {
+        base_policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
+        for (cluster_id, group) in &base_policies
+            .into_iter()
+            .group_by(|&(cluster_id, _, _)| cluster_id)
+        {
+            let group = group
+                .map(|(_, id, base_policy)| {
+                    let capability = self
+                        .compute_read_capabilities
+                        .get_mut(&id)
+                        .expect("coord out of sync");
+                    capability.base_policy = base_policy;
+                    (id, capability.policy())
+                })
+                .collect::<Vec<_>>();
+            self.controller
+                .active_compute()
+                .set_read_policy(cluster_id, group)
+                .unwrap_or_terminate("cannot fail to set read policy");
+        }
+    }
+
     pub(crate) fn update_compute_base_read_policy(
         &mut self,
         compute_instance: ComputeInstanceId,
         id: GlobalId,
         base_policy: ReadPolicy<mz_repr::Timestamp>,
     ) {
-        let capability = self
-            .compute_read_capabilities
-            .get_mut(&id)
-            .expect("coord out of sync");
-        capability.base_policy = base_policy;
-        self.controller
-            .active_compute()
-            .set_read_policy(compute_instance, vec![(id, capability.policy())])
-            .unwrap_or_terminate("cannot fail to set read policy");
+        self.update_compute_base_read_policies(vec![(compute_instance, id, base_policy)])
     }
 
     /// Drop read policy in STORAGE for `id`.
@@ -374,7 +349,7 @@ impl crate::coord::Coordinator {
                 .storage
                 .collection(*id)
                 .expect("collection does not exist");
-            let read_frontier = collection.read_capabilities.frontier().to_owned();
+            let read_frontier = collection.implied_capability.clone();
             let time = time.join(&read_frontier);
             read_holds
                 .holds
@@ -389,7 +364,7 @@ impl crate::coord::Coordinator {
                 let collection = compute
                     .collection(*compute_instance, *id)
                     .expect("collection does not exist");
-                let read_frontier = collection.read_frontier().to_owned();
+                let read_frontier = collection.read_capability().clone();
                 let time = time.join(&read_frontier);
                 read_holds
                     .holds
@@ -446,6 +421,25 @@ impl crate::coord::Coordinator {
         read_holds
     }
 
+    /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
+    /// This is similar to [Self::acquire_read_holds], but instead of returning the read holds,
+    /// it arranges for them to be automatically released at the end of the transaction.
+    ///
+    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then we
+    /// will acquire a read hold at the lowest possible time for that id.
+    pub(crate) fn acquire_read_holds_auto_cleanup(
+        &mut self,
+        session: &Session,
+        time: Timestamp,
+        id_bundle: &CollectionIdBundle,
+    ) {
+        let read_holds = self.acquire_read_holds(time, id_bundle);
+        self.txn_read_holds
+            .entry(session.conn_id().clone())
+            .or_insert_with(ReadHolds::new)
+            .extend(read_holds);
+    }
+
     /// Attempt to update the timestamp of the read holds on the indicated collections from the
     /// indicated times within `read_holds` to `new_time`.
     ///
@@ -479,10 +473,10 @@ impl crate::coord::Coordinator {
                         .storage
                         .collection(id)
                         .expect("id does not exist");
-                    assert!(collection.read_capabilities.frontier().le(&new_time.borrow()),
+                    assert!(collection.implied_capability.le(&new_time.borrow()),
                             "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                             id,
-                            collection.read_capabilities.frontier(),
+                            collection.implied_capability,
                             new_time,
                             old_time,
                     );
@@ -505,11 +499,11 @@ impl crate::coord::Coordinator {
                         let collection = compute
                             .collection(compute_instance, id)
                             .expect("id does not exist");
-                        assert!(collection.read_frontier().le(&new_time.borrow()),
+                        assert!(collection.read_capability().le(&new_time.borrow()),
                                 "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                                 id,
                                 compute_instance,
-                                collection.read_frontier(),
+                                collection.read_capability(),
                                 new_time,
                                 old_time,
                         );

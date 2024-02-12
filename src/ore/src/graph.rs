@@ -67,7 +67,7 @@ where
     let children = at_enter(graph, &root)?;
     entered_node(&mut entered, root, children);
     while !entered.is_empty() {
-        if let Some(to_enter) = find_next_child_to_enter(&mut entered, &mut exited) {
+        if let Some(to_enter) = find_next_child_to_enter(&mut entered, &exited) {
             let children = at_enter(graph, &to_enter)?;
             entered_node(&mut entered, to_enter, children);
         } else {
@@ -100,7 +100,7 @@ where
     let children = at_enter(graph, &root)?;
     entered_node(&mut entered, root, children);
     while !entered.is_empty() {
-        if let Some(to_enter) = find_next_child_to_enter(&mut entered, &mut exited) {
+        if let Some(to_enter) = find_next_child_to_enter(&mut entered, &exited) {
             let children = at_enter(graph, &to_enter)?;
             entered_node(&mut entered, to_enter, children);
         } else {
@@ -161,7 +161,7 @@ pub fn nonrecursive_dft<Graph, NodeId, AtEnter, AtExit>(
     let children = at_enter(graph, &root);
     entered_node(&mut entered, root, children);
     while !entered.is_empty() {
-        if let Some(to_enter) = find_next_child_to_enter(&mut entered, &mut exited) {
+        if let Some(to_enter) = find_next_child_to_enter(&mut entered, &exited) {
             let children = at_enter(graph, &to_enter);
             entered_node(&mut entered, to_enter, children);
         } else {
@@ -192,7 +192,7 @@ pub fn nonrecursive_dft_mut<Graph, NodeId, AtEnter, AtExit>(
     let children = at_enter(graph, &root);
     entered_node(&mut entered, root, children);
     while !entered.is_empty() {
-        if let Some(to_enter) = find_next_child_to_enter(&mut entered, &mut exited) {
+        if let Some(to_enter) = find_next_child_to_enter(&mut entered, &exited) {
             let children = at_enter(graph, &to_enter);
             entered_node(&mut entered, to_enter, children);
         } else {
@@ -220,7 +220,7 @@ fn entered_node<NodeId>(
 /// Find the next child node, if any, that we have not entered.
 fn find_next_child_to_enter<NodeId>(
     entered: &mut Vec<(NodeId, Vec<NodeId>)>,
-    exited: &mut BTreeSet<NodeId>,
+    exited: &BTreeSet<NodeId>,
 ) -> Option<NodeId>
 where
     NodeId: std::cmp::Ord,

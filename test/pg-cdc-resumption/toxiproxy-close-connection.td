@@ -7,15 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
+true
 
-# This REST call will cause toxiproxy to close the connection after processing 64K bytes
+# This REST call will cause toxiproxy to close the connection.
 
-$ http-request method=POST url=http://toxiproxy:8474/proxies/postgres/toxics content-type=application/json
+$ http-request method=POST url=http://toxiproxy:8474/proxies/postgres content-type=application/json
 {
   "name": "postgres",
-  "type": "limit_data",
-  "attributes": { "bytes": 65535 }
+  "listen": "0.0.0.0:5432",
+  "upstream": "postgres:5432",
+  "enabled": false
 }
 
-> SELECT mz_internal.mz_sleep(5);
-<null>
+> SELECT COUNT(*) > 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
+true

@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -14,30 +17,84 @@ use async_trait::async_trait;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use axum::Json;
+use axum::{Extension, Json};
+use futures::future::BoxFuture;
 use futures::Future;
 use http::StatusCode;
 use itertools::izip;
-use serde::{Deserialize, Serialize};
-use tokio::time;
-use tracing::warn;
-use tungstenite::protocol::frame::coding::CloseCode;
-
-use mz_adapter::session::{EndTransactionAction, RowBatchStream, TransactionStatus};
-use mz_adapter::{ExecuteResponse, ExecuteResponseKind, PeekResponseUnary, SessionClient};
+use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::session::{EndTransactionAction, TransactionStatus};
+use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
+use mz_adapter::{
+    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, ExecuteResponseKind,
+    PeekResponseUnary, SessionClient,
+};
 use mz_interchange::encode::TypedDatum;
-use mz_interchange::json::ToJson;
-use mz_ore::iter::IteratorExt;
+use mz_interchange::json::{JsonNumberPolicy, ToJson};
+use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
-use mz_pgwire::Severity;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
+use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
+use serde::{Deserialize, Serialize};
+use tokio::{select, time};
+use tokio_postgres::error::SqlState;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::debug;
+use tungstenite::protocol::frame::coding::CloseCode;
 
-use crate::http::{AuthedClient, MAX_REQUEST_SIZE};
+use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
 
-use super::{init_ws, WsState};
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Adapter(#[from] AdapterError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Axum(#[from] axum::Error),
+    #[error("SUBSCRIBE only supported over websocket")]
+    SubscribeOnlyOverWs,
+    #[error("current transaction is aborted, commands ignored until end of transaction block")]
+    AbortedTransaction,
+    #[error("unsupported via this API: {0}")]
+    Unsupported(String),
+    #[error("{0}")]
+    Unstructured(anyhow::Error),
+}
+
+impl Error {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Error::Adapter(err) => err.detail(),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Error::Adapter(err) => err.hint(),
+            _ => None,
+        }
+    }
+
+    pub fn position(&self) -> Option<usize> {
+        match self {
+            Error::Adapter(err) => err.position(),
+            _ => None,
+        }
+    }
+
+    pub fn code(&self) -> SqlState {
+        match self {
+            Error::Adapter(err) => err.code(),
+            Error::AbortedTransaction => SqlState::IN_FAILED_SQL_TRANSACTION,
+            _ => SqlState::INTERNAL_ERROR,
+        }
+    }
+}
 
 pub async fn handle_sql(
     mut client: AuthedClient,
@@ -46,6 +103,8 @@ pub async fn handle_sql(
     let mut res = SqlResponse {
         results: Vec::new(),
     };
+    // Don't need to worry about timeouts or resetting cancel here because there is always exactly 1
+    // request.
     match execute_request(&mut client, request, &mut res).await {
         Ok(()) => Ok(Json(res)),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
@@ -59,48 +118,111 @@ struct ErrorResponse {
 
 pub async fn handle_sql_ws(
     State(state): State<WsState>,
+    existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    // An upstream middleware may have already provided the user for us
+    let user = existing_user.and_then(|Extension(user)| Some(user));
     ws.max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, ws).await })
+        .on_upgrade(|ws| async move { run_ws(&state, user, ws).await })
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum WebSocketAuth {
-    Basic { user: String, password: String },
-    Bearer { token: String },
+    Basic {
+        user: String,
+        password: String,
+        #[serde(default)]
+        options: BTreeMap<String, String>,
+    },
+    Bearer {
+        token: String,
+        #[serde(default)]
+        options: BTreeMap<String, String>,
+    },
+    OptionsOnly {
+        #[serde(default)]
+        options: BTreeMap<String, String>,
+    },
 }
 
-async fn run_ws(state: &WsState, mut ws: WebSocket) {
-    let mut client = match init_ws(state, &mut ws).await {
+async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
+    let mut client = match init_ws(state, user, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
             // We omit most detail from the error message we send to the client, to
-            // avoid giving attackers unnecessary information.
-            warn!("WS request failed authentication: {}", e);
+            // avoid giving attackers unnecessary information during auth. AdapterErrors
+            // are safe to return because they're generated after authentication.
+            debug!("WS request failed init: {}", e);
+            let reason = match e.downcast_ref::<AdapterError>() {
+                Some(error) => Cow::Owned(error.to_string()),
+                None => "unauthorized".into(),
+            };
             let _ = ws
                 .send(Message::Close(Some(CloseFrame {
                     code: CloseCode::Protocol.into(),
-                    reason: "unauthorized".into(),
+                    reason,
                 })))
                 .await;
             return;
         }
     };
 
-    // Successful auth results in an initial ready message.
-    let _ = ws
-        .send(Message::Text(
-            serde_json::to_string(&WebSocketResponse::ReadyForQuery(
-                client.0.session().transaction_code().into(),
+    // Successful auth, send startup messages.
+    let mut msgs = Vec::new();
+    let session = client.client.session();
+    for var in session.vars().notify_set() {
+        msgs.push(WebSocketResponse::ParameterStatus(ParameterStatus {
+            name: var.name().to_string(),
+            value: var.value(),
+        }));
+    }
+    msgs.push(WebSocketResponse::BackendKeyData(BackendKeyData {
+        conn_id: session.conn_id().unhandled(),
+        secret_key: session.secret_key(),
+    }));
+    msgs.push(WebSocketResponse::ReadyForQuery(
+        session.transaction_code().into(),
+    ));
+    for msg in msgs {
+        let _ = ws
+            .send(Message::Text(
+                serde_json::to_string(&msg).expect("must serialize"),
             ))
-            .expect("must serialize"),
-        ))
-        .await;
+            .await;
+    }
+
+    // Send any notices that might have been generated on startup.
+    let notices = session.drain_notices();
+    if let Err(err) = forward_notices(&mut ws, notices).await {
+        debug!("failed to forward notices to WebSocket, {err:?}");
+        return;
+    }
 
     loop {
-        let msg = match ws.recv().await {
+        // Handle timeouts first so we don't execute any statements when there's a pending timeout.
+        let msg = select! {
+            biased;
+
+            // `recv_timeout()` is cancel-safe as per it's docs.
+            Some(timeout) = client.client.recv_timeout() => {
+                client.client.terminate().await;
+                // We must wait for the client to send a request before we can send the error
+                // response. Although this isn't the PG wire protocol, we choose to mirror it by
+                // only sending errors as responses to requests.
+                let _ = ws.recv().await;
+                let err = Error::from(AdapterError::from(timeout));
+                let _ = send_ws_response(&mut ws, WebSocketResponse::Error(err.into())).await;
+                return;
+            },
+            message = ws.recv() => message,
+        };
+
+        client.client.remove_idle_in_transaction_session_timeout();
+        client.client.reset_canceled();
+
+        let msg = match msg {
             Some(Ok(msg)) => msg,
             _ => {
                 // client disconnected
@@ -108,7 +230,7 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
             }
         };
 
-        let req: Result<SqlRequest, anyhow::Error> = match msg {
+        let req: Result<SqlRequest, Error> = match msg {
             Message::Text(data) => serde_json::from_str(&data).err_into(),
             Message::Binary(data) => serde_json::from_slice(&data).err_into(),
             // Handled automatically by the server.
@@ -126,46 +248,77 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         // Figure out if we need to send an error, any notices, but always the ready message.
         let err = match run_ws_request(req, &mut client, &mut ws).await {
             Ok(()) => None,
-            Err(err) => Some(WebSocketResponse::Error(err.to_string())),
+            Err(err) => Some(WebSocketResponse::Error(err.into())),
         };
-        let notices = client
-            .0
-            .session()
-            .drain_notices()
-            .into_iter()
-            .map(|notice| {
-                WebSocketResponse::Notice(Notice {
-                    message: notice.to_string(),
-                    severity: Severity::for_adapter_notice(&notice)
-                        .as_str()
-                        .to_lowercase(),
-                })
-            });
 
-        for msg in err
-            .into_iter()
-            .chain(notices)
-            .chain_one(WebSocketResponse::ReadyForQuery(
-                client.0.session().transaction_code().into(),
-            ))
-        {
-            let msg = serde_json::to_string(&msg).unwrap();
-            let msg = Message::Text(msg);
-            if ws.send(msg).await.is_err() {
-                // client disconnected
-                return;
+        // After running our request, there are several messages we need to send in a
+        // specific order.
+        //
+        // Note: we nest these into a closure so we can centralize our error handling
+        // for when sending over the WebSocket fails. We could also use a try {} block
+        // here, but those aren't stabilized yet.
+        let ws_response = || async {
+            // First respond with any error that might have occurred.
+            if let Some(e_resp) = err {
+                send_ws_response(&mut ws, e_resp).await?;
             }
+
+            // Then forward along any notices we generated.
+            let notices = client.client.session().drain_notices();
+            forward_notices(&mut ws, notices).await?;
+
+            // Finally, respond that we're ready for the next query.
+            let ready =
+                WebSocketResponse::ReadyForQuery(client.client.session().transaction_code().into());
+            send_ws_response(&mut ws, ready).await?;
+
+            Ok::<_, Error>(())
+        };
+
+        if let Err(err) = ws_response().await {
+            debug!("failed to send response over WebSocket, {err:?}");
+            return;
         }
     }
 }
 
 async fn run_ws_request(
-    req: Result<SqlRequest, anyhow::Error>,
+    req: Result<SqlRequest, Error>,
     client: &mut AuthedClient,
     ws: &mut WebSocket,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), Error> {
     let req = req?;
     execute_request(client, req, ws).await
+}
+
+/// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
+async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
+    let msg = serde_json::to_string(&resp).unwrap();
+    let msg = Message::Text(msg);
+    ws.send(msg).await?;
+
+    Ok(())
+}
+
+/// Forwards a collection of Notices to the provided [`WebSocket`].
+async fn forward_notices(
+    ws: &mut WebSocket,
+    notices: impl IntoIterator<Item = AdapterNotice>,
+) -> Result<(), Error> {
+    let ws_notices = notices.into_iter().map(|notice| {
+        WebSocketResponse::Notice(Notice {
+            message: notice.to_string(),
+            severity: notice.severity().as_str().to_lowercase(),
+            detail: notice.detail(),
+            hint: notice.hint(),
+        })
+    });
+
+    for notice in ws_notices {
+        send_ws_response(ws, notice).await?;
+    }
+
+    Ok(())
 }
 
 /// A request to execute SQL over HTTP.
@@ -207,7 +360,8 @@ enum StatementResult {
     Subscribe {
         desc: RelationDesc,
         tag: String,
-        rx: RowBatchStream,
+        rx: RecordFirstRowStream,
+        ctx_extra: ExecuteContextExtra,
     },
 }
 
@@ -227,8 +381,8 @@ pub enum SqlResult {
         tag: String,
         /// The result rows.
         rows: Vec<Vec<serde_json::Value>>,
-        /// The name of the columns in the row.
-        col_names: Vec<String>,
+        /// Information about each column.
+        desc: Description,
         // Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
@@ -238,11 +392,15 @@ pub enum SqlResult {
         ok: String,
         /// Any notices generated during execution of the query.
         notices: Vec<Notice>,
+        /// Any parameters that may have changed.
+        ///
+        /// Note: skip serializing this field in a response if the list of parameters is empty.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        parameters: Vec<ParameterStatus>,
     },
     /// The query returned an error.
     Err {
-        /// The error message.
-        error: String,
+        error: SqlError,
         // Any notices generated during execution of the query.
         notices: Vec<Notice>,
     },
@@ -253,28 +411,59 @@ impl SqlResult {
         client: &mut SessionClient,
         tag: String,
         rows: Vec<Vec<serde_json::Value>>,
-        col_names: Vec<String>,
+        desc: RelationDesc,
     ) -> SqlResult {
         SqlResult::Rows {
             tag,
             rows,
-            col_names,
+            desc: Description::from(&desc),
             notices: make_notices(client),
         }
     }
 
-    fn err(client: &mut SessionClient, msg: impl std::fmt::Display) -> SqlResult {
+    fn err(client: &mut SessionClient, error: impl Into<SqlError>) -> SqlResult {
         SqlResult::Err {
-            error: msg.to_string(),
+            error: error.into(),
             notices: make_notices(client),
         }
     }
 
-    fn ok(client: &mut SessionClient, tag: String) -> SqlResult {
+    fn ok(client: &mut SessionClient, tag: String, params: Vec<ParameterStatus>) -> SqlResult {
         SqlResult::Ok {
             ok: tag,
+            parameters: params,
             notices: make_notices(client),
         }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SqlError {
+    pub message: String,
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<usize>,
+}
+
+impl From<Error> for SqlError {
+    fn from(err: Error) -> Self {
+        SqlError {
+            message: err.to_string(),
+            code: err.code().code().to_string(),
+            detail: err.detail(),
+            hint: err.hint(),
+            position: err.position(),
+        }
+    }
+}
+
+impl From<AdapterError> for SqlError {
+    fn from(value: AdapterError) -> Self {
+        Error::from(value).into()
     }
 }
 
@@ -283,66 +472,172 @@ impl SqlResult {
 pub enum WebSocketResponse {
     ReadyForQuery(String),
     Notice(Notice),
-    Rows(Vec<String>),
+    Rows(Description),
     Row(Vec<serde_json::Value>),
+    CommandStarting(CommandStarting),
     CommandComplete(String),
-    Error(String),
+    Error(SqlError),
+    ParameterStatus(ParameterStatus),
+    BackendKeyData(BackendKeyData),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Notice {
     message: String,
     severity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+impl Notice {
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Description {
+    pub columns: Vec<Column>,
+}
+
+impl From<&RelationDesc> for Description {
+    fn from(desc: &RelationDesc) -> Self {
+        let columns = desc
+            .iter()
+            .map(|(name, typ)| {
+                let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
+                Column {
+                    name: name.to_string(),
+                    type_oid: pg_type.oid(),
+                    type_len: pg_type.typlen(),
+                    type_mod: pg_type.typmod(),
+                }
+            })
+            .collect();
+        Description { columns }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Column {
+    pub name: String,
+    pub type_oid: u32,
+    pub type_len: i16,
+    pub type_mod: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ParameterStatus {
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackendKeyData {
+    conn_id: u32,
+    secret_key: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandStarting {
+    has_rows: bool,
+    is_streaming: bool,
 }
 
 /// Trait describing how to transmit a response to a client. HTTP clients
 /// accumulate into a Vec and send all at once. WebSocket clients send each
 /// message as they occur.
 #[async_trait]
-trait ResultSender {
-    /// Adds a result to the client. Returns Err if sending to the client
-    /// produced an error and the server should disconnect. Returns Ok(Err) if
-    /// the statement produced an error and should error the transaction, but
-    /// remain connected. Returns Ok(Ok(())) if the statement succeeded.
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error>;
-    /// Awaits a future while also able to check the status of the client
-    /// connection. Should return an error if the client connection has gone
-    /// away.
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
+trait ResultSender: Send {
+    /// Adds a result to the client. `canceled` is a function that returns a future that resolves if
+    /// a cancellation request was issued for this connection. The first component of the return value is
+    /// Err if sending to the client
+    /// produced an error and the server should disconnect. It is Ok(Err) if the statement
+    /// produced an error and should error the transaction, but remain connected. It is Ok(Ok(()))
+    /// if the statement succeeded.
+    /// The second component of the return value is `Some` if execution still
+    /// needs to be retired for statement logging purposes.
+    async fn add_result<C, F>(
+        &mut self,
+        canceled: C,
+        res: StatementResult,
+    ) -> (
+        Result<Result<(), ()>, Error>,
+        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+    )
     where
-        F: Future<Output = R> + Send;
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send;
+    /// Returns a future that resolves only when the client connection has gone away.
+    fn connection_error(&mut self) -> BoxFuture<Error>;
     /// Reports whether the client supports streaming SUBSCRIBE results.
     fn allow_subscribe(&self) -> bool;
+
+    async fn await_rows<C, F, R>(&mut self, cancelled: C, f: F) -> Result<R, Error>
+    where
+        C: Future<Output = ()> + Send,
+        F: Future<Output = R> + Send,
+    {
+        tokio::select! {
+            _ = cancelled => Err(AdapterError::Canceled.into()),
+            e = self.connection_error() => Err(e),
+            r = f => Ok(r),
+        }
+    }
 }
 
 #[async_trait]
 impl ResultSender for SqlResponse {
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error> {
-        Ok(match res {
+    // The first component of the return value is
+    // Err if sending to the client
+    // produced an error and the server should disconnect. It is Ok(Err) if the statement
+    // produced an error and should error the transaction, but remain connected. It is Ok(Ok(()))
+    // if the statement succeeded.
+    // The second component of the return value is `Some` if execution still
+    // needs to be retired for statement logging purposes.
+    async fn add_result<C, F>(
+        &mut self,
+        _canceled: C,
+        res: StatementResult,
+    ) -> (
+        Result<Result<(), ()>, Error>,
+        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+    )
+    where
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send,
+    {
+        let (res, stmt_logging) = match res {
             StatementResult::SqlResult(res) => {
                 let is_err = matches!(res, SqlResult::Err { .. });
                 self.results.push(res);
-                if is_err {
-                    Err(())
-                } else {
-                    Ok(())
-                }
+                let res = if is_err { Err(()) } else { Ok(()) };
+                (res, None)
             }
-            StatementResult::Subscribe { .. } => {
+            StatementResult::Subscribe { ctx_extra, .. } => {
+                let message = "SUBSCRIBE only supported over websocket";
                 self.results.push(SqlResult::Err {
-                    error: "SUBSCRIBE only supported over websocket".into(),
+                    error: Error::SubscribeOnlyOverWs.into(),
                     notices: Vec::new(),
                 });
-                Err(())
+                (
+                    Err(()),
+                    Some((
+                        StatementEndedExecutionReason::Errored {
+                            error: message.into(),
+                        },
+                        ctx_extra,
+                    )),
+                )
             }
-        })
+        };
+        (Ok(res), stmt_logging)
     }
 
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
-    where
-        F: Future<Output = R> + Send,
-    {
-        Ok(f.await)
+    fn connection_error(&mut self) -> BoxFuture<Error> {
+        Box::pin(futures::future::pending())
     }
 
     fn allow_subscribe(&self) -> bool {
@@ -352,105 +647,200 @@ impl ResultSender for SqlResponse {
 
 #[async_trait]
 impl ResultSender for WebSocket {
-    async fn add_result(&mut self, res: StatementResult) -> Result<Result<(), ()>, anyhow::Error> {
-        async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), anyhow::Error> {
+    // The first component of the return value is
+    // Err if sending to the client
+    // produced an error and the server should disconnect. It is Ok(Err) if the statement
+    // produced an error and should error the transaction, but remain connected. It is Ok(Ok(()))
+    // if the statement succeeded.
+    // The second component of the return value is `Some` if execution still
+    // needs to be retired for statement logging purposes.
+    async fn add_result<C, F>(
+        &mut self,
+        canceled: C,
+        res: StatementResult,
+    ) -> (
+        Result<Result<(), ()>, Error>,
+        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+    )
+    where
+        C: Fn() -> F + Send + Sync,
+        F: Future<Output = ()> + Send,
+    {
+        async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), Error> {
             let msg = serde_json::to_string(&msg).expect("must serialize");
             Ok(ws.send(Message::Text(msg)).await?)
         }
 
-        let (is_err, msgs) = match res {
+        let (has_rows, is_streaming) = match res {
+            StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),
+            StatementResult::SqlResult(SqlResult::Ok { .. }) => (false, false),
+            StatementResult::SqlResult(SqlResult::Rows { .. }) => (true, false),
+            StatementResult::Subscribe { .. } => (true, true),
+        };
+        if let Err(e) = send(
+            self,
+            WebSocketResponse::CommandStarting(CommandStarting {
+                has_rows,
+                is_streaming,
+            }),
+        )
+        .await
+        {
+            return (Err(e), None);
+        }
+
+        let (is_err, msgs, stmt_logging) = match res {
             StatementResult::SqlResult(SqlResult::Rows {
                 tag,
                 rows,
-                col_names,
+                desc,
                 notices,
             }) => {
-                let mut msgs = vec![WebSocketResponse::Rows(col_names)];
+                let mut msgs = vec![WebSocketResponse::Rows(desc)];
                 msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
                 msgs.push(WebSocketResponse::CommandComplete(tag));
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
-                (false, msgs)
+                (false, msgs, None)
             }
-            StatementResult::SqlResult(SqlResult::Ok { ok, notices }) => {
+            StatementResult::SqlResult(SqlResult::Ok {
+                ok,
+                parameters,
+                notices,
+            }) => {
                 let mut msgs = vec![WebSocketResponse::CommandComplete(ok)];
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
-                (false, msgs)
+                msgs.extend(
+                    parameters
+                        .into_iter()
+                        .map(WebSocketResponse::ParameterStatus),
+                );
+                (false, msgs, None)
             }
             StatementResult::SqlResult(SqlResult::Err { error, notices }) => {
                 let mut msgs = vec![WebSocketResponse::Error(error)];
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
-                (true, msgs)
+                (true, msgs, None)
             }
-            StatementResult::Subscribe { desc, tag, mut rx } => {
-                send(
-                    self,
-                    WebSocketResponse::Rows(
-                        desc.iter_names().map(|name| name.to_string()).collect(),
-                    ),
-                )
-                .await?;
+            StatementResult::Subscribe {
+                ref desc,
+                tag,
+                mut rx,
+                ctx_extra,
+            } => {
+                if let Err(e) = send(self, WebSocketResponse::Rows(desc.into())).await {
+                    // We consider the remote breaking the connection to be a cancellation,
+                    // matching the behavior for pgwire
+                    return (
+                        Err(e),
+                        Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
+                    );
+                }
 
                 let mut datum_vec = mz_repr::DatumVec::new();
+                let mut rows_returned = 0;
                 loop {
-                    match self.await_rows(rx.recv()).await? {
+                    let res = match self.await_rows(canceled(), rx.recv()).await {
+                        Ok(res) => res,
+                        Err(e) => {
+                            // We consider the remote breaking the connection to be a cancellation,
+                            // matching the behavior for pgwire
+                            return (
+                                Err(e),
+                                Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
+                            );
+                        }
+                    };
+                    match res {
                         Some(PeekResponseUnary::Rows(rows)) => {
+                            rows_returned += rows.len();
                             for row in rows {
                                 let datums = datum_vec.borrow_with(&row);
                                 let types = &desc.typ().column_types;
-                                send(
+                                if let Err(e) = send(
                                     self,
                                     WebSocketResponse::Row(
                                         datums
                                             .iter()
                                             .enumerate()
-                                            .map(|(i, d)| TypedDatum::new(*d, &types[i]).json())
+                                            .map(|(i, d)| {
+                                                TypedDatum::new(*d, &types[i])
+                                                    .json(&JsonNumberPolicy::ConvertNumberToString)
+                                            })
                                             .collect(),
                                     ),
                                 )
-                                .await?;
+                                .await
+                                {
+                                    // We consider the remote breaking the connection to be a cancellation,
+                                    // matching the behavior for pgwire
+                                    return (
+                                        Err(e),
+                                        Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
+                                    );
+                                }
                             }
                         }
-                        Some(PeekResponseUnary::Error(err)) => {
-                            break (true, vec![WebSocketResponse::Error(err)])
+                        Some(PeekResponseUnary::Error(error)) => {
+                            break (
+                                true,
+                                vec![WebSocketResponse::Error(
+                                    Error::Unstructured(anyhow!(error.clone())).into(),
+                                )],
+                                Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
+                            )
                         }
                         Some(PeekResponseUnary::Canceled) => {
                             break (
                                 true,
-                                vec![WebSocketResponse::Error("query canceled".into())],
+                                vec![WebSocketResponse::Error(AdapterError::Canceled.into())],
+                                Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
                             )
                         }
-                        None => break (false, vec![WebSocketResponse::CommandComplete(tag)]),
+                        None => {
+                            break (
+                                false,
+                                vec![WebSocketResponse::CommandComplete(tag)],
+                                Some((
+                                    StatementEndedExecutionReason::Success {
+                                        rows_returned: Some(u64::cast_from(rows_returned)),
+                                        execution_strategy: Some(
+                                            StatementExecutionStrategy::Standard,
+                                        ),
+                                    },
+                                    ctx_extra,
+                                )),
+                            )
+                        }
                     }
                 }
             }
         };
         for msg in msgs {
-            send(self, msg).await?;
+            if let Err(e) = send(self, msg).await {
+                return (
+                    Err(e),
+                    stmt_logging.map(|(_old_reason, ctx_extra)| {
+                        (StatementEndedExecutionReason::Canceled, ctx_extra)
+                    }),
+                );
+            }
         }
-        Ok(if is_err { Err(()) } else { Ok(()) })
+        (Ok(if is_err { Err(()) } else { Ok(()) }), stmt_logging)
     }
 
     // Send a websocket Ping every second to verify the client is still
     // connected.
-    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, anyhow::Error>
-    where
-        F: Future<Output = R> + Send,
-    {
-        let pinger = async {
+    fn connection_error(&mut self) -> BoxFuture<Error> {
+        Box::pin(async {
             let mut tick = time::interval(Duration::from_secs(1));
             tick.tick().await;
             loop {
                 tick.tick().await;
                 if let Err(err) = self.send(Message::Ping(Vec::new())).await {
-                    return err;
+                    return err.into();
                 }
             }
-        };
-
-        tokio::select! {
-            err = pinger => Err(err.into()),
-            data = f => Ok(data),
-        }
+        })
     }
 
     fn allow_subscribe(&self) -> bool {
@@ -458,35 +848,47 @@ impl ResultSender for WebSocket {
     }
 }
 
+async fn send_and_retire<S: ResultSender>(
+    res: StatementResult,
+    client: &mut SessionClient,
+    sender: &mut S,
+) -> Result<Result<(), ()>, Error> {
+    let (res, stmt_logging) = sender.add_result(|| client.canceled(), res).await;
+    if let Some((reason, ctx_extra)) = stmt_logging {
+        client.retire_execute(ctx_extra, reason);
+    }
+    res
+}
+
 /// Returns Ok(Err) if any statement error'd during execution.
 async fn execute_stmt_group<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
-    stmt_group: Vec<(Statement<Raw>, Vec<Option<String>>)>,
-) -> Result<Result<(), ()>, anyhow::Error> {
+    stmt_group: Vec<(Statement<Raw>, String, Vec<Option<String>>)>,
+) -> Result<Result<(), ()>, Error> {
     let num_stmts = stmt_group.len();
-    for (stmt, params) in stmt_group {
+    for (stmt, sql, params) in stmt_group {
         assert!(num_stmts <= 1 || params.is_empty(),
             "statement groups contain more than 1 statement iff Simple request, which does not support parameters"
         );
 
         let is_aborted_txn = matches!(client.session().transaction(), TransactionStatus::Failed(_));
         if is_aborted_txn && !is_txn_exit_stmt(&stmt) {
-            let _ = sender.add_result(SqlResult::err(
-                client,
-                "current transaction is aborted, commands ignored until end of transaction block",
-            ).into()).await?;
+            let err = SqlResult::err(client, Error::AbortedTransaction);
+            let _ = send_and_retire(err.into(), client, sender).await?;
             return Ok(Err(()));
         }
 
         // Mirror the behavior of the PostgreSQL simple query protocol.
         // See the pgwire::protocol::StateMachine::query method for details.
         if let Err(e) = client.start_transaction(Some(num_stmts)) {
-            let _ = sender.add_result(SqlResult::err(client, e).into()).await?;
+            let err = SqlResult::err(client, e);
+            let _ = send_and_retire(err.into(), client, sender).await?;
             return Ok(Err(()));
         }
-        let res = execute_stmt(client, sender, stmt, params).await?;
-        let is_err = sender.add_result(res).await?;
+        let res = execute_stmt(client, sender, stmt, sql, params).await?;
+        let is_err = send_and_retire(res, client, sender).await?;
+
         if is_err.is_err() {
             // Mirror StateMachine::error, which sometimes will clean up the
             // transaction state instead of always leaving it in Failed.
@@ -498,9 +900,8 @@ async fn execute_stmt_group<S: ResultSender>(
                 // In Started (i.e., a single statement) and implicit transactions cleanup themselves.
                 TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => {
                     if let Err(err) = client.end_transaction(EndTransactionAction::Rollback).await {
-                        let _ = sender
-                            .add_result(SqlResult::err(client, err.to_string()).into())
-                            .await?;
+                        let err = SqlResult::err(client, err);
+                        let _ = send_and_retire(err.into(), client, sender).await?;
                     }
                 }
                 // Explicit transactions move to failed.
@@ -522,15 +923,15 @@ async fn execute_request<S: ResultSender>(
     client: &mut AuthedClient,
     request: SqlRequest,
     sender: &mut S,
-) -> Result<(), anyhow::Error> {
-    let client = &mut client.0;
+) -> Result<(), Error> {
+    let client = &mut client.client;
 
     // This API prohibits executing statements with responses whose
     // semantics are at odds with an HTTP response.
     fn check_prohibited_stmts<S: ResultSender>(
         sender: &S,
         stmt: &Statement<Raw>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), Error> {
         let kind: StatementKind = stmt.into();
         let execute_responses = Plan::generated_from(kind)
             .into_iter()
@@ -555,60 +956,66 @@ async fn execute_request<S: ResultSender>(
                 _ => false,
             }
         }) {
-            anyhow::bail!("unsupported via this API: {}", stmt.to_ast_string());
+            return Err(Error::Unsupported(stmt.to_ast_string()));
         }
         Ok(())
     }
 
-    fn parse(query: &str) -> Result<Vec<Statement<Raw>>, anyhow::Error> {
-        match mz_sql::parse::parse_with_limit(query) {
-            Ok(result) => result.map_err(|e| anyhow!(e)),
-            Err(e) => Err(anyhow!(e)),
-        }
+    fn parse<'a>(
+        client: &SessionClient,
+        query: &'a str,
+    ) -> Result<Vec<StatementParseResult<'a>>, Error> {
+        let result = client
+            .parse(query)
+            .map_err(|e| Error::Unstructured(anyhow!(e)))?;
+        result.map_err(|e| AdapterError::from(e).into())
     }
 
     let mut stmt_groups = vec![];
 
     match request {
         SqlRequest::Simple { query } => {
-            let stmts = parse(&query)?;
+            let stmts = parse(client, &query)?;
             let mut stmt_group = Vec::with_capacity(stmts.len());
-            for stmt in stmts {
+            for StatementParseResult { ast: stmt, sql } in stmts {
                 check_prohibited_stmts(sender, &stmt)?;
-                stmt_group.push((stmt, vec![]));
+                stmt_group.push((stmt, sql.to_string(), vec![]));
             }
             stmt_groups.push(stmt_group);
         }
         SqlRequest::Extended { queries } => {
             for ExtendedRequest { query, params } in queries {
-                let mut stmts = parse(&query)?;
+                let mut stmts = parse(client, &query)?;
                 if stmts.len() != 1 {
-                    anyhow::bail!(
+                    return Err(Error::Unstructured(anyhow!(
                         "each query must contain exactly 1 statement, but \"{}\" contains {}",
                         query,
                         stmts.len()
-                    );
+                    )));
                 }
 
-                let stmt = stmts.pop().unwrap();
+                let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
                 check_prohibited_stmts(sender, &stmt)?;
 
-                stmt_groups.push(vec![(stmt, params)]);
+                stmt_groups.push(vec![(stmt, sql.to_string(), params)]);
             }
         }
     }
 
     for stmt_group in stmt_groups {
-        if execute_stmt_group(client, sender, stmt_group)
-            .await?
-            .is_err()
-        {
+        let executed = execute_stmt_group(client, sender, stmt_group).await;
+        // At the end of each group, commit implicit transactions. Do that here so that any `?`
+        // early return can still be handled here.
+        if client.session().transaction().is_implicit() {
+            let ended = client.end_transaction(EndTransactionAction::Commit).await;
+            if let Err(err) = ended {
+                let err = SqlResult::err(client, err);
+                let _ = send_and_retire(StatementResult::SqlResult(err), client, sender).await?;
+            }
+        }
+        if executed?.is_err() {
             break;
         }
-    }
-
-    if client.session().transaction().is_implicit() {
-        client.end_transaction(EndTransactionAction::Commit).await?;
     }
 
     Ok(())
@@ -619,11 +1026,12 @@ async fn execute_stmt<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
     stmt: Statement<Raw>,
+    sql: String,
     raw_params: Vec<Option<String>>,
-) -> Result<StatementResult, anyhow::Error> {
+) -> Result<StatementResult, Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
-        .describe(EMPTY_PORTAL.into(), Some(stmt.clone()), vec![])
+        .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), sql, vec![])
         .await
     {
         return Ok(SqlResult::err(client, e).into());
@@ -638,14 +1046,14 @@ async fn execute_stmt<S: ResultSender>(
 
     let param_types = &prep_stmt.desc().param_types;
     if param_types.len() != raw_params.len() {
-        let message = format!(
+        let message = anyhow!(
             "request supplied {actual} parameters, \
                         but {statement} requires {expected}",
             statement = stmt.to_ast_string(),
             actual = raw_params.len(),
             expected = param_types.len()
         );
-        return Ok(SqlResult::err(client, message).into());
+        return Ok(SqlResult::err(client, Error::Unstructured(message)).into());
     }
 
     let buf = RowArena::new();
@@ -656,14 +1064,14 @@ async fn execute_stmt<S: ResultSender>(
             None => Datum::Null,
             Some(raw_param) => {
                 match mz_pgrepr::Value::decode(
-                    mz_pgrepr::Format::Text,
+                    mz_pgwire_common::Format::Text,
                     &pg_typ,
                     raw_param.as_bytes(),
                 ) {
                     Ok(param) => param.into_datum(&buf, &pg_typ),
                     Err(err) => {
-                        let msg = format!("unable to decode parameter: {}", err);
-                        return Ok(SqlResult::err(client, msg).into());
+                        let msg = anyhow!("unable to decode parameter: {}", err);
+                        return Ok(SqlResult::err(client, Error::Unstructured(msg)).into());
                     }
                 }
             }
@@ -672,7 +1080,7 @@ async fn execute_stmt<S: ResultSender>(
     }
 
     let result_formats = vec![
-        mz_pgrepr::Format::Text;
+        mz_pgwire_common::Format::Text;
         prep_stmt
             .desc()
             .relation_desc
@@ -683,16 +1091,18 @@ async fn execute_stmt<S: ResultSender>(
 
     let desc = prep_stmt.desc().clone();
     let revision = prep_stmt.catalog_revision;
-    let stmt = prep_stmt.sql().cloned();
+    let stmt = prep_stmt.stmt().cloned();
+    let logging = Arc::clone(prep_stmt.logging());
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,
         stmt,
+        logging,
         params,
         result_formats,
         revision,
     ) {
-        return Ok(SqlResult::err(client, err.to_string()).into());
+        return Ok(SqlResult::err(client, err).into());
     }
 
     let desc = client
@@ -702,22 +1112,18 @@ async fn execute_stmt<S: ResultSender>(
         .map(|portal| portal.desc.clone())
         .expect("unnamed portal should be present");
 
-    let res = match client.execute(EMPTY_PORTAL.into()).await {
+    let (res, execute_started) = match client
+        .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
+        .await
+    {
         Ok(res) => res,
         Err(e) => {
             return Ok(SqlResult::err(client, e).into());
         }
     };
-    let col_names = match &desc.relation_desc {
-        Some(desc) => desc.iter_names().map(|name| name.to_string()).collect(),
-        None => vec![],
-    };
     let tag = res.tag();
 
     Ok(match res {
-        ExecuteResponse::Canceled => {
-            SqlResult::err(client, "statement canceled due to user request").into()
-        }
         ExecuteResponse::CreatedConnection { .. }
         | ExecuteResponse::CreatedDatabase { .. }
         | ExecuteResponse::CreatedSchema { .. }
@@ -728,83 +1134,161 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedIndex { .. }
         | ExecuteResponse::CreatedSecret { .. }
         | ExecuteResponse::CreatedSource { .. }
-        | ExecuteResponse::CreatedSources
         | ExecuteResponse::CreatedSink { .. }
         | ExecuteResponse::CreatedView { .. }
         | ExecuteResponse::CreatedViews { .. }
         | ExecuteResponse::CreatedMaterializedView { .. }
         | ExecuteResponse::CreatedType
+        | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp
         | ExecuteResponse::DiscardedAll
-        | ExecuteResponse::DroppedDatabase
-        | ExecuteResponse::DroppedSchema
-        | ExecuteResponse::DroppedRole
-        | ExecuteResponse::DroppedCluster
-        | ExecuteResponse::DroppedClusterReplica
-        | ExecuteResponse::DroppedSource
-        | ExecuteResponse::DroppedIndex
-        | ExecuteResponse::DroppedSink
-        | ExecuteResponse::DroppedTable
-        | ExecuteResponse::DroppedView
-        | ExecuteResponse::DroppedMaterializedView
-        | ExecuteResponse::DroppedType
-        | ExecuteResponse::DroppedSecret
-        | ExecuteResponse::DroppedConnection
+        | ExecuteResponse::DroppedObject(_)
+        | ExecuteResponse::DroppedOwned
         | ExecuteResponse::EmptyQuery
+        | ExecuteResponse::GrantedPrivilege
         | ExecuteResponse::GrantedRole
         | ExecuteResponse::Inserted(_)
+        | ExecuteResponse::Copied(_)
         | ExecuteResponse::Raised
+        | ExecuteResponse::ReassignOwned
+        | ExecuteResponse::RevokedPrivilege
+        | ExecuteResponse::AlteredDefaultPrivileges
         | ExecuteResponse::RevokedRole
-        | ExecuteResponse::SetVariable { .. }
         | ExecuteResponse::StartedTransaction { .. }
-        | ExecuteResponse::TransactionCommitted
-        | ExecuteResponse::TransactionRolledBack
         | ExecuteResponse::Updated(_)
         | ExecuteResponse::AlteredObject(_)
         | ExecuteResponse::AlteredIndexLogicalCompaction
         | ExecuteResponse::AlteredRole
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
-        | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results")).into(),
-        ExecuteResponse::SendingRows {
-            future: rows,
-            span: _,
-        } => {
-            let rows = match sender.await_rows(rows).await? {
-                PeekResponseUnary::Rows(rows) => rows,
+        | ExecuteResponse::ValidatedConnection
+        | ExecuteResponse::Prepare => SqlResult::ok(
+            client,
+            tag.expect("ok only called on tag-generating results"),
+            Vec::default(),
+        )
+        .into(),
+        ExecuteResponse::TransactionCommitted { params }
+        | ExecuteResponse::TransactionRolledBack { params } => {
+            let notify_set: mz_ore::collections::HashSet<String> = client
+                .session()
+                .vars()
+                .notify_set()
+                .map(|v| v.name().to_string())
+                .collect();
+            let params = params
+                .into_iter()
+                .filter(|(name, _value)| notify_set.contains(*name))
+                .map(|(name, value)| ParameterStatus {
+                    name: name.to_string(),
+                    value,
+                })
+                .collect();
+            SqlResult::ok(
+                client,
+                tag.expect("ok only called on tag-generating results"),
+                params,
+            )
+            .into()
+        }
+        ExecuteResponse::SetVariable { name, .. } => {
+            let mut params = Vec::with_capacity(1);
+            if let Some(var) = client
+                .session()
+                .vars()
+                .notify_set()
+                .find(|v| v.name() == &name)
+            {
+                params.push(ParameterStatus {
+                    name,
+                    value: var.value(),
+                });
+            };
+            SqlResult::ok(
+                client,
+                tag.expect("ok only called on tag-generating results"),
+                params,
+            )
+            .into()
+        }
+        ExecuteResponse::SendingRows { future: rows } => {
+            let rows = match sender.await_rows(client.canceled(), rows).await? {
+                PeekResponseUnary::Rows(rows) => {
+                    RecordFirstRowStream::record(execute_started, client);
+                    rows
+                }
                 PeekResponseUnary::Error(e) => {
-                    return Ok(SqlResult::err(client, e).into());
+                    return Ok(
+                        SqlResult::err(client, Error::Unstructured(anyhow!(e))).into(),
+                    );
                 }
                 PeekResponseUnary::Canceled => {
-                    return Ok(SqlResult::err(client, "statement canceled due to user request").into());
+                    return Ok(SqlResult::err(client, AdapterError::Canceled).into());
                 }
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
             let mut datum_vec = mz_repr::DatumVec::new();
+            let desc = desc.relation_desc.expect("RelationDesc must exist");
+            let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                let types = &desc.relation_desc.as_ref().unwrap().typ().column_types;
-                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
+                sql_rows.push(
+                    datums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            TypedDatum::new(*d, &types[i])
+                                .json(&JsonNumberPolicy::ConvertNumberToString)
+                        })
+                        .collect(),
+                );
             }
             let tag = format!("SELECT {}", sql_rows.len());
-            SqlResult::rows(client, tag, sql_rows, col_names).into()
+            SqlResult::rows(client, tag, sql_rows, desc).into()
         }
-        ExecuteResponse::Subscribing { rx }  => {
-            StatementResult::Subscribe { tag:"SUBSCRIBE".into(), desc: desc.relation_desc.unwrap(), rx }
+        ExecuteResponse::SendingRowsImmediate { rows } => {
+            let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
+            let mut datum_vec = mz_repr::DatumVec::new();
+            let desc = desc.relation_desc.expect("RelationDesc must exist");
+            let types = &desc.typ().column_types;
+            for row in rows {
+                let datums = datum_vec.borrow_with(&row);
+                sql_rows.push(
+                    datums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            TypedDatum::new(*d, &types[i])
+                                .json(&JsonNumberPolicy::ConvertNumberToString)
+                        })
+                        .collect(),
+                );
+            }
+            let tag = format!("SELECT {}", sql_rows.len());
+            SqlResult::rows(client, tag, sql_rows, desc).into()
+        }
+        ExecuteResponse::Subscribing { rx, ctx_extra } => StatementResult::Subscribe {
+            tag: "SUBSCRIBE".into(),
+            desc: desc.relation_desc.unwrap(),
+            rx: RecordFirstRowStream::new(
+                Box::new(UnboundedReceiverStream::new(rx)),
+                execute_started,
+                client,
+            ),
+            ctx_extra,
         },
         res @ (ExecuteResponse::Fetch { .. }
         | ExecuteResponse::CopyTo { .. }
         | ExecuteResponse::CopyFrom { .. }
         | ExecuteResponse::DeclaredCursor
-        | ExecuteResponse::ClosedCursor) => {
-            SqlResult::err(
-                client,
-                format!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
-This is a bug. Can you please file an issue letting us know?\n
-https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml",
-            ExecuteResponseKind::from(res))).into()
-        }
+        | ExecuteResponse::ClosedCursor) => SqlResult::err(
+            client,
+            Error::Unstructured(anyhow!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
+            This is a bug. Can you please file an issue letting us know?\n
+            https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml", ExecuteResponseKind::from(res))),
+        )
+        .into(),
     })
 }
 
@@ -815,9 +1299,9 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
         .into_iter()
         .map(|notice| Notice {
             message: notice.to_string(),
-            severity: Severity::for_adapter_notice(&notice)
-                .as_str()
-                .to_lowercase(),
+            severity: notice.severity().as_str().to_lowercase(),
+            detail: notice.detail(),
+            hint: notice.hint(),
         })
         .collect()
 }
@@ -829,4 +1313,61 @@ fn is_txn_exit_stmt(stmt: &Statement<Raw>) -> bool {
         stmt,
         Statement::Commit(_) | Statement::Rollback(_) | Statement::Prepare(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::WebSocketAuth;
+
+    #[mz_ore::test]
+    fn smoke_test_websocket_auth_parse() {
+        struct TestCase {
+            json: &'static str,
+            expected: WebSocketAuth,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                json: r#"{ "user": "mz", "password": "1234" }"#,
+                expected: WebSocketAuth::Basic {
+                    user: "mz".to_string(),
+                    password: "1234".to_string(),
+                    options: BTreeMap::default(),
+                },
+            },
+            TestCase {
+                json: r#"{ "user": "mz", "password": "1234", "options": {} }"#,
+                expected: WebSocketAuth::Basic {
+                    user: "mz".to_string(),
+                    password: "1234".to_string(),
+                    options: BTreeMap::default(),
+                },
+            },
+            TestCase {
+                json: r#"{ "token": "i_am_a_token" }"#,
+                expected: WebSocketAuth::Bearer {
+                    token: "i_am_a_token".to_string(),
+                    options: BTreeMap::default(),
+                },
+            },
+            TestCase {
+                json: r#"{ "token": "i_am_a_token", "options": { "foo": "bar" } }"#,
+                expected: WebSocketAuth::Bearer {
+                    token: "i_am_a_token".to_string(),
+                    options: BTreeMap::from([("foo".to_string(), "bar".to_string())]),
+                },
+            },
+        ];
+
+        fn assert_parse(json: &'static str, expected: WebSocketAuth) {
+            let parsed: WebSocketAuth = serde_json::from_str(json).unwrap();
+            assert_eq!(parsed, expected);
+        }
+
+        for TestCase { json, expected } in test_cases {
+            assert_parse(json, expected)
+        }
+    }
 }

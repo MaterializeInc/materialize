@@ -6,9 +6,13 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 bytes = "1.3.0"
 csv = "1.1.6"
+mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }

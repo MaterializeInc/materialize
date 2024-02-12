@@ -14,8 +14,15 @@
 //! struct in order to provide alternate [`mz_repr::explain::Explain`]
 //! implementations for some structs (see the [`mir`]) module for details.
 
+use std::sync::Arc;
+
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::explain::ExplainContext;
-use mz_repr::explain::UsedIndexes;
+use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer};
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::OptimizerNotice;
+
+use crate::AdapterError;
 
 pub(crate) mod fast_path;
 pub(crate) mod hir;
@@ -31,4 +38,39 @@ impl<'a, T> Explainable<'a, T> {
     pub(crate) fn new(t: &'a mut T) -> Explainable<'a, T> {
         Explainable(t)
     }
+}
+
+/// Convenience method to derive an `ExplainContext` from the `index_imports` in
+/// the given `plan` and all other input parameters, wrap the `plan` in an
+/// `Explainable`, and finally compute and return the `explain(...)` result.
+pub(crate) fn explain_dataflow<T>(
+    mut plan: DataflowDescription<T>,
+    format: ExplainFormat,
+    config: &ExplainConfig,
+    humanizer: &dyn ExprHumanizer,
+    dataflow_metainfo: &DataflowMetainfo<Arc<OptimizerNotice>>,
+) -> Result<String, AdapterError>
+where
+    for<'a> Explainable<'a, DataflowDescription<T>>: Explain<'a, Context = ExplainContext<'a>>,
+{
+    // Collect the list of indexes used by the dataflow at this point.
+    let used_indexes = dataflow_metainfo.used_indexes(&plan);
+
+    let optimizer_notices = OptimizerNotice::explain(
+        &dataflow_metainfo.optimizer_notices,
+        humanizer,
+        config.redacted,
+    )
+    .map_err(ExplainError::FormatError)?;
+
+    let context = ExplainContext {
+        config,
+        humanizer,
+        used_indexes,
+        finishing: Default::default(),
+        duration: Default::default(),
+        optimizer_notices,
+    };
+
+    Ok(Explainable::new(&mut plan).explain(&format, &context)?)
 }

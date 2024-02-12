@@ -9,19 +9,27 @@
 
 //! Management of K8S objects, such as VpcEndpoints.
 
-use std::collections::BTreeSet;
-use std::str::FromStr;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Utc;
+use futures::stream::BoxStream;
+use futures::StreamExt;
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
-use kube::ResourceExt;
-
+use kube::runtime::{watcher, WatchStreamExt};
+use kube::{Api, ResourceExt};
 use maplit::btreemap;
-use mz_cloud_resources::crd::vpc_endpoint::v1::{VpcEndpoint, VpcEndpointSpec};
-use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_repr::GlobalId;
 
-use crate::{KubernetesOrchestrator, FIELD_MANAGER};
+use mz_cloud_resources::crd::vpc_endpoint::v1::{
+    VpcEndpoint, VpcEndpointSpec, VpcEndpointState, VpcEndpointStatus,
+};
+use mz_cloud_resources::{
+    CloudResourceController, CloudResourceReader, VpcEndpointConfig, VpcEndpointEvent,
+};
+
+use crate::{util, KubernetesOrchestrator, FIELD_MANAGER};
 
 #[async_trait]
 impl CloudResourceController for KubernetesOrchestrator {
@@ -82,20 +90,108 @@ impl CloudResourceController for KubernetesOrchestrator {
         }
     }
 
-    async fn list_vpc_endpoints(&self) -> Result<BTreeSet<GlobalId>, anyhow::Error> {
-        Ok(self
-            .vpc_endpoint_api
-            .list(&ListParams::default())
-            .await?
-            .iter()
-            .filter_map(|vpc_endpoint| {
-                vpc_endpoint
-                    .name_any()
-                    .split_once('-')
-                    // Ignore any whom's name can't be parsed into a GlobalId
-                    .map(|(_, id_str)| GlobalId::from_str(id_str).ok())
-            })
-            .flatten()
-            .collect())
+    async fn list_vpc_endpoints(
+        &self,
+    ) -> Result<BTreeMap<GlobalId, VpcEndpointStatus>, anyhow::Error> {
+        let objects = self.vpc_endpoint_api.list(&ListParams::default()).await?;
+        let mut endpoints = BTreeMap::new();
+        for object in objects {
+            let id = match mz_cloud_resources::id_from_vpc_endpoint_name(&object.name_any()) {
+                Some(id) => id,
+                // Ignore any object whose name can't be parsed as a GlobalId
+                None => continue,
+            };
+            endpoints.insert(id, object.status.unwrap_or_default());
+        }
+        Ok(endpoints)
+    }
+
+    async fn watch_vpc_endpoints(&self) -> BoxStream<'static, VpcEndpointEvent> {
+        let stream = watcher(self.vpc_endpoint_api.clone(), watcher::Config::default())
+            .touched_objects()
+            .filter_map(|object| async move {
+                match object {
+                    Ok(vpce) => {
+                        let connection_id =
+                            mz_cloud_resources::id_from_vpc_endpoint_name(&vpce.name_any())?;
+
+                        if let Some(state) = vpce.status.as_ref().and_then(|st| st.state.to_owned())
+                        {
+                            Some(VpcEndpointEvent {
+                                connection_id,
+                                status: state,
+                                // Use the 'Available' Condition on the VPCE Status to set the event-time, falling back
+                                // to now if it's not set
+                                time: vpce
+                                    .status
+                                    .unwrap()
+                                    .conditions
+                                    .and_then(|c| c.into_iter().find(|c| &c.type_ == "Available"))
+                                    .and_then(|condition| Some(condition.last_transition_time.0))
+                                    .unwrap_or_else(Utc::now),
+                            })
+                        } else {
+                            // The Status/State is not yet populated on the VpcEndpoint, which means it was just
+                            // initialized and hasn't yet been reconciled by the environment-controller
+                            // We return an event with an 'unknown' state so that watchers know the VpcEndpoint was created
+                            // even if we don't yet have an accurate status
+                            Some(VpcEndpointEvent {
+                                connection_id,
+                                status: VpcEndpointState::Unknown,
+                                time: vpce.creation_timestamp()?.0,
+                            })
+                        }
+                        // TODO: Should we also check for the deletion_timestamp on the vpce? That would indicate that the
+                        // resource is about to be deleted; however there is already a 'deleted' enum val on VpcEndpointState
+                        // which refers to the state of the customer's VPC Endpoint Service, so we'd need to introduce a new state val
+                    }
+                    Err(error) => {
+                        // We assume that errors returned by Kubernetes are usually transient, so we
+                        // just log a warning and ignore them otherwise.
+                        tracing::warn!("vpc endpoint watch error: {error}");
+                        None
+                    }
+                }
+            });
+        Box::pin(stream)
+    }
+
+    fn reader(&self) -> Arc<dyn CloudResourceReader> {
+        let reader = Arc::clone(&self.resource_reader);
+        reader
+    }
+}
+
+#[async_trait]
+impl CloudResourceReader for KubernetesOrchestrator {
+    async fn read(&self, id: GlobalId) -> Result<VpcEndpointStatus, anyhow::Error> {
+        self.resource_reader.read(id).await
+    }
+}
+
+/// Reads cloud resources managed by a [`KubernetesOrchestrator`].
+#[derive(Debug)]
+pub struct KubernetesResourceReader {
+    vpc_endpoint_api: Api<VpcEndpoint>,
+}
+
+impl KubernetesResourceReader {
+    /// Constructs a new Kubernetes cloud resource reader.
+    ///
+    /// The `context` parameter works like
+    /// [`KubernetesOrchestratorConfig::context`](crate::KubernetesOrchestratorConfig::context).
+    pub async fn new(context: String) -> Result<KubernetesResourceReader, anyhow::Error> {
+        let (client, _) = util::create_client(context).await?;
+        let vpc_endpoint_api: Api<VpcEndpoint> = Api::default_namespaced(client);
+        Ok(KubernetesResourceReader { vpc_endpoint_api })
+    }
+}
+
+#[async_trait]
+impl CloudResourceReader for KubernetesResourceReader {
+    async fn read(&self, id: GlobalId) -> Result<VpcEndpointStatus, anyhow::Error> {
+        let name = mz_cloud_resources::vpc_endpoint_name(id);
+        let endpoint = self.vpc_endpoint_api.get(&name).await?;
+        Ok(endpoint.status.unwrap_or_default())
     }
 }

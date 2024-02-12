@@ -1,11 +1,17 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Use of this software is governed by the Business Source License
-// included in the LICENSE file.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License in the LICENSE file at the
+// root of this repository, or online at
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::os::raw::c_int;
 
@@ -32,7 +38,7 @@ pub async unsafe fn prof_time(
     time::sleep(total_time).await;
     let builder = pg.report();
     let report = builder.build_unresolved()?;
-    let mut profile = <StackProfile as Default>::default();
+    let mut profile = StackProfile::default();
     for (f, weight) in report.data {
         let thread_name;
         // No other known way to convert `*mut c_void` to `usize`.
@@ -49,7 +55,7 @@ pub async unsafe fn prof_time(
             Some(thread_name.as_ref())
         };
         let stack = WeightedStack { addrs, weight };
-        profile.push(stack, anno);
+        profile.push_stack(stack, anno);
     }
 
     Ok(profile)

@@ -27,6 +27,12 @@ SHOW CREATE VIEW my_view;
  materialize.public.my_view | CREATE VIEW "materialize"."public"."my_view" AS SELECT * FROM "materialize"."public"."my_source"
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the view.
+
 ## Related pages
 
 - [`SHOW VIEWS`](../show-views)

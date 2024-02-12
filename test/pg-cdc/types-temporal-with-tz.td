@@ -68,4 +68,4 @@ INSERT INTO timestamp_table SELECT * FROM timestamp_table;
 ! CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_time')
   FOR ALL TABLES;
-contains:unknown catalog item 'pg_catalog.timetz'
+contains:type "pg_catalog.timetz" does not exist

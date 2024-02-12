@@ -341,7 +341,7 @@ ALTER TABLE t DROP COLUMN y
 statement error cannot drop column "e" because view "v" depends on it
 ALTER TABLE t DROP COLUMN e
 
-# TODO(knz): this statement should succeed after #17269 is fixed.
+# TODO(knz): this statement should succeed after cockroach#17269 is fixed.
 statement error cannot drop column "d" because view "v" depends on it
 ALTER TABLE t DROP COLUMN d
 

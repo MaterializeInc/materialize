@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
 `SHOW MATERIALIZED VIEWS` returns a list of materialized views being maintained
 in Materialize.
 
@@ -17,7 +15,7 @@ in Materialize.
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show materialized views from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show materialized views from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 _cluster&lowbar;name_ | The cluster to show materialized views from. If omitted, materialized views from all clusters are shown.
 
 ## Examples
@@ -29,7 +27,7 @@ SHOW MATERIALIZED VIEWS;
 ```nofmt
      name     | cluster
 --------------+----------
- winning_bids | default
+ winning_bids | quickstart
 ```
 
 ```sql
@@ -39,7 +37,7 @@ SHOW MATERIALIZED VIEWS LIKE '%bid%';
 ```nofmt
      name     | cluster
 --------------+----------
- winning_bids | default
+ winning_bids | quickstart
 ```
 
 ## Related pages

@@ -28,6 +28,9 @@ The long-running tests will simulate actual production runs of Materialize on
 gigabytes to terabytes of data over several hours to days, and will therefore
 report their results asynchronously (perhaps nightly or weekly).
 
+For how to run tests on your PR with a code coverage report see
+[Code Coverage for Pull Requests](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/code-coverage.md).
+
 Details about each of the test suites follow.
 
 ## Unit/integration tests
@@ -69,8 +72,11 @@ pervasively throughout Cargo, and eventually you get used to it. (It's also the
 POSIX-blessed syntax for indicating that you want option parsing to stop, so you
 might be familiar with it from other command-line tools.)
 
-Without `--nocapture`, `println!()` and `dbg!()` output from tests can go
+Without `--nocapture`, `println!()` and `dbg!()`, output from tests can go
 missing, making debugging a very frustrating experience.
+
+Most tests execute with the tracing log filter `info`.
+This can be changed by setting the environment variable `MZ_TEST_LOG_FILTER`.
 
 The second argument worth special mention is the filter argument, which only
 runs the tests that match the specified pattern. For example, to only run tests
@@ -212,7 +218,7 @@ implementation is properly serializing dates.
 
 ### pgtest
 
-Pgtest is DSL to specify raw pgwire messages to send and their expected
+Pgtest is a DSL to specify raw pgwire messages to send and their expected
 responses. It can be used to test message sequences that are difficult
 or impossible to test with PostgreSQL drivers. Its output is generated
 against PostgreSQL and then tested against Materialize. Usage is

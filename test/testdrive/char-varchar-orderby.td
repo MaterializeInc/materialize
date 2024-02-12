@@ -73,8 +73,8 @@ $ set-regex match=u\d+ replacement=UID
 
 ? EXPLAIN SELECT * FROM (SELECT * FROM char_table ORDER BY f1 NULLS FIRST LIMIT 1 OFFSET 0)
 Explained Query:
-  TopK order_by=[#0 asc nulls_first] limit=1 monotonic=false
-    Get materialize.public.char_table
+  TopK order_by=[#0 asc nulls_first] limit=1
+    ReadStorage materialize.public.char_table
 
 > SELECT * FROM (SELECT * FROM char_table ORDER BY f1 LIMIT 1 OFFSET 0)
 "                    " "empty string"

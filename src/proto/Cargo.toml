@@ -7,19 +7,30 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.66"
+chrono = { version = "0.4.23", default-features = false, features = ["serde", "std"], optional = true }
+chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
 globset = "0.4.9"
 http = "0.2.8"
-mz-ore = { path = "../ore", default-features = false }
-proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
+mz-ore = { path = "../ore", default-features = false, features = ["proptest"] }
+num = "0.4.0"
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 regex = "1.7.0"
+serde = { version = "1.0.152", features = ["derive", "rc"] }
 serde_json = { version = "1.0.89", features = ["arbitrary_precision"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
+tokio-postgres = { version = "0.7.8", optional = true }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[features]
+chrono = ["dep:chrono", "dep:chrono-tz"]
 
 [build-dependencies]
 prost-build = "0.11.2"

@@ -9,80 +9,131 @@
 
 //! Aggregate statistics about data stored in persist.
 
-use std::collections::BTreeMap;
+use std::borrow::Cow;
 
+use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist_types::columnar::{ColumnFormat, PartEncoder, Schema};
+use mz_persist_types::columnar::{PartEncoder, Schema};
 use mz_persist_types::part::{Part, PartBuilder};
+use mz_persist_types::stats::StructStats;
 use mz_persist_types::Codec;
+use proptest_derive::Arbitrary;
 
+use crate::batch::UntrimmableColumns;
 use crate::internal::encoding::Schemas;
+use crate::ShardId;
 
-/// Logic for filtering parts in a read as uninteresting purely from stats about
-/// the data held in them.
-pub trait PartFilter<K, V>: 'static {
-    /// True if the part should be fetched, false if it should be skipped.
-    fn should_fetch(&mut self, stats: &PartStats) -> bool;
-}
+/// Percent of filtered data to opt in to correctness auditing.
+pub(crate) const STATS_AUDIT_PERCENT: Config<usize> = Config::new(
+    "persist_stats_audit_percent",
+    0,
+    "Percent of filtered data to opt in to correctness auditing (Materialize).",
+);
 
-/// An implementation of [PartFilter] that always returns true.
-#[derive(Debug)]
-pub struct FetchAllPartFilter;
+/// Computes and stores statistics about each batch part.
+///
+/// These can be used at read time to entirely skip fetching a part based on its
+/// statistics. See [STATS_FILTER_ENABLED].
+pub(crate) const STATS_COLLECTION_ENABLED: Config<bool> = Config::new(
+    "persist_stats_collection_enabled",
+    true,
+    "\
+    Whether to calculate and record statistics about the data stored in \
+    persist to be used at read time, see persist_stats_filter_enabled \
+    (Materialize).",
+);
 
-impl<K, V> PartFilter<K, V> for FetchAllPartFilter {
-    fn should_fetch(&mut self, _stats: &PartStats) -> bool {
-        true
+/// Uses previously computed statistics about batch parts to entirely skip
+/// fetching them at read time.
+///
+/// See `STATS_COLLECTION_ENABLED`.
+pub const STATS_FILTER_ENABLED: Config<bool> = Config::new(
+    "persist_stats_filter_enabled",
+    true,
+    "\
+    Whether to use recorded statistics about the data stored in persist to \
+    filter at read time, see persist_stats_collection_enabled (Materialize).",
+);
+
+/// The budget (in bytes) of how many stats to write down per batch part. When
+/// the budget is exceeded, stats will be trimmed away according to a variety of
+/// heuristics.
+pub(crate) const STATS_BUDGET_BYTES: Config<usize> = Config::new(
+    "persist_stats_budget_bytes",
+    1024,
+    "The budget (in bytes) of how many stats to maintain per batch part.",
+);
+
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<String> = Config::new(
+    "persist_stats_untrimmable_columns_equals",
+    concat!(
+        // If we trim the "err" column, then we can't ever use pushdown on a
+        // part (because it could have >0 errors).
+        "err,",
+        "ts,",
+        "receivedat,",
+        "createdat,",
+        // Fivetran created tables track deleted rows by setting this column.
+        //
+        // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
+        "_fivetran_deleted,",
+    ),
+    "\
+    Which columns to always retain during persist stats trimming. Any column \
+    with a name exactly equal (case-insensitive) to one of these will be kept. \
+    Comma separated list.",
+);
+
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_PREFIX: Config<String> = Config::new(
+    "persist_stats_untrimmable_columns_prefix",
+    concat!("last_,",),
+    "\
+    Which columns to always retain during persist stats trimming. Any column \
+    with a name starting with (case-insensitive) one of these will be kept. \
+    Comma separated list.",
+);
+
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_SUFFIX: Config<String> = Config::new(
+    "persist_stats_untrimmable_columns_suffix",
+    concat!("timestamp,", "time,", "_at,", "_tstamp,"),
+    "\
+    Which columns to always retain during persist stats trimming. Any column \
+    with a name ending with (case-insensitive) one of these will be kept. \
+    Comma separated list.",
+);
+
+pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
+    fn split(x: String) -> Vec<Cow<'static, str>> {
+        x.split(',')
+            .filter(|x| !x.is_empty())
+            .map(|x| x.to_owned().into())
+            .collect()
+    }
+    UntrimmableColumns {
+        equals: split(STATS_UNTRIMMABLE_COLUMNS_EQUALS.get(cfg)),
+        prefixes: split(STATS_UNTRIMMABLE_COLUMNS_PREFIX.get(cfg)),
+        suffixes: split(STATS_UNTRIMMABLE_COLUMNS_SUFFIX.get(cfg)),
     }
 }
 
 /// Aggregate statistics about data contained in a [Part].
-///
-/// TODO(mfp): PartialEq, Eq, PartialOrd, Ord are sus.
-#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Arbitrary, Debug)]
 pub struct PartStats {
-    // TODO(mfp): Only contains Option<u64> columns in this initial skeleton.
-    pub(crate) key_col_min_max_nulls: BTreeMap<String, (u64, u64, usize)>,
+    /// Aggregate statistics about key data contained in a [Part].
+    pub key: StructStats,
+}
+
+impl serde::Serialize for PartStats {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let PartStats { key } = self;
+        key.serialize(s)
+    }
 }
 
 impl PartStats {
-    pub(crate) fn new<K: Codec, V: Codec>(
-        schemas: &Schemas<K, V>,
-        part: &Part,
-    ) -> Result<Self, String> {
-        // TODO(mfp): This impl is all entirely just a placeholder. Zero chance
-        // it works like this by the time it ships.
-        let mut key_cols = part.key_ref();
-        let mut key_col_min_max_nulls = BTreeMap::new();
-        // TODO(mfp): We only need to plumb the schemas here if we end up
-        // allowing them to specify arbitrary min/max logic for complex types.
-        // If we don't end up doing that, consider pulling the schemas out of
-        // here.
-        for (name, typ) in schemas.key.columns() {
-            let col = match (typ.optional, typ.format) {
-                (true, ColumnFormat::U64) => key_cols.col::<Option<u64>>(name.as_str())?,
-                // TODO(mfp): Support stats on other column types.
-                _ => continue,
-            };
-            let (mut min, mut max, mut nulls) = (u64::MAX, u64::MIN, 0usize);
-            for x in col.iter() {
-                if let Some(x) = x {
-                    min = std::cmp::min(*x, min);
-                    max = std::cmp::max(*x, max);
-                } else {
-                    nulls += 1;
-                }
-            }
-            // Skip adding nonsensical min=u64::MAX max=u64::MIN. This might
-            // lose null count for an all null batch, but we keep sparse metrics
-            // so fine for placeholder impl.
-            if min <= max {
-                key_col_min_max_nulls.insert(name, (min, max, nulls));
-            }
-        }
-        drop(key_cols);
-        Ok(PartStats {
-            key_col_min_max_nulls,
-        })
+    pub(crate) fn new(part: &Part) -> Result<Self, String> {
+        let key = part.key_stats()?;
+        Ok(PartStats { key })
     }
 
     pub(crate) fn legacy_part_format<K: Codec, V: Codec>(
@@ -93,7 +144,7 @@ impl PartStats {
         // on the old part format. We don't intend to make this fast, rather we
         // intend to compute stats on the new part format.
         let mut new_format = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
-        let builder = new_format.get_mut();
+        let mut builder = new_format.get_mut();
         let mut key = schemas.key.encoder(builder.key)?;
         let mut val = schemas.val.encoder(builder.val)?;
         for x in part {
@@ -109,21 +160,27 @@ impl PartStats {
         drop(key);
         drop(val);
         let new_format = new_format.finish()?;
-        Self::new(schemas, &new_format)
+        Self::new(&new_format)
     }
+}
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self == &Self::default()
-    }
-
-    /// The min and max values as well as null count for an `Option<u64>` column
-    /// in this part.
+/// Statistics about the contents of a shard as_of some time.
+///
+/// TODO: Add more stats here as they become necessary.
+#[derive(Debug)]
+pub struct SnapshotStats {
+    /// The shard these statistics are for.
+    pub shard_id: ShardId,
+    /// An estimate of the count of updates in the shard.
     ///
-    /// Returns `None` if persist doesn't have stats about this column, or if
-    /// the column is not `Option<u64>`.
+    /// This is an upper bound on the number of updates that persist_source
+    /// would emit if you snapshot the source at the given as_of. The real
+    /// number of updates, after consolidation, might be lower. It includes both
+    /// additions and retractions.
     ///
-    /// TODO(mfp): This is decidedly not the final public interface.
-    pub fn opt_u64_key_col_min_max_nulls(&self, name: &str) -> Option<(u64, u64, usize)> {
-        self.key_col_min_max_nulls.get(name).copied()
-    }
+    /// NB: Because of internal persist compaction, the answer for a given as_of
+    /// may change over time (as persist advances through Seqnos), but because
+    /// compaction never results in more updates than the sum of the inputs, it
+    /// can only go down.
+    pub num_updates: usize,
 }

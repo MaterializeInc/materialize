@@ -7,8 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Cockroach, Service
+import argparse
+
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.cockroach import Cockroach
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -44,6 +50,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--blob", type=str, choices=["mem", "maelstrom"], default="maelstrom"
     )
+    parser.add_argument(
+        "--persist-txn", type=bool, default=False, action=argparse.BooleanOptionalAction
+    )
 
     args = parser.parse_args()
 
@@ -64,6 +73,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # empty blob uri defaults to Maelstrom blob implementation
         blob_uri = ""
 
+    maelstrom_cmd = "maelstrom"
+    if args.persist_txn:
+        maelstrom_cmd = "maelstrom-txn"
+
     c.run(
         "maelstrom-persist",
         f"--time-limit={args.time_limit}",
@@ -71,7 +84,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"--concurrency={args.concurrency}",
         f"--rate={args.rate}",
         "--",
-        "maelstrom",
+        maelstrom_cmd,
         *([f"--blob-uri={blob_uri}"] if blob_uri else []),
         *([f"--consensus-uri={consensus_uri}"] if consensus_uri else []),
         *([f"--unreliability={args.unreliability}"] if args.unreliability else []),

@@ -18,12 +18,14 @@
 //! 4. Exceptions in (1) can be made when virtual syntax is requested (done by
 //!    default, can be turned off with `WITH(raw_syntax)`).
 
+use itertools::Itertools;
 use std::fmt;
 
+use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
 use mz_expr::virtual_syntax::{AlgExcept, Except};
-use mz_expr::Id;
+use mz_expr::{Id, WindowFrame};
 use mz_ore::str::{separated, IndentLike};
-use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
+use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
 use crate::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
@@ -73,12 +75,20 @@ impl HirRelationExpr {
         ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
     ) -> fmt::Result {
         use HirRelationExpr::*;
+
+        let mode = HumanizedExplain::new(ctx.config.redacted);
+
         match &self {
             Constant { rows, .. } => {
                 if !rows.is_empty() {
                     writeln!(f, "{}Constant", ctx.indent)?;
                     ctx.indented(|ctx| {
-                        fmt_text_constant_rows(f, rows.iter().map(|row| (row, &1)), &mut ctx.indent)
+                        fmt_text_constant_rows(
+                            f,
+                            rows.iter().map(|row| (row, &1)),
+                            &mut ctx.indent,
+                            ctx.config.redacted,
+                        )
                     })?;
                 } else {
                     writeln!(f, "{}Constant <empty>", ctx.indent)?;
@@ -118,10 +128,18 @@ impl HirRelationExpr {
                     Ok(())
                 })?;
             }
-            LetRec { bindings, body } => {
+            LetRec {
+                limit,
+                bindings,
+                body,
+            } => {
                 writeln!(f, "{}Return", ctx.indent)?;
                 ctx.indented(|ctx| body.fmt_text(f, ctx))?;
-                writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
+                write!(f, "{}With Mutually Recursive", ctx.indent)?;
+                if let Some(limit) = limit {
+                    write!(f, " {}", limit)?;
+                }
+                writeln!(f)?;
                 ctx.indented(|ctx| {
                     for (_name, id, value, _type) in bindings.iter().rev() {
                         // TODO: print the name and not the id
@@ -212,6 +230,7 @@ impl HirRelationExpr {
                 limit,
                 offset,
                 input,
+                expected_group_size,
             } => {
                 write!(f, "{}TopK", ctx.indent)?;
                 if group_key.len() > 0 {
@@ -219,7 +238,8 @@ impl HirRelationExpr {
                     write!(f, " group_by=[{}]", group_by)?;
                 }
                 if order_key.len() > 0 {
-                    let order_by = separated(", ", order_key);
+                    let order_by = mode.seq(order_key, None);
+                    let order_by = separated(", ", order_by);
                     write!(f, " order_by=[{}]", order_by)?;
                 }
                 if let Some(limit) = limit {
@@ -227,6 +247,9 @@ impl HirRelationExpr {
                 }
                 if offset > &0 {
                     write!(f, " offset={}", offset)?
+                }
+                if let Some(expected_group_size) = expected_group_size {
+                    write!(f, " exp_group_size={}", expected_group_size)?;
                 }
                 writeln!(f)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
@@ -320,19 +343,78 @@ impl fmt::Display for HirScalarExpr {
                 write!(f, "case when {} then {} else {} end", cond, then, els)
             }
             Windowing(expr) => {
-                match &expr.func {
-                    WindowExprType::Scalar(scalar) => {
-                        write!(f, "{}()", scalar.clone().into_expr())?
+                // First, print
+                // - the window function name
+                // - the arguments.
+                // Also, dig out some info from the `func`.
+                let (column_orders, ignore_nulls, window_frame) = match &expr.func {
+                    WindowExprType::Scalar(scalar_window_expr) => {
+                        write!(f, "{}()", scalar_window_expr.func)?;
+                        (&scalar_window_expr.order_by, false, None)
                     }
-                    WindowExprType::Value(scalar) => {
-                        write!(f, "{}({})", scalar.clone().into_expr(), scalar.expr)?
+                    WindowExprType::Value(value_window_expr) => {
+                        write!(f, "{}({})", value_window_expr.func, value_window_expr.args)?;
+                        (
+                            &value_window_expr.order_by,
+                            value_window_expr.ignore_nulls,
+                            Some(&value_window_expr.window_frame),
+                        )
                     }
-                }
-                write!(f, " over ({})", separated(", ", expr.partition.iter()))?;
+                    WindowExprType::Aggregate(aggregate_window_expr) => {
+                        write!(f, "{}", aggregate_window_expr.aggregate_expr)?;
+                        (
+                            &aggregate_window_expr.order_by,
+                            false,
+                            Some(&aggregate_window_expr.window_frame),
+                        )
+                    }
+                };
 
-                if !expr.order_by.is_empty() {
-                    write!(f, " order by ({})", separated(", ", expr.order_by.iter()))?;
+                // Reconstruct the ORDER BY (see comment on `WindowExpr.order_by`).
+                // We assume that the `column_order.column`s refer to each of the expressions in
+                // `expr.order_by` in order. This is a consequence of how `plan_function_order_by`
+                // works.
+                assert!(column_orders
+                    .iter()
+                    .enumerate()
+                    .all(|(i, column_order)| i == column_order.column));
+                let order_by = column_orders
+                    .iter()
+                    .zip_eq(expr.order_by.iter())
+                    .map(|(column_order, expr)| {
+                        ColumnOrderWithExpr {
+                            expr: expr.clone(),
+                            desc: column_order.desc,
+                            nulls_last: column_order.nulls_last,
+                        }
+                        // (We can ignore column_order.column because of the above assert.)
+                    })
+                    .collect_vec();
+
+                // Print IGNORE NULLS if present.
+                if ignore_nulls {
+                    write!(f, " ignore nulls")?;
                 }
+
+                // Print the OVER clause.
+                // This is close to the SQL syntax, but we are adding some [] to make it easier to
+                // read.
+                write!(f, " over (")?;
+                if !expr.partition_by.is_empty() {
+                    write!(
+                        f,
+                        "partition by [{}] ",
+                        separated(", ", expr.partition_by.iter())
+                    )?;
+                }
+                write!(f, "order by [{}]", separated(", ", order_by.iter()))?;
+                if let Some(window_frame) = window_frame {
+                    if *window_frame != WindowFrame::default() {
+                        write!(f, " {}", window_frame)?;
+                    }
+                }
+                write!(f, ")")?;
+
                 Ok(())
             }
             Exists(expr) => match expr.as_ref() {
@@ -347,19 +429,47 @@ impl fmt::Display for HirScalarExpr {
     }
 }
 
+/// This is like ColumnOrder, but contains a HirScalarExpr instead of just a column reference by
+/// index. (This is only used in EXPLAIN, when reconstructing an ORDER BY inside an OVER clause.)
+struct ColumnOrderWithExpr {
+    /// The scalar expression.
+    pub expr: HirScalarExpr,
+    /// Whether to sort in descending order.
+    pub desc: bool,
+    /// Whether to sort nulls last.
+    pub nulls_last: bool,
+}
+
+impl fmt::Display for ColumnOrderWithExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // If you modify this, then please also attend to Display for ColumnOrder!
+        write!(
+            f,
+            "{} {} {}",
+            self.expr,
+            if self.desc { "desc" } else { "asc" },
+            if self.nulls_last {
+                "nulls_last"
+            } else {
+                "nulls_first"
+            },
+        )
+    }
+}
+
 impl fmt::Display for AggregateExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_count_asterisk() {
             return write!(f, "count(*)");
         }
 
-        write!(
-            f,
-            "{}({}",
-            self.func.clone().into_expr(),
-            if self.distinct { "distinct " } else { "" }
-        )?;
+        // TODO(cloud#8196)
+        let mode = HumanizedExplain::new(false);
+        let func = self.func.clone().into_expr();
+        let func = mode.expr(&func, None);
+        let distinct = if self.distinct { "distinct " } else { "" };
 
+        write!(f, "{}({}", func, distinct)?;
         self.expr.fmt(f)?;
         write!(f, ")")
     }

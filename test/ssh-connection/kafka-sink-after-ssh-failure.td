@@ -1,0 +1,20 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This test script runs after the SSH bastion host has been terminated.
+
+# Ensure they all are marked as broken for ssh reasons. Sinks continuously restart, so we
+# instead check the history
+> SELECT s.name, count(*) > 0 FROM mz_internal.mz_sink_status_history st
+  JOIN mz_sinks s ON st.sink_id = s.id
+  WHERE error LIKE 'ssh:%'
+  AND s.name in ('sink_fixed', 'sink_dynamic')
+  GROUP BY s.name
+sink_fixed true
+sink_dynamic true

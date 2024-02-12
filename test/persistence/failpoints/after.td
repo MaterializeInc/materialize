@@ -52,9 +52,12 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CLUSTER single_replica_cluster SIZE '${arg.default-replica-size}';
 
 > CREATE SOURCE failpoint_from_sink
+  IN CLUSTER single_replica_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-failpoint-sink-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

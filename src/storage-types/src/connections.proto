@@ -1,0 +1,133 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+import "repr/src/global_id.proto";
+import "repr/src/url.proto";
+import "proto/src/tokio_postgres.proto";
+import "storage-types/src/errors.proto";
+
+package mz_storage_types.connections;
+
+message ProtoStringOrSecret {
+    oneof kind {
+        string string = 1;
+        mz_repr.global_id.ProtoGlobalId secret = 2;
+    }
+}
+
+message ProtoTlsIdentity {
+    ProtoStringOrSecret cert = 1;
+    mz_repr.global_id.ProtoGlobalId key = 2;
+}
+
+message ProtoKafkaConnectionTlsConfig {
+    ProtoStringOrSecret root_cert = 1;
+    ProtoTlsIdentity identity = 2;
+}
+
+message ProtoKafkaConnectionSaslConfig {
+    reserved 4;
+    string mechanism = 1;
+    ProtoStringOrSecret username = 2;
+    mz_repr.global_id.ProtoGlobalId password = 3;
+}
+
+message ProtoKafkaBroker {
+    string address = 1;
+    ProtoTunnel tunnel = 12;
+}
+
+message ProtoKafkaConnection {
+    reserved 1, 2, 4;
+    reserved "broker";
+    repeated ProtoKafkaBroker brokers = 3;
+    ProtoTunnel default_tunnel = 7;
+    optional string progress_topic = 5;
+    map<string, mz_storage_types.connections.ProtoStringOrSecret> options = 6;
+    ProtoKafkaConnectionTlsConfig tls = 8;
+    ProtoKafkaConnectionSaslConfig sasl = 9;
+}
+
+message ProtoCsrConnection {
+    mz_repr.url.ProtoUrl url = 1;
+    ProtoStringOrSecret tls_root_cert = 2;
+    ProtoTlsIdentity tls_identity = 3;
+    ProtoCsrConnectionHttpAuth http_auth = 4;
+    ProtoTunnel tunnel = 6;
+}
+
+message ProtoCsrConnectionHttpAuth {
+    ProtoStringOrSecret username = 1;
+    mz_repr.global_id.ProtoGlobalId password = 2;
+}
+
+message ProtoPostgresConnection {
+    string host = 1;
+    uint32 port = 2;
+    string database = 3;
+    ProtoStringOrSecret user = 4;
+    mz_repr.global_id.ProtoGlobalId password = 5;
+    mz_proto.tokio_postgres.ProtoSslMode tls_mode = 6;
+    ProtoStringOrSecret tls_root_cert = 7;
+    ProtoTlsIdentity tls_identity = 8;
+    ProtoTunnel tunnel = 12;
+}
+
+message ProtoTunnel {
+    oneof tunnel {
+        google.protobuf.Empty direct = 9;
+        ProtoSshTunnel ssh = 10;
+        ProtoAwsPrivatelink aws_privatelink = 11;
+    }
+}
+
+message ProtoSshTunnel {
+    mz_repr.global_id.ProtoGlobalId connection_id = 1;
+    ProtoSshConnection connection = 10;
+}
+
+message ProtoSshConnection {
+    message ProtoPublicKeys {
+        string primary_public_key = 1;
+        string secondary_public_key = 2;
+    }
+
+    string host = 1;
+    uint32 port = 2;
+    string user = 3;
+    ProtoPublicKeys public_keys = 4;
+}
+
+message ProtoAwsPrivatelink {
+    mz_repr.global_id.ProtoGlobalId connection_id = 1;
+    optional uint32 port = 2;
+    optional string availability_zone = 3;
+}
+
+enum ProtoMySqlSslMode {
+    DISABLED = 0;
+    REQUIRED = 1;
+    VERIFY_CA = 2;
+    VERIFY_IDENTITY = 3;
+}
+
+message ProtoMySqlConnection {
+    string host = 1;
+    uint32 port = 2;
+    ProtoStringOrSecret user = 3;
+    mz_repr.global_id.ProtoGlobalId password = 4;
+    ProtoMySqlSslMode tls_mode = 5;
+    ProtoStringOrSecret tls_root_cert = 6;
+    ProtoTlsIdentity tls_identity = 7;
+    ProtoTunnel tunnel = 8;
+}

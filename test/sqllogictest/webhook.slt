@@ -1,0 +1,395 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Start from a pristine server
+reset-server
+
+# Create a cluster to install all of our webhook sources on.
+statement ok
+CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+
+#
+# Happy Path, valid WEBHOOK sources
+#
+
+statement ok
+CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT BYTES
+
+query TTT
+SHOW COLUMNS FROM webhook_bytes
+----
+body false bytea
+
+query TT
+SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+----
+webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
+
+statement ok
+CREATE SOURCE "weird-name-(]%/'" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
+
+query TT
+SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+----
+webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
+weird-name-(]%/' {/api/webhook/materialize/public/weird-name-(]%25%2F'}
+
+statement ok
+DROP SOURCE "weird-name-(]%/'"
+
+query TT
+SELECT id, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+----
+u1 {/api/webhook/materialize/public/webhook_bytes}
+
+statement ok
+CREATE SOURCE webhook_bytes_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT BYTES
+    INCLUDE HEADERS
+
+query TTT
+SHOW COLUMNS FROM webhook_bytes_include_headers
+----
+body false bytea
+headers false map
+
+statement ok
+CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+
+query TTT
+SHOW COLUMNS FROM webhook_json
+----
+body false jsonb
+
+statement ok
+CREATE SOURCE webhook_json_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    INCLUDE HEADERS
+
+query TTT
+SHOW COLUMNS FROM webhook_json_include_headers
+----
+body false jsonb
+headers false map
+
+statement ok
+CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT TEXT
+
+query TTT
+SHOW COLUMNS FROM webhook_text
+----
+body false text
+
+statement ok
+CREATE SOURCE webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT TEXT
+    INCLUDE HEADERS
+
+query TTT
+SHOW COLUMNS FROM webhook_text_include_headers
+----
+body false text
+headers false map
+
+statement ok
+CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
+    SELECT body FROM webhook_text_include_headers
+);
+
+# Should fail because a source with this name already exists.
+statement error source "materialize.public.webhook_text_include_headers" already exists
+CREATE SOURCE webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT TEXT
+    INCLUDE HEADERS
+
+# Should succeed since we're specifying "if not exists".
+statement ok
+CREATE SOURCE IF NOT EXISTS webhook_text_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT TEXT
+    INCLUDE HEADERS
+
+# Make sure we can parse a relatively complex validation expression.
+statement ok
+CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT TEXT
+    CHECK (
+        WITH (HEADERS, BODY)
+        decode(headers->'signature', 'base64') = hmac(headers->'timestamp' || '.' || body, 'key', 'sha256')
+    )
+
+statement ok
+CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  CHECK (
+    WITH (HEADERS, BODY BYTES)
+    decode(split_part(headers->'x-buildkite-signature', 'signature=', 1), 'hex') = hmac(
+      split_part(split_part(headers->'x-buildkite-signature', 'timestamp=', 1), ',', 1) || '.' || convert_from(body, 'utf-8'),
+      'test_key',
+      'sha256'
+    )
+  )
+
+statement error column "field_that_does_not_exist" does not exist
+CREATE SOURCE webhook_bad_validation_expr IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT TEXT
+    CHECK (
+        WITH (HEADERS)
+        decode(headers->'signature', 'base64') = hmac(field_that_does_not_exist, 'key', 'sha256')
+    )
+
+statement error CHECK must have type boolean, not type text
+CREATE SOURCE webhook_validation_returns_non_bool IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT TEXT
+    CHECK ( 'foo' || 'bar' )
+
+statement error expression provided in CHECK does not reference any columns
+CREATE SOURCE webhook_json_with_validation IN CLUSTER webhook_cluster FROM WEBHOOK
+    BODY FORMAT JSON
+    CHECK ( 'a' = 'test' )
+
+statement error CHECK does not allow subqueries
+CREATE SOURCE webhook_validation_with_subquery IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (HEADERS)
+    headers->'signature' IN (select * from mz_tables)
+  )
+
+# Some webhook providers (e.g. Stripe) suggest you should reject any request whose provided
+# timestamp is older than a certain threshold.
+
+statement ok
+CREATE SOURCE webhook_validation_with_now IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (HEADERS)
+    (headers->'event_ts'::text)::timestamp + INTERVAL '30s' >= now()
+  )
+
+statement ok
+CREATE SOURCE webhook_validation_with_current_timestamp IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (HEADERS)
+    headers->'event_ts' = current_timestamp()::text
+  )
+
+statement error expression provided in CHECK is not deterministic
+CREATE SOURCE webhook_validation_with_mz_now IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (HEADERS)
+    headers->'event_ts' = mz_now()::text
+  )
+
+statement error expression provided in CHECK is not deterministic
+CREATE SOURCE webhook_validation_with_current_db IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (HEADERS)
+    headers->'database' = current_database()
+  )
+
+statement error unknown cluster 'i_do_not_exist'
+CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER i_do_not_exist FROM WEBHOOK
+  BODY FORMAT BYTES;
+
+# Dropping without cascade should fail since there are sources using it.
+statement error cannot drop cluster "webhook_cluster" because other objects depend on it
+DROP CLUSTER webhook_cluster;
+
+# Create a webhook source that uses secrets when validating.
+
+statement ok
+CREATE SECRET webhook_shared_secret AS 'test_key';
+
+statement ok
+CREATE SOURCE webhook_with_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH ( HEADERS, SECRET webhook_shared_secret )
+    headers->'signature' = webhook_shared_secret
+  )
+
+statement ok
+CREATE SOURCE webhook_buildkite2 IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  CHECK (
+    WITH ( HEADERS, BODY, SECRET webhook_shared_secret )
+    decode(split_part(headers->'x-buildkite-signature', 'signature=', 1), 'hex') = hmac(
+      split_part(split_part(headers->'x-buildkite-signature', 'timestamp=', 1), ',', 1) || '.' || body,
+      webhook_shared_secret,
+      'sha256'
+    )
+  )
+
+statement ok
+ALTER SOURCE webhook_buildkite2 RENAME TO webhook_buildkite2_renamed;
+
+statement ok
+SELECT * FROM webhook_buildkite2_renamed;
+
+statement error unknown catalog item 'webhook_buildkite2'
+SELECT * FROM webhook_buildkite2;
+
+statement ok
+CREATE SECRET other_secret AS 'another_one';
+
+statement ok
+CREATE SOURCE webhook_with_two_secrets IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (
+      HEADERS, BODY BYTES,
+      SECRET webhook_shared_secret AS key,
+      SECRET other_secret BYTES
+    )
+    headers->'signature' = key AND body = other_secret
+  )
+
+statement error unknown catalog item 'non_existent_secret'
+CREATE SOURCE webhook_with_unknown_second_secret IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (
+      HEADERS, BODY,
+      SECRET webhook_shared_secret AS key,
+      SECRET non_existent_secret
+    )
+    headers->'signature' = key AND body = non_existent_secret
+  )
+
+statement error column reference "other_secret" is ambiguous
+CREATE SOURCE webhook_with_duplicate_secret_names IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT BYTES
+  CHECK (
+    WITH (
+      HEADERS, BODY,
+      SECRET webhook_shared_secret AS other_secret,
+      SECRET other_secret
+    )
+    headers->'signature' = other_secret AND body = other_secret
+  )
+
+statement ok
+CREATE SOURCE webhook_with_headers_and_body_alias IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (
+      HEADERS AS h1 BYTES,
+      HEADERS,
+      BODY AS b1,
+      BODY BYTES
+    )
+    headers->'signature' = convert_from(h1->'signature', 'utf-8') AND b1 = convert_from(body, 'utf-8')
+  )
+
+statement error column reference "headers" is ambiguous
+CREATE SOURCE webhook_with_headers_duplicates IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (HEADERS, HEADERS)
+    HEADERS->'signature' = '42'
+  )
+
+statement error column reference "body" is ambiguous
+CREATE SOURCE webhook_with_body_duplicates IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (BODY, BODY)
+    length(body) > 0
+  )
+
+statement error column reference "x" is ambiguous
+CREATE SOURCE webhook_with_duplicate_aliases IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (HEADERS as x, BODY as x)
+    length(x) > 0
+  )
+
+statement ok
+CREATE SOURCE webhook_text_with_mapped_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-special-header' AS "specialHeader"
+  INCLUDE HEADER 'x-hash' AS hash BYTES
+  INCLUDE HEADER 'content-type' AS content_type
+
+query TTT
+SHOW COLUMNS FROM webhook_text_with_mapped_headers
+----
+body false text
+specialHeader true text
+hash true bytea
+content_type true text
+
+statement ok
+CREATE SOURCE webhook_text_mapped_and_filtered_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-hash' as hash BYTES
+  INCLUDE HEADER 'content-type' as content_type
+  INCLUDE HEADERS ('x-special-header')
+
+query TTT
+SHOW COLUMNS FROM webhook_text_mapped_and_filtered_headers
+----
+body false text
+headers false map
+hash true bytea
+content_type true text
+
+statement error column reference "header_a" is ambiguous
+CREATE SOURCE webhook_text_with_duplicate_header_alias IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-first-header' as header_a
+  INCLUDE HEADER 'x-second-header' as header_a
+
+statement error column reference "body" is ambiguous
+CREATE SOURCE webhook_text_with_header_alias_as_body IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-my-header' as body
+
+# Try creating a webhook source in a compute cluster.
+
+statement ok
+CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE '1'));
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 IN CLUSTER cluster1 AS SELECT name FROM mz_objects;
+
+# Webhook on cluster alongside compute objects.
+statement ok
+CREATE SOURCE webhook_on_cluster1 IN CLUSTER cluster1 FROM WEBHOOK
+  BODY FORMAT BYTES;
+
+# Make sure we report webhook sources as running.
+
+query TTTT
+SELECT name, type, status, error FROM mz_internal.mz_source_statuses WHERE name = 'webhook_bytes'
+----
+webhook_bytes webhook running NULL
+
+statement ok
+DROP SOURCE webhook_bytes;
+
+query TTTT
+SELECT name, type, status, error FROM mz_internal.mz_source_statuses WHERE name = 'webhook_bytes'
+----
+
+# Cleanup.
+statement ok
+DROP CLUSTER webhook_cluster CASCADE;
+
+statement ok
+DROP CLUSTER cluster1 CASCADE;

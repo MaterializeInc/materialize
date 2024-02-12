@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-from typing import List
 
 import boto3
 from mypy_boto3_ec2.type_defs import FilterTypeDef
@@ -29,7 +28,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    filters: List[FilterTypeDef] = []
+    filters: list[FilterTypeDef] = []
     if not args.all:
         filters.append({"Name": "tag:LaunchedBy", "Values": args.who or [whoami()]})
     print_instances(

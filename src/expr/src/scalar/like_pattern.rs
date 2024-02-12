@@ -11,15 +11,14 @@ use std::mem;
 use std::str::FromStr;
 
 use derivative::Derivative;
+use mz_lowertest::MzReflect;
+use mz_ore::fmt::FormatBuffer;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{Arbitrary, Strategy};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
-use mz_lowertest::MzReflect;
-use mz_ore::fmt::FormatBuffer;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use proto_matcher_impl::ProtoSubpatternVec;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
 
@@ -90,7 +89,7 @@ pub fn normalize_pattern(pattern: &str, escape: EscapeBehavior) -> Result<String
 }
 
 // This implementation supports a couple of different methods of matching
-// text against a SQL LIKE pattern.
+// text against a SQL LIKE or ILIKE pattern.
 //
 // The most general approach is to convert the LIKE pattern into a
 // regular expression and use the well-tested Regex library to perform the
@@ -100,86 +99,59 @@ pub fn normalize_pattern(pattern: &str, escape: EscapeBehavior) -> Result<String
 // That said, regular expressions aren't that efficient. For most patterns
 // we can do better using built-in string matching.
 
-/// An object that can test whether a string matches a LIKE pattern.
-#[derive(Debug, Clone, Deserialize, Serialize, Derivative, MzReflect)]
-#[derivative(Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Matcher {
-    pub pattern: String,
-    pub case_insensitive: bool,
-    #[derivative(
-        PartialEq = "ignore",
-        Hash = "ignore",
-        Ord = "ignore",
-        PartialOrd = "ignore"
-    )]
-    matcher_impl: MatcherImpl,
-}
+pub use matcher::Matcher;
+use matcher::MatcherImpl;
 
-impl Matcher {
-    pub fn is_match(&self, text: &str) -> bool {
-        match &self.matcher_impl {
-            MatcherImpl::String(subpatterns) => is_match_subpatterns(subpatterns, text),
-            MatcherImpl::Regex(r) => r.is_match(text),
-        }
-    }
-}
+// This lint interacts poorly with `derivative` here; we are confident it generates
+// compatible `PartialOrd` and `Ord` impls. Unfortunately it also requires we introduce
+// this module to allow it.
+#[allow(clippy::non_canonical_partial_ord_impl)]
+mod matcher {
+    use super::*;
 
-impl RustType<ProtoMatcher> for Matcher {
-    fn into_proto(&self) -> ProtoMatcher {
-        ProtoMatcher {
-            pattern: self.pattern.clone(),
-            case_insensitive: self.case_insensitive,
-            matcher_impl: Some(self.matcher_impl.into_proto()),
-        }
+    /// An object that can test whether a string matches a LIKE or ILIKE pattern.
+    #[derive(Debug, Clone, Deserialize, Serialize, Derivative, MzReflect)]
+    #[derivative(Eq, PartialEq, Ord, PartialOrd, Hash)]
+    pub struct Matcher {
+        pub pattern: String,
+        pub case_insensitive: bool,
+        #[derivative(
+            PartialEq = "ignore",
+            Hash = "ignore",
+            Ord = "ignore",
+            PartialOrd = "ignore"
+        )]
+        pub(super) matcher_impl: MatcherImpl,
     }
 
-    fn from_proto(proto: ProtoMatcher) -> Result<Self, TryFromProtoError> {
-        Ok(Matcher {
-            pattern: proto.pattern,
-            case_insensitive: proto.case_insensitive,
-            matcher_impl: proto
-                .matcher_impl
-                .into_rust_if_some("ProtoMatcher::matcher_impl")?,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
-enum MatcherImpl {
-    String(Vec<Subpattern>),
-    Regex(#[serde(with = "serde_regex")] Regex),
-}
-
-impl RustType<ProtoMatcherImpl> for MatcherImpl {
-    fn into_proto(&self) -> ProtoMatcherImpl {
-        use proto_matcher_impl::Kind::*;
-        ProtoMatcherImpl {
-            kind: Some(match self {
-                MatcherImpl::String(subpatterns) => String(subpatterns.into_proto()),
-                MatcherImpl::Regex(regex) => Regex(regex.into_proto()),
-            }),
+    impl Matcher {
+        pub fn is_match(&self, text: &str) -> bool {
+            match &self.matcher_impl {
+                MatcherImpl::String(subpatterns) => is_match_subpatterns(subpatterns, text),
+                MatcherImpl::Regex(r) => r.is_match(text),
+            }
         }
     }
 
-    fn from_proto(proto: ProtoMatcherImpl) -> Result<Self, TryFromProtoError> {
-        use proto_matcher_impl::Kind::*;
-        match proto.kind {
-            Some(String(subpatterns)) => Ok(MatcherImpl::String(subpatterns.into_rust()?)),
-            Some(Regex(regex)) => Ok(MatcherImpl::Regex(regex.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field("ProtoMatcherImpl::kind")),
+    impl RustType<ProtoMatcher> for Matcher {
+        fn into_proto(&self) -> ProtoMatcher {
+            ProtoMatcher {
+                pattern: self.pattern.clone(),
+                case_insensitive: self.case_insensitive,
+            }
         }
-    }
-}
 
-impl RustType<ProtoSubpatternVec> for Vec<Subpattern> {
-    fn into_proto(&self) -> ProtoSubpatternVec {
-        ProtoSubpatternVec {
-            vec: self.into_proto(),
+        fn from_proto(proto: ProtoMatcher) -> Result<Self, TryFromProtoError> {
+            compile(proto.pattern.as_str(), proto.case_insensitive).map_err(|eval_err| {
+                TryFromProtoError::LikePatternDeserializationError(eval_err.to_string())
+            })
         }
     }
 
-    fn from_proto(proto: ProtoSubpatternVec) -> Result<Self, TryFromProtoError> {
-        proto.vec.into_rust()
+    #[derive(Debug, Clone, Deserialize, Serialize, MzReflect)]
+    pub(super) enum MatcherImpl {
+        String(Vec<Subpattern>),
+        Regex(#[serde(with = "serde_regex")] Regex),
     }
 }
 
@@ -456,7 +428,7 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_normalize_pattern() {
         struct TestCase<'a> {
             pattern: &'a str,
@@ -524,7 +496,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_escape_too_long() {
         match EscapeBehavior::from_str("foo") {
             Err(EvalError::LikeEscapeTooLong) => {}
@@ -534,7 +506,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_like() {
         struct Input<'a> {
             haystack: &'a str,

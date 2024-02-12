@@ -33,7 +33,7 @@ SELECT pg_typeof('true'::boolean)
 ----
 boolean
 
-query error unknown catalog item 'pg_catalog.boolean'
+query error type "pg_catalog.boolean" does not exist
 SELECT 'true'::pg_catalog.boolean
 
 # 🔬🔬 bytea
@@ -55,7 +55,7 @@ SELECT 'a'::bytes
 ----
 a
 
-query error unknown catalog item 'pg_catalog.bytes'
+query error type "pg_catalog.bytes" does not exist
 SELECT ''::pg_catalog.bytes
 
 # 🔬🔬 date
@@ -89,7 +89,7 @@ SELECT '1.2'::float(1)
 ----
 1.200
 
-query error unknown catalog item 'pg_catalog.float'
+query error type "pg_catalog.float" does not exist
 SELECT '1.2'::pg_catalog.float(1)
 
 query T
@@ -102,7 +102,7 @@ SELECT '1.2'::real
 ----
 1.200
 
-query error unknown catalog item 'pg_catalog.real'
+query error type "pg_catalog.real" does not exist
 SELECT '1.2'::pg_catalog.real
 
 query T
@@ -129,7 +129,7 @@ SELECT '1.2'::float(53)
 ----
 1.200
 
-query error unknown catalog item 'pg_catalog.float'
+query error type "pg_catalog.float" does not exist
 SELECT '1.2'::pg_catalog.float(53)
 
 query T
@@ -142,7 +142,7 @@ SELECT '1.2'::double
 ----
 1.200
 
-query error unknown catalog item 'pg_catalog.double'
+query error type "pg_catalog.double" does not exist
 SELECT '1.2'::pg_catalog.double
 
 query T
@@ -169,7 +169,7 @@ SELECT '1'::smallint
 ----
 1
 
-query error unknown catalog item 'pg_catalog.smallint'
+query error type "pg_catalog.smallint" does not exist
 SELECT '1'::pg_catalog.smallint
 
 query T
@@ -196,7 +196,7 @@ SELECT '1'::int
 ----
 1
 
-query error unknown catalog item 'pg_catalog.int'
+query error type "pg_catalog.int" does not exist
 SELECT '1'::pg_catalog.int
 
 query T
@@ -209,7 +209,7 @@ SELECT '1'::integer
 ----
 1
 
-query error unknown catalog item 'pg_catalog.integer'
+query error type "pg_catalog.integer" does not exist
 SELECT '1'::pg_catalog.integer
 
 query T
@@ -236,7 +236,7 @@ SELECT '1'::bigint
 ----
 1
 
-query error unknown catalog item 'pg_catalog.bigint'
+query error type "pg_catalog.bigint" does not exist
 SELECT '1'::pg_catalog.bigint
 
 query T
@@ -291,7 +291,7 @@ SELECT '{"1":2,"3":4}'::json
 ----
 {"1":2,"3":4}
 
-query error unknown catalog item 'pg_catalog.json'
+query error type "pg_catalog.json" does not exist
 SELECT '{"1":2,"3":4}'::pg_catalog.json
 
 # 🔬🔬 numeric
@@ -314,7 +314,7 @@ SELECT '1'::decimal(38,0)
 ----
 1
 
-query error unknown catalog item 'pg_catalog.decimal'
+query error type "pg_catalog.decimal" does not exist
 SELECT '1'::pg_catalog.decimal(38,0)
 
 query T
@@ -322,7 +322,7 @@ SELECT '1'::dec(38,0)
 ----
 1
 
-query error unknown catalog item 'pg_catalog.dec'
+query error type "pg_catalog.dec" does not exist
 SELECT '1'::pg_catalog.dec(38,0)
 
 # 🔬🔬 oid
@@ -351,112 +351,6 @@ query I
 SELECT 1::int4::oid::int4
 ----
 1
-
-# 🔬🔬 regproc
-
-query T
-SELECT 1::regproc
-----
-1
-
-query T
-SELECT 1::int4::regproc
-----
-1
-
-query T
-SELECT 1::oid::regproc
-----
-1
-
-query T
-SELECT 1::oid::regproc::oid
-----
-1
-
-query T
-SELECT '1'::regproc
-----
-1
-
-query T
-SELECT '1'::pg_catalog.regproc
-----
-1
-
-query T
-SELECT '1'::regproc::text
-----
-1
-
-query T
-SELECT 'now'::regproc::text
-----
-now
-
-query T
-SELECT 'now'::regproc::text::regproc
-----
-1299
-
-query T
-SELECT 'now'::regproc::text::regproc::text
-----
-now
-
-query T
-SELECT 'now'::regproc
-----
-1299
-
-query T
-SELECT 'now'::regproc::oid
-----
-1299
-
-query T
-SELECT NULL::regproc::text
-----
-NULL
-
-# TODO: improve this error message to match postgres.
-query error more than one record produced in subquery
-SELECT 'max'::regproc
-
-query error function "nonexistent" does not exist
-SELECT 'nonexistent'::regproc
-
-query T
-SELECT 'array_in'::regproc
-----
-750
-
-query B
-SELECT 750 = 'array_in'::regproc
-----
-true
-
-statement ok
-CREATE TABLE text_to_regproc (a text);
-
-statement ok
-INSERT INTO text_to_regproc VALUES (NULL), ('array_in');
-
-query I
-SELECT a::regproc FROM text_to_regproc ORDER BY a
-----
-750
-NULL
-
-# Regression for 9194
-query I
-select 'now'::regproc::oid::text::regproc
-----
-1299
-
-# ensure that all existing functions can be cast to their respective names (#9199)
-statement OK
-select oid, oid::regproc::text from (select oid from mz_catalog.mz_functions)
 
 # 🔬🔬 record
 
@@ -596,8 +490,106 @@ SELECT '1'::materialize.pg_catalog.int4
 1
 
 # tables are not types yet
-query error "pg_catalog.pg_enum" does not refer to a type
+query error type "pg_catalog.pg_enum" does not exist
 SELECT '1'::pg_catalog.pg_enum
+
+# relations can have the same name as built-in types
+statement ok
+CREATE VIEW int4 AS VALUES (1)
+
+query I
+SELECT * FROM int4
+----
+1
+
+# but within the same schema, types cannot have the same name as a relation
+statement error view "materialize.public.int4" already exists
+CREATE TYPE int4 AS (a int)
+
+# creating relations with the same name as an existing type is not allowed
+# (see #23789)...
+
+statement ok
+CREATE TYPE rectype AS (a int)
+
+statement error type "materialize.public.rectype" already exists
+CREATE VIEW rectype AS VALUES (1)
+
+statement error type "materialize.public.rectype" already exists
+CREATE MATERIALIZED VIEW rectype AS VALUES (1)
+
+statement error type "materialize.public.rectype" already exists
+CREATE TABLE rectype (a int)
+
+statement error type "materialize.public.rectype" already exists
+CREATE SOURCE rectype FROM LOAD GENERATOR COUNTER
+
+statement error type "materialize.public.rectype" already exists
+CREATE INDEX rectype ON int4 (column1)
+
+# ...not even via rename...
+
+statement ok
+CREATE VIEW rectype_sneaky_v AS VALUES (1)
+
+statement error catalog item 'rectype' already exists
+ALTER VIEW rectype_sneaky_v RENAME TO rectype
+
+statement ok
+CREATE MATERIALIZED VIEW rectype_sneaky_mv AS VALUES (1)
+
+statement error catalog item 'rectype' already exists
+ALTER MATERIALIZED VIEW rectype_sneaky_mv RENAME TO rectype
+
+statement ok
+CREATE TABLE rectype_sneaky_t (a int)
+
+statement error catalog item 'rectype' already exists
+ALTER TABLE rectype_sneaky_t RENAME TO rectype
+
+statement ok
+CREATE SOURCE rectype_sneaky_s FROM LOAD GENERATOR COUNTER
+
+statement error catalog item 'rectype' already exists
+ALTER SOURCE rectype_sneaky_s RENAME TO rectype
+
+statement ok
+CREATE INDEX rectype_sneaky_i ON int4 (column1)
+
+statement error catalog item 'rectype' already exists
+ALTER INDEX rectype_sneaky_i RENAME TO rectype
+
+# creating secrets with the same name as a type is ok though...
+
+statement ok
+CREATE SECRET rectype AS 'ignored'
+
+statement ok
+DROP SECRET rectype
+
+statement ok
+CREATE SECRET rectype_sneaky AS 'ignored'
+
+statement ok
+ALTER SECRET rectype_sneaky RENAME TO rectype
+
+statement ok
+DROP SECRET rectype
+
+statement ok
+CREATE CONNECTION rectype TO SSH TUNNEL (HOST 'localhost', USER 'ignored')
+
+statement ok
+DROP CONNECTION rectype
+
+statement ok
+CREATE CONNECTION rectype_sneaky TO SSH TUNNEL (HOST 'localhost', USER 'ignored')
+
+statement ok
+ALTER CONNECTION rectype_sneaky RENAME TO rectype
+
+statement ok
+DROP CONNECTION rectype
 
 # 🔬 format_type
 
@@ -674,12 +666,112 @@ time
 query T
 SELECT format_type(1114, NULL)
 ----
-timestamp
+timestamp without time zone
+
+query T
+SELECT format_type(1114, -2)
+----
+timestamp without time zone
+
+query T
+SELECT format_type(1114, -1)
+----
+timestamp without time zone
+
+query T
+SELECT format_type(1114, 0)
+----
+timestamp(0) without time zone
+
+query T
+SELECT format_type(1114, 1)
+----
+timestamp(1) without time zone
+
+query T
+SELECT format_type(1114, 2)
+----
+timestamp(2) without time zone
+
+query T
+SELECT format_type(1114, 3)
+----
+timestamp(3) without time zone
+
+query T
+SELECT format_type(1114, 4)
+----
+timestamp(4) without time zone
+
+query T
+SELECT format_type(1114, 5)
+----
+timestamp(5) without time zone
+
+query T
+SELECT format_type(1114, 6)
+----
+timestamp(6) without time zone
+
+query T
+SELECT format_type(1114, 7)
+----
+timestamp(7) without time zone
 
 query T
 SELECT format_type(1184, NULL)
 ----
 timestamp with time zone
+
+query T
+SELECT format_type(1184, -2)
+----
+timestamp with time zone
+
+query T
+SELECT format_type(1184, -1)
+----
+timestamp with time zone
+
+query T
+SELECT format_type(1184, 0)
+----
+timestamp(0) with time zone
+
+query T
+SELECT format_type(1184, 1)
+----
+timestamp(1) with time zone
+
+query T
+SELECT format_type(1184, 2)
+----
+timestamp(2) with time zone
+
+query T
+SELECT format_type(1184, 3)
+----
+timestamp(3) with time zone
+
+query T
+SELECT format_type(1184, 4)
+----
+timestamp(4) with time zone
+
+query T
+SELECT format_type(1184, 5)
+----
+timestamp(5) with time zone
+
+query T
+SELECT format_type(1184, 6)
+----
+timestamp(6) with time zone
+
+query T
+SELECT format_type(1184, 7)
+----
+timestamp(7) with time zone
 
 query T
 SELECT format_type(1186, NULL)
@@ -759,7 +851,7 @@ time[]
 query T
 SELECT format_type(1115, NULL)
 ----
-timestamp[]
+timestamp without time zone[]
 
 query T
 SELECT format_type(1185, NULL)
@@ -875,230 +967,72 @@ SELECT format_type(26, -1);
 ----
 oid
 
-# 🔬🔬 regtype
-
-query T
-SELECT 1::regtype
-----
-1
-
-query T
-SELECT 1::int4::regtype
-----
-1
-
-query T
-SELECT 1::oid::regtype
-----
-1
-
-query T
-SELECT 1::oid::regtype::oid
-----
-1
-
-query T
-SELECT '1'::regtype
-----
-1
-
-query T
-SELECT '1'::pg_catalog.regtype
-----
-1
-
-query T
-SELECT '1'::regtype::text
-----
-1
-
-query T
-SELECT 'date'::regtype::text
-----
-date
-
-query T
-SELECT 'date'::regtype
-----
-1082
-
-query T
-SELECT 'date'::regtype::oid
-----
-1082
-
-query error type "nonexistent" does not exist
-SELECT 'nonexistent'::regtype
-
-query B
-SELECT 1082 = 'date'::regtype
-----
-true
+## coalesce nullability
 
 statement ok
-CREATE TABLE text_to_regtype (a text);
+CREATE TABLE t1(key int, val int, n int NOT NULL);
 
-statement ok
-INSERT INTO text_to_regtype VALUES (NULL), ('date');
-
-query I
-SELECT a::regtype FROM text_to_regtype ORDER BY a
+# coalesce's output type should be non-nullable when any of its input types are non-nullable
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, 0)
+FROM t1;
 ----
-1082
-NULL
+Explained Query:
+  Project (#3) // { types: "(integer)" }
+    Map (coalesce(#0, 0)) // { types: "(integer?, integer?, integer, integer)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
-# Regression for 9194
-query I
-select 'date'::regtype::oid::text::regtype
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, n)
+FROM t1;
 ----
-1082
+Explained Query:
+  Project (#3) // { types: "(integer)" }
+    Map (coalesce(#0, #2)) // { types: "(integer?, integer?, integer, integer)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
-# Make sure that there are no functions with duplicate OIDs
-query I
-select oid from (select count(*) as cnt, oid from mz_catalog.mz_functions group by oid) where cnt>1
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, 0), sum(val)
+FROM t1
+GROUP BY key;
 ----
+Explained Query:
+  Project (#2, #1) // { types: "(integer, bigint?)" }
+    Map (coalesce(#0, 0)) // { types: "(integer?, bigint?, integer)" }
+      Reduce group_by=[#0] aggregates=[sum(#1)] // { types: "(integer?, bigint?)" }
+        Project (#0, #1) // { types: "(integer?, integer?)" }
+          ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
-query T
-SELECT 'date'::regtype::text::regtype
+EOF
+
+# coalesce's output type should be nullable when all of its input types are nullable
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, val)
+FROM t1;
 ----
-1082
+Explained Query:
+  Project (#3) // { types: "(integer?)" }
+    Map (coalesce(#0, #1)) // { types: "(integer?, integer?, integer, integer?)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
-query T
-SELECT 'date'::regtype::text::regtype::text
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, val + 5)
+FROM t1;
 ----
-date
+Explained Query:
+  Project (#3) // { types: "(integer?)" }
+    Map (coalesce(#0, (#1 + 5))) // { types: "(integer?, integer?, integer, integer?)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
-query T
-SELECT NULL::regtype::text
-----
-NULL
-
-# ensure that all existing types can be cast to their respective names
-statement OK
-select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)
-
-# 🔬🔬 regclass
-
-query T
-SELECT 1::regclass
-----
-1
-
-query T
-SELECT 1::int4::regclass
-----
-1
-
-query T
-SELECT 1::oid::regclass
-----
-1
-
-query T
-SELECT 1::oid::regclass::oid
-----
-1
-
-query T
-SELECT '1'::regclass
-----
-1
-
-query T
-SELECT '1'::pg_catalog.regclass
-----
-1
-
-query T
-SELECT '1'::regclass::text
-----
-1
-
-query T
-SELECT 'mz_tables'::regclass::text
-----
-mz_tables
-
-query B
-SELECT 'mz_tables'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
-----
-true
-
-query B
-SELECT 'mz_tables'::regclass::oid = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
-----
-true
-
-query error object "nonexistent" does not exist
-SELECT 'nonexistent'::regclass
-
-statement ok
-CREATE TABLE text_to_regclass (a text);
-
-statement ok
-INSERT INTO text_to_regclass VALUES (NULL), ('mz_tables');
-
-query T
-SELECT a::regclass::text FROM text_to_regclass ORDER BY a
-----
-mz_tables
-NULL
-
-# Regression for 9194
-query B
-select 'mz_tables'::regclass::oid::text::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
-----
-true
-
-# Make sure that there are no classes with duplicate OIDs
-query I
-select oid from (select count(*) as cnt, oid from pg_catalog.pg_class group by oid) where cnt>1
-----
-
-query T
-SELECT NULL::regclass::text
-----
-NULL
-
-# ensure that all existing types can be cast to their respective names
-statement OK
-select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)
-
-# multiple tables with the same name cause a lookup collision
-statement OK
-create schema test
-
-statement OK
-create schema test2
-
-statement ok
-CREATE TABLE test.table_with_id(i int);
-
-statement ok
-CREATE TABLE test2.table_with_id(i int);
-
-# unqualified duplicate names will lead to an error
-statement error more than one record produced in subquery
-SELECT 'table_with_id'::regclass
-
-# fully qualified names are not yet supported
-statement error object "test.table_with_id" does not exist
-SELECT 'test.table_with_id'::regclass
-
-# Regression for 18020
-query B
-SELECT returns_set FROM mz_functions WHERE name in ('generate_series', 'generate_subscripts', 'regexp_extract', 'jsonb_array_elements', 'jsonb_array_elements_text', 'jsonb_each', 'jsonb_each_text', 'jsonb_object_keys');
-----
-true
-true
-true
-true
-true
-true
-true
-true
-true
-true
-true
-true
-true
+EOF

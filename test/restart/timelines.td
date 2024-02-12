@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true;
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true;
+
 #
 # A test that timelines with objects that have released all write frontiers work
 #
@@ -90,9 +94,15 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
 {"array":[{"data":{"a":1,"b":1},"time":1,"diff":1}]}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+# This test runs multiple times but does not drop all of its clusters before
+# each invocation, so we have to do this manually.
+> DROP CLUSTER IF EXISTS single_replica_cluster;
+> CREATE CLUSTER single_replica_cluster SIZE '${arg.default-replica-size}';
 
 > CREATE SOURCE data_foo
+  IN CLUSTER single_replica_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
   WITH (TIMELINE 'user')

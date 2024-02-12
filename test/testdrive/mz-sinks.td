@@ -10,7 +10,7 @@
 # Verify that envelope types are correctly reported in mz_sinks
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -18,7 +18,9 @@
 
 > CREATE TABLE mz_sinks_table (name string);
 
-> CREATE SINK mz_sinks_debezium FROM mz_sinks_table
+> CREATE SINK mz_sinks_debezium
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM mz_sinks_table
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mz-sinks-debezium-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
@@ -27,7 +29,9 @@
     SELECT name, count(name) from mz_sinks_table
     GROUP BY name;
 
-> CREATE SINK mz_sinks_upsert FROM mz_sinks_table_keyed
+> CREATE SINK mz_sinks_upsert
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM mz_sinks_table_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mz-upsert-debezium-${testdrive.seed}')
   KEY (name)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -38,3 +42,6 @@ debezium
 
 > SELECT envelope_type FROM mz_sinks WHERE name = 'mz_sinks_upsert'
 upsert
+
+> SELECT format FROM mz_sinks WHERE name = 'mz_sinks_upsert'
+avro

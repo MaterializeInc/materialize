@@ -9,18 +9,20 @@
 
 //! Provides tooling to handle `WITH` options.
 
-use mz_sql_parser::ast::KafkaBroker;
-use mz_sql_parser::ast::ReplicaDefinition;
-use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use mz_repr::adt::interval::Interval;
-use mz_repr::strconv;
-use mz_repr::GlobalId;
-use mz_storage_client::types::connections::StringOrSecret;
+use mz_repr::bytes::ByteSize;
+use mz_repr::{strconv, GlobalId};
+use mz_sql_parser::ast::{
+    ConnectionDefaultAwsPrivatelink, Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition,
+};
+use mz_storage_types::connections::StringOrSecret;
+use serde::{Deserialize, Serialize};
 
-use crate::ast::{AstInfo, IntervalValue, UnresolvedObjectName, Value, WithOptionValue};
-use crate::names::{ResolvedDataType, ResolvedObjectName};
-use crate::plan::{Aug, PlanError};
+use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
+use crate::names::{ResolvedDataType, ResolvedItemName};
+use crate::plan::{literal, Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, PlanError>;
@@ -76,7 +78,7 @@ impl From<&Object> for GlobalId {
 impl TryFromValue<WithOptionValue<Aug>> for Object {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Object(ResolvedObjectName::Object { id, .. }) => Object(id),
+            WithOptionValue::Item(ResolvedItemName::Item { id, .. }) => Object(id),
             _ => sql_bail!("must provide an object"),
         })
     }
@@ -91,10 +93,28 @@ impl ImpliedValue for Object {
     }
 }
 
-impl TryFromValue<WithOptionValue<Aug>> for UnresolvedObjectName {
+impl TryFromValue<WithOptionValue<Aug>> for Ident {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::UnresolvedObjectName(name) => name,
+            WithOptionValue::Ident(name) => name,
+            _ => sql_bail!("must provide an identifier"),
+        })
+    }
+    fn name() -> String {
+        "identifier".to_string()
+    }
+}
+
+impl ImpliedValue for Ident {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an identifier")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for UnresolvedItemName {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        Ok(match v {
+            WithOptionValue::UnresolvedItemName(name) => name,
             _ => sql_bail!("must provide an object name"),
         })
     }
@@ -103,7 +123,7 @@ impl TryFromValue<WithOptionValue<Aug>> for UnresolvedObjectName {
     }
 }
 
-impl ImpliedValue for UnresolvedObjectName {
+impl ImpliedValue for UnresolvedItemName {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an object name")
     }
@@ -130,7 +150,7 @@ impl ImpliedValue for ResolvedDataType {
 impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Secret(ResolvedObjectName::Object { id, .. }) => {
+            WithOptionValue::Secret(ResolvedItemName::Item { id, .. }) => {
                 StringOrSecret::Secret(id)
             }
             v => StringOrSecret::String(String::try_from_value(v)?),
@@ -147,14 +167,49 @@ impl ImpliedValue for StringOrSecret {
     }
 }
 
+impl TryFromValue<Value> for Duration {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        let interval = Interval::try_from_value(v)?;
+        Ok(interval.duration()?)
+    }
+    fn name() -> String {
+        "interval".to_string()
+    }
+}
+
+impl ImpliedValue for Duration {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an interval value")
+    }
+}
+
+impl TryFromValue<Value> for ByteSize {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::Number(value) | Value::String(value) => Ok(value
+                .parse::<ByteSize>()
+                .map_err(|e| sql_err!("invalid bytes value: {e}"))?),
+            _ => sql_bail!("cannot use value as bytes"),
+        }
+    }
+    fn name() -> String {
+        "bytes".to_string()
+    }
+}
+
+impl ImpliedValue for ByteSize {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value for bytes")
+    }
+}
+
 impl TryFromValue<Value> for Interval {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
-        Ok(match v {
-            Value::Interval(IntervalValue { value, .. })
-            | Value::Number(value)
-            | Value::String(value) => strconv::parse_interval(&value)?,
+        match v {
+            Value::Interval(value) => literal::plan_interval(&value),
+            Value::Number(value) | Value::String(value) => Ok(strconv::parse_interval(&value)?),
             _ => sql_bail!("cannot use value as interval"),
-        })
+        }
     }
     fn name() -> String {
         "interval".to_string()
@@ -168,25 +223,21 @@ impl ImpliedValue for Interval {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
-pub struct OptionalInterval(pub Option<Interval>);
+pub struct OptionalDuration(pub Option<Duration>);
 
-impl From<Interval> for OptionalInterval {
-    fn from(i: Interval) -> OptionalInterval {
+impl From<Duration> for OptionalDuration {
+    fn from(i: Duration) -> OptionalDuration {
         // An interval of 0 disables the setting.
-        let inner = if i == Interval::default() {
-            None
-        } else {
-            Some(i)
-        };
-        OptionalInterval(inner)
+        let inner = if i == Duration::ZERO { None } else { Some(i) };
+        OptionalDuration(inner)
     }
 }
 
-impl TryFromValue<Value> for OptionalInterval {
+impl TryFromValue<Value> for OptionalDuration {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         Ok(match v {
-            Value::Null => OptionalInterval(None),
-            v => Interval::try_from_value(v)?.into(),
+            Value::Null => OptionalDuration(None),
+            v => Duration::try_from_value(v)?.into(),
         })
     }
     fn name() -> String {
@@ -194,7 +245,7 @@ impl TryFromValue<Value> for OptionalInterval {
     }
 }
 
-impl ImpliedValue for OptionalInterval {
+impl ImpliedValue for OptionalDuration {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an interval value")
     }
@@ -407,23 +458,31 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
             WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.into_string())),
+            WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
             WithOptionValue::Sequence(_)
-            | WithOptionValue::Object(_)
-            | WithOptionValue::UnresolvedObjectName(_)
+            | WithOptionValue::Item(_)
+            | WithOptionValue::UnresolvedItemName(_)
             | WithOptionValue::Secret(_)
             | WithOptionValue::DataType(_)
             | WithOptionValue::ClusterReplicas(_)
-            | WithOptionValue::ConnectionKafkaBroker(_) => sql_bail!(
+            | WithOptionValue::ConnectionKafkaBroker(_)
+            | WithOptionValue::ConnectionAwsPrivatelink(_)
+            | WithOptionValue::Refresh(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
+                    // The first few are unreachable because they are handled at the top of the outer match.
+                    WithOptionValue::Value(_) => unreachable!(),
+                    WithOptionValue::Ident(_) => unreachable!(),
+                    WithOptionValue::RetainHistoryFor(_) => unreachable!(),
                     WithOptionValue::Sequence(_) => "sequences",
-                    WithOptionValue::Object(_) => "object references",
-                    WithOptionValue::UnresolvedObjectName(_) => "object names",
+                    WithOptionValue::Item(_) => "object references",
+                    WithOptionValue::UnresolvedItemName(_) => "object names",
                     WithOptionValue::Secret(_) => "secrets",
                     WithOptionValue::DataType(_) => "data types",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
-                    _ => unreachable!(),
+                    WithOptionValue::ConnectionAwsPrivatelink(_) => "connection kafka brokers",
+                    WithOptionValue::Refresh(_) => "refresh option values",
                 },
                 V::name()
             ),
@@ -488,5 +547,45 @@ impl TryFromValue<WithOptionValue<Aug>> for Vec<KafkaBroker<Aug>> {
 impl ImpliedValue for Vec<KafkaBroker<Aug>> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a kafka broker")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for RefreshOptionValue<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::Refresh(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a refresh option", v)
+        }
+    }
+
+    fn name() -> String {
+        "refresh option value".to_string()
+    }
+}
+
+impl ImpliedValue for RefreshOptionValue<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a refresh option value")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ConnectionDefaultAwsPrivatelink<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::ConnectionAwsPrivatelink(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a privatelink", v)
+        }
+    }
+
+    fn name() -> String {
+        "privatelink option value".to_string()
+    }
+}
+
+impl ImpliedValue for ConnectionDefaultAwsPrivatelink<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value")
     }
 }

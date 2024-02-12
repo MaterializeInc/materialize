@@ -19,9 +19,13 @@ class SourceExists(Capability):
     def format_str(cls) -> str:
         return "source_{}"
 
-    def __init__(self, name: str, topic: TopicExists) -> None:
+    def __init__(
+        self, name: str, topic: TopicExists, cluster_name: str, uses_ssh_tunnel: bool
+    ) -> None:
         self.name = name
         self.topic = topic
+        self.cluster_name = cluster_name
+        self.uses_ssh_tunnel = uses_ssh_tunnel
 
     def get_watermarks(self) -> Watermarks:
         return self.topic.watermarks

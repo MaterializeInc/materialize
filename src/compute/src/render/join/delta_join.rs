@@ -12,21 +12,35 @@
 //! Consult [DeltaJoinPlan] documentation for details.
 
 #![allow(clippy::op_ref)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
-use timely::dataflow::Scope;
-use timely::progress::Antichain;
-
-use mz_compute_client::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
-use mz_compute_client::plan::join::JoinClosure;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
+use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
+use mz_compute_types::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
-use mz_repr::{DatumVec, Diff, Row, RowArena};
-use mz_storage_client::types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
+use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_storage_types::errors::DataflowError;
+use mz_timely_util::operator::{CollectionExt, StreamExt};
+use timely::container::columnation::Columnation;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::{Map, OkErr};
+use timely::dataflow::Scope;
+use timely::progress::timestamp::Refines;
+use timely::progress::{Antichain, Timestamp};
 
-use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::render::context::{
+    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
+    SpecializedArrangementImport,
+};
+use crate::render::RenderTimestamp;
+use crate::typedefs::{RowAgent, RowEnter, RowRowAgent, RowRowEnter};
 
-impl<G> Context<G, Row>
+impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
@@ -37,9 +51,9 @@ where
     /// implementation will be pushed in to the join pipeline if at all possible.
     pub fn render_delta_join(
         &mut self,
-        inputs: Vec<CollectionBundle<G, Row>>,
+        inputs: Vec<CollectionBundle<G>>,
         join_plan: DeltaJoinPlan,
-    ) -> CollectionBundle<G, Row> {
+    ) -> CollectionBundle<G> {
         // We create a new region to contain the dataflow paths for the delta join.
         let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
             // Collects error streams for the ambient scope.
@@ -127,9 +141,6 @@ where
                     // Collects error streams for the region scope. Concats before leaving.
                     let mut region_errs = Vec::with_capacity(inputs.len());
 
-                    use differential_dataflow::AsCollection;
-                    use timely::dataflow::operators::Map;
-
                     // Ensure this input is rendered, and extract its update stream.
                     let val = arrangements
                         .get(&(source_relation, source_key))
@@ -138,7 +149,7 @@ where
                     let update_stream = match val {
                         Ok(local) => {
                             let arranged = local.enter_region(region);
-                            let (update_stream, err_stream) = build_update_stream(
+                            let (update_stream, err_stream) = dispatch_build_update_stream_local(
                                 arranged,
                                 as_of,
                                 source_relation,
@@ -149,7 +160,7 @@ where
                         }
                         Err(trace) => {
                             let arranged = trace.enter_region(region);
-                            let (update_stream, err_stream) = build_update_stream(
+                            let (update_stream, err_stream) = dispatch_build_update_stream_trace(
                                 arranged,
                                 as_of,
                                 source_relation,
@@ -191,43 +202,47 @@ where
                             match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
                                 Ok(local) => {
                                     if source_relation < lookup_relation {
-                                        build_halfjoin(
+                                        dispatch_build_halfjoin_local(
                                             update_stream,
                                             local.enter_region(region),
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
+                                            self.shutdown_token.clone(),
                                         )
                                     } else {
-                                        build_halfjoin(
+                                        dispatch_build_halfjoin_local(
                                             update_stream,
                                             local.enter_region(region),
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
+                                            self.shutdown_token.clone(),
                                         )
                                     }
                                 }
                                 Err(trace) => {
                                     if source_relation < lookup_relation {
-                                        build_halfjoin(
+                                        dispatch_build_halfjoin_trace(
                                             update_stream,
                                             trace.enter_region(region),
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
+                                            self.shutdown_token.clone(),
                                         )
                                     } else {
-                                        build_halfjoin(
+                                        dispatch_build_halfjoin_trace(
                                             update_stream,
                                             trace.enter_region(region),
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
+                                            self.shutdown_token.clone(),
                                         )
                                     }
                                 }
@@ -255,8 +270,9 @@ where
                             update_stream.flat_map_fallible("DeltaJoinFinalization", {
                                 // Reuseable allocation for unpacking.
                                 let mut datums = DatumVec::new();
-                                let mut row_builder = Row::default();
                                 move |row| {
+                                    let binding = SharedRow::get();
+                                    let mut row_builder = binding.borrow_mut();
                                     let temp_storage = RowArena::new();
                                     let mut datums_local = datums.borrow_with(&row);
                                     // TODO(mcsherry): re-use `row` allocation.
@@ -291,11 +307,96 @@ where
     }
 }
 
-use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::BatchReader;
-use differential_dataflow::trace::Cursor;
-use differential_dataflow::trace::TraceReader;
-use differential_dataflow::Collection;
+/// Dispatches half-join construction according to arrangement type specialization.
+fn dispatch_build_halfjoin_local<G, CF>(
+    updates: Collection<G, (Row, G::Timestamp), Diff>,
+    trace: SpecializedArrangement<G>,
+    prev_key: Vec<MirScalarExpr>,
+    prev_thinning: Vec<usize>,
+    comparison: CF,
+    closure: JoinClosure,
+    shutdown_token: ShutdownToken,
+) -> (
+    Collection<G, (Row, G::Timestamp), Diff>,
+    Collection<G, DataflowError, Diff>,
+)
+where
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
+    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
+{
+    match trace {
+        SpecializedArrangement::RowUnit(inner) => build_halfjoin::<_, RowAgent<_, _>, _>(
+            updates,
+            inner,
+            None,
+            Some(vec![]),
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
+        SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
+            updates,
+            inner,
+            None,
+            None,
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
+    }
+}
+
+/// Dispatches half-join construction according to trace type specialization.
+fn dispatch_build_halfjoin_trace<G, T, CF>(
+    updates: Collection<G, (Row, G::Timestamp), Diff>,
+    trace: SpecializedArrangementImport<G, T>,
+    prev_key: Vec<MirScalarExpr>,
+    prev_thinning: Vec<usize>,
+    comparison: CF,
+    closure: JoinClosure,
+    shutdown_token: ShutdownToken,
+) -> (
+    Collection<G, (Row, G::Timestamp), Diff>,
+    Collection<G, DataflowError, Diff>,
+)
+where
+    G: Scope,
+    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
+    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
+{
+    match trace {
+        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin::<_, RowEnter<_, _, _>, _>(
+            updates,
+            inner,
+            None,
+            Some(vec![]),
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
+        SpecializedArrangementImport::RowRow(inner) => {
+            build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
+                updates,
+                inner,
+                None,
+                None,
+                prev_key,
+                prev_thinning,
+                comparison,
+                closure,
+                shutdown_token,
+            )
+        }
+    }
+}
 
 /// Constructs a `half_join` from supplied arguments.
 ///
@@ -310,10 +411,13 @@ use differential_dataflow::Collection;
 fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
+    trace_key_types: Option<Vec<ColumnType>>,
+    trace_val_types: Option<Vec<ColumnType>>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
+    shutdown_token: ShutdownToken,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
     Collection<G, DataflowError, Diff>,
@@ -321,51 +425,68 @@ fn build_halfjoin<G, Tr, CF>(
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
-    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
+    Tr: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    Tr::KeyOwned: ExchangeData + Hashable + Default + FromRowByTypes + IntoRowByTypes,
+    for<'a> Tr::Val<'a>: IntoRowByTypes,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
+    let updates_key_types = trace_key_types.clone();
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
-        let mut row_buf = Row::default();
+        let mut key_buf = Tr::KeyOwned::default();
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
-            row_buf.packer().try_extend(
+            let key = key_buf.try_from_datum_iter(
                 prev_key
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage)),
+                updates_key_types.as_deref(),
             )?;
-            let row_key = row_buf.clone();
-            row_buf
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            row_builder
                 .packer()
                 .extend(prev_thinning.iter().map(|&c| datums_local[c]));
-            let row_value = row_buf.clone();
+            let row_value = row_builder.clone();
 
-            Ok((row_key, row_value, time))
+            Ok((key, row_value, time))
         }
     });
 
-    use crate::render::RenderTimestamp;
-    use differential_dataflow::AsCollection;
-    use timely::dataflow::operators::OkErr;
-
     let mut datums = DatumVec::new();
-    let mut row_builder = Row::default();
 
     if closure.could_error() {
         let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
             trace,
-            |time| time.step_back(),
+            |time, antichain| {
+                antichain.insert(time.step_back());
+            },
             comparison,
             // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+                // Check the shutdown token to avoid doing unnecessary work when the dataflow is
+                // shutting down.
+                shutdown_token.probe()?;
+
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+
+                let key = key.into_datum_iter(trace_key_types.as_deref());
+                let stream_row = stream_row.into_datum_iter(None);
+                let lookup_row = lookup_row.into_datum_iter(trace_val_types.as_deref());
+
+                let mut datums_local = datums.borrow();
+                datums_local.extend(key);
+                datums_local.extend(stream_row);
+                datums_local.extend(lookup_row);
+
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
                 let diff = diff1.clone() * diff2.clone();
                 let dout = (row, time.clone());
@@ -389,15 +510,32 @@ where
         let oks = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
             trace,
-            |time| time.step_back(),
+            |time, antichain| {
+                antichain.insert(time.step_back());
+            },
             comparison,
             // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+                // Check the shutdown token to avoid doing unnecessary work when the dataflow is
+                // shutting down.
+                shutdown_token.probe()?;
+
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+
+                let key = key.into_datum_iter(trace_key_types.as_deref());
+                let stream_row = stream_row.into_datum_iter(None);
+                let lookup_row = lookup_row.into_datum_iter(trace_val_types.as_deref());
+
+                let mut datums_local = datums.borrow();
+                datums_local.extend(key);
+                datums_local.extend(stream_row);
+                datums_local.extend(lookup_row);
+
                 let row = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
                     .expect("Closure claimed to never errer");
@@ -410,13 +548,9 @@ where
     }
 }
 
-/// Builds the beginning of the update stream of a delta path.
-///
-/// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
-/// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
-/// updates happening at the same time on different relations.
-fn build_update_stream<G, Tr>(
-    trace: Arranged<G, Tr>,
+/// Dispatches building of a delta path update stream by to arrangement type specialization.
+fn dispatch_build_update_stream_local<G>(
+    trace: SpecializedArrangement<G>,
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
@@ -424,19 +558,88 @@ fn build_update_stream<G, Tr>(
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
-    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
 {
-    use differential_dataflow::AsCollection;
-    use mz_timely_util::operator::StreamExt;
-    use timely::dataflow::channels::pact::Pipeline;
+    match trace {
+        SpecializedArrangement::RowUnit(inner) => build_update_stream::<_, RowAgent<_, _>>(
+            inner,
+            None,
+            Some(vec![]),
+            as_of,
+            source_relation,
+            initial_closure,
+        ),
+        SpecializedArrangement::RowRow(inner) => build_update_stream::<_, RowRowAgent<_, _>>(
+            inner,
+            None,
+            None,
+            as_of,
+            source_relation,
+            initial_closure,
+        ),
+    }
+}
 
-    use timely::progress::timestamp::Refines;
+/// Dispatches building of a delta path update stream by to trace type specialization.
+fn dispatch_build_update_stream_trace<G, T>(
+    trace: SpecializedArrangementImport<G, T>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+where
+    G: Scope,
+    T: Timestamp + Lattice + Columnation,
+    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
+{
+    match trace {
+        SpecializedArrangementImport::RowUnit(inner) => {
+            build_update_stream::<_, RowEnter<_, _, _>>(
+                inner,
+                None,
+                Some(vec![]),
+                as_of,
+                source_relation,
+                initial_closure,
+            )
+        }
+        SpecializedArrangementImport::RowRow(inner) => {
+            build_update_stream::<_, RowRowEnter<_, _, _>>(
+                inner,
+                None,
+                None,
+                as_of,
+                source_relation,
+                initial_closure,
+            )
+        }
+    }
+}
+
+/// Builds the beginning of the update stream of a delta path.
+///
+/// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
+/// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
+/// updates happening at the same time on different relations.
+fn build_update_stream<G, Tr>(
+    trace: Arranged<G, Tr>,
+    trace_key_types: Option<Vec<ColumnType>>,
+    trace_val_types: Option<Vec<ColumnType>>,
+    as_of: Antichain<mz_repr::Timestamp>,
+    source_relation: usize,
+    initial_closure: JoinClosure,
+) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+where
+    G: Scope,
+    G::Timestamp: crate::render::RenderTimestamp,
+    Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    for<'a> Tr::Key<'a>: IntoRowByTypes,
+    for<'a> Tr::Val<'a>: IntoRowByTypes,
+{
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {
         inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
     }
 
-    let mut row_buf = Row::default();
     let (ok_stream, err_stream) =
         trace
             .stream
@@ -444,8 +647,11 @@ where
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
                     input.for_each(|time, data| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
+
                         for wrapper in data.iter() {
                             let batch = &wrapper;
                             let mut cursor = batch.cursor();
@@ -458,14 +664,22 @@ where
                                             || !inner_as_of.elements().contains(time)
                                         {
                                             let temp_storage = RowArena::new();
-                                            let mut datums_local =
-                                                datums.borrow_with_many(&[key, val]);
+
+                                            let key =
+                                                key.into_datum_iter(trace_key_types.as_deref());
+                                            let val =
+                                                val.into_datum_iter(trace_val_types.as_deref());
+
+                                            let mut datums_local = datums.borrow();
+                                            datums_local.extend(key);
+                                            datums_local.extend(val);
+
                                             if !initial_closure.is_identity() {
                                                 match initial_closure
                                                     .apply(
                                                         &mut datums_local,
                                                         &temp_storage,
-                                                        &mut row_buf,
+                                                        &mut row_builder,
                                                     )
                                                     .transpose()
                                                 {
@@ -483,8 +697,8 @@ where
                                                 }
                                             } else {
                                                 let row = {
-                                                    row_buf.packer().extend(&*datums_local);
-                                                    row_buf.clone()
+                                                    row_builder.packer().extend(&*datums_local);
+                                                    row_builder.clone()
                                                 };
                                                 ok_session.give((row, time.clone(), diff.clone()));
                                             }

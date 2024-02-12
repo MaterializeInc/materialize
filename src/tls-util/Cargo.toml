@@ -1,0 +1,27 @@
+[package]
+name = "mz-tls-util"
+description = "A tiny utility crate for making TLS connectors."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { version = "1.0.66", features = ["backtrace"] }
+openssl = { version = "0.10.48", features = ["vendored"] }
+openssl-sys = { version = "0.9.80", features = ["vendored"] }
+postgres-openssl = { version = "0.5.0" }
+thiserror = "1.0.37"
+tokio = { version = "1.32.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
+tokio-postgres = { version = "0.7.8" }
+tracing = "0.1.37"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

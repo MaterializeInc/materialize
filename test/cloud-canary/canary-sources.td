@@ -11,7 +11,7 @@
 # topic creation
 # $ kafka-create-topic topic=bytes
 
-$ kafka-ingest format=bytes key-terminator=: key-format=bytes topic=bytes repeat=1000
+$ kafka-ingest format=bytes key-terminator=: key-format=bytes topic=bytes repeat=100
 abc:abc
 
 > DROP SOURCE IF EXISTS bytes CASCADE;
@@ -30,11 +30,17 @@ abc:abc
   SASL PASSWORD = SECRET confluent_password
   );
 
+> CREATE CLUSTER canary_sources SIZE '3xsmall';
+
 > CREATE SOURCE bytes
+  IN CLUSTER canary_sources
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
   FORMAT BYTES
-  ENVELOPE NONE
-  WITH (SIZE '3xsmall');
+  ENVELOPE NONE;
 
-> SELECT COUNT(*) > 0 from bytes
+> CREATE MATERIALIZED VIEW bytes_view AS SELECT COUNT(*) AS cnt FROM bytes;
+
+> CREATE DEFAULT INDEX ON bytes_view;
+
+> SELECT cnt > 0 from bytes_view
 true

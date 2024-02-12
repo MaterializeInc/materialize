@@ -1,0 +1,61 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test that custom types support type modifiers.
+
+reset-server
+
+statement ok
+CREATE TYPE y1 AS (
+    "id" int4,
+    "name" text,
+    "num" numeric(3, 1),
+    "updatedAt" timestamp(3)
+)
+
+statement ok
+CREATE TABLE t1 (y y1)
+
+statement ok
+INSERT INTO t1 VALUES ((1, 'a', 1.234, '2001-02-03 04:05:06.123456789'))
+
+query T
+SELECT * FROM t1
+----
+(1,a,1.2,"2001-02-03 04:05:06.123")
+
+statement ok
+CREATE TYPE y2 AS LIST (ELEMENT TYPE = timestamp(2))
+
+query T
+SELECT '{''2001-02-03 04:05:06.123456789'', ''2001-02-03 04:05:06.987'', ''2001-02-03 04:05:06.5''}'::y2::text
+----
+{"2001-02-03 04:05:06.12","2001-02-03 04:05:06.99","2001-02-03 04:05:06.5"}
+
+query T
+SELECT element_modifiers::text FROM mz_list_types l JOIN mz_types t ON l.id=t.id AND t.name='y2'
+----
+{2}
+
+statement ok
+CREATE TYPE y3 AS MAP (KEY TYPE = text, VALUE TYPE = numeric(5, 2))
+
+statement ok
+CREATE TYPE y4 AS MAP (KEY TYPE = text, VALUE TYPE = y3)
+
+query T
+SELECT '{a=>{b=>1.2,c=>5.6789}}'::y4::text
+----
+{a=>{b=>1.2,c=>5.68}}
+
+query T
+SELECT value_modifiers::text FROM mz_map_types m JOIN mz_types t ON m.id=t.id AND t.name IN ('y3', 'y4') ORDER BY t.name
+----
+{5,2}
+NULL

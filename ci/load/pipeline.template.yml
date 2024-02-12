@@ -1,0 +1,20 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Fires periodic load tests
+
+steps:
+  - command: bin/ci-builder run stable env MZ_SCRATCH_NO_DEFAULT_ENV=1 bin/pyactivate -m materialize.cli.cloudbench start --profile confluent --trials 3 --revs HEAD  --append_metadata --s3_root mz-periodic-cloudbench/avro_ingest_periodic materialize.benches.avro_ingest -r 1000000 -n 10 -d big-records
+    timeout_in_minutes: 20
+    agents:
+      queue: linux-x86_64
+    env:
+      AWS_DEFAULT_REGION: us-east-1
+    plugins:
+       - ./ci/plugins/scratch-aws-access

@@ -9,7 +9,7 @@
 
 //! Structs and traits for `EXPLAIN AS JSON`.
 
-use super::*;
+use crate::explain::*;
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Json`].
@@ -29,6 +29,12 @@ where
 pub fn json_string<T: DisplayJson>(t: &T) -> String {
     let value = t.to_serde_value().expect("serde_json::Value");
     serde_json::to_string_pretty(&value).expect("JSON string")
+}
+
+impl DisplayJson for serde_json::Value {
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
+        Ok(self.to_owned())
+    }
 }
 
 impl DisplayJson for String {

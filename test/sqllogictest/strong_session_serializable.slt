@@ -1,0 +1,153 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_session_timelines = true;
+----
+COMPLETE 0
+
+# Use explicit conn names to guarantee that the same session is used for all queries.
+
+simple conn=materialize,user=materialize
+SET TRANSACTION_ISOLATION TO "strong session serializable";
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+CREATE CLUSTER stuck SIZE '1';
+----
+COMPLETE 0
+
+# TODO(jkosh44) Read mz_clusters once DDL is working
+
+simple conn=materialize,user=materialize
+CREATE TABLE t (a INT);
+----
+COMPLETE 0
+
+# TODO(jkosh44) Read mz_tables once DDL is working
+
+simple conn=materialize,user=materialize
+CREATE MATERIALIZED VIEW mv IN CLUSTER stuck AS SELECT SUM(a) FROM t;
+----
+COMPLETE 0
+
+# TODO(jkosh44) Read mz_materialized_views once DDL is working
+
+simple conn=materialize,user=materialize
+INSERT INTO t VALUES (1);
+----
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv;
+----
+1
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+INSERT INTO t VALUES (1);
+----
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv
+----
+2
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+ALTER CLUSTER stuck SET (REPLICATION FACTOR = 0);
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv;
+----
+2
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+INSERT INTO t VALUES (1);
+----
+COMPLETE 1
+
+# TODO(jkosh44) It would be nice to assert that a SELECT would block indefinitely.
+
+simple conn=materialize,user=materialize
+ALTER CLUSTER stuck SET (REPLICATION FACTOR = 1);
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv;
+----
+3
+COMPLETE 1
+
+# Test that reading from a constant materialized view doesn't send our session timeline too far
+# into the future.
+
+simple conn=materialize,user=materialize
+CREATE MATERIALIZED VIEW const_mv AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+SELECT * FROM const_mv;
+----
+1
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv;
+----
+3
+COMPLETE 1
+
+# Test that reading from a constant materialized view with a temporal filter doesn't send our
+# session timeline too far into the future.
+# This test will break in the year 10000. Please update the year 10000 in the view days to a much
+# larger year.
+
+simple conn=materialize,user=materialize
+CREATE VIEW days AS
+    SELECT generate_series(
+        CAST('1970-08-06' AS timestamp),
+        CAST('1970-08-07' AS timestamp),
+        CAST('1 day' AS interval)
+    ) AS day
+    UNION ALL
+    SELECT generate_series(
+        CAST('10000-08-06' AS timestamp),
+        CAST('10000-08-07' AS timestamp),
+        CAST('1 day' AS interval)
+    ) AS day;
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+CREATE MATERIALIZED VIEW days_mv AS SELECT day FROM days WHERE mz_now() <= day;
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+SELECT * FROM days_mv;
+----
+10000-08-06 00:00:00
+10000-08-07 00:00:00
+COMPLETE 2
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv;
+----
+3
+COMPLETE 1

@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+MZFROM prod-base
 
-RUN apt-get update && apt-get -qy install ca-certificates
-
-COPY examples/persistcli /usr/local/bin/persistcli
+COPY persistcli /usr/local/bin/persistcli
+COPY mz-stash-debug /usr/local/bin/mz-stash-debug
+COPY mz-catalog-debug /usr/local/bin/mz-catalog-debug
 
 # TODO: the intention is for this image to eventually serve as the one-off
 # job launcher for all of materialize, not just for persist. but because of

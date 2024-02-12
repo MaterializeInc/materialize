@@ -14,9 +14,10 @@ jack,jill
 goofus,gallant
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE src
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS

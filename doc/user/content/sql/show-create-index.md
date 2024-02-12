@@ -23,9 +23,9 @@ SHOW INDEXES FROM my_view;
 ```
 
 ```nofmt
-     name    | on  | cluster | key
--------------+-----+---------+--------------------------------------------
- my_view_idx | t   | default | {a, b}
+     name    | on  | cluster    | key
+-------------+-----+------------+--------------------------------------------
+ my_view_idx | t   | quickstart | {a, b}
 ```
 
 ```sql
@@ -37,6 +37,12 @@ SHOW CREATE INDEX my_view_idx;
 --------------------------------+------------------------------------------------------------------------------------------------
  materialize.public.my_view_idx | CREATE INDEX "my_view_idx" IN CLUSTER "default" ON "materialize"."public"."my_view" ("a", "b")
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the index.
 
 ## Related pages
 

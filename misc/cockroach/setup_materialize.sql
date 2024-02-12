@@ -13,6 +13,9 @@
 -- See: https://github.com/MaterializeInc/materialize/issues/16726
 SET CLUSTER SETTING sql.stats.forecasts.enabled = false;
 
+SET CLUSTER SETTING storage.max_sync_duration.fatal.enabled = false;
+
 CREATE SCHEMA IF NOT EXISTS consensus;
 CREATE SCHEMA IF NOT EXISTS adapter;
 CREATE SCHEMA IF NOT EXISTS storage;
+CREATE SCHEMA IF NOT EXISTS tsoracle;

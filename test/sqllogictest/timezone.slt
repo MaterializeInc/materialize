@@ -66,6 +66,21 @@ SELECT timezone('America/New_York', TIMESTAMP '2020-12-21 18:53:49')
 2020-12-21 23:53:49+00
 
 query T
+SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'PST'
+----
+2020-12-22 02:53:49+00
+
+query T
+SELECT TIMESTAMPTZ '2020-12-21 18:53:49 PST'
+----
+2020-12-22 02:53:49+00
+
+query T
+SELECT timezone('PST', TIMESTAMP '2020-12-21 18:53:49')
+----
+2020-12-22 02:53:49+00
+
+query T
 SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'
 ----
 2020-12-21 23:53:49+00
@@ -120,3 +135,150 @@ query T
 SELECT TIMESTAMPTZ '2020-11-01 01:00:00 America/New_York'
 ----
 2020-11-01 06:00:00+00
+
+# Regression for 20324
+query error timestamp out of range
+SELECT pg_catalog.timezone(-INTERVAL '1' MINUTE, TIMESTAMP '95143-12-31 23:59:59' + INTERVAL '167 MILLENNIUM')
+
+# Regression for #20514
+query error timestamp out of range
+SELECT pg_catalog.timezone('JAPAN', TIMESTAMPTZ '95143-12-31 23:59:59+06' + INTERVAL '167 MILLENNIUM')
+
+# Test that POSIX is used for timezone() and AT TIME ZONE.
+
+query T
+SELECT timezone('+5', '0001-01-01 12:00:00 +6'::TIMESTAMPTZ);
+----
+0001-01-01 01:00:00
+
+query T
+SELECT '0001-01-01 12:00:00 +6'::TIMESTAMPTZ AT TIME ZONE '+5';
+----
+0001-01-01 01:00:00
+
+query T
+SELECT timezone('-5', '0001-01-01 12:00:00 -6'::TIMESTAMPTZ);
+----
+0001-01-01 23:00:00
+
+query T
+SELECT '0001-01-01 12:00:00 -6'::TIMESTAMPTZ AT TIME ZONE '-5';
+----
+0001-01-01 23:00:00
+
+query T
+SELECT timezone_offset('America/New_York', '2023-01-01T00:00:00+00')
+----
+(EST,-05:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('America/Los_Angeles', '2023-01-01T00:00:00+00')
+----
+(PST,-08:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('america/new_york', '2023-01-01T00:00:00+00')
+----
+(EST,-05:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('America/New_York', '2023-01-01T00:00:00+00').abbrev
+----
+EST
+
+query T
+SELECT timezone_offset('America/New_York', '2023-01-01T00:00:00+00').base_utc_offset
+----
+-05:00:00
+
+query T
+SELECT timezone_offset('America/New_York', '2023-01-01T00:00:00+00').dst_offset
+----
+00:00:00
+
+query T
+SELECT timezone_offset('America/New_York', '2023-06-01T00:00:00+00').base_utc_offset
+----
+-05:00:00
+
+query T
+SELECT timezone_offset('America/New_York', '2023-06-01T00:00:00+00').dst_offset
+----
+01:00:00
+
+query T
+SELECT timezone_offset('America/New_York', '2023-11-05T05:00:00+00')
+----
+(EDT,-05:00:00,01:00:00)
+
+query T
+SELECT timezone_offset('America/New_York', '2023-11-05T05:30:00+00')
+----
+(EDT,-05:00:00,01:00:00)
+
+query T
+SELECT timezone_offset('America/New_York', '2023-11-05T06:00:00+00')
+----
+(EST,-05:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00 UTC')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00 CET')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00 CEST')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-06-05T06:00:00 CET')
+----
+(CEST,01:00:00,01:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-06-05T06:00:00 CEST')
+----
+(CEST,01:00:00,01:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00.123+00')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset(NULL, '2023-11-05T06:00:00+00')
+----
+NULL
+
+query T
+SELECT timezone_offset('Europe/Vienna', NULL)
+----
+NULL
+
+query error invalid IANA Time Zone Database identifier: ''
+SELECT timezone_offset('', '2023-11-05T06:00:00+00')
+
+query error invalid IANA Time Zone Database identifier: 'America/New_Yorks'
+SELECT timezone_offset('America/New_Yorks', now())
+
+query error invalid IANA Time Zone Database identifier: 'PST'
+SELECT timezone_offset('PST', now())
+
+query error invalid IANA Time Zone Database identifier: '-05'
+SELECT timezone_offset('-05', now())

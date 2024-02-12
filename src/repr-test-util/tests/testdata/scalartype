@@ -29,7 +29,7 @@ timestamp_tz
 build-scalar-type
 (decimal 10 2)
 ----
-TimestampTz
+TimestampTz { precision: None }
 
 build-scalar-type
 (numeric 11)

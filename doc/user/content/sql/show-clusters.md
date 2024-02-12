@@ -7,9 +7,7 @@ menu:
 
 ---
 
-{{< show-command-note >}}
-
-`SHOW CLUSTERS` lists the [clusters](/overview/key-concepts/#clusters) configured in Materialize.
+`SHOW CLUSTERS` lists the [clusters](/get-started/key-concepts/#clusters) configured in Materialize.
 
 ## Syntax
 
@@ -21,16 +19,18 @@ When you enable a Materialize region, several clusters that are used to improve
 the user experience, as well as support system administration tasks, will be
 pre-installed.
 
-### `default` cluster
+### `quickstart` cluster
 
-A cluster named `default` with a single `xsmall` [replica](/overview/key-concepts/#cluster-replicas)
-named `r1` will be pre-installed in every environment. You can modify or drop
-this cluster or its replicas at any time.
+A cluster named `quickstart` with a size of `xsmall` and a replication factor of
+`1` will be pre-installed in every environment. You can modify or drop this
+cluster at any time.
 
 {{< note >}}
-The default value for the `cluster` session parameter is `default`.
-If the `default` cluster is dropped, you must run [`SET cluster`](/sql/select/#ad-hoc-queries)
-to choose a valid cluster in order to run `SELECT` queries.
+The default value for the `cluster` session parameter is `quickstart`.
+If the `quickstart` cluster is dropped, you must run [`SET cluster`](/sql/select/#ad-hoc-queries)
+to choose a valid cluster in order to run `SELECT` queries. A _superuser _(i.e. `Organization Admin`)
+can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
+default value.
 {{< /note >}}
 
 ### `mz_introspection` system cluster
@@ -69,12 +69,12 @@ SHOW CLUSTERS;
 ```
 
 ```nofmt
-       name
----------------------
- default
- auction_house
- mz_introspection
- mz_system
+       name                  replicas
+--------------------- | ------------------
+ default              |  r1 (3xsmall)
+ auction_house        |  r1 (3xsmall)
+ mz_introspection     |  r1 (2xsmall)
+ mz_system            |  r1 (2xsmall)
 ```
 
 ```sql
@@ -82,9 +82,9 @@ SHOW CLUSTERS LIKE 'auction_%';
 ```
 
 ```nofmt
-       name
----------------------
- auction_house
+      name                  replicas
+--------------------- | ------------------
+ auction_house        |  r1 (3xsmall)
 ```
 
 

@@ -7,12 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
-
-RUN apt-get update && apt-get -qy install \
-    ca-certificates \
-    postgresql-client \
-    wait-for-it
+MZFROM testdrive-base
 
 COPY testdrive /usr/local/bin/
 

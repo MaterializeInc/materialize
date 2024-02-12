@@ -11,14 +11,15 @@
 > SELECT COUNT(*) FROM one;
 10
 
-$ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)) replacement=<>
-
-# Note that the above regex does NOT match timestamps that are `0`, and also that we check `can respond immediately` == `false`.
-# We are explicitly checking that the _upper_ of `two` has moved, but we see that we can't actually query any
-# data out of it yet.
-> EXPLAIN TIMESTAMP FOR SELECT * FROM two
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: false\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.two (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
-
 # Here we note that the top-level source is also queryable,...
-> EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n\nsource materialize.public.mz_source (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
+> SELECT * FROM mz_source
+
+# We want to verify that the second subsource won't produce a snapshot but we
+# can't do anything better other than sleep for while and check that the upper
+# remains at 0. Given the tiny amount of data we'll give just a few seconds
+# after we have already confirmed that the first subsource has completed its
+# snapshot.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+> SELECT write_frontier FROM mz_internal.mz_frontiers f JOIN mz_objects o ON f.object_id = o.id WHERE o.name = 'two';
+0

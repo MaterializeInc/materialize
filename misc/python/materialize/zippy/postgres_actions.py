@@ -9,9 +9,9 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTableExists
@@ -20,7 +20,7 @@ from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTab
 class PostgresStart(Action):
     """Start a PostgresInstance instance."""
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [PostgresRunning()]
 
     def run(self, c: Composition) -> None:
@@ -31,10 +31,10 @@ class PostgresStop(Action):
     """Stop the Postgres instance."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {PostgresRunning}
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {PostgresRunning}
 
     def run(self, c: Composition) -> None:
@@ -53,8 +53,8 @@ class CreatePostgresTable(Action):
     """Creates a table on the Postgres instance. 50% of the tables have a PK."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, PostgresRunning}
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning, PostgresRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
         this_postgres_table = PostgresTableExists(
@@ -83,7 +83,7 @@ class CreatePostgresTable(Action):
 
     def run(self, c: Composition) -> None:
         if self.new_postgres_table:
-            primary_key = f"PRIMARY KEY" if self.postgres_table.has_pk else ""
+            primary_key = "PRIMARY KEY" if self.postgres_table.has_pk else ""
             c.testdrive(
                 dedent(
                     f"""
@@ -95,7 +95,7 @@ class CreatePostgresTable(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.postgres_table] if self.new_postgres_table else []
 
 
@@ -106,8 +106,8 @@ class PostgresDML(Action):
     MAX_BATCH_SIZE = 10000
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, PostgresRunning, PostgresTableExists}
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning, PostgresRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.postgres_table = random.choice(capabilities.get(PostgresTableExists))

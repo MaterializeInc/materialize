@@ -12,8 +12,8 @@
 # Set up the materialize autodeleting s3 bucket env vars. External developers
 # will have to use thier own autodeleting bucket and export the same env vars.
 
-export MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete"
-export AWS_DEFAULT_REGION="us-east-2"
+export MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete"
+export AWS_DEFAULT_REGION="us-east-1"
 export AWS_PROFILE="mz-scratch-admin"
 
 if [[ "$MZDEV_POSTGRES" ]]; then

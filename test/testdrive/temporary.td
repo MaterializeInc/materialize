@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+$ set-regex match=cluster1|quickstart replacement=<CLUSTER_NAME>
 
 > CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')
 
@@ -115,7 +115,7 @@ contains:table "mz_temp.temp_t" already exists
 #  on_name    key_name            seq_in_index  column_name  expression  nullable
 #  name                 on          cluster         key
 # --------------------------------------------------------------------------------
-#  temp_t_primary_idx   d           default         {a, b}
+#  temp_t_primary_idx   d           quickstart      {a, b}
 
 > DROP TABLE temp_t
 
@@ -198,13 +198,13 @@ $ set schema={
   }
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE TEMPORARY SOURCE data_schema_inline
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SOURCE
+contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SOURCE
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -214,12 +214,12 @@ contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE
 ! CREATE TEMPORARY SINK data_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-sink-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SINK
+contains:Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found SINK
 
 #####################################################################
 
 ! DROP VIEW temp_v;
-contains:cannot drop mz_temp.temp_v: still depended upon by catalog item 'mz_temp.double_temp_v'
+contains:cannot drop view "temp_v": still depended upon by view "double_temp_v"
 
 > DROP VIEW double_temp_v;
 

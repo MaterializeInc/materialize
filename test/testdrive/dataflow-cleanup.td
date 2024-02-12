@@ -15,6 +15,8 @@
 
 # Create a clean replica to inspect dataflow state on.
 
+> DROP CLUSTER IF EXISTS test
+
 > CREATE CLUSTER test REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '10ms'))
 > SET cluster = test
 > SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
@@ -39,7 +41,7 @@ false
 > CREATE INDEX test_index ON constant_view (a)
 > SELECT count(*) FROM constant_view
 1000
-> SELECT mz_internal.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 > SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
 false
@@ -64,7 +66,7 @@ false
 > CREATE MATERIALIZED VIEW test_mv AS SELECT generate_series(1, 1000)
 > SELECT count(*) FROM test_mv
 1000
-> SELECT mz_internal.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
 > SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
 false
@@ -74,7 +76,9 @@ false
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/16326
 
-> CREATE SOURCE lgtpch FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES WITH (SIZE = '1');
+> CREATE CLUSTER lgtpch_cluster_cleanup SIZE '1';
+
+> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES;
 > CREATE MATERIALIZED VIEW q14 AS
   SELECT
     100.00 * sum(case
@@ -91,13 +95,14 @@ false
     AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month
 > SELECT count(*) > 0 FROM q14
 true
-> SELECT mz_internal.mz_sleep(1)
+> SELECT mz_unsafe.mz_sleep(1)
 <null>
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
-false
+> SELECT count(*) FROM mz_internal.mz_dataflow_operators
+0
 > DROP MATERIALIZED VIEW q14
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
-false
+> SELECT count(*)  FROM mz_internal.mz_dataflow_operators
+0
 
 # Clean up.
 > DROP CLUSTER test CASCADE
+> DROP SOURCE lgtpch CASCADE

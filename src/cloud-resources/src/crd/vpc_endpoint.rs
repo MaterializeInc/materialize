@@ -9,7 +9,9 @@
 
 //! VpcEndpoint custom resource, to be reconciled into an AWS VPC Endpoint by the
 //! environment-controller.
+use std::fmt;
 
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -44,9 +46,60 @@ pub mod v1 {
         pub role_suffix: String,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+    #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
     #[serde(rename_all = "camelCase")]
-    pub struct VpcEndpointStatus {}
+    pub struct VpcEndpointStatus {
+        // This will be None if the customer hasn't allowed our principal, got the name of their
+        // VPC Endpoint Service wrong, or we've otherwise failed to create the VPC Endpoint.
+        pub vpc_endpoint_id: Option<String>,
+        pub state: Option<VpcEndpointState>,
+        pub conditions: Option<Vec<Condition>>,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub enum VpcEndpointState {
+        // Internal States
+        PendingServiceDiscovery,
+        CreatingEndpoint,
+        RecreatingEndpoint,
+        UpdatingEndpoint,
+
+        // AWS States
+        // Connection established to the customer's VPC Endpoint Service.
+        Available,
+        Deleted,
+        Deleting,
+        Expired,
+        Failed,
+        // Customer has approved the connection. It should eventually move to Available.
+        Pending,
+        // Waiting on the customer to approve the connection.
+        PendingAcceptance,
+        Rejected,
+        Unknown,
+    }
+
+    impl fmt::Display for VpcEndpointState {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            let repr = match self {
+                VpcEndpointState::PendingServiceDiscovery => "pending-service-discovery",
+                VpcEndpointState::CreatingEndpoint => "creating-endpoint",
+                VpcEndpointState::RecreatingEndpoint => "recreating-endpoint",
+                VpcEndpointState::UpdatingEndpoint => "updating-endpoint",
+                VpcEndpointState::Available => "available",
+                VpcEndpointState::Deleted => "deleted",
+                VpcEndpointState::Deleting => "deleting",
+                VpcEndpointState::Expired => "expired",
+                VpcEndpointState::Failed => "failed",
+                VpcEndpointState::Pending => "pending",
+                VpcEndpointState::PendingAcceptance => "pending-acceptance",
+                VpcEndpointState::Rejected => "rejected",
+                VpcEndpointState::Unknown => "unknown",
+            };
+            write!(f, "{}", repr)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -56,7 +109,7 @@ mod tests {
     use kube::core::crd::merge_crds;
     use kube::CustomResourceExt;
 
-    #[test]
+    #[mz_ore::test]
     fn test_vpc_endpoint_crd_matches() {
         let crd = merge_crds(vec![super::v1::VpcEndpoint::crd()], "v1").unwrap();
         let crd_json = serde_json::to_string(&serde_json::json!(&crd)).unwrap();

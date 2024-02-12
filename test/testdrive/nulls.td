@@ -23,11 +23,17 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
 {"a": null}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE foo
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${foo-schema}'
+
+> SELECT * FROM foo;
+1
+2
+<null>
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM foo JOIN foo as foo2 USING (a);
@@ -47,6 +53,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=nullpayload 
 :así
 
 > CREATE SOURCE nullpayload (col)
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nullpayload-${testdrive.seed}')
   FORMAT BYTES
 

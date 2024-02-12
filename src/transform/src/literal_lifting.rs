@@ -22,15 +22,14 @@
 
 use std::collections::BTreeMap;
 
-use itertools::Itertools;
-
+use itertools::{zip_eq, Itertools};
 use mz_expr::visit::Visit;
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::{Row, RowPacker};
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Hoist literal values from maps wherever possible.
 #[derive(Debug)]
@@ -54,15 +53,15 @@ impl CheckedRecursion for LiteralLifting {
 
 impl crate::Transform for LiteralLifting {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "literal_lifting")
     )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let literals = self.action(relation, &mut BTreeMap::new())?;
         if !literals.is_empty() {
@@ -230,7 +229,7 @@ impl LiteralLifting {
                         Ok(Vec::new())
                     }
                 }
-                MirRelationExpr::Get { id, typ } => {
+                MirRelationExpr::Get { id, typ, .. } => {
                     // A get expression may need to have literal expressions appended to it.
                     let literals = gets.get(id).cloned().unwrap_or_else(Vec::new);
                     if !literals.is_empty() {
@@ -263,7 +262,53 @@ impl LiteralLifting {
                     gets.remove(&id);
                     result
                 }
-                MirRelationExpr::LetRec { .. } => Err(crate::TransformError::LetRecUnsupported)?,
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    limits: _,
+                    body,
+                } => {
+                    let recursive_ids = MirRelationExpr::recursive_ids(ids, values);
+
+                    // Extend the context with empty `literals` vectors for all
+                    // recursive IDs.
+                    for local_id in ids.iter() {
+                        if recursive_ids.contains(local_id) {
+                            let literals = vec![];
+                            let prior = gets.insert(Id::Local(*local_id), literals);
+                            assert!(!prior.is_some());
+                        }
+                    }
+
+                    // Descend into values and extend the context with their
+                    // `literals` results.
+                    for (local_id, value) in zip_eq(ids.iter(), values.iter_mut()) {
+                        let literals = self.action(value, gets)?;
+                        if recursive_ids.contains(local_id) {
+                            // Literals lifted from a recursive binding should
+                            // be re-installed at the top of the value.
+                            if !literals.is_empty() {
+                                *value = value.take_dangerous().map(literals);
+                            }
+                        } else {
+                            // Literals lifted from a non-recursive binding can
+                            // propagate to its call sites.
+                            let prior = gets.insert(Id::Local(*local_id), literals);
+                            assert!(!prior.is_some());
+                        }
+                    }
+
+                    // Descend into body.
+                    let result = self.action(body, gets)?;
+
+                    // Remove all enclosing IDs from the context before
+                    // returning the result.
+                    for id in ids.iter() {
+                        gets.remove(&Id::Local(*id));
+                    }
+
+                    Ok(result)
+                }
                 MirRelationExpr::Project { input, outputs } => {
                     // We do not want to lift literals around projections.
                     // Projections are the highest lifted operator and lifting
@@ -497,7 +542,16 @@ impl LiteralLifting {
                             }
 
                             let literals = input_literals.into_iter().flatten().collect::<Vec<_>>();
-                            *relation = relation.take_dangerous().map(literals).project(projection)
+
+                            // Bubble up literals if the projection is the
+                            // identity.
+                            if projection.iter().enumerate().all(|(col, &pos)| col == pos) {
+                                return Ok(literals);
+                            }
+
+                            // Otherwise add map(literals) + project(projection)
+                            // and bubble up an empty literals vector.
+                            *relation = relation.take_dangerous().map(literals).project(projection);
                         }
                     }
                     Ok(Vec::new())
@@ -612,9 +666,10 @@ impl LiteralLifting {
                     input,
                     group_key,
                     order_key,
-                    limit: _,
+                    limit,
                     offset: _,
                     monotonic: _,
+                    expected_group_size: _,
                 } => {
                     let literals = self.action(input, gets)?;
                     if !literals.is_empty() {
@@ -624,6 +679,16 @@ impl LiteralLifting {
                         let input_arity = input.arity();
                         group_key.retain(|c| *c < input_arity);
                         order_key.retain(|o| o.column < input_arity);
+                        // Inline literals into the limit expression.
+                        if let Some(limit) = limit {
+                            limit.visit_mut_post(&mut |e| {
+                                if let MirScalarExpr::Column(c) = e {
+                                    if *c >= input_arity {
+                                        *e = literals[*c - input_arity].clone();
+                                    }
+                                }
+                            })?;
+                        }
                     }
                     Ok(literals)
                 }

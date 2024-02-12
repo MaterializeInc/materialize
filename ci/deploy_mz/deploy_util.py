@@ -15,14 +15,14 @@ from pathlib import Path
 
 import boto3
 import humanize
-import semver
 
 from materialize import git
+from materialize.mz_version import MzCliVersion
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
-VERSION = semver.VersionInfo.parse(TAG.removeprefix("mz-v"))
+MZ_CLI_VERSION = MzCliVersion.parse(TAG)
 
 
 def _tardir(name: str) -> tarfile.TarInfo:
@@ -86,13 +86,15 @@ def deploy_tarball(platform: str, mz: Path) -> None:
     size = humanize.naturalsize(os.lstat(tar_path).st_size)
     print(f"Tarball size: {size}")
 
-    upload_tarball(tar_path, platform, f"v{VERSION}")
+    upload_tarball(tar_path, platform, f"v{MZ_CLI_VERSION.str_without_prefix()}")
     if is_latest_version():
-        upload_latest_redirect(platform, f"v{VERSION}")
+        upload_latest_redirect(platform, f"v{MZ_CLI_VERSION.str_without_prefix()}")
 
 
 def is_latest_version() -> bool:
-    latest_version = next(
-        t for t in git.get_version_tags(prefix="mz-v") if t.prerelease is None
+    latest_version = max(
+        t
+        for t in git.get_version_tags(version_type=MzCliVersion)
+        if t.prerelease is None
     )
-    return VERSION == latest_version
+    return MZ_CLI_VERSION == latest_version

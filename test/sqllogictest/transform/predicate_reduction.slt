@@ -27,7 +27,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 
 ----
 Explained Query:
   Filter (#0 = 0) // { arity: 2 }
-    Get materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 = 0))
@@ -39,7 +39,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 is null and (f1 is nul
 ----
 Explained Query:
   Filter (#0) IS NULL // { arity: 2 }
-    Get materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0) IS NULL)
@@ -62,7 +62,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE f1 is not null and (f1 is
 ----
 Explained Query:
   Filter (#0 = 1) // { arity: 2 }
-    Get materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 = 1))
@@ -114,7 +114,7 @@ Explained Query:
   Project (#0, #1) // { arity: 2 }
     Filter #2 AND case when #2 then ((1 / #0) > 0) else false end // { arity: 3 }
       Map (((#0 + #1) > 0)) // { arity: 3 }
-        Get materialize.public.t2 // { arity: 2 }
+        ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t2
   filter=(#2 AND case when #2 then ((1 / #0) > 0) else false end)
@@ -129,7 +129,7 @@ Explained Query:
   Project (#0, #1) // { arity: 2 }
     Filter #2 AND case when #2 then ((1 / #0) > 0) else false end // { arity: 3 }
       Map (((#0 + #1) > 0)) // { arity: 3 }
-        Get materialize.public.t2 // { arity: 2 }
+        ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t2
   filter=(#2 AND case when #2 then ((1 / #0) > 0) else false end)

@@ -67,20 +67,17 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
     CREATE SOURCE purchases
     FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'purchases')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
-    ENVELOPE DEBEZIUM
-    WITH (SIZE = '3xsmall');
+    ENVELOPE DEBEZIUM;
 
     CREATE SOURCE items
     FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'items')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
-    ENVELOPE DEBEZIUM
-    WITH (SIZE = '3xsmall');
+    ENVELOPE DEBEZIUM;
 
     CREATE SOURCE users
     FROM KAFKA CONNECTION shop.kafka_connection (TOPIC 'users')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION shop.csr_basic_http
-    ENVELOPE DEBEZIUM
-    WITH (SIZE = '3xsmall');
+    ENVELOPE DEBEZIUM;
     ```
 
 ### Build the analytics

@@ -9,7 +9,7 @@
 
 from enum import Enum
 
-from materialize.zippy.framework import Capability
+from materialize.zippy.framework import Capabilities, Capability
 
 
 class ReplicaSizeType(Enum):
@@ -27,3 +27,11 @@ class ReplicaExists(Capability):
 
     def __init__(self, name: str) -> None:
         self.name = name
+
+
+def source_capable_clusters(capabilities: Capabilities) -> list[str]:
+    if len(capabilities.get(ReplicaExists)) > 0:
+        # Default cluster may have multiple replicas, can not be used for sources
+        return ["storage"]
+    else:
+        return ["storage", "quickstart"]

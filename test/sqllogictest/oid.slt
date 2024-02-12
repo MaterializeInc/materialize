@@ -24,10 +24,10 @@ SELECT (-1)::oid
 ----
 4294967295
 
-query error OID out of range
+query error "4294967296" OID out of range
 SELECT 4294967296::oid
 
-query error OID out of range
+query error "-1" OID out of range
 SELECT (-1)::int8::oid
 
 query B

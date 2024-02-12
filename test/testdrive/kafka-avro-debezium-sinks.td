@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true
+
 # Test behavior that is specific to Kafka Avro Sinks with ENVELOPE DEBEZIUM
 
 # Test a basic sink with multiple rows.
@@ -16,13 +19,16 @@
 > CREATE MATERIALIZED VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK data_sink FROM data
+> CREATE CLUSTER data_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK data_sink
+  IN CLUSTER data_sink_cluster
+  FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -115,11 +121,16 @@ $ kafka-create-topic topic=input
 # first create all the sinks, then ingest data, to ensure that
 # input is processed in consistency batches and not all at once
 
+> CREATE CLUSTER input_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input
+  IN CLUSTER input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE SINK non_keyed_sink FROM input
+> CREATE CLUSTER non_keyed_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK non_keyed_sink
+  IN CLUSTER non_keyed_sink_cluster
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -129,25 +140,37 @@ $ kafka-create-topic topic=input
 
 # the sinked relation has the natural primary key (a)
 
-> CREATE SINK non_keyed_sink_of_keyed_relation FROM input
+> CREATE CLUSTER non_keyed_sink_of_keyed_relation_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK non_keyed_sink_of_keyed_relation
+  IN CLUSTER non_keyed_sink_of_keyed_relation_cluster
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-of-keyed-relation-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK keyed_sink FROM input
+> CREATE CLUSTER keyed_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK keyed_sink
+  IN CLUSTER keyed_sink_cluster
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK keyed_sink_of_keyed_relation FROM input
+> CREATE CLUSTER keyed_sink_of_keyed_relation_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK keyed_sink_of_keyed_relation
+  IN CLUSTER keyed_sink_of_keyed_relation_cluster
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-of-keyed-relation-${testdrive.seed}') KEY (b)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK multi_keyed_sink FROM input
+> CREATE CLUSTER multi_keyed_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK multi_keyed_sink
+  IN CLUSTER multi_keyed_sink_cluster
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'multi-keyed-sink-${testdrive.seed}') KEY (b, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

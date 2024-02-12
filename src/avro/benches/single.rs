@@ -24,11 +24,9 @@
 #![feature(test)]
 extern crate test;
 
-use mz_avro::{
-    schema::Schema,
-    to_avro_datum,
-    types::{Record, ToAvro, Value},
-};
+use mz_avro::schema::Schema;
+use mz_avro::to_avro_datum;
+use mz_avro::types::{Record, ToAvro, Value};
 
 static RAW_SMALL_SCHEMA: &'static str = r#"
 {

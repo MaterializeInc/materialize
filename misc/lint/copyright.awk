@@ -28,6 +28,8 @@ function done()
 }
 
 /^#![ \t\n]*\//             { next }
-/^(\/\/|#|--|;)?.*Copyright/  { copyright=$0; copyright_line=NR }
+/^(\/\/|#|--|\s+"#|;)?.*Copyright/  { copyright=$0; copyright_line=NR }
 /^[ \t\n]*$/                { next }
+# In case of ipynb files, continue into the JSON
+/[{}"\[\]]/                { next }
 !/^(<!--|<\?xml|\/\/|#|--|;)/ { done() }

@@ -34,7 +34,7 @@ $ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${k
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE topic_compaction
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-compaction-${testdrive.seed}')

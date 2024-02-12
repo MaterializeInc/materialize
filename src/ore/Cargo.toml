@@ -7,6 +7,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors = ["Materialize, Inc."]
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { version = "1.0.66", optional = true }
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
@@ -15,24 +18,41 @@ anyhow = { version = "1.0.66", optional = true }
 #
 # The only exception to the above is the `either` crate, which itself has zero
 # dependencies and is widely considered to be basically part of the stdlib.
-async-trait = { version = "0.1.59", optional = true }
+async-trait = { version = "0.1.68", optional = true }
 bytes = { version = "1.3.0", optional = true }
-chrono = { version = "0.4.23", default-features = false, features = ["std"], optional = true }
-clap = { version = "3.2.20", features = ["env"], optional = true }
+chrono = { version = "0.4.23", default-features = false, features = [
+  "std",
+], optional = true }
+clap = { version = "3.2.24", features = ["env"], optional = true }
+compact_bytes = { version = "0.1.1", optional = true }
 ctor = { version = "0.1.26", optional = true }
 either = "1.8.0"
 futures = { version = "0.3.25", optional = true }
+hibitset = { version = "0.6.4", optional = true }
+lgalloc = { version = "0.1", optional = true }
+mz-test-macro = { path = "../test-macro", default-features = false }
+num = "0.4.0"
 once_cell = "1.16.0"
 # The vendored feature is transitively depended upon by tokio-openssl.
-openssl = { version = "0.10.43", features = ["vendored"], optional = true }
+openssl = { version = "0.10.48", features = ["vendored"], optional = true }
 paste = "1.0.11"
 pin-project = "1.0.12"
 prometheus = { version = "0.13.3", default-features = false, optional = true }
+proptest = { version = "1.0.0", default-features = false, features = [
+  "std",
+], optional = true }
+rand = { version = "0.8.5", optional = true }
 smallvec = { version = "1.10.0", optional = true }
 stacker = { version = "0.1.15", optional = true }
-sentry = { version = "0.29.1", optional = true }
-serde = { version = "1.0.152", features = ["derive"], optional = true }
-tokio = { version = "1.24.2", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
+sentry = { version = "0.29.1", optional = true, features = ["debug-images"] }
+serde = { version = "1.0.152", features = ["derive"] }
+tokio = { version = "1.32.0", features = [
+  "io-util",
+  "net",
+  "rt-multi-thread",
+  "sync",
+  "time",
+], optional = true }
 tokio-openssl = { version = "0.6.3", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
@@ -40,34 +60,58 @@ tokio-openssl = { version = "0.6.3", optional = true }
 # log lines we care about.
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
-tracing-subscriber = { version = "0.3.16", default-features = false, features = ["env-filter", "fmt", "json", "tracing-log"], optional = true }
-
+tracing-subscriber = { version = "0.3.16", default-features = false, features = [
+  "env-filter",
+  "fmt",
+  "json",
+  "tracing-log",
+], optional = true }
+uuid = { version = "1.7.0", optional = true }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 # For the `tracing` feature
 atty = { version = "0.2.14", optional = true }
 http = { version = "0.2.8", optional = true }
 tracing = { version = "0.1.37", optional = true }
-tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing.git", branch = "v0.1.x", optional = true }
-tonic = { version = "0.8.2", features = ["transport"], optional = true }
+tracing-opentelemetry = { version = "0.22.0", optional = true }
+tonic = { version = "0.9.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }
 native-tls = { version = "0.2.11", features = ["alpn"], optional = true }
 hyper = { version = "0.14.23", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
-opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", features = ["rt-tokio", "trace"], optional = true }
-opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git", optional = true }
-console-subscriber = { git = "https://github.com/MaterializeInc/tokio-console.git", optional = true }
+opentelemetry = { version = "0.21.0", features = ["trace"], optional = true }
+opentelemetry-otlp = { version = "0.14.0", optional = true }
+opentelemetry_sdk = { version = "0.21.2", features = [
+  "rt-tokio",
+], optional = true }
+console-subscriber = { version = "0.1.10", optional = true }
 sentry-tracing = { version = "0.29.1", optional = true }
 yansi = { version = "0.5.1", optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 anyhow = { version = "1.0.66" }
+criterion = { version = "0.4.0", features = ["async_tokio"] }
+mz-ore = { path = "../ore", features = ["id_gen"] }
 scopeguard = "1.1.0"
-tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread"] }
+serde_json = "1.0.89"
+tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread"] }
+tokio-test = "0.4.2"
+tracing-subscriber = "0.3.16"
 
 [features]
-async = ["async-trait", "futures", "openssl", "tokio-openssl", "tokio"]
-network = ["async", "bytes", "hyper", "smallvec", "tonic"]
+default = ["tokio-console", "workspace-hack"]
+async = [
+  "async-trait",
+  "futures",
+  "metrics",
+  "openssl",
+  "tokio-openssl",
+  "tokio",
+  "tracing",
+]
+bytes_ = ["bytes", "compact_bytes", "smallvec", "smallvec/const_generics"]
+network = ["async", "bytes", "hyper", "smallvec", "tonic", "tracing"]
+region = ["lgalloc"]
 tracing_ = [
   "anyhow",
   "atty",
@@ -76,27 +120,38 @@ tracing_ = [
   "tracing-subscriber/ansi",
   "tracing-opentelemetry",
   "tokio-native-tls",
-  "serde",
   "native-tls",
   "http",
   "hyper",
   "hyper-tls",
+  "metrics",
   "opentelemetry",
   "opentelemetry-otlp",
+  "opentelemetry_sdk",
   "tonic",
   "sentry",
   "sentry-tracing",
   "yansi",
 ]
-tokio-console = ["console-subscriber", "tokio", "tokio/tracing"]
+tokio-console = ["console-subscriber", "tokio", "tokio/tracing", "network"]
 cli = ["clap"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber"]
 metrics = ["prometheus"]
+id_gen = ["hibitset", "rand", "uuid"]
 
 [[test]]
 name = "future"
 required-features = ["async"]
 
+[[test]]
+name = "task"
+required-features = ["async"]
+
+[[bench]]
+name = "id_gen"
+harness = false
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+development = ["tokio-test"]

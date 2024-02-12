@@ -16,9 +16,10 @@
 //! Future and stream utilities.
 //!
 //! This module provides future and stream combinators that are missing from
-//! the [`futures`](futures) crate.
+//! the [`futures`] crate.
 
 use std::any::Any;
+use std::error::Error;
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::marker::PhantomData;
@@ -26,10 +27,13 @@ use std::panic::UnwindSafe;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use async_trait::async_trait;
 use futures::future::{CatchUnwind, FutureExt};
 use futures::sink::Sink;
+use futures::Stream;
 use pin_project::pin_project;
 use tokio::task::futures::TaskLocalFuture;
+use tokio::time::{self, Duration, Instant};
 
 use crate::panic::CATCHING_UNWIND_ASYNC;
 use crate::task;
@@ -175,6 +179,117 @@ where
     }
 }
 
+/// The error returned by [`timeout`] and [`timeout_at`].
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub enum TimeoutError<E> {
+    /// The timeout deadline has elapsed.
+    DeadlineElapsed,
+    /// The underlying operation failed.
+    Inner(E),
+}
+
+impl<E> fmt::Display for TimeoutError<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TimeoutError::DeadlineElapsed => f.write_str("deadline has elapsed"),
+            e => e.fmt(f),
+        }
+    }
+}
+
+impl<E> Error for TimeoutError<E>
+where
+    E: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            TimeoutError::DeadlineElapsed => None,
+            TimeoutError::Inner(e) => Some(e),
+        }
+    }
+}
+
+/// Applies a maximum duration to a [`Result`]-returning future.
+///
+/// Whether the maximum duration was reached is indicated via the error type.
+/// Specifically:
+///
+///   * If `future` does not complete within `duration`, returns
+///     [`TimeoutError::DeadlineElapsed`].
+///   * If `future` completes with `Ok(t)`, returns `Ok(t)`.
+///   * If `future` completes with `Err(e)`, returns
+///     [`TimeoutError::Inner(e)`](TimeoutError::Inner).
+///
+/// Using this function can be considerably more readable than
+/// [`tokio::time::timeout`] when the inner future returns a `Result`.
+///
+/// # Examples
+///
+/// ```
+/// # use tokio::time::Duration;
+/// use mz_ore::future::TimeoutError;
+/// # tokio_test::block_on(async {
+/// let slow_op = async {
+///     tokio::time::sleep(Duration::from_secs(1)).await;
+///     Ok::<_, String>(())
+/// };
+/// let res = mz_ore::future::timeout(Duration::from_millis(1), slow_op).await;
+/// assert_eq!(res, Err(TimeoutError::DeadlineElapsed));
+/// # });
+/// ```
+pub async fn timeout<F, T, E>(duration: Duration, future: F) -> Result<T, TimeoutError<E>>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    match time::timeout(duration, future).await {
+        Ok(Ok(t)) => Ok(t),
+        Ok(Err(e)) => Err(TimeoutError::Inner(e)),
+        Err(_) => Err(TimeoutError::DeadlineElapsed),
+    }
+}
+
+/// Applies a deadline to a [`Result`]-returning future.
+///
+/// Whether the deadline elapsed is indicated via the error type. Specifically:
+///
+///   * If `future` does not complete by `deadline`, returns
+///     [`TimeoutError::DeadlineElapsed`].
+///   * If `future` completes with `Ok(t)`, returns `Ok(t)`.
+///   * If `future` completes with `Err(e)`, returns
+///     [`TimeoutError::Inner(e)`](TimeoutError::Inner).
+///
+/// Using this function can be considerably more readable than
+/// [`tokio::time::timeout_at`] when the inner future returns a `Result`.
+///
+/// # Examples
+///
+/// ```
+/// # use tokio::time::{Duration, Instant};
+/// use mz_ore::future::TimeoutError;
+/// # tokio_test::block_on(async {
+/// let slow_op = async {
+///     tokio::time::sleep(Duration::from_secs(1)).await;
+///     Ok::<_, String>(())
+/// };
+/// let deadline = Instant::now() + Duration::from_millis(1);
+/// let res = mz_ore::future::timeout_at(deadline, slow_op).await;
+/// assert_eq!(res, Err(TimeoutError::DeadlineElapsed));
+/// # });
+/// ```
+pub async fn timeout_at<F, T, E>(deadline: Instant, future: F) -> Result<T, TimeoutError<E>>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    match time::timeout_at(deadline, future).await {
+        Ok(Ok(t)) => Ok(t),
+        Ok(Err(e)) => Err(TimeoutError::Inner(e)),
+        Err(_) => Err(TimeoutError::DeadlineElapsed),
+    }
+}
+
 /// Extension methods for sinks.
 pub trait OreSinkExt<T>: Sink<T> {
     /// Boxes this sink.
@@ -260,5 +375,52 @@ impl<T, E> Sink<T> for DevNull<T, E> {
 
     fn poll_close(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
+    }
+}
+
+/// Extension methods for streams.
+#[async_trait]
+pub trait OreStreamExt: Stream {
+    /// Awaits the stream for an event to be available and returns all currently buffered
+    /// events on the stream up to some `max`.
+    ///
+    /// This method returns `None` if the stream has ended.
+    ///
+    /// If there are no events ready on the stream this method will sleep until an event is
+    /// sent or the stream is closed. When woken it will return up to `max` currently buffered
+    /// events.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv_many` is used as the event in a `select!` statement
+    /// and some other branch completes first, it is guaranteed that no messages were received on
+    /// this channel.
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<Self::Item>>;
+}
+
+#[async_trait]
+impl<T> OreStreamExt for T
+where
+    T: futures::stream::Stream + futures::StreamExt + Send + Unpin,
+{
+    async fn recv_many(&mut self, max: usize) -> Option<Vec<Self::Item>> {
+        // Wait for an event to be ready on the stream
+        let first = self.next().await?;
+        let mut buffer = Vec::from([first]);
+
+        // Note(parkmycar): It's very important for cancelation safety that we don't add any more
+        // .await points other than the initial one.
+
+        // Pull all other ready events off the stream, up to the max
+        while let Some(v) = self.next().now_or_never().and_then(|e| e) {
+            buffer.push(v);
+
+            // Break so we don't loop here continuously.
+            if buffer.len() >= max {
+                break;
+            }
+        }
+
+        Some(buffer)
     }
 }

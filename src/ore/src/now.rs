@@ -14,10 +14,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use once_cell::sync::Lazy;
-
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
+use once_cell::sync::Lazy;
 
 /// A type representing the number of milliseconds since the Unix epoch.
 pub type EpochMillis = u64;
@@ -28,9 +27,15 @@ pub type EpochMillis = u64;
 #[allow(clippy::as_conversions)]
 pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
     let dur = std::time::Duration::from_millis(millis);
-    Utc.timestamp_opt(dur.as_secs() as i64, dur.subsec_nanos())
+    match Utc
+        .timestamp_opt(dur.as_secs() as i64, dur.subsec_nanos())
         .single()
-        .expect("ambiguous timestamp")
+    {
+        Some(single) => single,
+        None => {
+            panic!("Ambiguous timestamp: {millis} millis")
+        }
+    }
 }
 
 /// A function that returns system or mocked time.
@@ -38,12 +43,10 @@ pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
 // implement `Debug` by default. It derefs to a callable so that it is
 // ergonomically equivalent to a closure.
 #[derive(Clone)]
-pub struct NowFn(Arc<dyn Fn() -> EpochMillis + Send + Sync>);
+pub struct NowFn<T = EpochMillis>(Arc<dyn Fn() -> T + Send + Sync>);
 
-impl NowFn {
+impl NowFn<EpochMillis> {
     /// Returns now in seconds.
-    // TODO(benesch): rewrite to avoid dangerous use of `as`.
-    #[allow(clippy::as_conversions)]
     pub fn as_secs(&self) -> i64 {
         let millis: u64 = (self)();
         // Justification for `unwrap`:
@@ -52,25 +55,25 @@ impl NowFn {
     }
 }
 
-impl fmt::Debug for NowFn {
+impl<T> fmt::Debug for NowFn<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("<now_fn>")
     }
 }
 
-impl Deref for NowFn {
-    type Target = dyn Fn() -> EpochMillis + Send + Sync;
+impl<T> Deref for NowFn<T> {
+    type Target = dyn Fn() -> T + Send + Sync;
 
     fn deref(&self) -> &Self::Target {
         &(*self.0)
     }
 }
 
-impl<F> From<F> for NowFn
+impl<F, T> From<F> for NowFn<T>
 where
-    F: Fn() -> EpochMillis + Send + Sync + 'static,
+    F: Fn() -> T + Send + Sync + 'static,
 {
-    fn from(f: F) -> NowFn {
+    fn from(f: F) -> NowFn<T> {
         NowFn(Arc::new(f))
     }
 }
@@ -102,7 +105,7 @@ mod tests {
 
     use super::to_datetime;
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_to_datetime() {
         let test_cases = [
             (

@@ -21,40 +21,45 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::bail;
 #[cfg(feature = "tokio-console")]
 use console_subscriber::ConsoleLayer;
 use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
-use opentelemetry::global;
+use once_cell::sync::Lazy;
+use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
-use opentelemetry::sdk::propagation::TraceContextPropagator;
-use opentelemetry::sdk::{trace, Resource};
-use opentelemetry::KeyValue;
+use opentelemetry::{global, KeyValue};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::{trace, Resource};
+use prometheus::IntCounter;
+use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{Event, Level, Subscriber};
+use tracing::{warn, Event, Level, Span, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::filter::Targets;
+use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{reload, Registry};
+use tracing_subscriber::{reload, EnvFilter, Registry};
 
+use crate::metric;
+use crate::metrics::MetricsRegistry;
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
 
 /// Application tracing configuration.
 ///
 /// See the [`configure`] function for details.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TracingConfig<F> {
     /// The name of the service.
     pub service_name: &'static str,
@@ -76,6 +81,8 @@ pub struct TracingConfig<F> {
     pub build_sha: &'static str,
     /// The time of this build of the service.
     pub build_time: &'static str,
+    /// Registry for prometheus metrics.
+    pub registry: MetricsRegistry,
 }
 
 /// Configures Sentry reporting.
@@ -95,12 +102,12 @@ pub struct SentryConfig<F> {
 }
 
 /// Configures the stderr log.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StderrLogConfig {
     /// The format in which to emit messages.
     pub format: StderrLogFormat,
     /// A filter which determines which events are emitted to the log.
-    pub filter: Targets,
+    pub filter: EnvFilter,
 }
 
 /// Specifies the format of a stderr log message.
@@ -120,7 +127,7 @@ pub enum StderrLogFormat {
 }
 
 /// Configuration for the [`opentelemetry`] library.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OpenTelemetryConfig {
     /// The [OTLP/HTTP] endpoint to export OpenTelemetry data to.
     ///
@@ -129,12 +136,10 @@ pub struct OpenTelemetryConfig {
     /// Additional headers to send with every request to the endpoint.
     pub headers: HeaderMap,
     /// A filter which determines which events are exported.
-    pub filter: Targets,
+    pub filter: EnvFilter,
     /// `opentelemetry::sdk::resource::Resource` to include with all
     /// traces.
     pub resource: Resource,
-    /// Whether to startup with the dynamic OpenTelemetry layer enabled
-    pub start_enabled: bool,
 }
 
 /// Configuration of the [Tokio console] integration.
@@ -158,13 +163,15 @@ pub struct TokioConsoleConfig {
     pub retention: Duration,
 }
 
-type Reloader = Arc<dyn Fn(Targets) -> Result<(), anyhow::Error> + Send + Sync>;
+type Reloader = Arc<dyn Fn(EnvFilter, Vec<Directive>) -> Result<(), anyhow::Error> + Send + Sync>;
+type DirectiveReloader = Arc<dyn Fn(Vec<Directive>) -> Result<(), anyhow::Error> + Send + Sync>;
 
 /// A handle to the tracing infrastructure configured with [`configure`].
 #[derive(Clone)]
 pub struct TracingHandle {
     stderr_log: Reloader,
     opentelemetry: Reloader,
+    sentry: DirectiveReloader,
 }
 
 impl TracingHandle {
@@ -173,19 +180,33 @@ impl TracingHandle {
     /// Primarily useful in tests.
     pub fn disabled() -> TracingHandle {
         TracingHandle {
-            stderr_log: Arc::new(|_| Ok(())),
-            opentelemetry: Arc::new(|_| Ok(())),
+            stderr_log: Arc::new(|_, _| Ok(())),
+            opentelemetry: Arc::new(|_, _| Ok(())),
+            sentry: Arc::new(|_| Ok(())),
         }
     }
 
     /// Dynamically reloads the stderr log filter.
-    pub fn reload_stderr_log_filter(&self, targets: Targets) -> Result<(), anyhow::Error> {
-        (self.stderr_log)(targets)
+    pub fn reload_stderr_log_filter(
+        &self,
+        filter: EnvFilter,
+        defaults: Vec<Directive>,
+    ) -> Result<(), anyhow::Error> {
+        (self.stderr_log)(filter, defaults)
     }
 
     /// Dynamically reloads the OpenTelemetry log filter.
-    pub fn reload_opentelemetry_filter(&self, targets: Targets) -> Result<(), anyhow::Error> {
-        (self.opentelemetry)(targets)
+    pub fn reload_opentelemetry_filter(
+        &self,
+        filter: EnvFilter,
+        defaults: Vec<Directive>,
+    ) -> Result<(), anyhow::Error> {
+        (self.opentelemetry)(filter, defaults)
+    }
+
+    /// Dynamically reloads the additional sentry directives.
+    pub fn reload_sentry_directives(&self, defaults: Vec<Directive>) -> Result<(), anyhow::Error> {
+        (self.sentry)(defaults)
     }
 }
 
@@ -214,6 +235,36 @@ impl std::fmt::Debug for TracingGuard {
         f.debug_struct("TracingGuard").finish_non_exhaustive()
     }
 }
+
+// Note that the following defaults are used on startup, regardless of the
+// parameters in LaunchDarkly. If we need to, we can add cli flags to control
+// then going forward.
+
+/// By default we turn off tracing from the following crates, because they
+/// have error spans which are noisy.
+///
+/// Note: folks should feel free to add more crates here if we find more
+/// with long lived Spans.
+pub static LOGGING_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
+    vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
+});
+/// By default we turn off tracing from the following crates, because they
+/// have long-lived Spans, which OpenTelemetry does not handle well.
+///
+/// Note: folks should feel free to add more crates here if we find more
+/// with long lived Spans.
+pub static OPENTELEMETRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
+    vec![
+        Directive::from_str("h2=off").expect("valid directive"),
+        Directive::from_str("hyper=off").expect("valid directive"),
+    ]
+});
+
+/// By default we turn off tracing from the following crates, because they
+/// have error spans which are noisy.
+pub static SENTRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
+    vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
+});
 
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
@@ -263,11 +314,20 @@ where
                 .with_current_span(true),
         ),
     };
-    let (stderr_log_filter, stderr_log_filter_reloader) =
-        reload::Layer::new(config.stderr_log.filter);
+    let (stderr_log_filter, stderr_log_filter_reloader) = reload::Layer::new({
+        let mut filter = config.stderr_log.filter;
+        for directive in LOGGING_DEFAULTS.iter() {
+            filter = filter.add_directive(directive.clone());
+        }
+        filter
+    });
     let stderr_log_layer = stderr_log_layer.with_filter(stderr_log_filter);
-    let stderr_log_reloader =
-        Arc::new(move |targets| Ok(stderr_log_filter_reloader.reload(targets)?));
+    let stderr_log_reloader = Arc::new(move |mut filter: EnvFilter, defaults: Vec<Directive>| {
+        for directive in &defaults {
+            filter = filter.add_directive(directive.clone());
+        }
+        Ok(stderr_log_filter_reloader.reload(filter)?)
+    });
 
     let (otel_layer, otel_reloader): (_, Reloader) = if let Some(otel_config) = config.opentelemetry
     {
@@ -314,30 +374,60 @@ where
                 ),
             )
             .with_exporter(exporter)
-            .install_batch(opentelemetry::runtime::Tokio)
+            .install_batch(opentelemetry_sdk::runtime::Tokio)
             .unwrap();
 
-        // By default we turn off tracing from the following crates, because they
-        // have long-lived Spans, which OpenTelemetry does not handle well.
-        //
-        // Note: folks should feel free to add more crates here if we find more
-        // with long lived Spans.
-        let default_targets = [("h2", LevelFilter::OFF), ("hyper", LevelFilter::OFF)];
+        // Create our own error handler to:
+        //   1. Rate limit the number of error logs. By default the OTel library will emit
+        //      an enormous number of duplicate logs if any errors occur, one per batch
+        //      send attempt, until the error is resolved.
+        //   2. Log the errors via our tracing layer, so they are formatted consistently
+        //      with the rest of our logs, rather than the direct `eprintln` used by the
+        //      OTel library.
+        const OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS: u64 = 30;
+        let last_log_in_epoch_seconds = AtomicU64::default();
+        opentelemetry::global::set_error_handler(move |err| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("Failed to get duration since Unix epoch")
+                .as_secs();
+            let last_log = last_log_in_epoch_seconds.load(Ordering::SeqCst);
 
-        let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
-            let new_targets = Targets::default()
-                .with_targets(default_targets)
-                .with_targets(&otel_config.filter);
-
-            if let Some(default_level) = otel_config.filter.default_level() {
-                new_targets.with_default(default_level)
-            } else {
-                new_targets
+            if now.saturating_sub(last_log) >= OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS {
+                if last_log_in_epoch_seconds
+                    .compare_exchange_weak(last_log, now, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_err()
+                {
+                    return;
+                }
+                use crate::error::ErrorExt;
+                match err {
+                    Error::Trace(err) => {
+                        warn!("OpenTelemetry error: {}", err.display_with_causes());
+                    }
+                    // TODO(guswynn): turn off the metrics feature?
+                    Error::Metric(err) => {
+                        warn!("OpenTelemetry error: {}", err.display_with_causes());
+                    }
+                    Error::Other(err) => {
+                        warn!("OpenTelemetry error: {}", err);
+                    }
+                    _ => {
+                        warn!("unknown OpenTelemetry error");
+                    }
+                }
             }
-        } else {
-            // The default `Targets` has everything disabled.
-            Targets::default()
+        })
+        .expect("valid error handler");
+
+        let (filter, filter_handle) = reload::Layer::new({
+            let mut filter = otel_config.filter;
+            for directive in OPENTELEMETRY_DEFAULTS.iter() {
+                filter = filter.add_directive(directive.clone());
+            }
+            filter
         });
+        let metrics_layer = MetricsLayer::new(&config.registry);
         let layer = tracing_opentelemetry::layer()
             // OpenTelemetry does not handle long-lived Spans well, and they end up continuously
             // eating memory until OOM. So we set a max number of events that are allowed to be
@@ -346,24 +436,21 @@ where
             // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
             .max_events_per_span(2048)
             .with_tracer(tracer)
+            .and_then(metrics_layer)
+            // WARNING, ENTERING SPOOKY ZONE 2.0
+            //
+            // Notice we use `with_filter` here. `and_then` will apply the filter globally.
             .with_filter(filter);
-        let reloader = Arc::new(move |targets: Targets| {
-            // Re-apply our default targets on reload.
-            let new_targets = Targets::default()
-                .with_targets(default_targets)
-                .with_targets(&targets);
-
-            let new_targets = if let Some(default_level) = targets.default_level() {
-                new_targets.with_default(default_level)
-            } else {
-                new_targets
-            };
-
-            Ok(filter_handle.reload(new_targets)?)
+        let reloader = Arc::new(move |mut filter: EnvFilter, defaults: Vec<Directive>| {
+            // Re-apply our defaults on reload.
+            for directive in &defaults {
+                filter = filter.add_directive(directive.clone());
+            }
+            Ok(filter_handle.reload(filter)?)
         });
         (Some(layer), reloader)
     } else {
-        let reloader = Arc::new(move |_| bail!("OpenTelemetry is disabled"));
+        let reloader = Arc::new(|_, _| Ok(()));
         (None, reloader)
     };
 
@@ -384,58 +471,77 @@ where
         None
     };
 
-    let (sentry_guard, sentry_layer) = if let Some(sentry_config) = config.sentry {
-        let guard = sentry::init((
-            sentry_config.dsn,
-            sentry::ClientOptions {
-                attach_stacktrace: true,
-                release: Some(config.build_version.into()),
-                environment: sentry_config.environment.map(Into::into),
-                ..Default::default()
-            },
-        ));
+    let (sentry_guard, sentry_layer, sentry_reloader): (_, _, DirectiveReloader) =
+        if let Some(sentry_config) = config.sentry {
+            let guard = sentry::init((
+                sentry_config.dsn,
+                sentry::ClientOptions {
+                    attach_stacktrace: true,
+                    release: Some(config.build_version.into()),
+                    environment: sentry_config.environment.map(Into::into),
+                    integrations: vec![Arc::new(DebugImagesIntegration::new())],
+                    ..Default::default()
+                },
+            ));
 
-        sentry::configure_scope(|scope| {
-            scope.set_tag("service_name", config.service_name);
-            scope.set_tag("build_sha", config.build_sha.to_string());
-            scope.set_tag("build_time", config.build_time.to_string());
-            for (k, v) in sentry_config.tags {
-                scope.set_tag(&k, v);
-            }
-        });
+            sentry::configure_scope(|scope| {
+                scope.set_tag("service_name", config.service_name);
+                scope.set_tag("build_sha", config.build_sha.to_string());
+                scope.set_tag("build_time", config.build_time.to_string());
+                for (k, v) in sentry_config.tags {
+                    scope.set_tag(&k, v);
+                }
+            });
 
-        let layer = sentry_tracing::layer()
-            .event_filter(sentry_config.event_filter)
-            // WARNING, ENTERING THE SPOOKY ZONE
-            //
-            // While sentry provides an event filter above that maps events to types of sentry events, its `Layer`
-            // implementation does not participate in `tracing`'s level-fast-path implementation, which depends on
-            // a hidden api (<https://github.com/tokio-rs/tracing/blob/b28c9351dd4f34ed3c7d5df88bb5c2e694d9c951/tracing-subscriber/src/layer/mod.rs#L861-L867>)
-            // which is primarily manged by filters (like below). The fast path skips verbose log
-            // (and span) levels that no layer is interested by reading a single atomic. Usually, not implementing this
-            // api means "give me everything, including `trace`, unless you attach a filter to me.
-            //
-            // The curious thing here (and a bug in tracing) is that _some configurations of our layer stack above_,
-            // if you don't have this filter can cause the fast-path to trigger, despite the fact
-            // that the sentry layer would specifically communicating that it wants to see
-            // everything. This bug appears to be related to the presence of a `reload::Layer`
-            // _around a filter, not a layer_, and guswynn is tracking investigating it here:
-            // <https://github.com/MaterializeInc/materialize/issues/16556>. Because we don't
-            // enable a reload-able filter in CI/locally, but DO in production (the otel layer), it
-            // was once possible to trigger and rely on the fast path in CI, but not notice that it
-            // was disabled in production.
-            //
-            // The behavior of this optimization is now tested in various scenarios (in
-            // `test/tracing`). Regardless, when the upstream bug is fixed/resolved,
-            // we will continue to place this here, as the sentry layer only cares about
-            // events <= INFO, so we want to use the fast-path if no other layer
-            // is interested in high-fidelity events.
-            .with_filter(tracing::level_filters::LevelFilter::INFO);
-
-        (Some(guard), Some(layer))
-    } else {
-        (None, None)
-    };
+            let (filter, filter_handle) = reload::Layer::new({
+                // Please see the comment on `with_filter` below.
+                let mut filter = EnvFilter::new("info");
+                for directive in SENTRY_DEFAULTS.iter() {
+                    filter = filter.add_directive(directive.clone());
+                }
+                filter
+            });
+            let layer = sentry_tracing::layer()
+                .event_filter(sentry_config.event_filter)
+                // WARNING, ENTERING THE SPOOKY ZONE
+                //
+                // While sentry provides an event filter above that maps events to types of sentry events, its `Layer`
+                // implementation does not participate in `tracing`'s level-fast-path implementation, which depends on
+                // a hidden api (<https://github.com/tokio-rs/tracing/blob/b28c9351dd4f34ed3c7d5df88bb5c2e694d9c951/tracing-subscriber/src/layer/mod.rs#L861-L867>)
+                // which is primarily manged by filters (like below). The fast path skips verbose log
+                // (and span) levels that no layer is interested by reading a single atomic. Usually, not implementing this
+                // api means "give me everything, including `trace`, unless you attach a filter to me.
+                //
+                // The curious thing here (and a bug in tracing) is that _some configurations of our layer stack above_,
+                // if you don't have this filter can cause the fast-path to trigger, despite the fact
+                // that the sentry layer would specifically communicating that it wants to see
+                // everything. This bug appears to be related to the presence of a `reload::Layer`
+                // _around a filter, not a layer_, and guswynn is tracking investigating it here:
+                // <https://github.com/MaterializeInc/materialize/issues/16556>. Because we don't
+                // enable a reload-able filter in CI/locally, but DO in production (the otel layer), it
+                // was once possible to trigger and rely on the fast path in CI, but not notice that it
+                // was disabled in production.
+                //
+                // The behavior of this optimization is now tested in various scenarios (in
+                // `test/tracing`). Regardless, when the upstream bug is fixed/resolved,
+                // we will continue to place this here, as the sentry layer only cares about
+                // events <= INFO, so we want to use the fast-path if no other layer
+                // is interested in high-fidelity events.
+                .with_filter(filter);
+            let reloader = Arc::new(move |defaults: Vec<Directive>| {
+                // Please see the comment on `with_filter` above.
+                let mut filter = EnvFilter::new("info");
+                // Re-apply our defaults on reload.
+                for directive in &defaults {
+                    filter = filter.add_directive(directive.clone());
+                }
+                Ok(filter_handle.reload(filter)?)
+            });
+            (Some(guard), Some(layer), reloader)
+        } else {
+            let reloader = Arc::new(|_| Ok(()));
+            (None, None, reloader)
+        };
 
     let stack = tracing_subscriber::registry();
     let stack = stack.with(stderr_log_layer);
@@ -457,6 +563,7 @@ where
     let handle = TracingHandle {
         stderr_log: stderr_log_reloader,
         opentelemetry: otel_reloader,
+        sentry: sentry_reloader,
     };
     let guard = TracingGuard {
         _sentry_guard: sentry_guard,
@@ -465,19 +572,41 @@ where
     Ok((handle, guard))
 }
 
-/// Returns the level of a specific target from a [`Targets`].
-pub fn target_level(targets: &Targets, target: &str) -> Level {
-    if targets.would_enable(target, &Level::TRACE) {
-        Level::TRACE
-    } else if targets.would_enable(target, &Level::DEBUG) {
-        Level::DEBUG
-    } else if targets.would_enable(target, &Level::INFO) {
-        Level::INFO
-    } else if targets.would_enable(target, &Level::WARN) {
-        Level::WARN
-    } else {
-        Level::ERROR
+/// Returns the [`Level`] of a crate from an [`EnvFilter`] by performing an
+/// exact match between `crate` and the original `EnvFilter` directive.
+pub fn crate_level(filter: &EnvFilter, crate_name: &'static str) -> Level {
+    // TODO: implement `would_enable` on `EnvFilter` or equivalent
+    // to avoid having to manually parse out the directives. This
+    // would also significantly broaden the lookups the fn is able
+    // to do (modules, spans, fields, etc).
+
+    let mut default_level = Level::ERROR;
+    // EnvFilter roundtrips through its Display fmt, so it
+    // is safe to split out its individual directives here
+    for directive in format!("{}", filter).split(',') {
+        match directive.split('=').collect::<Vec<_>>().as_slice() {
+            [target, level] => {
+                if *target == crate_name {
+                    match Level::from_str(*level) {
+                        Ok(level) => return level,
+                        Err(err) => warn!("invalid level for {}: {}", target, err),
+                    }
+                }
+            }
+            [token] => match Level::from_str(*token) {
+                Ok(level) => default_level = default_level.max(level),
+                Err(_) => {
+                    // a target without a level is interpreted as trace
+                    if *token == crate_name {
+                        default_level = default_level.max(Level::TRACE);
+                    }
+                }
+            },
+            _ => {}
+        }
     }
+
+    default_level
 }
 
 /// A wrapper around a [`FormatEvent`] that adds an optional prefix to each
@@ -535,6 +664,17 @@ impl OpenTelemetryContext {
         tracing::Span::current().set_parent(parent_cx);
     }
 
+    /// Attaches this `Context` to the given [`tracing`] Span, as its parent.
+    /// as its parent.
+    ///
+    /// If there is not enough information in this `OpenTelemetryContext`
+    /// to create a context, then the current thread's `Context` is used
+    /// defaulting to the default `Context`.
+    pub fn attach_as_parent_to(&self, span: &mut Span) {
+        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
+        span.set_parent(parent_cx);
+    }
+
     /// Obtains a `Context` from the current [`tracing`] span.
     pub fn obtain() -> Self {
         let mut context = Self::empty();
@@ -581,12 +721,34 @@ impl From<BTreeMap<String, String>> for OpenTelemetryContext {
     }
 }
 
+struct MetricsLayer {
+    on_close: IntCounter,
+}
+
+impl MetricsLayer {
+    fn new(registry: &MetricsRegistry) -> Self {
+        MetricsLayer {
+            on_close: registry.register(metric!(
+                name: "mz_otel_on_close",
+                help: "count of on_close events sent to otel",
+            )),
+        }
+    }
+}
+
+impl<S: tracing::Subscriber> Layer<S> for MetricsLayer {
+    fn on_close(&self, _id: tracing::span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        self.on_close.inc()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use tracing::Level;
-    use tracing_subscriber::filter::{LevelFilter, Targets};
+    use tracing_subscriber::filter::{EnvFilter, LevelFilter, Targets};
 
-    #[test]
+    #[mz_test_macro::test]
     fn overriding_targets() {
         let user_defined = Targets::new().with_target("my_crate", Level::INFO);
 
@@ -598,5 +760,54 @@ mod tests {
             .with_targets(default)
             .with_targets(user_defined);
         assert!(filters.would_enable("my_crate", &Level::INFO));
+    }
+
+    #[mz_test_macro::test]
+    fn crate_level() {
+        // target=level directives only. should default to ERROR if unspecified
+        let filter = EnvFilter::from_str("abc=trace,def=debug").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(
+            super::crate_level(&filter, "abc::doesnt::exist"),
+            Level::ERROR
+        );
+        assert_eq!(super::crate_level(&filter, "doesnt::exist"), Level::ERROR);
+
+        // add in a global default
+        let filter = EnvFilter::from_str("abc=trace,def=debug,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(
+            super::crate_level(&filter, "abc::doesnt:exist"),
+            Level::INFO
+        );
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "nan"), Level::INFO);
+
+        // a directive with mod path doesn't match the top-level crate
+        let filter = EnvFilter::from_str("abc::def::ghi=trace,debug").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::DEBUG);
+        assert_eq!(super::crate_level(&filter, "def"), Level::DEBUG);
+        assert_eq!(
+            super::crate_level(&filter, "gets_the_default"),
+            Level::DEBUG
+        );
+
+        // directives with spans and fields don't match the top-level crate
+        let filter =
+            EnvFilter::from_str("abc[s]=trace,def[s{g=h}]=debug,[{s2}]=debug,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::INFO);
+        assert_eq!(super::crate_level(&filter, "def"), Level::INFO);
+        assert_eq!(super::crate_level(&filter, "gets_the_default"), Level::INFO);
+
+        // a bare target without a level is taken as trace
+        let filter = EnvFilter::from_str("abc,info").expect("valid");
+        assert_eq!(super::crate_level(&filter, "abc"), Level::TRACE);
+        assert_eq!(super::crate_level(&filter, "gets_the_default"), Level::INFO);
+        // the contract of `crate_level` is that it only matches top-level crates.
+        // if we had a proper EnvFilter::would_match impl, this assertion should
+        // be Level::TRACE
+        assert_eq!(super::crate_level(&filter, "abc::def"), Level::INFO);
     }
 }

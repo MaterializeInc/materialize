@@ -36,23 +36,23 @@ $ kafka-ingest format=bytes topic=many partition=9
 msg
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CLUSTER many_cluster SIZE '2-2';
 
 > CREATE SOURCE many
+  IN CLUSTER many_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-many-${testdrive.seed}'
   )
   FORMAT BYTES
-  WITH (
-    SIZE '2-2'
-  )
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
 
 # Until compute and storage are _entirely unified_, storage will not have
 # logging dataflows, so the only way we can see that both processes are
-# utilized is using `mz_source_statistics`. Timely only supports
+# utilized is using `mz_source_statistics_per_worker`. Timely only supports
 # mapping workers 0,1 to process 0 and 2,3 to process 1, so we use a CTE
 # here to distinguish between processes.
 > WITH cte AS (
@@ -60,7 +60,7 @@ msg
       CASE WHEN u.worker_id IN (0, 1) THEN 0 ELSE 1 END as process_id,
       SUM(u.messages_received) as messages_received
       FROM mz_sources s
-      JOIN mz_internal.mz_source_statistics u on s.id = u.id
+      JOIN mz_internal.mz_source_statistics_per_worker u on s.id = u.id
       WHERE s.name = 'many'
       GROUP BY u.worker_id
     )

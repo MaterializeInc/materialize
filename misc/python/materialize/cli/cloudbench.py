@@ -18,11 +18,11 @@ import os
 import shlex
 import sys
 import time
-from typing import List, NamedTuple, Optional, Union, cast
+from typing import NamedTuple, cast
 
 import boto3
 
-from materialize import ROOT, git, scratch, spawn, util
+from materialize import MZ_ROOT, git, scratch, spawn, util
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import print_instances
 
@@ -30,7 +30,7 @@ from materialize.scratch import print_instances
 # This is duplicated with the one in cli/scratch.
 # TODO - factor it out.
 def main() -> None:
-    os.chdir(ROOT)
+    os.chdir(MZ_ROOT)
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
     for cmd_name, configure, run in [
@@ -98,7 +98,7 @@ def configure_check(parser: argparse.ArgumentParser) -> None:
 DEFAULT_BUCKET = "mz-cloudbench"
 
 
-def try_get_object(key: str, bucket: str) -> Optional[str]:
+def try_get_object(key: str, bucket: str) -> str | None:
     client = boto3.client("s3")
     try:
         result = client.get_object(Bucket=bucket, Key=key)
@@ -121,9 +121,7 @@ def check(ns: argparse.Namespace) -> None:
     insts = manifest.split("\n")
     if not insts:
         raise RuntimeError(f"No instances found for bench ID {bench_id}")
-    results: List[Optional[Union[BenchSuccessResult, BenchFailureLogs]]] = [
-        None for _ in insts
-    ]
+    results: list[BenchSuccessResult | BenchFailureLogs | None] = [None for _ in insts]
     not_done = list(range(len(results)))
     while not_done:
         for i in not_done:
@@ -144,7 +142,7 @@ def check(ns: argparse.Namespace) -> None:
             time.sleep(60)
     for r in results:
         assert isinstance(r, BenchSuccessResult) or isinstance(r, BenchFailureLogs)
-    done_results = cast(List[Union[BenchFailureLogs, BenchSuccessResult]], results)
+    done_results = cast(list[BenchFailureLogs | BenchSuccessResult], results)
     failed = [
         (i, r) for i, r in enumerate(done_results) if isinstance(r, BenchFailureLogs)
     ]
@@ -155,7 +153,7 @@ def check(ns: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
         raise RuntimeError(f"{len(failed)} runs FAILED!")
-    good_results = cast(List[BenchSuccessResult], done_results)
+    good_results = cast(list[BenchSuccessResult], done_results)
     readers = [
         csv.DictReader(f"{line}\n" for line in r.stdout.split("\n"))
         for r in good_results
@@ -165,12 +163,12 @@ def check(ns: argparse.Namespace) -> None:
         assert isinstance(r.fieldnames, list)
         for fn in r.fieldnames:
             assert isinstance(fn, str)
-    headers = set(tuple(cast(List[str], r.fieldnames)) for r in readers)
+    headers = set(tuple(cast(list[str], r.fieldnames)) for r in readers)
     if len(headers) > 1:
         raise RuntimeError("Mismatched headers")
     w = csv.writer(sys.stdout)
     w.writerow(
-        cast(List[str], readers[0].fieldnames) + ["InstanceIndex", "Rev", "Trial"]
+        cast(list[str], readers[0].fieldnames) + ["InstanceIndex", "Rev", "Trial"]
     )
     for inst, r in zip(insts, csv_results):
         components = inst.split("-")
@@ -189,7 +187,7 @@ def start(ns: argparse.Namespace) -> None:
 
     bench_script = ns.bench_script
     script_name = bench_script[0]
-    script_args = " ".join((shlex.quote(arg) for arg in bench_script[1:]))
+    script_args = " ".join(shlex.quote(arg) for arg in bench_script[1:])
 
     # zip up the `misc` repository, for shipment to the remote machine
     os.chdir("misc/python")

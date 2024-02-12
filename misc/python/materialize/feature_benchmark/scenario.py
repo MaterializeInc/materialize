@@ -8,29 +8,32 @@
 # by the Apache License, Version 2.0.
 
 from math import ceil
-from typing import Dict, List, Optional, Type, Union
 
 from materialize.feature_benchmark.action import Action, DummyAction, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource
+from materialize.mz_version import MzVersion
 
-BenchmarkingSequence = Union[MeasurementSource, List[Union[Action, MeasurementSource]]]
+BenchmarkingSequence = MeasurementSource | list[Action | MeasurementSource]
 
 
 class RootScenario:
     SCALE: float = 6
+    FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenario
 
-    def __init__(self, scale: float) -> None:
+    def __init__(self, scale: float, mz_version: MzVersion, default_size: int) -> None:
         self._name = self.__class__.__name__
         self._scale = scale
+        self._mz_version = mz_version
         self._n: int = int(10**scale)
+        self._default_size = default_size
 
-    def shared(self) -> Optional[Union[Action, List[Action]]]:
+    def shared(self) -> Action | list[Action] | None:
         return None
 
-    def init(self) -> Optional[Union[Action, List[Action]]]:
+    def init(self) -> Action | list[Action] | None:
         return None
 
-    def before(self) -> Action:
+    def before(self) -> Action | list[Action] | None:
         return DummyAction()
 
     def benchmark(self) -> BenchmarkingSequence:
@@ -46,19 +49,28 @@ class RootScenario:
         return self._n
 
     @staticmethod
-    def name_with_scale(cls: Type["Scenario"], num: int, params_dict: Dict) -> str:
-        """Return the name of the Senario including the scale.
+    def name_with_scale(class_: type["Scenario"], num: int, params_dict: dict) -> str:
+        """Return the name of the Scenario including the scale.
         Used for running multiple instances of the same scenario via the
         parameterized python module.
         """
-        return f"{cls.__name__}_scale_{params_dict['SCALE']}"
+        return f"{class_.__name__}_scale_{params_dict['SCALE']}"
 
     def table_ten(self) -> TdAction:
         """Returns a Td() object that creates the 'ten' table"""
         return TdAction(
             """
 > CREATE TABLE ten (f1 INTEGER);
-> INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+> INSERT INTO ten VALUES (0)
+> INSERT INTO ten VALUES (1)
+> INSERT INTO ten VALUES (2)
+> INSERT INTO ten VALUES (3)
+> INSERT INTO ten VALUES (4)
+> INSERT INTO ten VALUES (5)
+> INSERT INTO ten VALUES (6)
+> INSERT INTO ten VALUES (7)
+> INSERT INTO ten VALUES (8)
+> INSERT INTO ten VALUES (9)
 """
         )
 

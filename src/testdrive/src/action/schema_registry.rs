@@ -10,7 +10,6 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-
 use mz_ccsr::{SchemaReference, SchemaType};
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
@@ -21,7 +20,7 @@ use crate::parser::BuiltinCommand;
 
 pub async fn run_publish(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     // Parse arguments.
     let subject = cmd.args.string("subject")?;
@@ -66,7 +65,7 @@ pub async fn run_publish(
 
 pub async fn run_verify(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     // Parse arguments.
     let subject = cmd.args.string("subject")?;
@@ -87,12 +86,24 @@ pub async fn run_verify(
         "Verifying contents of latest schema for subject {} in the schema registry...",
         subject.quoted(),
     );
-    let actual_schema = state
-        .ccsr_client
-        .get_schema_by_subject(&subject)
+
+    // Finding the published schema is retryable because it's published
+    // asynchronously and only after the source/sink is created.
+    let actual_schema = mz_ore::retry::Retry::default()
+        .max_duration(state.default_timeout)
+        .retry_async(|_| async {
+            match state.ccsr_client.get_schema_by_subject(&subject).await {
+                Ok(s) => mz_ore::retry::RetryResult::Ok(s.raw),
+                Err(
+                    e @ mz_ccsr::GetBySubjectError::SubjectNotFound
+                    | e @ mz_ccsr::GetBySubjectError::VersionNotFound(_),
+                ) => mz_ore::retry::RetryResult::RetryableErr(e),
+                Err(e) => mz_ore::retry::RetryResult::FatalErr(e),
+            }
+        })
         .await
-        .context("fetching schema")?
-        .raw;
+        .context("fetching schema")?;
+
     let actual_schema = avro::parse_schema(&actual_schema).context("parsing actual avro schema")?;
     if expected_schema != actual_schema {
         bail!(
@@ -106,30 +117,55 @@ pub async fn run_verify(
 
 pub async fn run_wait(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     // Parse arguments.
-    let subject = cmd.args.string("subject")?;
+    let topic = cmd.args.string("topic")?;
+    let subjects = [format!("{}-value", topic), format!("{}-key", topic)];
+
     cmd.args.done()?;
     cmd.assert_no_input()?;
 
     // Run action.
+
+    let mut waiting_for_kafka = false;
+
     println!(
-        "Waiting for schema for subject {} to become available in the schema registry...",
-        subject.quoted(),
+        "Waiting for schema for subjects {:?} to become available in the schema registry...",
+        subjects
     );
+
+    let topic = &topic;
+    let subjects = &subjects;
     Retry::default()
         .initial_backoff(Duration::from_millis(50))
         .factor(1.5)
         .max_duration(state.timeout)
-        .retry_async_canceling(|_| async {
-            state
-                .ccsr_client
-                .get_schema_by_subject(&subject)
-                .await
-                .context("fetching schema")
-                .and(Ok(()))
+        .retry_async_canceling(|_| async move {
+            if !waiting_for_kafka {
+                futures::future::try_join_all(subjects.iter().map(|subject| async move {
+                    state
+                        .ccsr_client
+                        // This doesn't take `ccsr_client` by `&mut self`, so it should be safe to cancel
+                        // by try-joining.
+                        .get_schema_by_subject(subject)
+                        .await
+                        .context("fetching schema")
+                        .and(Ok(()))
+                }))
+                .await?;
+
+                waiting_for_kafka = true;
+                println!("Waiting for Kafka topic {} to exist", topic);
+            }
+
+            if waiting_for_kafka {
+                super::kafka::check_topic_exists(topic, state).await?
+            }
+
+            Ok::<(), anyhow::Error>(())
         })
         .await?;
+
     Ok(ControlFlow::Continue)
 }

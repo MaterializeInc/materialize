@@ -7,18 +7,28 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
-
 > CREATE MATERIALIZED VIEW simple_view AS SELECT 1 AS a, 2 AS b, 3 AS c;
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK simple_view_sink FROM simple_view
+> CREATE CLUSTER simple_view_sink_cluster SIZE '${arg.default-storage-size}';
+
+! CREATE SINK simple_view_sink
+  IN CLUSTER simple_view_sink_cluster
+  FROM simple_view
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-cols-sink-${testdrive.seed}')
+  FORMAT JSON ARRAY
+  ENVELOPE DEBEZIUM
+contains:JSON ARRAY format in sinks not yet supported
+
+> CREATE SINK simple_view_sink
+  IN CLUSTER simple_view_sink_cluster
+  FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-cols-sink-${testdrive.seed}')
   FORMAT JSON
   ENVELOPE DEBEZIUM
@@ -26,7 +36,10 @@
 $ kafka-verify-data format=json sink=materialize.public.simple_view_sink key=false
 {"before": null, "after": {"a": 1, "b": 2, "c": 3}}
 
-> CREATE SINK simple_view_upsert FROM simple_view
+> CREATE CLUSTER simple_view_upsert_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK simple_view_upsert
+  IN CLUSTER simple_view_upsert_cluster
+  FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-upsert-${testdrive.seed}')
   KEY (b)
   FORMAT JSON
@@ -53,7 +66,10 @@ $ kafka-verify-data format=json sink=materialize.public.simple_view_upsert key=t
   'текст'::bytea c13,
   '{"a": 2}'::jsonb c14
 
-> CREATE SINK types_sink FROM types_view
+> CREATE CLUSTER types_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK types_sink
+  IN CLUSTER types_sink_cluster
+  FROM types_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-types-sink-${testdrive.seed}')
   FORMAT JSON
   ENVELOPE DEBEZIUM
@@ -67,7 +83,10 @@ $ kafka-verify-data format=json sink=materialize.public.types_sink key=false
 > CREATE MATERIALIZED VIEW special_characters_view AS
   SELECT 'текст' c1, '"' c2, '''' c3, '\' c4, E'a\n\tb' c5
 
-> CREATE SINK special_characters_sink FROM special_characters_view
+> CREATE CLUSTER special_characters_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK special_characters_sink
+  IN CLUSTER special_characters_sink_cluster
+  FROM special_characters_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-special-characters-sink-${testdrive.seed}')
   FORMAT JSON
   ENVELOPE DEBEZIUM
@@ -79,7 +98,10 @@ $ kafka-verify-data format=json sink=materialize.public.special_characters_sink 
 
 > CREATE MATERIALIZED VIEW record_view AS SELECT simple_view FROM simple_view;
 
-> CREATE SINK record_sink FROM record_view
+> CREATE CLUSTER record_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK record_sink
+  IN CLUSTER record_sink_cluster
+  FROM record_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-record-sink-${testdrive.seed}')
   FORMAT JSON
   ENVELOPE DEBEZIUM
@@ -106,7 +128,10 @@ contains:column "a" specified more than once
 
 > CREATE MATERIALIZED VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
 
-> CREATE SINK complex_type_sink FROM complex_type_view
+> CREATE CLUSTER complex_type_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK complex_type_sink
+  IN CLUSTER complex_type_sink_cluster
+  FROM complex_type_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-complex-type-sink-${testdrive.seed}')
   FORMAT JSON
   ENVELOPE DEBEZIUM

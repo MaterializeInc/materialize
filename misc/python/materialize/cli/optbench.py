@@ -12,11 +12,11 @@ import re
 import tempfile
 from contextlib import closing
 from pathlib import Path
-from typing import Optional, cast
+from typing import cast
 
 import click
 import numpy as np
-import pandas as pd  # type: ignore
+import pandas as pd
 
 from ..optbench import Scenario, scenarios, sql, util
 
@@ -113,7 +113,7 @@ def init(
     db_port: int,
     db_host: str,
     db_user: str,
-    db_pass: Optional[str],
+    db_pass: str | None,
     db_require_ssl: bool,
 ) -> None:
     """Initialize the DB under test for the given scenario."""
@@ -178,7 +178,7 @@ def run(
     db_port: int,
     db_host: str,
     db_user: str,
-    db_pass: Optional[str],
+    db_pass: str | None,
     db_require_ssl: bool,
 ) -> None:
     """Run benchmark in the DB under test for a given scenario."""
@@ -239,11 +239,11 @@ def compare(
 
     try:
         base_df = pd.read_csv(base, quoting=csv.QUOTE_MINIMAL).agg(
-            [np.min, np.median, np.max]
+            ["min", "median", "max"]
         )
 
         diff_df = pd.read_csv(diff, quoting=csv.QUOTE_MINIMAL).agg(
-            [np.min, np.median, np.max]
+            ["min", "median", "max"]
         )
 
         # compute diff/base quotient for all (metric, query) pairs

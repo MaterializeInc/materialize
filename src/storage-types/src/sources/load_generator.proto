@@ -1,0 +1,38 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package mz_storage_types.sources.load_generator;
+
+message ProtoLoadGeneratorSourceConnection {
+    reserved 1;
+    oneof kind {
+        ProtoCounterLoadGenerator counter = 6;
+        google.protobuf.Empty auction = 3;
+        ProtoTpchLoadGenerator tpch = 4;
+        google.protobuf.Empty datums = 5;
+        google.protobuf.Empty marketing = 7;
+    }
+    optional uint64 tick_micros = 2;
+}
+
+message ProtoCounterLoadGenerator {
+    optional uint64 max_cardinality = 1;
+}
+
+message ProtoTpchLoadGenerator {
+    int64 count_supplier = 1;
+    int64 count_part = 2;
+    int64 count_customer = 3;
+    int64 count_orders = 4;
+    int64 count_clerk = 5;
+}

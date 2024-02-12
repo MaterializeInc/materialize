@@ -17,11 +17,10 @@
 //! controller methods return bespoke error types that serve as documentation for the failure modes
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
+use mz_repr::GlobalId;
 use thiserror::Error;
 
-use mz_repr::GlobalId;
-
-use super::{instance, ComputeInstanceId, ReplicaId};
+use crate::controller::{instance, ComputeInstanceId, ReplicaId};
 
 /// Error returned in response to a reference to an unknown compute instance.
 #[derive(Error, Debug)]
@@ -165,7 +164,7 @@ impl From<instance::PeekError> for PeekError {
         match error {
             CollectionMissing(id) => Self::CollectionMissing(id),
             ReplicaMissing(id) => Self::ReplicaMissing(id),
-            SinceViolation(id) => Self::CollectionMissing(id),
+            SinceViolation(id) => Self::SinceViolation(id),
         }
     }
 }
@@ -188,6 +187,33 @@ impl From<InstanceMissing> for CollectionUpdateError {
 impl From<CollectionMissing> for CollectionUpdateError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
+    }
+}
+
+/// Errors arising during collection read policy assignment.
+#[derive(Error, Debug)]
+pub enum ReadPolicyError {
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(ComputeInstanceId),
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+    #[error("collection is write-only: {0}")]
+    WriteOnlyCollection(GlobalId),
+}
+
+impl From<InstanceMissing> for ReadPolicyError {
+    fn from(error: InstanceMissing) -> Self {
+        Self::InstanceMissing(error.0)
+    }
+}
+
+impl From<instance::ReadPolicyError> for ReadPolicyError {
+    fn from(error: instance::ReadPolicyError) -> Self {
+        use instance::ReadPolicyError::*;
+        match error {
+            CollectionMissing(id) => Self::CollectionMissing(id),
+            WriteOnlyCollection(id) => Self::WriteOnlyCollection(id),
+        }
     }
 }
 

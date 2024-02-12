@@ -9,10 +9,4 @@
 
 //! Moving data to external systems
 
-mod healthcheck;
 mod kafka;
-pub mod metrics;
-
-pub use healthcheck::{Healthchecker, SinkStatus};
-pub(crate) use metrics::KafkaBaseMetrics;
-pub use metrics::SinkBaseMetrics;

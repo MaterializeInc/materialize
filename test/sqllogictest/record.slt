@@ -18,7 +18,7 @@ EXPLAIN WITH(arity, join_impls) SELECT (record).f2 FROM (SELECT ROW(a, a) AS rec
 ----
 Explained Query:
   Project (#0) // { arity: 1 }
-    Get materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -28,7 +28,7 @@ EXPLAIN WITH(arity, join_impls) SELECT record, (record).f2 FROM (SELECT ROW(a, a
 Explained Query:
   Project (#2, #3) // { arity: 2 }
     Map (row(#0, #0), record_get[1](#2)) // { arity: 4 }
-      Get materialize.public.t1 // { arity: 2 }
+      ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -37,7 +37,7 @@ EXPLAIN WITH(arity, join_impls) SELECT (COALESCE(record, ROW(NULL, NULL))).f2 FR
 ----
 Explained Query:
   Project (#0) // { arity: 1 }
-    Get materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF
 
@@ -60,7 +60,7 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE (t1.a, t1.b) IN ((1,2))
 ----
 Explained Query:
   Filter (#0 = 1) AND (#1 = 2) // { arity: 2 }
-    Get materialize.public.t1 // { arity: 2 }
+    ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0 = 1) AND (#1 = 2))

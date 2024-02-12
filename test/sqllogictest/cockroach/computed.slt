@@ -260,7 +260,7 @@ SELECT a, b, c, d FROM x
 statement ok
 DROP TABLE x
 
-# TODO(justin): #22434
+# TODO(justin): cockroach#22434
 # statement ok
 # CREATE TABLE x (
 #   b INT AS a STORED,

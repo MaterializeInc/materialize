@@ -7,15 +7,61 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Postgres, TestCerts, Testdrive
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
     Testdrive(),
     TestCerts(),
-    Postgres(),
+    # Set the max slot WAL keep size to 10MB
+    Postgres(extra_command=["-c", "max_slot_wal_keep_size=10"]),
 ]
+
+# Test that ceased statuses persist across restart
+def workflow_ceased_status(c: Composition, parser: WorkflowArgumentParser) -> None:
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "postgres")
+        c.run_testdrive_files("ceased/before-mz-restart.td")
+
+        # Restart mz
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.run_testdrive_files("ceased/after-mz-restart.td")
+
+
+def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
+    with c.override(Postgres(extra_command=["-c", "max_replication_slots=2"])):
+        c.up("materialized", "postgres")
+        c.run_testdrive_files("override/replication-slots.td")
+
+
+def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
+    for wal_level in ["replica", "minimal"]:
+        with c.override(
+            Postgres(
+                extra_command=[
+                    "-c",
+                    "max_wal_senders=0",
+                    "-c",
+                    f"wal_level={wal_level}",
+                ]
+            )
+        ):
+            c.up("materialized", "postgres")
+            c.run_testdrive_files("override/insufficient-wal-level.td")
+
+
+def workflow_replication_disabled(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    with c.override(Postgres(extra_command=["-c", "max_wal_senders=0"])):
+        c.up("materialized", "postgres")
+        c.run_testdrive_files("override/replication-disabled.td")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -37,13 +83,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-certs", "cat", "/secrets/postgres.key", capture=True
     ).stdout
 
-    c.up("materialized", "test-certs", "testdrive", "postgres")
-    c.run(
-        "testdrive",
+    c.up("materialized", "test-certs", "postgres")
+    c.run_testdrive_files(
         f"--var=ssl-ca={ssl_ca}",
         f"--var=ssl-cert={ssl_cert}",
         f"--var=ssl-key={ssl_key}",
         f"--var=ssl-wrong-cert={ssl_wrong_cert}",
         f"--var=ssl-wrong-key={ssl_wrong_key}",
+        f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+        f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         *args.filter,
     )

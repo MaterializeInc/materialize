@@ -54,7 +54,8 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
     "database.history.kafka.bootstrap.servers": "kafka:9092",
     "database.history.kafka.topic": "schema-changes.history",
     "truncate.handling.mode": "include",
-    "decimal.handling.mode": "precise"
+    "decimal.handling.mode": "precise",
+    "topic.prefix": "postgres"
   }
 }
 
@@ -67,5 +68,5 @@ ALTER SYSTEM SET max_sources = 1000
 # Sleep for 10 seconds, as Debezium may fail to replicate any
 # postgresql statements that come immediately afterwards
 
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_unsafe.mz_sleep(10)
 <null>

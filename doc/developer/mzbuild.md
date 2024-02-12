@@ -240,7 +240,7 @@ Let's add another mzbuild dependency, this time on `materialized`:
 
 ```py
 from materialize.mzcompose import Service
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     Materialized(),
@@ -290,7 +290,7 @@ Compose.
 
 ```py
 from materialize.mzcompose import Service
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     Materialized(),
@@ -405,9 +405,9 @@ publish: true
      The optional `matching` field specifies a glob that determines which
      files in the `source` directory to copy.
 
-  *  `type: cargo-bin` builds a Rust binary with Cargo. The `bin` field is a
+  *  `type: cargo-build` builds a Rust binary with Cargo. The `bin` field is a
      string or a list of strings that indicates the name of one or more binary
-     target in the Cargo workspace to build. The resulting artifact will be
+     targets in the Cargo workspace to build. The resulting artifact will be
      placed into the mzbuild context. The `example` field works identically but
      names an example to build rather than a binary.
 
@@ -418,8 +418,7 @@ publish: true
      `.cargo/config` files.
 
      Cargo is invoked with the `--release` flag unless the `--dev` flag is
-     specified. The binary will be stripped of debug information unless
-     `strip: false` is requested.
+     specified.
 
      In rare cases, it may be necessary to extract files from the build
      directory of a dependency. The `extract` key specifies a mapping from a

@@ -9,17 +9,18 @@
 
 //! gRPC transport for the [client](crate::client) module.
 
-use std::fmt::{self, Debug};
-use std::pin::Pin;
-use std::sync::Arc;
-
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::future;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::uri::PathAndQuery;
+use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
+use mz_proto::{ProtoType, RustType};
 use once_cell::sync::Lazy;
 use semver::Version;
+use std::fmt::{self, Debug};
+use std::pin::Pin;
+use std::sync::Arc;
 use tokio::net::UnixStream;
 use tokio::select;
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -34,11 +35,14 @@ use tonic::{IntoStreamingRequest, Request, Response, Status, Streaming};
 use tower::Service;
 use tracing::{debug, error, info};
 
-use mz_ore::netio::{Listener, SocketAddr, SocketAddrType};
-use mz_proto::{ProtoType, RustType};
-
 use crate::client::{GenericClient, Partitionable, Partitioned};
 use crate::codec::{StatCodec, StatsCollector};
+use crate::params::GrpcClientParameters;
+
+include!(concat!(env!("OUT_DIR"), "/mz_service.params.rs"));
+
+// Use with generated servers Server::new(Svc).max_decoding_message_size
+pub const MAX_GRPC_MESSAGE_SIZE: usize = usize::MAX;
 
 pub type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, Status>> + Send>>;
 
@@ -87,11 +91,24 @@ where
         addr: String,
         version: Version,
         metrics: G::STATS,
+        params: &GrpcClientParameters,
     ) -> Result<Self, anyhow::Error> {
         debug!("GrpcClient {}: Attempt to connect", addr);
 
         let channel = match SocketAddrType::guess(&addr) {
-            SocketAddrType::Inet => Endpoint::new(format!("http://{}", addr))?.connect().await?,
+            SocketAddrType::Inet => {
+                let mut endpoint = Endpoint::new(format!("http://{}", addr))?;
+                if let Some(connect_timeout) = params.connect_timeout {
+                    endpoint = endpoint.connect_timeout(connect_timeout);
+                }
+                if let Some(keep_alive_timeout) = params.http2_keep_alive_timeout {
+                    endpoint = endpoint.keep_alive_timeout(keep_alive_timeout);
+                }
+                if let Some(keep_alive_interval) = params.http2_keep_alive_interval {
+                    endpoint = endpoint.http2_keep_alive_interval(keep_alive_interval);
+                }
+                endpoint.connect().await?
+            }
             SocketAddrType::Unix => {
                 let addr = addr.clone();
                 Endpoint::from_static("http://localhost") // URI is ignored
@@ -116,6 +133,7 @@ where
     pub async fn connect_partitioned<C, R>(
         dests: Vec<(String, G::STATS)>,
         version: Version,
+        params: &GrpcClientParameters,
     ) -> Result<Partitioned<Self, C, R>, anyhow::Error>
     where
         (C, R): Partitionable<C, R>,
@@ -123,7 +141,7 @@ where
         let clients = future::try_join_all(
             dests
                 .into_iter()
-                .map(|(addr, metrics)| Self::connect(addr, version.clone(), metrics)),
+                .map(|(addr, metrics)| Self::connect(addr, version.clone(), metrics, params)),
         )
         .await?;
         Ok(Partitioned::new(clients))
@@ -178,7 +196,9 @@ where
     where
         Self: Sized,
     {
-        let inner = tonic::client::Grpc::new(inner);
+        let inner = tonic::client::Grpc::new(inner)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_SIZE);
         let codec = StatCodec::new(stats_collector);
         BidiProtoClient { inner, path, codec }
     }

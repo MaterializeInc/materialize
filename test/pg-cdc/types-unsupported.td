@@ -24,8 +24,9 @@ CREATE SCHEMA public;
 CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
 CREATE TABLE person (name TEXT, current_mood mood);
 INSERT INTO person VALUES ('Moe', 'happy');
+ALTER TABLE person REPLICA IDENTITY FULL;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-# Todo: add test for detail and hint once testdrive supports that
 ! CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
-regex: the following columns contain unsupported types:\npostgres\.public\.person\.current_mood \(OID \d+\)
+contains:referenced tables use unsupported types

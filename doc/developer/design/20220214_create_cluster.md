@@ -47,7 +47,7 @@ if a cluster with the specified name does not exist unless the `IF EXIST`
 clause is present. Dropping a non-empty cluster (i.e., a cluster with at least
 one index) is not permitted unless `CASCADE` is present.
 
-THe `SHOW CLUSTERS` statement lists the clusters in the system, optionally
+The `SHOW CLUSTERS` statement lists the clusters in the system, optionally
 filtered by the provided `LIKE` pattern or `WHERE` expression, which work
 analogously to the same clauses in the `SHOW DATABASES` statement.
 

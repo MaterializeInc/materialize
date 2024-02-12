@@ -1,0 +1,23 @@
+[package]
+name = "mz-postgres-client"
+description = "A Postgres client that uses deadpool as a connection pool."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { version = "1.0.66", features = ["backtrace"] }
+deadpool-postgres = "0.10.3"
+mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes_"] }
+mz-tls-util = { path = "../tls-util" }
+prometheus = { version = "0.13.3", default-features = false}
+tokio = { version = "1.32.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
+tracing = "0.1.37"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

@@ -1,7 +1,7 @@
 Field                               | Value      | Description
 ------------------------------------|------------|-------------------------------------
-`SIZE`                              | `text`     | The size of the replica. For valid sizes, see [cluster replica sizes](/sql/create-cluster-replica#sizes).
-`AVAILABILITY ZONE`                 | `text`     | If you want the replica to reside in a specific availability zone. You must specify an [AWS availability zone ID] in either `us-east-1` or `eu-west-1`, e.g. `use1-az1`. Note that we expect the zone's ID, rather than its name.
-`INTROSPECTION INTERVAL`            | `interval` | Default: `1s`. The interval at which to collect introspection data. See [Troubleshooting](/ops/troubleshooting) for details about introspection data. The special value `0` entirely disables the gathering of introspection data.
-`INTROSPECTION DEBUGGING`           | `bool`     | Default: `false`. Whether to introspect the gathering of the introspection data.
-`IDLE ARRANGEMENT MERGE EFFORT`     | `integer`  | The amount of effort the replica should exert on compacting arrangements during idle periods. *This is an unstable option! It may be changed or removed at any time.*
+`SIZE`                              | `text`     | The size of the replica. For valid sizes, see [Size](/sql/create-cluster-replica#size).
+`AVAILABILITY ZONE`                 | `text`     | The availability zone of the underlying cloud provider in which to provision the replica. You must specify an [AWS availability zone ID](https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html) in either `us-east-1`, `eu-west-1`, or `us-west-2`, e.g. `use1-az1`. Note that you must use the zone's ID, not its name.
+`INTROSPECTION INTERVAL`            | `interval` | The interval at which to collect introspection data. See [Troubleshooting](/ops/troubleshooting) for details about introspection data. The special value `0` entirely disables the gathering of introspection data.<br>Default: `1s`
+`INTROSPECTION DEBUGGING`           | `bool`     | Whether to introspect the gathering of the introspection data.<br>Default: `FALSE`
+`IDLE ARRANGEMENT MERGE EFFORT`     | `integer`  | ***Unstable.** This option may be changed or removed at any time.*<br>The amount of effort the replica should exert on compacting arrangements during idle periods.

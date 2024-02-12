@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, Service
-from materialize.mzcompose.services import Materialized
+from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [
     Materialized(),

@@ -11,6 +11,9 @@ edition.workspace = true
 rust-version.workspace = true
 autobenches = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.66"
 byteorder = { version = "1.4.3", optional = true }
@@ -20,6 +23,7 @@ digest = "0.10.6"
 enum-kinds = "0.5.1"
 flate2 = "1.0.24"
 itertools = "0.10.5"
+mz-ore = { path = "../ore", features = ["test"] }
 once_cell = "1.16.0"
 rand = "0.8.5"
 regex = "1.7.0"
@@ -38,4 +42,4 @@ once_cell = "1.16.0"
 snappy = ["byteorder", "crc32fast", "snap"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+normal = ["mz-ore", "workspace-hack"]

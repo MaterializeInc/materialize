@@ -18,12 +18,14 @@ one
 two
 three
 
-> CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
+> CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 # Test that the default consumer group ID is
 # `materialize-$ENVIRONMENTID-$CONNECTIONID-$SOURCEID`.
 
+> CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE topic
+  IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
@@ -36,9 +38,9 @@ three
 
 $ set-from-sql var=consumer-group-id
 SELECT
-  'materialize-' || mz_environment_id() || '-' || c.id || '-' || s.id
+  ks.group_id_prefix
 FROM mz_sources s
-JOIN mz_connections c ON c.id = s.connection_id
+JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0
@@ -49,6 +51,7 @@ $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partiti
 # Test than an arbitrary prefix can be prepended to the consumer group.
 
 > CREATE SOURCE topic
+  IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}',
     GROUP ID PREFIX 'OVERRIDE-'
@@ -62,9 +65,9 @@ three
 
 $ set-from-sql var=consumer-group-id
 SELECT
-  'OVERRIDE-materialize-' || mz_environment_id() || '-' || c.id || '-' || s.id
+  ks.group_id_prefix
 FROM mz_sources s
-JOIN mz_connections c ON c.id = s.connection_id
+JOIN mz_internal.mz_kafka_sources ks ON s.id = ks.id
 WHERE s.name = 'topic'
 
 $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partition=0

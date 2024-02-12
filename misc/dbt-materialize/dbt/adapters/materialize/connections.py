@@ -17,20 +17,48 @@
 from dataclasses import dataclass
 from typing import Optional
 
+import psycopg2
+
+import dbt.adapters.postgres.connections
 import dbt.exceptions
 from dbt.adapters.postgres import PostgresConnectionManager, PostgresCredentials
 from dbt.events import AdapterLogger
 from dbt.semver import versions_compatible
 
 # If you bump this version, bump it in README.md too.
-SUPPORTED_MATERIALIZE_VERSIONS = ">=0.28.0"
+SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
 
 logger = AdapterLogger("Materialize")
+
+# Override the psycopg2 connect function in order to inject Materialize-specific
+# session parameter defaults.
+#
+# This approach is a bit hacky, but some of these session parameters *must* be
+# set as part of connection initiation, so we can't simply run `SET` commands
+# after the session is established.
+def connect(**kwargs):
+    options = [
+        # Ensure that dbt's introspection queries get routed to the
+        # `mz_introspection` cluster, even if the server or role's default is
+        # different.
+        "--auto_route_introspection_queries=on",
+        # dbt prints notices to stdout, which is very distracting because dbt
+        # can establish many new connections during `dbt run`.
+        "--welcome_message=off",
+        *(kwargs.get("options") or []),
+    ]
+    kwargs["options"] = " ".join(options)
+
+    return _connect(**kwargs)
+
+
+_connect = psycopg2.connect
+psycopg2.connect = connect
 
 
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
-    cluster: Optional[str] = "default"
+    cluster: Optional[str] = "quickstart"
 
     @property
     def type(self):
@@ -47,6 +75,7 @@ class MaterializeCredentials(PostgresCredentials):
             "sslmode",
             "keepalives_idle",
             "connect_timeout",
+            "search_path",
             "retries",
         )
 
@@ -62,18 +91,11 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         # More info: https://www.psycopg.org/docs/usage.html#transactions-control
         connection.handle.autocommit = True
 
-        cursor = connection.handle.cursor()
-
-        # Upon connection, dbt performs introspection queries that should run in
-        # the mz_introspection cluster for optimal performance. Each materialization
-        # should then handle falling back to the default connection cluster if no
-        # cluster configuration is specified at the model level.
-        mz_introspection_cluster = "mz_introspection"
-        logger.debug("Switching to cluster '{}'".format(mz_introspection_cluster))
-        cursor.execute("SET cluster = %s" % mz_introspection_cluster)
-
-        cursor.execute("SELECT mz_version()")
-        mz_version = cursor.fetchone()[0].split()[0].strip("v")
+        mz_version = connection.handle.info.parameter_status(
+            "mz_version"
+        )  # e.g. v0.79.0-dev (937dfde5e)
+        mz_version = mz_version.split()[0]  # e.g. v0.79.0-dev
+        mz_version = mz_version[1:]  # e.g. 0.79.0-dev
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
             raise dbt.exceptions.DbtRuntimeError(
                 f"Detected unsupported Materialize version {mz_version}\n"
@@ -81,6 +103,32 @@ class MaterializeConnectionManager(PostgresConnectionManager):
             )
 
         return connection
+
+    def cancel(self, connection):
+        # The PostgreSQL implementation calls `pg_terminate_backend` from a new
+        # connection to terminate `connection`. At the time of writing,
+        # Materialize doesn't support `pg_terminate_backend`, so we implement
+        # cancellation by calling `close` on the connection.
+        #
+        # NOTE(benesch): I'm not entirely sure why the PostgreSQL implementation
+        # uses `pg_terminate_backend`. I suspect that disconnecting the network
+        # connection by calling `connection.handle.close()` is not immediately
+        # noticed by the PostgreSQL server, and so the queries running on that
+        # connection may continue executing to completion. Materialize, however,
+        # will quickly notice if the network socket disconnects and cancel any
+        # queries that were initiated by that connection.
+
+        connection_name = connection.name
+        try:
+            logger.debug("Closing connection '{}' to force cancellation")
+            connection.handle.close()
+        except psycopg2.InterfaceError as exc:
+            # if the connection is already closed, not much to cancel!
+            if "already closed" in str(exc):
+                logger.debug(f"Connection {connection_name} was already closed")
+                return
+            # probably bad, re-raise it
+            raise
 
     # Disable transactions. Materialize transactions do not support arbitrary
     # queries in transactions and therefore many of dbt's internal macros

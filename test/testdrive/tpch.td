@@ -11,33 +11,43 @@
 # cardinality, don't depend on exact count that could change if the rng
 # implementation changes, just check that it's within the spec range.
 
-! CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR 0)
+! CREATE SOURCE gen
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 0)
 contains: multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement
 
-! CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR 9223372036854775807) FOR ALL TABLES
+! CREATE SOURCE gen
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 9223372036854775807) FOR ALL TABLES
 contains: unsupported scale factor 9223372036854776000
 
-! CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR -1) FOR ALL TABLES
+! CREATE SOURCE gen
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR -1) FOR ALL TABLES
 contains: unsupported scale factor -1
 
-> CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
+> CREATE SOURCE gen
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
 
 $ set-from-sql var=source-size
-SELECT size FROM mz_sources WHERE name = 'gen'
+SELECT size FROM (
+    SHOW SOURCES
+) WHERE name = 'gen'
 
 > SHOW SOURCES
-name         type       size
---------------------------------
- customer  subsource       <null>
- gen       load-generator  ${source-size}
- gen_progress  subsource       <null>
- lineitem  subsource       <null>
- nation    subsource       <null>
- orders    subsource       <null>
- part      subsource       <null>
- partsupp  subsource       <null>
- region    subsource       <null>
- supplier  subsource       <null>
+name           type            size             cluster
+-------------------------------------------------------
+ customer      subsource       <null>           <null>
+ gen           load-generator  ${source-size}   ${arg.single-replica-cluster}
+ gen_progress  progress        <null>           <null>
+ lineitem      subsource       <null>           <null>
+ nation        subsource       <null>           <null>
+ orders        subsource       <null>           <null>
+ part          subsource       <null>           <null>
+ partsupp      subsource       <null>           <null>
+ region        subsource       <null>           <null>
+ supplier      subsource       <null>           <null>
 
 # SF * 150,000
 > SELECT count(*) FROM customer
@@ -118,7 +128,7 @@ true
   ORDER BY
     l_returnflag,
     l_linestatus;
-4 values hashing to e350d21706985f8be572176f2301222f
+4 values hashing to 87d2cbecfc8cdcd9c9614dfb7e6d236f
 
 # Query 02
 > SELECT
@@ -839,7 +849,7 @@ true
   ORDER BY
     l_returnflag,
     l_linestatus;
-4 values hashing to e350d21706985f8be572176f2301222f
+4 values hashing to 87d2cbecfc8cdcd9c9614dfb7e6d236f
 
 # Query 02
 > SELECT
@@ -1497,3 +1507,5 @@ true
   ORDER BY
       cntrycode;
 7 values hashing to 3782c67124c71b5bcb3460934dec46de
+
+> DROP SOURCE gen CASCADE

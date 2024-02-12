@@ -1,0 +1,92 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Basic tests of colocating compute and storage objects
+
+mode cockroach
+
+# Start from a pristine state
+reset-server
+
+statement ok
+CREATE CLUSTER c SIZE '1', REPLICATION FACTOR 2;
+
+statement error db error: ERROR: cannot create source in cluster with more than one replica
+CREATE SOURCE ldgen IN CLUSTER c FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
+
+statement ok
+ALTER CLUSTER c SET (REPLICATION FACTOR 1)
+
+statement ok
+CREATE SOURCE ldgen IN CLUSTER c FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
+
+statement error db error: ERROR: cannot create more than one replica of a cluster containing sources or sinks
+ALTER CLUSTER c SET (REPLICATION FACTOR 2)
+
+statement ok
+CREATE TABLE t(a int);
+
+statement ok
+CREATE INDEX t_idx IN CLUSTER c ON t(a);
+
+statement ok
+SET CLUSTER = c;
+
+query TT
+SELECT s.name, c.name FROM mz_sources s JOIN mz_clusters c ON s.cluster_id = c.id
+----
+ldgen   c
+
+statement ok
+INSERT INTO t VALUES (1);
+
+query T
+SELECT * FROM t;
+----
+1
+
+statement ok
+ALTER CLUSTER c SET (REPLICATION FACTOR 0);
+
+statement error db error: ERROR: cannot create more than one replica of a cluster containing sources or sinks
+ALTER CLUSTER c SET (SIZE '2', REPLICATION FACTOR 2);
+
+statement ok
+ALTER CLUSTER c SET (REPLICATION FACTOR 1);
+
+statement ok
+INSERT INTO t VALUES (2);
+
+query T
+SELECT * FROM t;
+----
+1
+2
+
+statement ok
+DROP CLUSTER c CASCADE;
+
+# First create a compute item, then a storage item
+
+statement ok
+CREATE CLUSTER c SIZE '1';
+
+statement ok
+CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
+
+statement ok
+CREATE SOURCE ldgen IN CLUSTER c FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
+
+statement ok
+SET CLUSTER = c;
+
+query T
+SELECT * FROM mv;
+----
+1

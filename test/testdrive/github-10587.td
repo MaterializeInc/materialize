@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET max_clusters = 20
+
 # Regression test for https://github.com/MaterializeInc/materialize/issues/10587
 #
 # This file uses the old create source syntax.
@@ -76,45 +79,65 @@ $ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} repeat=${count}
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE s0 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s0_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s0 IN CLUSTER s0_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-0-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s1 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s1_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s1 IN CLUSTER s1_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s2 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s2_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s2 IN CLUSTER s2_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s3 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s3_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s3 IN CLUSTER s3_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s4 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s4_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s4 IN CLUSTER s4_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-4-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s5 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s5_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s5 IN CLUSTER s5_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-5-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s6 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s6_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s6 IN CLUSTER s6_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-6-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s7 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s7_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s7 IN CLUSTER s7_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-7-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s8 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s8_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s8 IN CLUSTER s8_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-8-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE SOURCE s9 FROM KAFKA CONNECTION kafka_conn
+> CREATE CLUSTER s9_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE s9 IN CLUSTER s9_cluster
+  FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-multi-topic-9-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
@@ -144,49 +167,49 @@ count
 
 $ set-max-tries max-tries=1
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count
 -----
 100000
 
-> SELECT mz_internal.mz_sleep(0.2);
+> SELECT mz_unsafe.mz_sleep(0.2);
 <null>
 > SELECT COUNT(*) FROM s1 AS OF AT LEAST 0;
 count

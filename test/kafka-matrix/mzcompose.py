@@ -7,25 +7,25 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Localstack,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
-REDPANDA_VERSIONS = ["v23.1.2", "v22.2.11", "v22.1.11"]
+REDPANDA_VERSIONS = ["v22.3.25", "v23.1.21", "v23.2.25", "v23.3.5"]
 
 CONFLUENT_PLATFORM_VERSIONS = [
-    "6.2.8",
-    "7.0.7",
-    "7.1.5",
-    "7.2.3",
-    "7.3.2",
+    "6.2.14",
+    "7.0.13",
+    "7.1.11",
+    "7.2.9",
+    "7.3.7",
+    "7.4.4",
+    "7.5.2",
     "latest",
 ]
 
@@ -41,7 +41,9 @@ SERVICES = [
 
 
 TD_CMD = [
-    f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+    f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+    f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+    "--var=single-replica-cluster=quickstart",
     *[f"testdrive/{td}" for td in ["kafka-sinks.td", "kafka-upsert-sources.td"]],
 ]
 
@@ -54,15 +56,17 @@ def workflow_default(c: Composition) -> None:
         with c.override(Redpanda(version=redpanda_version)):
             c.down(destroy_volumes=True)
             c.up("redpanda", "materialized")
-            c.run("testdrive", *TD_CMD)
+            c.run_testdrive_files(*TD_CMD)
 
     for confluent_version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"--- Testing Confluent Platform {confluent_version}")
+        # No arm64 images available for Confluent Platform versions 6.*
+        platform = "linux/amd64" if confluent_version.startswith("6.") else None
         with c.override(
-            Zookeeper(tag=confluent_version),
-            Kafka(tag=confluent_version),
-            SchemaRegistry(tag=confluent_version),
+            Zookeeper(tag=confluent_version, platform=platform),
+            Kafka(tag=confluent_version, platform=platform),
+            SchemaRegistry(tag=confluent_version, platform=platform),
         ):
             c.down(destroy_volumes=True)
             c.up("zookeeper", "kafka", "schema-registry", "materialized")
-            c.run("testdrive", *TD_CMD)
+            c.run_testdrive_files(*TD_CMD)

@@ -14,13 +14,19 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 . misc/shlib/shlib.bash
+. test/cloudtest/config.bash
 
-if ! kind get clusters | grep -q cloudtest; then
-    run kind create cluster --name=cloudtest --config=misc/kind/cluster.yaml --wait=60s
+if ! kind get clusters | grep -q "$K8S_CLUSTER_NAME"; then
+    CLUSTER_YAML=${CLOUDTEST_CLUSTER_DEFINITION_FILE:-"misc/kind/cluster.yaml"}
+    echo "Using cluster definition specified in ${CLUSTER_YAML}"
+
+    run kind create cluster --name="$K8S_CLUSTER_NAME" --config="${CLUSTER_YAML}" --wait=60s
+
+    run kubectl --context="$K8S_CONTEXT" taint nodes --selector=environmentd=true "environmentd=true:NoSchedule"
 fi
 
 for f in misc/kind/configmaps/*; do
-    run kubectl --context=kind-cloudtest apply -f "$f"
+    run kubectl --context="$K8S_CONTEXT" apply -f "$f"
 done
 
-run kubectl --context=kind-cloudtest rollout restart -n kube-system deployment/coredns
+run kubectl --context="$K8S_CONTEXT" rollout restart -n kube-system deployment/coredns

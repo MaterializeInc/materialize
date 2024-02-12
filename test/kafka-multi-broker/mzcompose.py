@@ -9,14 +9,12 @@
 
 import time
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -38,11 +36,13 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     c.up("zookeeper", "kafka1", "kafka2", "kafka3", "schema-registry", "materialized")
-    c.run("testdrive", "--kafka-addr=kafka2", "01-init.td")
+    c.run_testdrive_files("--kafka-addr=kafka2", "01-init.td")
     time.sleep(10)
     c.kill("kafka1")
     time.sleep(10)
-    c.run("testdrive", "--kafka-addr=kafka2,kafka3", "--no-reset", "02-after-leave.td")
+    c.run_testdrive_files(
+        "--kafka-addr=kafka2,kafka3", "--no-reset", "02-after-leave.td"
+    )
     c.up("kafka1")
     time.sleep(10)
-    c.run("testdrive", "--kafka-addr=kafka1", "--no-reset", "03-after-join.td")
+    c.run_testdrive_files("--kafka-addr=kafka1", "--no-reset", "03-after-join.td")

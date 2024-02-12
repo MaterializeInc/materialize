@@ -22,11 +22,17 @@ from kubernetes.client import (
     V1ServiceSpec,
 )
 
-from materialize.cloudtest.k8s import K8sDeployment, K8sService
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class DebeziumDeployment(K8sDeployment):
-    def __init__(self) -> None:
+    def __init__(
+        self, namespace: str, redpanda_namespace: str, apply_node_selectors: bool
+    ) -> None:
+        super().__init__(namespace)
         ports = [V1ContainerPort(container_port=8083, name="debezium")]
 
         env = [
@@ -44,11 +50,11 @@ class DebeziumDeployment(K8sDeployment):
             ),
             V1EnvVar(
                 name="CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL",
-                value="http://redpanda:8081",
+                value=f"http://redpanda.{redpanda_namespace}:8081",
             ),
             V1EnvVar(
                 name="CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL",
-                value="http://redpanda:8081",
+                value=f"http://redpanda.{redpanda_namespace}:8081",
             ),
             V1EnvVar(
                 name="CONNECT_OFFSET_COMMIT_POLICY", value="AlwaysCommitOffsetPolicy"
@@ -61,9 +67,18 @@ class DebeziumDeployment(K8sDeployment):
             name="debezium", image="debezium/connect:1.9.6.Final", env=env, ports=ports
         )
 
+        node_selector = None
+        if apply_node_selectors:
+            node_selector = {"supporting-services": "true"}
+
+        pod_spec = V1PodSpec(
+            containers=[container],
+            node_selector=node_selector,
+        )
+
         template = V1PodTemplateSpec(
-            metadata=V1ObjectMeta(labels={"app": "debezium"}),
-            spec=V1PodSpec(containers=[container]),
+            metadata=V1ObjectMeta(namespace=namespace, labels={"app": "debezium"}),
+            spec=pod_spec,
         )
 
         selector = V1LabelSelector(match_labels={"app": "debezium"})
@@ -73,23 +88,41 @@ class DebeziumDeployment(K8sDeployment):
         self.deployment = V1Deployment(
             api_version="apps/v1",
             kind="Deployment",
-            metadata=V1ObjectMeta(name="debezium"),
+            metadata=V1ObjectMeta(name="debezium", namespace=namespace),
             spec=spec,
         )
 
 
 class DebeziumService(K8sService):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        namespace: str,
+    ) -> None:
+        super().__init__(namespace)
         ports = [
             V1ServicePort(name="debezium", port=8083),
         ]
 
         self.service = V1Service(
-            metadata=V1ObjectMeta(name="debezium", labels={"app": "debezium"}),
+            metadata=V1ObjectMeta(
+                name="debezium", namespace=namespace, labels={"app": "debezium"}
+            ),
             spec=V1ServiceSpec(
                 type="NodePort", ports=ports, selector={"app": "debezium"}
             ),
         )
 
 
-DEBEZIUM_RESOURCES = [DebeziumDeployment(), DebeziumService()]
+def debezium_resources(
+    debezium_namespace: str = DEFAULT_K8S_NAMESPACE,
+    redpanda_namespace: str = DEFAULT_K8S_NAMESPACE,
+    apply_node_selectors: bool = False,
+) -> list[K8sResource]:
+    return [
+        DebeziumDeployment(
+            debezium_namespace,
+            redpanda_namespace=redpanda_namespace,
+            apply_node_selectors=apply_node_selectors,
+        ),
+        DebeziumService(debezium_namespace),
+    ]

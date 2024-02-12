@@ -143,7 +143,7 @@ Join on=(#0 = #1)
     Project (#2)
       Map ((#0 + 2))
         Get x
-  Distinct group_by=[(#0 + 1)]
+  Distinct project=[(#0 + 1)]
     Get x
 
 # We can't remove the join unless the literal is lifted
@@ -156,7 +156,7 @@ build apply=RedundantJoin
 ----
 Join on=(#0 = #2)
   Map (1)
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get x
   Get x
 

@@ -1,38 +1,32 @@
 ---
 title: "CREATE CLUSTER REPLICA"
-description: "`CREATE CLUSTER REPLICA` provisions physical resources to perform computations."
+description: "`CREATE CLUSTER REPLICA` provisions a new replica of a cluster."
 pagerank: 50
 menu:
   main:
     parent: commands
 ---
 
-`CREATE CLUSTER REPLICA` provisions physical resources to perform computations.
+{{< warning >}}
+`CREATE CLUSTER REPLICA` is deprecated.
+
+We recommend migrating to a [managed
+cluster](/sql/alter-cluster/#converting-unmanaged-to-managed-clusters) instead
+of manually creating and dropping replicas.
+{{< /warning >}}
+
+`CREATE CLUSTER REPLICA` provisions a new replica of a [cluster](/get-started/key-concepts#clusters).
 
 ## Conceptual framework
 
-Where [clusters](/overview/key-concepts#clusters) represent the logical set of
-dataflows you want to maintain, cluster replicas are their physical
-counterparts. Cluster replicas are where Materialize actually creates and
-maintains dataflows.
+A cluster consists of zero or more replicas. Each replica of a cluster is a pool
+of compute resources that performs exactly the same computations on exactly the
+same data.
 
-Each cluster replica is essentially a clone, constructing the same dataflows.
-Each cluster replica receives a copy of all data that comes in from sources its
-dataflows use, and uses the data to perform identical computations. This design
-provides Materialize with active replication, and so long as one replica is
-still reachable, the cluster continues making progress.
-
-This also means that all of a cluster's dataflows contend for the same resources
-on each replica. This might mean, for instance, that instead of placing many
-complex materialized views on the same cluster, you choose some other
-distribution, or you replace all replicas in a cluster with more powerful
-machines.
-
-{{< warning >}}
-Clusters containing sources and sinks can have at most one replica.
-
-We plan to remove this restriction in a future version of Materialize.
-{{< /warning >}}
+Using multiple replicas of a cluster facilitates **fault tolerance**. Clusters
+with multiple replicas can tolerate failures of the underlying hardware or
+network. As long as one replica remains reachable, the cluster as a whole
+remains available.
 
 ## Syntax
 
@@ -40,7 +34,7 @@ We plan to remove this restriction in a future version of Materialize.
 
 Field | Use
 ------|-----
-_cluster_name_ | The cluster whose resources you want to create an additional computation of.
+_cluster_name_ | The cluster you want to attach a replica to.
 _replica_name_ | A name for this replica.
 
 ### Options
@@ -49,55 +43,64 @@ _replica_name_ | A name for this replica.
 
 ## Details
 
-### Sizes
+### Size
 
-Valid `size` options are:
+The `SIZE` option for replicas is identical to the [`SIZE` option for
+clusters](/sql/create-cluster/#disk-enabled-sizes) option, except that the size
+applies only to the new replica.
 
-- `2xsmall`
-- `xsmall`
-- `small`
-- `medium`
-- `large`
-- `xlarge`
-- `2xlarge`
-- `3xlarge`
-- `4xlarge`
-- `5xlarge`
-- `6xlarge`
+### Credit usage
 
-### Deployment options
+The replica will consume credits at a rate determined by its size:
 
-Materialize is an active-replication-based system, which means you expect each
-cluster replica to have the same working set.
+Size      | Disk-enabled size  | Credits per hour
+----------|--------------------|---------
+`3xsmall` | `25cc`             | 0.25
+`2xsmall` | `50cc`             | 0.5
+`xsmall`  | `100cc`            | 1
+`small`   | `200cc`            | 2
+&nbsp;    | `300cc`            | 3
+`medium`  | `400cc`            | 4
+&nbsp;    | `600cc`            | 6
+`large`   | `800cc`            | 8
+&nbsp;    | `1200cc`           | 12
+`xlarge`  | `1600cc`           | 16
+`2xlarge` | `3200cc`           | 32
+`3xlarge` | `6400cc`           | 64
+`4xlarge` | `128C`             | 128
+`5xlarge` | `256C`             | 256
+`6xlarge` | `512C`             | 512
 
-With this in mind, when building your Materialize deployment, you can change its
-performance characteristics by...
-
-Action | Outcome
----------|---------
-Increase all replicas' sizes | Ability to maintain more dataflows or more complex dataflows
-Add replicas to a cluster | Greater tolerance to replica failure
+Credit usage is measured at a one second granularity. Credit usage begins when a
+`CREATE CLUSTER REPLICA` provisions the replica and ends when a [`DROP CLUSTER
+REPLICA`] statement deprovisions the replica.
 
 ### Homogeneous vs. heterogeneous hardware provisioning
 
-Because Materialize uses active replication, all replicas will be asked to do
-the same work, irrespective of their resources.
+Because Materialize uses active replication, all replicas will be instructed to
+do the same work, irrespective of their resource allocation.
 
-For the most stable performance, we recommend provisioning the same class of
-hardware for all replicas.
+For the most stable performance, we recommend using the same size and disk
+configuration for all replicas.
 
-However, it is possible to provision multiple type of hardware in the same
-cluster. In these cases, the slower machines will likely be continually burdened
-with a backlog of work. If all of the faster machines become unreachable, the
-system might experience delays in replying to requests while the slower machines
-catch up to the last known time that the faster machines had computed.
-
-
+However, it is possible to use different replica configurations in the same
+cluster. In these cases, the replicas with less resources will likely be
+continually burdened with a backlog of work. If all of the faster replicas
+become unreachable, the system might experience delays in replying to requests
+while the slower replicas catch up to the last known time that the faster
+machines had computed.
 
 ## Example
 
 ```sql
-CREATE CLUSTER REPLICA c1.r1 SIZE = 'medium';
+CREATE CLUSTER REPLICA c1.r1 (SIZE = 'medium');
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of `cluster_name`.
+
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
+[`DROP CLUSTER REPLICA`]: /sql/drop-cluster-replica

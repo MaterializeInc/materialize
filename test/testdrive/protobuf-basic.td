@@ -68,10 +68,11 @@ $ kafka-ingest topic=basic format=protobuf descriptor-file=basic.pb message=Basi
 {"message": {}}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE basic FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-basic-${testdrive.seed}')
+> CREATE SOURCE basic
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-basic-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Basic' USING SCHEMA '${basic-schema}'
 
 > SHOW COLUMNS FROM basic

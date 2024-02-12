@@ -19,6 +19,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 # The join condition logic is tricky to get right with NULL
 # values. Simple implementations can deal well with NULLs on the first
 # or last row but fail to handle them in the middle. So the test table

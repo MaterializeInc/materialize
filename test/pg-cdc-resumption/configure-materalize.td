@@ -7,29 +7,21 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> DROP SOURCE IF EXISTS mz_source CASCADE;
 > DROP SECRET IF EXISTS pgpass CASCADE;
 > DROP CONNECTION IF EXISTS pg CASCADE;
 
-> CREATE SECRET pgpass AS 'postgres'
+> CREATE SECRET pgpass AS 'materialize'
 > CREATE CONNECTION pg TO POSTGRES (
-    HOST postgres,
+    HOST toxiproxy,
     DATABASE postgres,
-    USER postgres,
+    USER materialize,
     PASSWORD SECRET pgpass
   );
 
+> DROP SOURCE IF EXISTS mz_source CASCADE;
 
 > CREATE SOURCE mz_source
   FROM POSTGRES
   CONNECTION pg
   (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
-
-> DROP SOURCE IF EXISTS mz_source_alter CASCADE;
-
-> CREATE SOURCE mz_source_alter
-  FROM POSTGRES
-  CONNECTION pg
-  (PUBLICATION 'mz_source_alter')
   FOR ALL TABLES;

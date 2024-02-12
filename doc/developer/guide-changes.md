@@ -17,9 +17,9 @@ We use [GitHub pull requests](https://github.com/MaterializeInc/materialize/pull
 small, must be submitted as a pull request, and that pull request must pass a
 battery of automated tests before it merges.
 
-Any substantial PR must additionally be reviewed by one or more engineers who
-are familiar with the areas of the codebase that are touched in the PR. The
-goals of code review are threefold:
+All PRs must be reviewed by one or more employees who are familiar with the
+areas of the codebase that are touched in the PR. The goals of code review are
+threefold:
 
 1. To ensure the health of the codebase improves over time.
 
@@ -89,6 +89,16 @@ feature in isolation. This can be particularly problematic if the bugfix or
 feature needs to be reverted—it is much more difficult to revert just one or the
 other if they are in the same RU.
 
+You should also endeavor to limit each RU to one team's scope as defined by
+the [CODEOWNERS](/.github/CODEOWNERS) file, in particular for larger changes.
+When a single RU contains changes across multiple parts of the stack, each
+reviewer has the additional overhead of digging through the PR to figure out
+which files require their review. Splitting up the change into multiple RUs
+avoids this.\
+Areas where this is particularly applicable:
+* Changes to the [SQL parser](/src/sql-parser)
+* Changes to the [SQL planner](/src/sql/src/plan)
+
 ### Change descriptions
 
 Writing good commit messages (or PR descriptions, if you use the semantic PRs
@@ -152,7 +162,7 @@ Roughly speaking, Materialize's stable APIs are:
   * The observable behavior of any source or sink.
   * The behavior of all documented command-line flags.
 
-For details, see the [backwards compatibility policy](https://materialize.com/docs//versions/#Backwards-compatibility).
+For details, see the [backwards compatibility policy](https://materialize.com/docs/releases/#backwards-compatibility).
 
 Notably, changes to experimental or unstable APIs should *not* have release
 notes. The point of having experimental and unstable APIs is to decrease the
@@ -381,18 +391,9 @@ strategy works best when you are fairly confident in the change. If you're not
 confident in the change, consider assigning _both_ an experienced an
 inexperienced reviewer.
 
-Coming soon: a breakdown of which tech lead is responsible for each area of the
-codebase. The tech lead needn't review every PR in their area of responsibility,
-but can help direct code review requests to the appropriate engineer.
-
 ### Merging
 
 #### When to merge
-
-For sufficiently trivial changes, you can consider merging without review. This
-should be somewhat rare, however, and only when you have high confidence that a)
-the change is correct, and b) the change is uncontroversial. When in doubt, get
-a review!
 
 When a reviewer approves your PR, they will either press the "approve" button
 in GitHub's code review interface, leaving a big green checkmark on your PR,
@@ -412,6 +413,10 @@ case you must use your discretion as to when you have received a covering set
 of approvals. (This is a great reason to prefer small PRs when possible, since
 you can gather full approvals from various owners in parallel.)
 
+We've configured GitHub to require at least one formal approval (i.e., clicking
+"Approve" in the review UI, rather than just posting a comment like "LGTM")
+before a PR can be merged.
+
 #### Stalled PRs
 
 In some cases, code review reveals that a PR should neither be merged or
@@ -430,7 +435,7 @@ their part. When work resumes on the PR, convert it back to an active PR.
 In a similar vein, if code review reveals that a PR needs to be scrapped
 entirely, close the PR rather than leaving it open. Even if the PR should serve
 useful example of an approach that didn't pan out, it can serve in that role
-while closed. Consider linking it an the associated issue for posterity, if
+while closed. Consider linking it and the associated issue for posterity, if
 applicable.
 
 #### Merge skew
@@ -466,12 +471,16 @@ Fixing merge skew is usually as simple as identifying the above situation
 and adjusting the new function call or test case to account for the change
 in the other PR.
 
-While there _are_ tools that can prevent merge skew, like [Bors], they introduce
-quite a bit of latency and flakiness when merging a PR. As long as merge skew is
-fairly rare—right now it seems to happen once every month or two—net
-productivity is still higher without Bors. If, however, the incidence of merge
-skew increases to about once per week, it's probably time to reevaluate this
-decision and consider a tool like Bors.
+We have a CI job called *Merge skew cargo check*, which is triggered in pull
+requests. It conducts a merge with the target branch and runs `cargo check` to
+validate the merge result.
+Since the job is not triggered on pushes to the target branch (usually `main`),
+merge skew can still occur, in particular when a PR is stale for a long time
+before its merge.
+In addition, the job does not run any linters or tests as of now.
+Further tools like [Bors] exist that can prevent merge skew. However, they introduce
+quite a bit of latency and flakiness when merging a PR, and are currently not
+in use.
 
 #### Branch restrictions
 
@@ -736,7 +745,7 @@ in the long term they harm the maintainability of the codebase. Put another way:
 adding the first special case is easy, but adding the tenth special case is
 nearly impossible.
 
-Usually, special casing a sign that the interface is wrong. Can you redesign the
+Usually, special casing is a sign that the interface is wrong. Can you redesign the
 interface to instead consist of several composable, non-interdependent pieces?
 This sort of refactor can be _really_ tricky to design, but if you can get it
 right, it pays dividends.
@@ -898,6 +907,9 @@ submit a PR to fix it!
 
 * Keep PRs small, and ideally less than 500 lines.
 
+* For larger PRs, aim to limit each RU to one team's scope as defined by the
+[CODEOWNERS](/.github/CODEOWNERS) file.
+
 * Always initiate PR reviews within one business day, and sooner if possible.
 
 * Verify that every PR has, at a minimum:
@@ -909,6 +921,19 @@ submit a PR to fix it!
 
 * Accept PRs that improve the overall health of the codebase, even if they
   are not perfect.
+
+## Common Issues
+
+### Stuck CLA check
+
+Taken from the [cla-assistant `README.md`](https://github.com/cla-assistant/cla-assistant/blob/main/COMMON_ISSUES.md#cla-assistant-status-or-comment-not-updated-1).
+
+Sometimes it happens that while you signed the CLA the status doesn't get updated.
+Might be a technical issue or some other problem. Most temporary issues can be solved by manually triggering a new check with navigating to
+```
+https://cla-assistant.io/check/<orgname>/<reponame>?pullRequest=<pr_number>
+```
+replacing `<orgname>`, `<reponame>` and `<pr_number>` with your respective values.
 
 [`29f8f46b9`]: https://github.com/MaterializeInc/materialize/commit/29f8f46b92280071c96b294d414675aa626f9403
 [#3808]: https://github.com/MaterializeInc/materialize/pull/3808

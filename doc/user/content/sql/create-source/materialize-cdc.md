@@ -9,7 +9,7 @@ draft: true
     #parent: "advanced"
 ---
 
-{{< beta />}}
+{{< public-preview />}}
 
 Change data capture (CDC) tools provide feeds that record any changes to a database. Typically, the feeds are then saved to another platform, like Kafka, for storage or processing. However, sometimes the stream can have missing or duplicate records, or records can be received out of order. For example, if a CDC tool crashes while writing a record, it may retry and write the record again, resulting in a duplicate entry.
 
@@ -144,8 +144,7 @@ You specify the use of the Materialize CDC format in the [Avro schema](/sql/crea
   CREATE SOURCE name_of_source
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'name_of_kafka_topic')
     FORMAT AVRO USING SCHEMA '<schema goes here>'
-    ENVELOPE MATERIALIZE
-    WITH (SIZE = '3xsmall');
+    ENVELOPE MATERIALIZE;
 ```
 
 The following example schema specifies that records will consist of `id` and `price` fields. Note that `price` object supports multiple datatypes: It can be `null` or `int`.

@@ -15,13 +15,13 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE array_type (f1 text[], f2 INTEGER PRIMARY KEY);
 INSERT INTO array_type VALUES ('{foo, null}', 0);
 
-$ schema-registry-wait subject=postgres.public.array_type-value
+$ schema-registry-wait topic=postgres.public.array_type
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE array_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.array_type')

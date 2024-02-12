@@ -12,3 +12,5 @@ datasources:
   - name: Prometheus
     type: prometheus
     url: http://prometheus:9090
+    jsonData:
+      timeInterval: 5s

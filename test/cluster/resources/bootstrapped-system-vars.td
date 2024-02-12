@@ -8,4 +8,4 @@
 # by the Apache License, Version 2.0.
 
 > SHOW allowed_cluster_replica_sizes
-"'1', '2', 'oops'"
+"\"1\", \"2\", oops"

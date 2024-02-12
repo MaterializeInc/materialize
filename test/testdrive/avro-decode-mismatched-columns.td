@@ -26,9 +26,10 @@ $ kafka-ingest format=avro topic=decode-1to2-nodefault schema=${1column} timesta
 {"f1": 123}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE decode_1to2_nodefault
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-nodefault-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${2columns-nodefault}'
   ENVELOPE NONE
@@ -46,6 +47,7 @@ $ kafka-ingest format=avro topic=decode-1to2-default schema=${1column} timestamp
 {"f1": 123}
 
 > CREATE SOURCE decode_1to2_default
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-1to2-default-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${2columns-default}'
   ENVELOPE NONE
@@ -64,6 +66,7 @@ $ kafka-ingest format=avro topic=decode-2to1 schema=${2columns-nodefault} timest
 {"f2": 345, "f1": 456}
 
 > CREATE SOURCE decode_2to1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-2to1-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${1column}'
   ENVELOPE NONE

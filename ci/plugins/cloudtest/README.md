@@ -1,4 +1,4 @@
-# mzcompose Buildkite Plugin
+# cloudtest Buildkite Plugin
 
 A [Buildkite plugin] that runs cloudtest.
 
@@ -12,4 +12,10 @@ steps:
           args: [--some, pytest, args]
 ```
 
+
+## Logs
+
+Logs are collected using [kail] and uploaded as artifact with name `kail-output.log`.
+
 [Buildkite plugin]: https://buildkite.com/docs/agent/v3/plugins
+[kail]: https://github.com/boz/kail

@@ -9,6 +9,8 @@
 
 // See https://developers.google.com/protocol-buffers for what's going on here.
 
+// buf breaking: ignore (Ignore because plans are currently not persisted.)
+
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
@@ -68,11 +70,23 @@ message ProtoAggregateFunc {
             google.protobuf.Empty lag = 2;
             google.protobuf.Empty lead = 3;
         }
+        bool ignore_nulls = 4;
     };
 
-    message ProtoWindowFrame {
+    message ProtoFramedWindowFunc {
         ProtoColumnOrders order_by = 1;
         mz_expr.relation.ProtoWindowFrame window_frame = 2;
+    }
+
+    message ProtoWindowAggregate {
+        ProtoAggregateFunc wrapped_aggregate = 1;
+        ProtoColumnOrders order_by = 2;
+        mz_expr.relation.ProtoWindowFrame window_frame = 3;
+    }
+
+    message ProtoMapAgg {
+        ProtoColumnOrders order_by = 1;
+        mz_repr.relation_and_scalar.ProtoScalarType value_type = 2;
     }
 
     oneof kind {
@@ -87,6 +101,7 @@ message ProtoAggregateFunc {
         google.protobuf.Empty max_date = 9;
         google.protobuf.Empty max_timestamp = 10;
         google.protobuf.Empty max_timestamp_tz = 11;
+        google.protobuf.Empty max_interval = 64;
         google.protobuf.Empty min_numeric = 12;
         google.protobuf.Empty min_int16 = 13;
         google.protobuf.Empty min_int32 = 14;
@@ -98,6 +113,7 @@ message ProtoAggregateFunc {
         google.protobuf.Empty min_date = 20;
         google.protobuf.Empty min_timestamp = 21;
         google.protobuf.Empty min_timestamp_tz = 22;
+        google.protobuf.Empty min_interval = 65;
         google.protobuf.Empty sum_int16 = 23;
         google.protobuf.Empty sum_int32 = 24;
         google.protobuf.Empty sum_int64 = 25;
@@ -113,11 +129,13 @@ message ProtoAggregateFunc {
         ProtoColumnOrders list_concat  = 35;
         ProtoColumnOrders string_agg  = 36;
         ProtoColumnOrders row_number  = 37;
+        ProtoColumnOrders rank  = 54;
         ProtoColumnOrders dense_rank  = 38;
         ProtoLagLead lag_lead  = 39;
         google.protobuf.Empty dummy = 40;
-        ProtoWindowFrame first_value = 41;
-        ProtoWindowFrame last_value = 42;
+        ProtoFramedWindowFunc first_value = 41;
+        ProtoFramedWindowFunc last_value = 42;
+        ProtoWindowAggregate window_aggregate = 55;
         google.protobuf.Empty max_uint16 = 43;
         google.protobuf.Empty max_uint32 = 44;
         google.protobuf.Empty max_uint64 = 45;
@@ -129,12 +147,14 @@ message ProtoAggregateFunc {
         google.protobuf.Empty sum_uint64 = 51;
         google.protobuf.Empty max_mz_timestamp = 52;
         google.protobuf.Empty min_mz_timestamp = 53;
+        ProtoMapAgg map_agg = 56;
     }
 }
 
 message ProtoRowSetFinishing {
+    reserved 2;
     repeated ProtoColumnOrder order_by = 1;
-    optional uint64 limit = 2;
+    optional int64 limit = 5;
     uint64 offset = 3;
     repeated uint64 project = 4;
 }
@@ -143,6 +163,11 @@ message ProtoTableFunc {
     message ProtoWrap {
         repeated mz_repr.relation_and_scalar.ProtoColumnType types = 1;
         uint64 width = 2;
+    }
+
+    message ProtoTabletizedScalar {
+        string name = 1;
+        mz_repr.relation_and_scalar.ProtoRelationType relation = 2;
     }
 
     oneof kind {
@@ -160,5 +185,9 @@ message ProtoTableFunc {
         mz_repr.relation_and_scalar.ProtoScalarType unnest_list = 12;
         ProtoWrap wrap = 13;
         google.protobuf.Empty generate_subscripts_array = 14;
+        ProtoTabletizedScalar tabletized_scalar = 15;
+        google.protobuf.Empty acl_explode = 16;
+        google.protobuf.Empty mz_acl_explode = 17;
+        mz_repr.relation_and_scalar.ProtoScalarType unnest_map = 18;
     }
 }

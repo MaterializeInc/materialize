@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+
 # Test creating a Kafka source using SSH, with and without the CSR
 
 $ kafka-create-topic topic=thetopic
@@ -14,15 +17,42 @@ $ kafka-create-topic topic=thetopic
 $ kafka-ingest topic=thetopic format=bytes
 one
 
-> CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+# Create a dedicated cluster for the sources, so we can easily restart the
+# sources by dropping and recreating the cluster's replica.
+#
+# We also use a large number of worker threads to protect against past behavior
+# in which we opened one SSH tunnel per worker thread per broker, which
+# tripped the default `MaxStartups 10` sshd configuration.
+> DROP CLUSTER IF EXISTS sc;
+> CREATE CLUSTER sc REPLICAS (r1 (SIZE '32'))
 
-> CREATE SOURCE mz_source
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-thetopic-${testdrive.seed}')
+# Test the various types of tunnels
+
+> CREATE CONNECTION kafka_conn_using
+  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CONNECTION kafka_conn_dynamic
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, SSH TUNNEL thancred);
+
+# Create source with a faster metadata refresh interval so
+# errors are detected every second instead of every minute.
+> CREATE SOURCE fixed_text IN CLUSTER sc
+  FROM KAFKA CONNECTION kafka_conn_using (
+    TOPIC 'testdrive-thetopic-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '1s'
+  )
   FORMAT TEXT
   ENVELOPE NONE
 
-> SELECT * FROM mz_source
+> CREATE SOURCE dynamic_text  IN CLUSTER sc
+  FROM KAFKA CONNECTION kafka_conn_dynamic (
+    TOPIC 'testdrive-thetopic-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '1s'
+  )
+  FORMAT TEXT
+  ENVELOPE NONE
+
+> SELECT * FROM fixed_text
 text
 ----
 one
@@ -30,7 +60,14 @@ one
 $ kafka-ingest topic=thetopic format=bytes
 two
 
-> SELECT * FROM mz_source
+# Ensure both types of tunnels work
+> SELECT * FROM fixed_text
+text
+----
+one
+two
+
+> SELECT * FROM dynamic_text
 text
 ----
 one
@@ -55,12 +92,34 @@ $ kafka-create-topic topic=avroavro
 $ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"f1": "fish", "f2": 1000}
 
-> CREATE SOURCE csr_source
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+> CREATE SOURCE fixed_plus_csr
+  IN CLUSTER sc
+  FROM KAFKA CONNECTION kafka_conn_using (TOPIC 'testdrive-avroavro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-> SELECT * FROM csr_source
+> SELECT * FROM fixed_plus_csr
 f1    f2
 ----------
 fish  1000
+
+# Test csr sources for dynamic connections as well.
+> CREATE SOURCE dynamic_plus_csr
+  IN CLUSTER sc
+  FROM KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE NONE
+
+> SELECT * FROM dynamic_plus_csr
+f1    f2
+----------
+fish  1000
+
+# ensure they all were marked as running correctly
+> SELECT status FROM mz_internal.mz_source_statuses st
+  JOIN mz_sources s ON st.id = s.id
+  WHERE s.name in ('fixed_text', 'dynamic_text', 'fixed_plus_csr', 'dynamic_plus_csr')
+running
+running
+running
+running

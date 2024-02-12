@@ -21,9 +21,10 @@ $ set schema={
 $ kafka-create-topic topic=data
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -83,11 +84,13 @@ $ set dummy={
   }
 
 ! CREATE SOURCE v2
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${dummy}'
 contains:materialized view "materialize.public.v2" already exists
 
 ! CREATE SOURCE i
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${dummy}'
 contains:index "materialize.public.i" already exists
@@ -149,6 +152,7 @@ exact:"materialize.public.s" is a source not a view
 > CREATE MATERIALIZED VIEW s AS SELECT 84 AS b
 
 > CREATE SOURCE i
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 

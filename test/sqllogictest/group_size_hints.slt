@@ -1,0 +1,300 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests the new syntax for GROUP SIZE query hints proposed in:
+# https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230829_topk_size_hint.md
+# Additionally, the tests below include scenarios that validate backwards compability in the
+# hint syntax according to what is described in the design doc.
+
+statement ok
+CREATE TABLE teachers (id INT, name TEXT);
+
+statement ok
+CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
+
+# Illustrates that the old hint applies to multiple operators in a single query block.
+statement ok
+CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
+  SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id)
+  FROM sections
+  GROUP BY id, teacher_id
+  OPTIONS (EXPECTED GROUP SIZE = 1000)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+----
+materialize.public.distinct_on_group_by_limit:
+  TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=1000
+    TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000
+      Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
+        Project (#0..=#2)
+          ReadStorage materialize.public.sections
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW distinct_on_group_by_limit;
+
+# Illustrates a workaround with the old hint to apply different values to different operators in
+# a single query block.
+statement ok
+CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
+  SELECT id, teacher_id, max_course_id
+  FROM (
+    SELECT DISTINCT ON(teacher_id) id, teacher_id, max_course_id
+    FROM (
+        SELECT id, teacher_id, MAX(course_id) AS max_course_id
+        FROM sections
+        GROUP BY id, teacher_id
+        OPTIONS (EXPECTED GROUP SIZE = 1000)
+    )
+    OPTIONS (EXPECTED GROUP SIZE = 60)
+    ORDER BY teacher_id, id
+  )
+  OPTIONS (EXPECTED GROUP SIZE = 50)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+----
+materialize.public.distinct_on_group_by_limit:
+  TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
+    TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60
+      Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
+        Project (#0..=#2)
+          ReadStorage materialize.public.sections
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW distinct_on_group_by_limit;
+
+# Illustrates that new hints apply cleanly without ambiguity to different query blocks.
+statement ok
+CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
+  SELECT id, teacher_id, max_course_id
+  FROM (
+    SELECT DISTINCT ON(teacher_id) id, teacher_id, max_course_id
+    FROM (
+        SELECT id, teacher_id, MAX(course_id) AS max_course_id
+        FROM sections
+        GROUP BY id, teacher_id
+        OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000)
+    )
+    OPTIONS (DISTINCT ON INPUT GROUP SIZE = 60)
+    ORDER BY teacher_id, id
+  )
+  OPTIONS (LIMIT INPUT GROUP SIZE = 50)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+----
+materialize.public.distinct_on_group_by_limit:
+  TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
+    TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60
+      Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
+        Project (#0..=#2)
+          ReadStorage materialize.public.sections
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW distinct_on_group_by_limit;
+
+# Illustrates that new hints apply without ambiguity in a single query block.
+statement ok
+CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
+  SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id)
+  FROM sections
+  GROUP BY id, teacher_id
+  OPTIONS (
+      AGGREGATE INPUT GROUP SIZE = 1000,
+      DISTINCT ON INPUT GROUP SIZE = 60,
+      LIMIT INPUT GROUP SIZE = 50)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+----
+materialize.public.distinct_on_group_by_limit:
+  TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
+    TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60
+      Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
+        Project (#0..=#2)
+          ReadStorage materialize.public.sections
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW distinct_on_group_by_limit;
+
+# Illustrates that partial combinations of the new hints in a single query block,
+# namely AGGREGATE and LIMIT INPUT GROUP SIZE.
+statement ok
+CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
+  SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id)
+  FROM sections
+  GROUP BY id, teacher_id
+  OPTIONS (
+      AGGREGATE INPUT GROUP SIZE = 1000,
+      LIMIT INPUT GROUP SIZE = 50)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+----
+materialize.public.distinct_on_group_by_limit:
+  TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
+    TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1
+      Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
+        Project (#0..=#2)
+          ReadStorage materialize.public.sections
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW distinct_on_group_by_limit;
+
+# Illustrates that partial combinations of the new hints in a single query block,
+# namely LIMIT and DISTINCT ON INPUT GROUP SIZE.
+statement ok
+CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
+  SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id)
+  FROM sections
+  GROUP BY id, teacher_id
+  OPTIONS (
+      LIMIT INPUT GROUP SIZE = 50,
+      DISTINCT ON INPUT GROUP SIZE = 60)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+----
+materialize.public.distinct_on_group_by_limit:
+  TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=50
+    TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=60
+      Reduce group_by=[#0, #1] aggregates=[max(#2)]
+        Project (#0..=#2)
+          ReadStorage materialize.public.sections
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW distinct_on_group_by_limit;
+
+# Illustrates that mixing of the old and new syntax for hints raises an error.
+statement error EXPECTED GROUP SIZE cannot be provided simultaneously with any of AGGREGATE INPUT GROUP SIZE, DISTINCT ON INPUT GROUP SIZE, or LIMIT INPUT GROUP SIZE
+CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
+  SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id)
+  FROM sections
+  GROUP BY id, teacher_id
+  OPTIONS (
+      LIMIT INPUT GROUP SIZE = 50,
+      EXPECTED GROUP SIZE = 1000)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+
+# Illustrates that the new syntax for hints can be used with a LATERAL top-k pattern.
+statement ok
+CREATE MATERIALIZED VIEW sections_of_top_3_courses_per_teacher AS
+SELECT id AS teacher_id, section_id
+FROM teachers grp,
+     LATERAL (SELECT id AS section_id
+              FROM sections
+              WHERE teacher_id = grp.id
+              OPTIONS (LIMIT INPUT GROUP SIZE = 1000)
+              ORDER BY course_id DESC
+              LIMIT 3);
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW sections_of_top_3_courses_per_teacher;
+----
+materialize.public.sections_of_top_3_courses_per_teacher:
+  Project (#0, #2)
+    Join on=(#0 = #1) type=differential
+      ArrangeBy keys=[[#0]]
+        Project (#0)
+          ReadStorage materialize.public.teachers
+      ArrangeBy keys=[[#0]]
+        Project (#0, #1)
+          TopK group_by=[#0] order_by=[#2 desc nulls_first] limit=3 exp_group_size=1000
+            Project (#0, #1, #3)
+              Join on=(#0 = #2) type=differential
+                ArrangeBy keys=[[#0]]
+                  Distinct project=[#0]
+                    Project (#0)
+                      Filter (#0) IS NOT NULL
+                        ReadStorage materialize.public.teachers
+                ArrangeBy keys=[[#1]]
+                  Project (#0..=#2)
+                    Filter (#1) IS NOT NULL
+                      ReadStorage materialize.public.sections
+
+Source materialize.public.sections
+  filter=((#1) IS NOT NULL)
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW sections_of_top_3_courses_per_teacher;
+
+# Illustrates that the new syntax for hints can be used with a LATERAL top-k pattern
+# and in conjunction with a min/max aggregation in the same query block.
+statement ok
+CREATE MATERIALIZED VIEW max_sections_of_top_3_courses_per_teacher AS
+SELECT id AS teacher_id, max_section_id
+FROM teachers grp,
+     LATERAL (SELECT course_id, MAX(id) AS max_section_id
+              FROM sections
+              WHERE teacher_id = grp.id
+              GROUP BY course_id
+              OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000, LIMIT INPUT GROUP SIZE = 20)
+              ORDER BY course_id DESC
+              LIMIT 3);
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW max_sections_of_top_3_courses_per_teacher;
+----
+materialize.public.max_sections_of_top_3_courses_per_teacher:
+  Project (#0, #2)
+    Join on=(#0 = #1) type=differential
+      ArrangeBy keys=[[#0]]
+        Project (#0)
+          ReadStorage materialize.public.teachers
+      ArrangeBy keys=[[#0]]
+        Project (#0, #2)
+          TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3 exp_group_size=20
+            Reduce group_by=[#0, #2] aggregates=[max(#1)] exp_group_size=1000
+              Project (#0, #1, #3)
+                Join on=(#0 = #2) type=differential
+                  ArrangeBy keys=[[#0]]
+                    Distinct project=[#0]
+                      Project (#0)
+                        Filter (#0) IS NOT NULL
+                          ReadStorage materialize.public.teachers
+                  ArrangeBy keys=[[#1]]
+                    Project (#0..=#2)
+                      Filter (#1) IS NOT NULL
+                        ReadStorage materialize.public.sections
+
+Source materialize.public.sections
+  filter=((#1) IS NOT NULL)
+
+EOF
+
+statement ok
+DROP MATERIALIZED VIEW max_sections_of_top_3_courses_per_teacher;

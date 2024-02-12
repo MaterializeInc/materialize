@@ -40,6 +40,31 @@ pub fn histogram_seconds_buckets(from: f64, to: f64) -> Vec<f64> {
     vec
 }
 
+/// A standard range of buckets for timing data, measured in seconds.
+/// Individual histograms may only need a subset of this range, in which case,
+/// see `histogram_seconds_buckets` below.
+///
+/// Note that any changes to this range may modify buckets for existing metrics.
+const HISTOGRAM_MILLISECOND_BUCKETS: [f64; 19] = [
+    0.128, 0.256, 0.512, 1., 2., 4., 8., 16., 32., 64., 128., 256., 512., 1000., 2000., 4000.,
+    8000., 16000., 32000.,
+];
+
+/// Returns a `Vec` of time buckets that are both present in our standard
+/// buckets above and within the provided inclusive range. (This makes it
+/// more meaningful to compare latency percentiles across histograms if needed,
+/// without requiring all metrics to use exactly the same buckets.)
+pub fn histogram_milliseconds_buckets(from_ms: f64, to_ms: f64) -> Vec<f64> {
+    let mut vec = Vec::with_capacity(HISTOGRAM_MILLISECOND_BUCKETS.len());
+    vec.extend(
+        HISTOGRAM_MILLISECOND_BUCKETS
+            .iter()
+            .copied()
+            .filter(|&b| b >= from_ms && b <= to_ms),
+    );
+    vec
+}
+
 /// Buckets that capture sizes of 64 bytes up to a gigabyte
 pub const HISTOGRAM_BYTE_BUCKETS: [f64; 7] = [
     64.0,

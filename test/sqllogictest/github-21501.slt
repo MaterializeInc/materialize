@@ -1,0 +1,57 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for #21501.
+# Note that this test employs the old syntax with the EXPECTED GROUP SIZE because the behavior
+# tested is exactly the backwards-compatible one of assigning the hinted value to all operators
+# in the same query block.
+
+statement ok
+CREATE TABLE teachers (id INT, name TEXT);
+
+statement ok
+CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
+
+statement ok
+CREATE MATERIALIZED VIEW distinct_on_group_by_limit AS
+  SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id)
+  FROM sections
+  GROUP BY id, teacher_id
+  OPTIONS (EXPECTED GROUP SIZE = 1000)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+
+query T multiline
+EXPLAIN RAW PLAN FOR
+  SELECT DISTINCT ON(teacher_id) id, teacher_id, MAX(course_id)
+  FROM sections
+  GROUP BY id, teacher_id
+  OPTIONS (EXPECTED GROUP SIZE = 1000)
+  ORDER BY teacher_id, id
+  LIMIT 2;
+----
+Finish order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 output=[#0..=#2]
+  TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000
+    Reduce group_by=[#4, #5] aggregates=[max(#2)] exp_group_size=1000
+      Map (#0, #1)
+        Get materialize.public.sections
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+----
+materialize.public.distinct_on_group_by_limit:
+  TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=1000
+    TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000
+      Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
+        Project (#0..=#2)
+          ReadStorage materialize.public.sections
+
+EOF

@@ -36,10 +36,11 @@ $ kafka-ingest topic=defaults format=protobuf descriptor-file=defaults.pb messag
 {}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE defaults FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-defaults-${testdrive.seed}')
+> CREATE SOURCE defaults
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-defaults-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Defaults' USING SCHEMA '${defaults-schema}'
 
 > SELECT * FROM defaults

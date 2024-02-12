@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Optional
 
 from materialize.zippy.framework import Capability
 from materialize.zippy.postgres_capabilities import PostgresTableExists
@@ -18,7 +17,7 @@ class PostgresCdcTableExists(Capability):
     """A Postgres CDC table exists in Materialize."""
 
     def __init__(
-        self, name: str, postgres_table: Optional[PostgresTableExists] = None
+        self, name: str, postgres_table: PostgresTableExists | None = None
     ) -> None:
         self.name = name
         self.postgres_table = postgres_table

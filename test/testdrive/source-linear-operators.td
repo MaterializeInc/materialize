@@ -30,9 +30,10 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 {"a": {"long": 1}, "b": {"long": 2}, "c": {"long": 2}, "d": {"long": 3}}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -41,16 +42,16 @@ $ set-regex match=u\d+ replacement=UID
 # basic test: pushing filters down to sources
 
 > CREATE VIEW v as SELECT * from data where a = 1 and d = 3;
-> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Filter (#0 = 1) AND (#3 = 3)
-    Get materialize.public.data
+    ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 3))
 
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1 2 2 3
 
@@ -59,18 +60,17 @@ Source materialize.public.data
 # basic test: pushing demand down to sources
 
 > CREATE VIEW v as SELECT b from data where b = 1;
-> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Project (#1)
     Filter (#1 = 1)
-      Get materialize.public.data
+      ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#1 = 1))
 
-
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1
 1
@@ -83,17 +83,17 @@ Source materialize.public.data
 # Filter gets pushed through intervening view.
 
 > CREATE VIEW v as SELECT b from inner_view where a = 1
-> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Project (#1)
     Filter (#0 = 1) AND (#3 = 4)
-      Get materialize.public.data
+      ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 4))
 
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1
 
@@ -102,38 +102,38 @@ Source materialize.public.data
 # Demand gets pushed through intervening view.
 
 > CREATE VIEW v as SELECT d from inner_view where a = 1;
-> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Project (#3)
     Filter (#0 = 1) AND (#3 = 4)
-      Get materialize.public.data
+      ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0 = 1) AND (#3 = 4))
 
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 4
 
 > DROP VIEW v;
 
 > CREATE VIEW v as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4;
-> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Project (#0)
     Join on=(#0 = #1) type=differential
       ArrangeBy keys=[[#0]]
         Project (#0)
           Filter (#0) IS NOT NULL
-            Get materialize.public.data
+            ReadStorage materialize.public.data
       ArrangeBy keys=[[#0]]
         Project (#1)
           Filter (#3 = 4) AND (#1) IS NOT NULL
-            Get materialize.public.data
+            ReadStorage materialize.public.data
 
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1
 1
@@ -145,24 +145,24 @@ materialize.public.v:
 # filters and demand can be inferred in more complicated queries
 
 > CREATE VIEW v as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4;
-> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Project (#1)
     Join on=(#0 = #2) type=differential
       ArrangeBy keys=[[#0]]
         Project (#0)
           Filter (#3 = 4) AND (#0) IS NOT NULL
-            Get materialize.public.data
+            ReadStorage materialize.public.data
       ArrangeBy keys=[[#1]]
         Project (#0, #1)
           Filter (#3 = 4) AND (#1) IS NOT NULL
-            Get materialize.public.data
+            ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#3 = 4))
 
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1
 2
@@ -170,10 +170,9 @@ Source materialize.public.data
 > DROP VIEW v;
 
 > CREATE VIEW v as SELECT s2.c from data s1, data s2 where s1.a = s2.a
-> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Return
     Project (#2)
       Join on=(#0 = #1) type=differential
@@ -186,11 +185,12 @@ materialize.public.v:
   With
     cte l0 =
       Filter (#0) IS NOT NULL
-        Get materialize.public.data
+        ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0) IS NOT NULL)
 
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 3
 5
@@ -202,25 +202,25 @@ Source materialize.public.data
 > DROP VIEW v;
 
 > CREATE VIEW v as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1;
-> CREATE DEFAULT INDEX ON v;
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Union
     Project (#1, #0)
       Map (1)
-        Reduce aggregates=[sum(#0)]
+        Reduce aggregates=[sum(#0)] monotonic
           Project (#1)
             Filter (#0 = 1)
-              Get materialize.public.data
+              ReadStorage materialize.public.data
     Project (#0, #4)
       Filter (#0 = 1)
         Map (bigint_to_numeric((1 + #2)))
-          Get materialize.public.data
+          ReadStorage materialize.public.data
 
 Source materialize.public.data
   filter=((#0 = 1))
 
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1 3
 1 3
@@ -237,26 +237,27 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 {"a": {"long": 2}, "b": {"long": 1}, "c": {"long": 5}, "d": null}
 
 > CREATE SOURCE data2
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE VIEW v as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
-> CREATE DEFAULT INDEX ON v
 
-? EXPLAIN VIEW v;
-materialize.public.v:
+? EXPLAIN SELECT * FROM v;
+Explained Query:
   Threshold
     Union
       Project (#0, #2)
-        Get materialize.public.data
+        ReadStorage materialize.public.data
       Negate
         Project (#0, #2)
           Filter (#3) IS NULL
-            Get materialize.public.data2
+            ReadStorage materialize.public.data2
 
 Source materialize.public.data2
   filter=((#3) IS NULL)
 
+> CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 1 2
 1 3

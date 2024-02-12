@@ -71,7 +71,8 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
         )
     except Exception as e:
         print(f"Got exception when uploading analytics: {e}")
-    print(res.status_code, res.text)
+    else:
+        print(res.status_code, res.text)
 
 
 def get_artifacts() -> Any:
@@ -80,7 +81,7 @@ def get_artifacts() -> Any:
     if "CI" not in os.environ:
         return []
 
-    ui.header(f"Getting artifact informations from Buildkite")
+    ui.header("Getting artifact informations from Buildkite")
     build = os.environ["BUILDKITE_BUILD_NUMBER"]
     build_id = os.environ["BUILDKITE_BUILD_ID"]
     job = os.environ["BUILDKITE_JOB_ID"]

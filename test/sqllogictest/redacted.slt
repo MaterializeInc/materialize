@@ -1,0 +1,89 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test requires stable object IDs
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
+
+query T multiline
+SELECT redacted_create_sql FROM mz_connections WHERE name = 'kafka_conn'
+----
+CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = '<REDACTED>', SECURITY PROTOCOL = '<REDACTED>')
+EOF
+
+query T multiline
+SELECT pretty_sql(redacted_create_sql) FROM mz_connections WHERE name = 'kafka_conn'
+----
+CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = '<REDACTED>', SECURITY PROTOCOL = '<REDACTED>');
+EOF
+
+statement ok
+CREATE TABLE t (i INT)
+
+query T multiline
+SELECT redacted_create_sql FROM mz_tables WHERE name = 't'
+----
+CREATE TABLE materialize.public.t (i [s20 AS pg_catalog.int4])
+EOF
+
+statement ok
+CREATE DEFAULT INDEX ON t
+
+query T multiline
+SELECT redacted_create_sql FROM mz_indexes WHERE name = 't_primary_idx'
+----
+CREATE INDEX t_primary_idx IN CLUSTER [u1] ON materialize.public.t (i)
+EOF
+
+statement ok
+CREATE VIEW v AS SELECT 1
+
+query T multiline
+SELECT redacted_create_sql FROM mz_views WHERE name = 'v'
+----
+CREATE VIEW materialize.public.v AS SELECT '<REDACTED>'
+EOF
+
+query T multiline
+SELECT pretty_sql(redacted_create_sql) FROM mz_views WHERE name = 'v'
+----
+CREATE VIEW materialize.public.v AS SELECT '<REDACTED>';
+EOF
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER
+
+# regexp_replace because local and testdrive produce different ids for an undiagnosed reason.
+query T multiline
+SELECT regexp_replace(redacted_create_sql, 'u[0-9]+', 'uX', 'g') FROM mz_sources WHERE name = 's'
+----
+CREATE SOURCE materialize.public.s IN CLUSTER [uX] FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [uX AS materialize.public.s_progress]
+EOF
+
+query T multiline
+SELECT regexp_replace(pretty_sql(redacted_create_sql), 'u[0-9]+', 'uX', 'g') FROM mz_sources WHERE name = 's'
+----
+CREATE SOURCE materialize.public.s IN CLUSTER [uX] FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [uX AS materialize.public.s_progress];
+EOF
+
+statement ok
+CREATE TYPE ty AS LIST (ELEMENT TYPE=bool)
+
+query T multiline
+SELECT redacted_create_sql FROM mz_types WHERE name = 'ty'
+----
+CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s6 AS pg_catalog.bool])
+EOF

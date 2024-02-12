@@ -12,10 +12,14 @@ use std::num::TryFromIntError;
 use std::time::Duration;
 
 use dec::TryFromDecimalError;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::adt::numeric::Numeric;
+use crate::strconv::parse_timestamptz;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
 
 /// System-wide timestamp type.
 #[derive(
@@ -35,11 +39,24 @@ pub struct Timestamp {
     internal: u64,
 }
 
+impl RustType<ProtoTimestamp> for Timestamp {
+    fn into_proto(&self) -> ProtoTimestamp {
+        ProtoTimestamp {
+            internal: self.into(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTimestamp) -> Result<Self, TryFromProtoError> {
+        Ok(Timestamp::new(proto.internal))
+    }
+}
+
 pub trait TimestampManipulation:
     timely::progress::Timestamp
     + timely::order::TotalOrder
     + differential_dataflow::lattice::Lattice
     + std::fmt::Debug
+    + mz_persist_types::StepForward
 {
     /// Advance a timestamp by the least amount possible such that
     /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
@@ -47,6 +64,13 @@ pub trait TimestampManipulation:
 
     /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
     fn step_forward_by(&self, amount: &Self) -> Self;
+
+    /// Advance a timestamp forward by the given `amount`. Return `None` if unable to do so.
+    fn try_step_forward_by(&self, amount: &Self) -> Option<Self>;
+
+    /// Advance a timestamp by the least amount possible such that `ts.less_than(ts.step_forward())`
+    /// is true. Return `None` if unable to do so.
+    fn try_step_forward(&self) -> Option<Self>;
 
     /// Retreat a timestamp by the least amount possible such that
     /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
@@ -66,12 +90,26 @@ impl TimestampManipulation for Timestamp {
         self.step_forward_by(amount)
     }
 
+    fn try_step_forward(&self) -> Option<Self> {
+        self.try_step_forward()
+    }
+
+    fn try_step_forward_by(&self, amount: &Self) -> Option<Self> {
+        self.try_step_forward_by(amount)
+    }
+
     fn step_back(&self) -> Option<Self> {
         self.step_back()
     }
 
     fn maximum() -> Self {
         Self::MAX
+    }
+}
+
+impl mz_persist_types::StepForward for Timestamp {
+    fn step_forward(&self) -> Self {
+        self.step_forward()
     }
 }
 
@@ -140,6 +178,17 @@ impl Timestamp {
             Some(ts) => ts,
             None => panic!("could not step {self} forward by {amount}"),
         }
+    }
+
+    /// Advance a timestamp by the least amount possible such that `ts.less_than(ts.step_forward())`
+    /// is true. Return `None` if unable to do so.
+    pub fn try_step_forward(&self) -> Option<Self> {
+        self.checked_add(1)
+    }
+
+    /// Advance a timestamp forward by the given `amount`. Return `None` if unable to do so.
+    pub fn try_step_forward_by(&self, amount: &Self) -> Option<Self> {
+        self.checked_add(*amount)
     }
 
     /// Retreat a timestamp by the least amount possible such that
@@ -301,11 +350,26 @@ impl std::fmt::Debug for Timestamp {
 }
 
 impl std::str::FromStr for Timestamp {
-    type Err = &'static str;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self {
-            internal: s.parse().map_err(|_| "could not parse mz_timestamp")?,
+            internal: s
+                .parse::<u64>()
+                .map_err(|_| "could not parse as number of milliseconds since epoch".to_string())
+                .or_else(|err_num_of_millis| {
+                    parse_timestamptz(s)
+                        .map_err(|parse_error| {
+                            format!(
+                                "{}; could not parse as date and time: {}",
+                                err_num_of_millis, parse_error
+                            )
+                        })?
+                        .timestamp_millis()
+                        .try_into()
+                        .map_err(|_| "out of range for mz_timestamp".to_string())
+                })
+                .map_err(|e: String| format!("could not parse mz_timestamp: {}", e))?,
         })
     }
 }
@@ -351,5 +415,5 @@ impl TryFrom<Numeric> for Timestamp {
 }
 
 impl columnation::Columnation for Timestamp {
-    type InnerRegion = columnation::CloneRegion<Timestamp>;
+    type InnerRegion = columnation::CopyRegion<Timestamp>;
 }

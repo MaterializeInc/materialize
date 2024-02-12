@@ -17,13 +17,13 @@ ALTER TABLE concurrent_update_pk REPLICA IDENTITY FULL;
 INSERT INTO concurrent_update_pk VALUES (1, 10);
 INSERT INTO concurrent_update_pk VALUES (2, 20);
 
-$ schema-registry-wait subject=postgres.public.concurrent_update_pk-value
+$ schema-registry-wait topic=postgres.public.concurrent_update_pk
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE concurrent_update_pk
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_update_pk')

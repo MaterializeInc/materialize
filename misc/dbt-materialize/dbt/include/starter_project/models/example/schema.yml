@@ -1,0 +1,87 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: 2
+
+# https://materialize.com/docs/get-started/quickstart/
+
+models:
+  - name: fraud_activity
+    description: "Detects when a user wins an auction as a bidder, and then is identified as a seller for an item at a higher price."
+    columns:
+      - name: seller
+        description: "The seller for an auction"
+        tests:
+          - unique
+          - not_null
+      - name: seller_item
+        description: "The name of the seller item"
+      - name: seller_amount
+        description: "The bid amount of the seller"
+      - name: buyer_item
+        description: "The name of the buyer item"
+      - name: buyer_amount
+        description: "The bid amount of the buyer"
+
+  - name: funds_movement
+    description: "Tracks the credits and debits of all winning bids."
+    columns:
+      - name: id
+        description: "The id of the buyer or seller"
+        tests:
+          - not_null
+      - name: credits
+        description: "Credit from an auction"
+      - name: debits
+        description: "Debit from an auction"
+
+  - name: winning_bids
+    description: "joins data from `auctions` and `bids` to get the bid with the highest `amount` for each auction at its `end_time`."
+    columns:
+      - name: id
+        description: "The primary key of the auction"
+        tests:
+          - unique
+          - not_null
+      - name: buyer
+        description: "The id of the buyer"
+      - name: auction_id
+        description: "The id of the auction"
+      - name: amount
+        description: "The bid amount"
+      - name: bid_time
+        description: "The time the bid was executed"
+      - name: item
+        description: "The name of the item"
+      - name: seller
+        description: "The id of the seller"
+
+  - name: my_first_dbt_model
+    description: "A starter dbt model"
+    columns:
+      - name: id
+        description: "The primary key for this table"
+        tests:
+          - unique
+          - not_null
+
+  - name: my_second_dbt_model
+    description: "A starter dbt model"
+    columns:
+      - name: id
+        description: "The primary key for this table"
+        tests:
+          - unique
+          - not_null

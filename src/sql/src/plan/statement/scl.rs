@@ -12,10 +12,10 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_sql_parser::ast::InspectShardStatement;
+use std::time::Duration;
 use uncased::UncasedStr;
-
-use mz_repr::adt::interval::Interval;
-use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -28,9 +28,11 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
-    FetchPlan, Plan, PlanError, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
-    VariableValue,
+    FetchPlan, InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan,
+    SetVariablePlan, ShowVariablePlan, VariableValue,
 };
+use crate::session::vars;
+use crate::session::vars::{IsolationLevel, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME};
 
 pub fn describe_set_variable(
     _: &StatementContext,
@@ -40,7 +42,7 @@ pub fn describe_set_variable(
 }
 
 pub fn plan_set_variable(
-    _: &StatementContext,
+    scx: &StatementContext,
     SetVariableStatement {
         local,
         variable,
@@ -48,11 +50,19 @@ pub fn plan_set_variable(
     }: SetVariableStatement,
 ) -> Result<Plan, PlanError> {
     let value = plan_set_variable_to(to)?;
-    Ok(Plan::SetVariable(SetVariablePlan {
-        name: variable.into_string(),
-        value,
-        local,
-    }))
+    let name = variable.into_string();
+
+    if let VariableValue::Values(values) = &value {
+        if let Some(value) = values.first() {
+            if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
+                && value == IsolationLevel::StrongSessionSerializable.as_str()
+            {
+                scx.require_feature_flag(&vars::ENABLE_SESSION_TIMELINES)?;
+            }
+        }
+    }
+
+    Ok(Plan::SetVariable(SetVariablePlan { name, value, local }))
 }
 
 pub fn plan_set_variable_to(to: SetVariableTo) -> Result<VariableValue, PlanError> {
@@ -98,6 +108,8 @@ pub fn describe_show_variable(
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("setting", ScalarType::String.nullable(false))
             .with_column("description", ScalarType::String.nullable(false))
+    } else if variable.as_str() == SCHEMA_ALIAS {
+        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(true))
     } else {
         RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(false))
     };
@@ -115,6 +127,22 @@ pub fn plan_show_variable(
             name: variable.to_string(),
         }))
     }
+}
+
+pub fn describe_inspect_shard(
+    _: &StatementContext,
+    InspectShardStatement { .. }: InspectShardStatement,
+) -> Result<StatementDesc, PlanError> {
+    let desc = RelationDesc::empty().with_column("state", ScalarType::Jsonb.nullable(false));
+    Ok(StatementDesc::new(Some(desc)))
+}
+
+pub fn plan_inspect_shard(
+    _: &StatementContext,
+    InspectShardStatement { id }: InspectShardStatement,
+) -> Result<Plan, PlanError> {
+    let id: GlobalId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
+    Ok(Plan::InspectShard(InspectShardPlan { id }))
 }
 
 pub fn describe_discard(
@@ -137,19 +165,32 @@ pub fn plan_discard(
 }
 
 pub fn describe_declare(
-    _: &StatementContext,
-    _: DeclareStatement<Aug>,
+    scx: &StatementContext,
+    DeclareStatement { stmt, .. }: DeclareStatement<Aug>,
+    param_types_in: &[Option<ScalarType>],
 ) -> Result<StatementDesc, PlanError> {
+    let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt)?;
+    // Get the desc for the inner statement, but only for its parameters. The outer DECLARE doesn't
+    // return any rows itself when executed.
+    let desc = describe(scx.pcx()?, scx.catalog, stmt_resolved, param_types_in)?;
+    // The outer describe fn calls scx.finalize_param_types, so we need to transfer the inner desc's
+    // params to this scx.
+    for (i, ty) in desc.param_types.into_iter().enumerate() {
+        scx.param_types.borrow_mut().insert(i + 1, ty);
+    }
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_declare(
     _: &StatementContext,
-    DeclareStatement { name, stmt }: DeclareStatement<Aug>,
+    DeclareStatement { name, stmt, sql }: DeclareStatement<Aug>,
+    params: &Params,
 ) -> Result<Plan, PlanError> {
     Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
         stmt: *stmt,
+        sql,
+        params: params.clone(),
     }))
 }
 
@@ -160,7 +201,7 @@ pub fn describe_fetch(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(FetchOption, (Timeout, Interval));
+generate_extracted_config!(FetchOption, (Timeout, Duration));
 
 pub fn plan_fetch(
     _: &StatementContext,
@@ -176,12 +217,11 @@ pub fn plan_fetch(
             // Limit FETCH timeouts to 1 day. If users have a legitimate need it can be
             // bumped. If we do bump it, ensure that the new upper limit is within the
             // bounds of a tokio time future, otherwise it'll panic.
-            const SECS_PER_DAY: f64 = 60f64 * 60f64 * 24f64;
-            let timeout_secs = timeout.as_epoch_seconds::<f64>();
-            if !timeout_secs.is_finite() || timeout_secs < 0f64 || timeout_secs > SECS_PER_DAY {
-                sql_bail!("timeout out of range: {:#}", timeout);
+            const DAY: Duration = Duration::from_secs(60 * 60 * 24);
+            if timeout > DAY {
+                sql_bail!("timeout out of range: {}s", timeout.as_secs_f64());
             }
-            ExecuteTimeout::Seconds(timeout_secs)
+            ExecuteTimeout::Seconds(timeout.as_secs_f64())
         }
         // FETCH defaults to WaitOnce.
         None => ExecuteTimeout::WaitOnce,
@@ -215,7 +255,7 @@ pub fn describe_prepare(
 
 pub fn plan_prepare(
     scx: &StatementContext,
-    PrepareStatement { name, stmt }: PrepareStatement<Aug>,
+    PrepareStatement { name, stmt, sql }: PrepareStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];
@@ -225,6 +265,7 @@ pub fn plan_prepare(
         name: name.to_string(),
         stmt: *stmt,
         desc,
+        sql,
     }))
 }
 

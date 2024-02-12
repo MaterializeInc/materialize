@@ -17,8 +17,9 @@ operations provided by the standard [`subprocess`][subprocess] module.
 
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import IO, Dict, Optional, Sequence, Union
+from typing import IO
 
 from materialize import ui
 
@@ -29,13 +30,13 @@ CalledProcessError = subprocess.CalledProcessError
 # set of parameters. If your needs are niche, consider calling `subprocess.run`
 # directly rather than adding a one-off parameter here.
 def runv(
-    args: Sequence[Union[Path, str]],
+    args: Sequence[Path | str],
     *,
-    cwd: Optional[Path] = None,
-    env: Optional[Dict[str, str]] = None,
-    stdin: Union[None, int, IO[bytes], bytes] = None,
-    stdout: Union[None, int, IO[bytes]] = None,
-    stderr: Union[None, int, IO[bytes]] = None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin: None | int | IO[bytes] | bytes = None,
+    stdout: None | int | IO[bytes] = None,
+    stderr: None | int | IO[bytes] = None,
 ) -> subprocess.CompletedProcess:
     """Verbosely run a subprocess.
 
@@ -81,12 +82,12 @@ def runv(
 
 
 def capture(
-    args: Sequence[Union[Path, str]],
+    args: Sequence[Path | str],
     *,
-    cwd: Optional[Path] = None,
-    env: Optional[Dict[str, str]] = None,
-    stdin: Union[None, int, IO[bytes], str] = None,
-    stderr: Union[None, int, IO[bytes]] = None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin: None | int | IO[bytes] | str = None,
+    stderr: None | int | IO[bytes] = None,
 ) -> str:
     """Capture the output of a subprocess.
 
@@ -124,3 +125,17 @@ def capture(
     return subprocess.check_output(
         args, cwd=cwd, env=env, input=input, stdin=stdin, stderr=stderr, text=True
     )
+
+
+def run_and_get_return_code(
+    args: Sequence[Path | str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Run a subprocess and return the return code."""
+    try:
+        capture(args, cwd=cwd, env=env, stderr=subprocess.DEVNULL)
+        return 0
+    except CalledProcessError as e:
+        return e.returncode

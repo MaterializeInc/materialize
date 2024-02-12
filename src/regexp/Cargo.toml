@@ -1,0 +1,23 @@
+[package]
+name = "mz-regexp"
+description = "Regexp utils."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-repr = { path = "../repr" }
+regex = "1.7.0"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[dev-dependencies]
+anyhow = "1.0.66"
+mz-ore = { path = "../ore", features = ["cli"] }
+postgres = "0.19.5"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

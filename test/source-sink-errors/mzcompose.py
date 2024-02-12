@@ -8,21 +8,26 @@
 # by the Apache License, Version 2.0.
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable, List, Optional, Protocol
+from typing import Protocol
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
+
+
+def schema() -> str:
+    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+
 
 SERVICES = [
     Redpanda(),
@@ -77,9 +82,8 @@ class KafkaTransactionLogGreaterThan1:
         ):
             c.up("zookeeper", "badkafka", "schema-registry", "materialized")
             self.populate(c)
-            self.assert_error(
-                c, "retriable transaction error", "running a single Kafka broker"
-            )
+            self.assert_error(c, "transaction error", "running a single Kafka broker")
+            c.down(sanity_restart_mz=False)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
@@ -87,7 +91,7 @@ class KafkaTransactionLogGreaterThan1:
             dedent(
                 """
                 > CREATE CONNECTION kafka_conn
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
                     URL '${testdrive.schema-registry-url}'
@@ -111,12 +115,11 @@ class KafkaTransactionLogGreaterThan1:
         c.testdrive(
             dedent(
                 f"""
-                > SELECT status, error ~* '{error}', details::json#>>'{{hint}}' ~* '{hint}'
+                > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hints,0}}' ~* '{hint}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'kafka_sink' and status = 'stalled'
-                  ORDER BY occurred_at DESC LIMIT 1
-                stalled true true
+                true true
                 """
             )
         )
@@ -127,13 +130,13 @@ class KafkaDisruption:
     name: str
     breakage: Callable
     expected_error: str
-    fixage: Optional[Callable]
+    fixage: Callable | None
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("redpanda", "materialized", "clusterd")
 
@@ -163,6 +166,7 @@ class KafkaDisruption:
                 > CREATE CONNECTION kafka_conn
                   TO KAFKA (
                     BROKER '${testdrive.kafka-addr}',
+                    SECURITY PROTOCOL PLAINTEXT,
                     PROGRESS TOPIC 'testdrive-progress-topic-${testdrive.seed}'
                   );
 
@@ -181,11 +185,19 @@ class KafkaDisruption:
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
 
+                # Ensure the source makes _real_ progress before we disrupt it. This also
+                # ensures the sink makes progress, which is required to hit certain stalls.
+                # As of implementing correctness property #2, this is required.
+                > SELECT count(*) from source1
+                1
+
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                $ kafka-verify-topic sink=materialize.public.sink1
                 """
             )
         )
@@ -197,16 +209,6 @@ class KafkaDisruption:
                 > SELECT status, error ~* '{error}'
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
-                stalled true
-
-                # Sinks generally halt after receiving an error, which means that they may alternate
-                # between `stalled` and `starting`. Instead of relying on the current status, we
-                # check that the latest stall has the error we expect.
-                > SELECT status, error ~* '{error}'
-                  FROM mz_internal.mz_sink_status_history
-                  JOIN mz_sinks ON mz_sinks.id = sink_id
-                  WHERE name = 'sink1' and status = 'stalled'
-                  ORDER BY occurred_at DESC LIMIT 1
                 stalled true
                 """
             )
@@ -226,7 +228,104 @@ class KafkaDisruption:
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
+                """
+            )
+        )
 
+
+@dataclass
+class KafkaSinkDisruption:
+    name: str
+    breakage: Callable
+    expected_error: str
+    fixage: Callable | None
+
+    def run_test(self, c: Composition) -> None:
+        print(f"+++ Running Kafka sink disruption scenario {self.name}")
+        seed = random.randint(0, 256**4)
+
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
+        c.up("testdrive", persistent=True)
+        c.up("redpanda", "materialized", "clusterd")
+
+        with c.override(
+            Testdrive(
+                no_reset=True,
+                seed=seed,
+                entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
+            )
+        ):
+            self.populate(c)
+            self.breakage(c, seed)
+            self.assert_error(c, self.expected_error)
+
+            if self.fixage:
+                self.fixage(c, seed)
+                self.assert_recovery(c)
+
+    def populate(self, c: Composition) -> None:
+        # Create a source and a sink
+        c.testdrive(
+            schema()
+            + dedent(
+                """
+                # We specify the progress topic explicitly so we can delete it in a test later,
+                # and confirm that the sink stalls. (Deleting the output topic is not enough if
+                # we're not actively publishing new messages to the sink.)
+                > CREATE CONNECTION kafka_conn
+                  TO KAFKA (
+                    BROKER '${testdrive.kafka-addr}',
+                    SECURITY PROTOCOL PLAINTEXT,
+                    PROGRESS TOPIC 'testdrive-progress-topic-${testdrive.seed}'
+                  );
+
+                > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                  URL '${testdrive.schema-registry-url}'
+                  );
+
+                $ kafka-create-topic topic=source-topic
+
+                $ kafka-ingest topic=source-topic format=avro schema=${schema}
+                {"f1": "A"}
+
+                > CREATE SOURCE source1
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                > CREATE SINK sink1 FROM source1
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                $ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
+                {"before": null, "after": {"row":{"f1": "A"}}}
+                """
+            )
+        )
+
+    def assert_error(self, c: Composition, error: str) -> None:
+        c.testdrive(
+            dedent(
+                f"""
+                # Sinks generally halt after receiving an error, which means that they may alternate
+                # between `stalled` and `starting`. Instead of relying on the current status, we
+                # check that there is a stalled status with the expected error.
+                > SELECT bool_or(error ~* '{error}'), bool_or(details->'namespaced'->>'kafka' ~* '{error}')
+                  FROM mz_internal.mz_sink_status_history
+                  JOIN mz_sinks ON mz_sinks.id = sink_id
+                  WHERE name = 'sink1' and status = 'stalled'
+                true true
+                """
+            )
+        )
+
+    def assert_recovery(self, c: Composition) -> None:
+        c.testdrive(
+            dedent(
+                """
                 > SELECT status, error
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'sink1'
@@ -241,13 +340,13 @@ class PgDisruption:
     name: str
     breakage: Callable
     expected_error: str
-    fixage: Optional[Callable]
+    fixage: Callable | None
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("postgres", "materialized", "clusterd")
 
@@ -287,14 +386,14 @@ class PgDisruption:
                 DROP PUBLICATION IF EXISTS mz_source;
                 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-                CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
-                INSERT INTO t1 VALUES (1, NULL);
-                ALTER TABLE t1 REPLICA IDENTITY FULL;
-                INSERT INTO t1 VALUES (2, NULL);
+                CREATE TABLE source1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
+                INSERT INTO source1 VALUES (1, NULL);
+                ALTER TABLE source1 REPLICA IDENTITY FULL;
+                INSERT INTO source1 VALUES (2, NULL);
 
-                > CREATE SOURCE "source1"
+                > CREATE SOURCE "pg_source"
                   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                  FOR TABLES ("t1");
+                  FOR TABLES ("source1");
                 """
             )
         )
@@ -306,12 +405,14 @@ class PgDisruption:
                 # Postgres sources may halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that the latest stall has the error we expect.
-                > SELECT status, error ~* '{error}'
-                  FROM mz_internal.mz_source_status_history
-                  JOIN mz_sources ON mz_sources.id = source_id
-                  WHERE name = 'source1' and status = 'stalled'
-                  ORDER BY occurred_at DESC LIMIT 1
-                stalled true
+                > SELECT error ~* '{error}'
+                    FROM mz_internal.mz_source_status_history
+                    JOIN mz_sources ON mz_sources.id = source_id
+                    WHERE (
+                        name = 'source1' OR name = 'pg_source'
+                    ) AND (status = 'stalled' OR status = 'ceased')
+                    ORDER BY occurred_at DESC LIMIT 1;
+                true
                 """
             )
         )
@@ -321,14 +422,14 @@ class PgDisruption:
             dedent(
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO t1 VALUES (3);
+                INSERT INTO source1 VALUES (3);
 
                 > SELECT status, error
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
 
-                > SELECT f1 FROM t1;
+                > SELECT f1 FROM source1;
                 1
                 2
                 3
@@ -337,25 +438,52 @@ class PgDisruption:
         )
 
 
-disruptions: List[Disruption] = [
+disruptions: list[Disruption] = [
+    KafkaSinkDisruption(
+        name="delete-sink-topic-delete-progress-fix",
+        breakage=lambda c, seed: delete_sink_topic(c, seed),
+        expected_error="sink progress data exists, but sink data topic is missing",
+        # If we delete the progress topic, we will re-create the sink as if it is new.
+        fixage=lambda c, seed: c.exec(
+            "redpanda", "rpk", "topic", "delete", f"testdrive-progress-topic-{seed}"
+        ),
+    ),
+    KafkaSinkDisruption(
+        name="delete-sink-topic-recreate-topic-fix",
+        breakage=lambda c, seed: delete_sink_topic(c, seed),
+        expected_error="sink progress data exists, but sink data topic is missing",
+        # If we recreate the sink topic, the sink will work but will likely be inconsistent.
+        fixage=lambda c, seed: c.exec(
+            "redpanda", "rpk", "topic", "create", f"testdrive-sink-topic-{seed}"
+        ),
+    ),
     KafkaDisruption(
-        name="delete-topic",
-        breakage=lambda c, seed: redpanda_topics(c, "delete", seed),
+        name="delete-source-topic",
+        breakage=lambda c, seed: c.exec(
+            "redpanda", "rpk", "topic", "delete", f"testdrive-source-topic-{seed}"
+        ),
         expected_error="UnknownTopicOrPartition|topic",
         fixage=None
         # Re-creating the topic does not restart the source
         # fixage=lambda c,seed: redpanda_topics(c, "create", seed),
     ),
+    # docker compose pause has become unreliable recently
+    # KafkaDisruption(
+    #     name="pause-redpanda",
+    #     breakage=lambda c, _: c.pause("redpanda"),
+    #     expected_error="OperationTimedOut|BrokerTransportFailure|transaction",
+    #     fixage=lambda c, _: c.unpause("redpanda"),
+    # ),
     KafkaDisruption(
-        name="pause-redpanda",
-        breakage=lambda c, _: c.pause("redpanda"),
+        name="sigstop-redpanda",
+        breakage=lambda c, _: c.kill("redpanda", signal="SIGSTOP", wait=False),
         expected_error="OperationTimedOut|BrokerTransportFailure|transaction",
-        fixage=lambda c, _: c.unpause("redpanda"),
+        fixage=lambda c, _: c.kill("redpanda", signal="SIGCONT", wait=False),
     ),
     KafkaDisruption(
         name="kill-redpanda",
         breakage=lambda c, _: c.kill("redpanda"),
-        expected_error="BrokerTransportFailure|Resolve",
+        expected_error="BrokerTransportFailure|Resolve|Broker transport failure|Timed out",
         fixage=lambda c, _: c.up("redpanda"),
     ),
     # https://github.com/MaterializeInc/materialize/issues/16582
@@ -368,7 +496,7 @@ disruptions: List[Disruption] = [
     PgDisruption(
         name="kill-postgres",
         breakage=lambda c, _: c.kill("postgres"),
-        expected_error="error connecting to server",
+        expected_error="error connecting to server|connection closed|deadline has elapsed",
         fixage=lambda c, _: c.up("postgres"),
     ),
     PgDisruption(
@@ -378,7 +506,7 @@ disruptions: List[Disruption] = [
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION mz_source;
-                INSERT INTO t1 VALUES (3, NULL);
+                INSERT INTO source1 VALUES (3, NULL);
                 """
             )
         ),
@@ -389,7 +517,7 @@ disruptions: List[Disruption] = [
     PgDisruption(
         name="alter-postgres",
         breakage=lambda c, _: alter_pg_table(c),
-        expected_error="source table t1 with oid .+ has been altered",
+        expected_error="source table source1 with oid .+ has been altered",
         fixage=None,
     ),
     PgDisruption(
@@ -410,13 +538,26 @@ def workflow_default(c: Composition) -> None:
     introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
     """
 
-    for id, disruption in enumerate(disruptions):
+    for disruption in disruptions:
         disruption.run_test(c)
 
 
-def redpanda_topics(c: Composition, action: str, seed: int) -> None:
-    for topic in ["source", "sink", "progress"]:
-        c.exec("redpanda", "rpk", "topic", action, f"testdrive-{topic}-topic-{seed}")
+def delete_sink_topic(c: Composition, seed: int) -> None:
+    c.exec("redpanda", "rpk", "topic", "delete", f"testdrive-sink-topic-{seed}")
+
+    # Write new data to source otherwise nothing will encounter the missing topic
+    c.testdrive(
+        schema()
+        + dedent(
+            """
+            $ kafka-ingest topic=source-topic format=avro schema=${schema}
+            {"f1": "B"}
+
+            > SELECT COUNT(*) FROM source1;
+            2
+            """
+        )
+    )
 
 
 def alter_pg_table(c: Composition) -> None:
@@ -424,8 +565,8 @@ def alter_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 ALTER TABLE t1 ADD COLUMN f3 INTEGER;
-                 INSERT INTO t1 VALUES (3, NULL, 4)
+                 ALTER TABLE source1 DROP COLUMN f1;
+                 INSERT INTO source1 VALUES (NULL)
                  """
         )
     )
@@ -436,7 +577,7 @@ def unsupported_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 INSERT INTO t1 VALUES (3, '{{1},{2}}')
+                 INSERT INTO source1 VALUES (3, '[2:3]={2,2}')
                  """
         )
     )

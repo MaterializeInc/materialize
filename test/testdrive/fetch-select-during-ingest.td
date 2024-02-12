@@ -11,16 +11,21 @@
 # Make sure that data that was ingested during the lifetime of a SELECT cursor is *NOT* FETCH-ed
 #
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET min_timestamp_interval = '100ms'
 
 $ set int={"type": "record", "name": "field_int", "fields": [ {"name": "f1", "type": "int"} ] }
 
 $ kafka-create-topic topic=tail-fetch-during-ingest
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE fetch_during_ingest
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tail-fetch-during-ingest-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
@@ -47,7 +52,7 @@ $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestam
 
 # NOTE(benesch): grumble. This is not a particularly robust way to write this
 # test. It is, however, better than what was previously here, which used
-# `SELECT mz_internal.mz_sleep(2)`, which had the extremely suboptimal property
+# `SELECT mz_unsafe.mz_sleep(2)`, which had the extremely suboptimal property
 # of wedging up the coordinator for 2s, instead of just pausing the test for 2s.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 

@@ -1,0 +1,319 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="627" height="1123">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="74" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="74"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">SELECT</text>
+   <rect x="145" y="35" width="46" height="32" rx="10"/>
+   <rect x="143"
+         y="33"
+         width="46"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="153" y="53">ALL</text>
+   <rect x="145" y="123" width="86" height="32" rx="10"/>
+   <rect x="143"
+         y="121"
+         width="86"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="153" y="141">DISTINCT</text>
+   <rect x="271" y="123" width="40" height="32" rx="10"/>
+   <rect x="269"
+         y="121"
+         width="40"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="279" y="141">ON</text>
+   <rect x="331" y="123" width="26" height="32" rx="10"/>
+   <rect x="329"
+         y="121"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="339" y="141">(</text>
+   <rect x="397" y="123" width="64" height="32"/>
+   <rect x="395" y="121" width="64" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="405" y="141">col_ref</text>
+   <rect x="397" y="79" width="24" height="32" rx="10"/>
+   <rect x="395"
+         y="77"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="405" y="97">,</text>
+   <rect x="501" y="123" width="26" height="32" rx="10"/>
+   <rect x="499"
+         y="121"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="509" y="141">)</text>
+   <rect x="83" y="249" width="98" height="32"/>
+   <rect x="81" y="247" width="98" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="91" y="267">target_elem</text>
+   <rect x="83" y="205" width="24" height="32" rx="10"/>
+   <rect x="81"
+         y="203"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="91" y="223">,</text>
+   <rect x="221" y="249" width="60" height="32" rx="10"/>
+   <rect x="219"
+         y="247"
+         width="60"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="229" y="267">FROM</text>
+   <rect x="321" y="249" width="88" height="32"/>
+   <rect x="319" y="247" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="329" y="267">table_expr</text>
+   <rect x="321" y="205" width="24" height="32" rx="10"/>
+   <rect x="319"
+         y="203"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="329" y="223">,</text>
+   <rect x="469" y="281" width="78" height="32"/>
+   <rect x="467" y="279" width="78" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="477" y="299">join_expr</text>
+   <rect x="89" y="423" width="70" height="32" rx="10"/>
+   <rect x="87"
+         y="421"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="97" y="441">WHERE</text>
+   <rect x="179" y="423" width="48" height="32"/>
+   <rect x="177" y="421" width="48" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="187" y="441">expr</text>
+   <rect x="287" y="391" width="70" height="32" rx="10"/>
+   <rect x="285"
+         y="389"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="295" y="409">GROUP</text>
+   <rect x="377" y="391" width="40" height="32" rx="10"/>
+   <rect x="375"
+         y="389"
+         width="40"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="385" y="409">BY</text>
+   <rect x="457" y="391" width="64" height="32"/>
+   <rect x="455" y="389" width="64" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="465" y="409">col_ref</text>
+   <rect x="457" y="347" width="24" height="32" rx="10"/>
+   <rect x="455"
+         y="345"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="465" y="365">,</text>
+   <rect x="113" y="533" width="84" height="32" rx="10"/>
+   <rect x="111"
+         y="531"
+         width="84"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="121" y="551">OPTIONS</text>
+   <rect x="217" y="533" width="26" height="32" rx="10"/>
+   <rect x="215"
+         y="531"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="225" y="551">(</text>
+   <rect x="283" y="533" width="62" height="32"/>
+   <rect x="281" y="531" width="62" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="291" y="551">option</text>
+   <rect x="365" y="533" width="28" height="32" rx="10"/>
+   <rect x="363"
+         y="531"
+         width="28"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="373" y="551">=</text>
+   <rect x="413" y="533" width="38" height="32"/>
+   <rect x="411" y="531" width="38" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="421" y="551">val</text>
+   <rect x="283" y="489" width="24" height="32" rx="10"/>
+   <rect x="281"
+         y="487"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="291" y="507">,</text>
+   <rect x="491" y="533" width="26" height="32" rx="10"/>
+   <rect x="489"
+         y="531"
+         width="26"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="499" y="551">)</text>
+   <rect x="243" y="631" width="76" height="32" rx="10"/>
+   <rect x="241"
+         y="629"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="251" y="649">HAVING</text>
+   <rect x="339" y="631" width="48" height="32"/>
+   <rect x="337" y="629" width="48" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="347" y="649">expr</text>
+   <rect x="45" y="741" width="68" height="32" rx="10"/>
+   <rect x="43"
+         y="739"
+         width="68"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="53" y="759">ORDER</text>
+   <rect x="133" y="741" width="40" height="32" rx="10"/>
+   <rect x="131"
+         y="739"
+         width="40"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="141" y="759">BY</text>
+   <rect x="213" y="741" width="64" height="32"/>
+   <rect x="211" y="739" width="64" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="221" y="759">col_ref</text>
+   <rect x="317" y="773" width="50" height="32" rx="10"/>
+   <rect x="315"
+         y="771"
+         width="50"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="325" y="791">ASC</text>
+   <rect x="317" y="817" width="58" height="32" rx="10"/>
+   <rect x="315"
+         y="815"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="325" y="835">DESC</text>
+   <rect x="435" y="773" width="106" height="32" rx="10"/>
+   <rect x="433"
+         y="771"
+         width="106"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="443" y="791">NULLS LAST</text>
+   <rect x="435" y="817" width="110" height="32" rx="10"/>
+   <rect x="433"
+         y="815"
+         width="110"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="443" y="835">NULLS FIRST</text>
+   <rect x="213" y="697" width="24" height="32" rx="10"/>
+   <rect x="211"
+         y="695"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="221" y="715">,</text>
+   <rect x="133" y="915" width="58" height="32" rx="10"/>
+   <rect x="131"
+         y="913"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="141" y="933">LIMIT</text>
+   <rect x="211" y="915" width="66" height="32"/>
+   <rect x="209" y="913" width="66" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="219" y="933">integer</text>
+   <rect x="337" y="915" width="74" height="32" rx="10"/>
+   <rect x="335"
+         y="913"
+         width="74"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="345" y="933">OFFSET</text>
+   <rect x="431" y="915" width="66" height="32"/>
+   <rect x="429" y="913" width="66" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="439" y="933">integer</text>
+   <rect x="143" y="1001" width="66" height="32" rx="10"/>
+   <rect x="141"
+         y="999"
+         width="66"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="151" y="1019">UNION</text>
+   <rect x="143" y="1045" width="98" height="32" rx="10"/>
+   <rect x="141"
+         y="1043"
+         width="98"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="151" y="1063">INTERSECT</text>
+   <rect x="143" y="1089" width="76" height="32" rx="10"/>
+   <rect x="141"
+         y="1087"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="151" y="1107">EXCEPT</text>
+   <rect x="301" y="1033" width="46" height="32" rx="10"/>
+   <rect x="299"
+         y="1031"
+         width="46"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="309" y="1051">ALL</text>
+   <rect x="301" y="1077" width="86" height="32" rx="10"/>
+   <rect x="299"
+         y="1075"
+         width="86"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="309" y="1095">DISTINCT</text>
+   <rect x="427" y="1001" width="152" height="32"/>
+   <rect x="425" y="999" width="152" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="435" y="1019">another_select_stmt</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m74 0 h10 m20 0 h10 m0 0 h412 m-442 0 h20 m422 0 h20 m-462 0 q10 0 10 10 m442 0 q0 -10 10 -10 m-452 10 v12 m442 0 v-12 m-442 12 q0 10 10 10 m422 0 q10 0 10 -10 m-432 10 h10 m46 0 h10 m0 0 h356 m-432 -10 v20 m442 0 v-20 m-442 20 v68 m442 0 v-68 m-442 68 q0 10 10 10 m422 0 q10 0 10 -10 m-432 10 h10 m86 0 h10 m20 0 h10 m40 0 h10 m0 0 h10 m26 0 h10 m20 0 h10 m64 0 h10 m-104 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m84 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-84 0 h10 m24 0 h10 m0 0 h40 m20 44 h10 m26 0 h10 m-296 0 h20 m276 0 h20 m-316 0 q10 0 10 10 m296 0 q0 -10 10 -10 m-306 10 v14 m296 0 v-14 m-296 14 q0 10 10 10 m276 0 q10 0 10 -10 m-286 10 h10 m0 0 h266 m42 -154 l2 0 m2 0 l2 0 m2 0 l2 0 m-548 246 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m98 0 h10 m-138 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m118 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-118 0 h10 m24 0 h10 m0 0 h74 m20 44 h10 m60 0 h10 m20 0 h10 m88 0 h10 m-128 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m108 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-108 0 h10 m24 0 h10 m0 0 h64 m40 44 h10 m0 0 h88 m-118 0 h20 m98 0 h20 m-138 0 q10 0 10 10 m118 0 q0 -10 10 -10 m-128 10 v12 m118 0 v-12 m-118 12 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m78 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-542 142 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h148 m-178 0 h20 m158 0 h20 m-198 0 q10 0 10 10 m178 0 q0 -10 10 -10 m-188 10 v12 m178 0 v-12 m-178 12 q0 10 10 10 m158 0 q10 0 10 -10 m-168 10 h10 m70 0 h10 m0 0 h10 m48 0 h10 m40 -32 h10 m70 0 h10 m0 0 h10 m40 0 h10 m20 0 h10 m64 0 h10 m-104 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m84 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-84 0 h10 m24 0 h10 m0 0 h40 m-274 44 h20 m274 0 h20 m-314 0 q10 0 10 10 m294 0 q0 -10 10 -10 m-304 10 v14 m294 0 v-14 m-294 14 q0 10 10 10 m274 0 q10 0 10 -10 m-284 10 h10 m0 0 h264 m22 -34 l2 0 m2 0 l2 0 m2 0 l2 0 m-512 142 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m84 0 h10 m0 0 h10 m26 0 h10 m20 0 h10 m62 0 h10 m0 0 h10 m28 0 h10 m0 0 h10 m38 0 h10 m-208 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m188 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-188 0 h10 m24 0 h10 m0 0 h144 m20 44 h10 m26 0 h10 m-444 0 h20 m424 0 h20 m-464 0 q10 0 10 10 m444 0 q0 -10 10 -10 m-454 10 v14 m444 0 v-14 m-444 14 q0 10 10 10 m424 0 q10 0 10 -10 m-434 10 h10 m0 0 h414 m22 -34 l2 0 m2 0 l2 0 m2 0 l2 0 m-358 66 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h154 m-184 0 h20 m164 0 h20 m-204 0 q10 0 10 10 m184 0 q0 -10 10 -10 m-194 10 v12 m184 0 v-12 m-184 12 q0 10 10 10 m164 0 q10 0 10 -10 m-174 10 h10 m76 0 h10 m0 0 h10 m48 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-426 142 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m68 0 h10 m0 0 h10 m40 0 h10 m20 0 h10 m64 0 h10 m20 0 h10 m0 0 h68 m-98 0 h20 m78 0 h20 m-118 0 q10 0 10 10 m98 0 q0 -10 10 -10 m-108 10 v12 m98 0 v-12 m-98 12 q0 10 10 10 m78 0 q10 0 10 -10 m-88 10 h10 m50 0 h10 m0 0 h8 m-88 -10 v20 m98 0 v-20 m-98 20 v24 m98 0 v-24 m-98 24 q0 10 10 10 m78 0 q10 0 10 -10 m-88 10 h10 m58 0 h10 m40 -76 h10 m0 0 h120 m-150 0 h20 m130 0 h20 m-170 0 q10 0 10 10 m150 0 q0 -10 10 -10 m-160 10 v12 m150 0 v-12 m-150 12 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m106 0 h10 m0 0 h4 m-140 -10 v20 m150 0 v-20 m-150 20 v24 m150 0 v-24 m-150 24 q0 10 10 10 m130 0 q10 0 10 -10 m-140 10 h10 m110 0 h10 m-372 -76 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m372 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-372 0 h10 m24 0 h10 m0 0 h328 m-560 44 h20 m560 0 h20 m-600 0 q10 0 10 10 m580 0 q0 -10 10 -10 m-590 10 v90 m580 0 v-90 m-580 90 q0 10 10 10 m560 0 q10 0 10 -10 m-570 10 h10 m0 0 h550 m22 -110 l2 0 m2 0 l2 0 m2 0 l2 0 m-536 142 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h154 m-184 0 h20 m164 0 h20 m-204 0 q10 0 10 10 m184 0 q0 -10 10 -10 m-194 10 v12 m184 0 v-12 m-184 12 q0 10 10 10 m164 0 q10 0 10 -10 m-174 10 h10 m58 0 h10 m0 0 h10 m66 0 h10 m40 -32 h10 m0 0 h170 m-200 0 h20 m180 0 h20 m-220 0 q10 0 10 10 m200 0 q0 -10 10 -10 m-210 10 v12 m200 0 v-12 m-200 12 q0 10 10 10 m180 0 q10 0 10 -10 m-190 10 h10 m74 0 h10 m0 0 h10 m66 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-458 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h466 m-496 0 h20 m476 0 h20 m-516 0 q10 0 10 10 m496 0 q0 -10 10 -10 m-506 10 v12 m496 0 v-12 m-496 12 q0 10 10 10 m476 0 q10 0 10 -10 m-466 10 h10 m66 0 h10 m0 0 h32 m-138 0 h20 m118 0 h20 m-158 0 q10 0 10 10 m138 0 q0 -10 10 -10 m-148 10 v24 m138 0 v-24 m-138 24 q0 10 10 10 m118 0 q10 0 10 -10 m-128 10 h10 m98 0 h10 m-128 -10 v20 m138 0 v-20 m-138 20 v24 m138 0 v-24 m-138 24 q0 10 10 10 m118 0 q10 0 10 -10 m-128 10 h10 m76 0 h10 m0 0 h22 m40 -88 h10 m0 0 h96 m-126 0 h20 m106 0 h20 m-146 0 q10 0 10 10 m126 0 q0 -10 10 -10 m-136 10 v12 m126 0 v-12 m-126 12 q0 10 10 10 m106 0 q10 0 10 -10 m-116 10 h10 m46 0 h10 m0 0 h40 m-116 -10 v20 m126 0 v-20 m-126 20 v24 m126 0 v-24 m-126 24 q0 10 10 10 m106 0 q10 0 10 -10 m-116 10 h10 m86 0 h10 m20 -76 h10 m152 0 h10 m23 -32 h-3"/>
+   <polygon points="617 983 625 979 625 987"/>
+   <polygon points="617 983 609 979 609 987"/>
+</svg>

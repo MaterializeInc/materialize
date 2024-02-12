@@ -15,7 +15,7 @@
 -- limitations under the License.
 
 {% materialization incremental, adapter='materialize' %}
-   -- TL;DR: dbt-materialize does not support incremental models, use materializedview
+   -- TL;DR: dbt-materialize does not support incremental models, use materialized_view
    -- models instead.
 
    -- Longer explanation:
@@ -30,7 +30,7 @@
         dbt-materialize does not support incremental models, because all views in
         Materialize are natively maintained incrementally.
 
-        Use the `materializedview` custom materialization instead.
+        Use the `materialized_view` custom materialization instead.
 
         See: https://materialize.com/docs/overview/api-components/#materialized-views
         See: https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#materializations

@@ -1,0 +1,30 @@
+[package]
+name = "mz-rocksdb-types"
+description = "Shared types for the `mz-rocksdb` crate"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.66"
+mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
+mz-proto = { path = "../proto" }
+num_cpus = "1.14.0"
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+proptest = { version = "1.0.0", default-features = false, features = ["std"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+serde = { version = "1.0.152", features = ["derive"] }
+uncased = "0.9.7"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[build-dependencies]
+prost-build = "0.11.2"
+protobuf-src = "1.1.0"
+tonic-build = "0.9.2"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

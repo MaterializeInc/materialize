@@ -8,9 +8,8 @@
 # by the Apache License, Version 2.0.
 
 import time
-from typing import List, Set, Type
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, Capability
 from materialize.zippy.minio_capabilities import MinioIsRunning
 
@@ -21,7 +20,7 @@ class MinioStart(Action):
     def run(self, c: Composition) -> None:
         c.up("minio")
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [MinioIsRunning()]
 
 
@@ -29,7 +28,7 @@ class MinioRestart(Action):
     """Restart the Minio instance."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MinioIsRunning}
 
     def run(self, c: Composition) -> None:

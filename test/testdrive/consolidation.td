@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true
+ALTER SYSTEM SET enable_index_options = true
+ALTER SYSTEM SET enable_logical_compaction_window = true
+
 # Test consolidation and compaction behavior.
 #
 # The various tests in this file use the following Debezium-formatted Kafka
@@ -92,9 +97,10 @@ $ set nums-schema=[
 $ kafka-create-topic topic=nums
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE nums
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
@@ -103,14 +109,16 @@ $ kafka-create-topic topic=nums
 
 # Disable logical compaction, to ensure we can view historical detail.
 > ALTER INDEX materialize.public.nums_primary_idx
-  SET (LOGICAL COMPACTION WINDOW = 0)
+  SET (RETAIN HISTORY = FOR 0)
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
 # Create a sink before we ingest any data, to ensure the sink starts AS OF 0
-> CREATE SINK nums_sink FROM nums
+> CREATE SINK nums_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM nums
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'nums-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -148,7 +156,9 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 # TODO(benesch): re-enable when we support `CREATE SINK ... AS OF`.
 # # Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)
 # # is fully consolidated.
-# > CREATE SINK nums_sink FROM nums
+# > CREATE SINK nums_sink
+#   IN CLUSTER ${arg.single-replica-cluster}
+#   FROM nums
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-sink-${testdrive.seed}')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   AS OF 3
@@ -183,7 +193,7 @@ mz_timestamp  mz_diff  num
 # 4.
 
 > ALTER INDEX materialize.public.nums_primary_idx
-  SET (LOGICAL COMPACTION WINDOW = '1ms')
+  SET (RETAIN HISTORY = FOR '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":5},"time":4,"diff":-1}]}
@@ -203,11 +213,11 @@ contains:Timestamp (3) is not valid for all inputs
 # Set the compaction window back to off and advance the number in transactions 5 and 6.
 
 > ALTER INDEX materialize.public.nums_primary_idx
-  SET (LOGICAL COMPACTION WINDOW = 0)
+  SET (RETAIN HISTORY = FOR 0)
 
 # But also create an index that compacts frequently.
 > CREATE VIEW nums_compacted AS SELECT * FROM nums
-> CREATE DEFAULT INDEX ON nums_compacted WITH (LOGICAL COMPACTION WINDOW = '1ms')
+> CREATE DEFAULT INDEX ON nums_compacted WITH (RETAIN HISTORY = FOR '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":6},"time":5,"diff":-1}]}

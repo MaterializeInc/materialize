@@ -1,0 +1,54 @@
+[package]
+name = "persistcli"
+description = "Persist command-line utilities"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+autobins = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "persistcli"
+bench = false
+
+[dependencies]
+anyhow = { version = "1.0.66", features = ["backtrace"] }
+async-trait = "0.1.68"
+axum = { version = "0.6.20" }
+bytes = { version = "1.3.0", features = ["serde"] }
+clap = { version = "3.2.24", features = ["derive", "env"] }
+differential-dataflow = "0.12.0"
+futures = "0.3.25"
+humantime = "2.1.0"
+mz-http-util = { path = "../http-util" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+mz-ore = { path = "../ore", features = ["bytes_", "network", "tracing_", "test"] }
+mz-persist = { path = "../persist" }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-txn = { path = "../persist-txn" }
+mz-persist-types = { path = "../persist-types" }
+mz-repr = { path = "../repr" }
+mz-timestamp-oracle = { path = "../timestamp-oracle" }
+num_cpus = "1.14.0"
+num_enum = "0.5.7"
+prometheus = { version = "0.13.3", default-features = false }
+serde = { version = "1.0.152", features = ["derive", "rc"] }
+serde_json = "1.0.89"
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
+tokio = { version = "1.32.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
+tracing = "0.1.37"
+url = "2.3.1"
+uuid = { version = "1.7.0", features = ["v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[features]
+default = ["tokio-console"]
+tokio-console = ["mz-ore/tokio-console"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

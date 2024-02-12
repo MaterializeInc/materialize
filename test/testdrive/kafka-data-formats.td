@@ -12,9 +12,11 @@ $ kafka-create-topic topic=input_csv_partitioned partitions=2
 $ kafka-create-topic topic=input_proto
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER input_csv_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input_csv (first, second)
+  IN CLUSTER input_csv_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_csv-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS;
 
@@ -34,7 +36,9 @@ $ kafka-ingest format=bytes topic=input_csv_partitioned partition=0
 $ kafka-ingest format=bytes topic=input_csv_partitioned partition=1
 2,3
 
+> CREATE CLUSTER input_csv_partitioned_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input_csv_partitioned (first, second)
+  IN CLUSTER input_csv_partitioned_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1,0], TOPIC 'testdrive-input_csv_partitioned-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS;
 

@@ -137,3 +137,31 @@ SELECT
     get_byte(NULL, 2);
 ----
 NULL NULL
+
+# constant_time_eq for bytea
+
+statement ok
+CREATE TABLE test_eq_bytea (ord integer, data1 bytea, data2 bytea);
+
+statement ok
+INSERT INTO test_eq_bytea VALUES
+    (1, '\x1234567890'::bytea, '\x1234567890'::bytea),
+    (2, '\x1234567890'::bytea, '\x9999999999'::bytea),
+    (3, 'GOODBYTE'::bytea, 'GOODBYTE'::bytea);
+
+query B
+SELECT constant_time_eq(data1, data2) FROM test_eq_bytea ORDER BY ord
+----
+true
+false
+true
+
+query BBB
+SELECT
+    constant_time_eq('x', NULL),
+    constant_time_eq(NULL, 'x'),
+    constant_time_eq(NULL, NULL)
+----
+NULL
+NULL
+NULL

@@ -10,11 +10,10 @@
 use std::fmt;
 
 use itertools::Itertools;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
@@ -61,6 +60,10 @@ impl LazyUnaryFunc for CastRecordToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         // TODO? if we moved typeconv into expr, we could evaluate this
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -118,6 +121,13 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         // TODO: we could determine Record1's type from `cast_exprs`
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        // In theory this could be marked as monotone if we knew that all the expressions were
+        // monotone in the same direction. (ie. all increasing or all decreasing.) We don't yet
+        // track enough information to make that call, though!
+        false
+    }
 }
 
 impl fmt::Display for CastRecord1ToRecord2 {
@@ -171,6 +181,10 @@ impl LazyUnaryFunc for RecordGet {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

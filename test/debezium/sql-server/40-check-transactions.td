@@ -7,23 +7,23 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ schema-registry-wait subject=sql-server.dbo.transaction_table1-value
+$ schema-registry-wait topic=sql-server.test.dbo.transaction_table1
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE transaction_table1
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.transaction_table1')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.transaction_table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-$ schema-registry-wait subject=sql-server.dbo.transaction_table2-value
+$ schema-registry-wait topic=sql-server.test.dbo.transaction_table2
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
 > CREATE SOURCE transaction_table2
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.transaction_table2')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.transaction_table2')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 

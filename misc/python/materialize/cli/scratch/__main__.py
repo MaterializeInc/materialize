@@ -11,7 +11,16 @@ import argparse
 
 import shtab
 
-from materialize.cli.scratch import create, destroy, login, mine, push, sftp, ssh
+from materialize.cli.scratch import (
+    create,
+    destroy,
+    forward,
+    login,
+    mine,
+    push,
+    sftp,
+    ssh,
+)
 
 
 def main() -> None:
@@ -52,6 +61,12 @@ def main() -> None:
             lambda p: shtab.add_argument_to(p, "shell", parent=parser),
             lambda: None,
             "Generate shell completion script",
+        ),
+        (
+            "forward",
+            forward.configure_parser,
+            forward.run,
+            "Forward local ports remotely",
         ),
     ]:
         s = subparsers.add_parser(name, description=description, help=description)

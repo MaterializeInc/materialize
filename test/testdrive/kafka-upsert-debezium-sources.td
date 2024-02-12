@@ -82,7 +82,7 @@ $ set schema={
   }
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -96,12 +96,21 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}, "op": "u", "source": {"file": "binlog3", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
 ! CREATE SOURCE doin_upsert
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
 
+! CREATE SOURCE doin_upsert
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
+  KEY FORMAT JSON VALUE FORMAT JSON
+  ENVELOPE DEBEZIUM
+contains:ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO
+
 > CREATE SOURCE doin_upsert
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -150,6 +159,7 @@ moros
 
 # [btv] uncomment if we bring back classic debezium mode
 # ! CREATE SOURCE doin_upsert_metadata
+#   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   INCLUDE OFFSET
@@ -157,6 +167,7 @@ moros
 # contains:INCLUDE OFFSET with Debezium requires UPSERT semantics
 
 > CREATE SOURCE doin_upsert_metadata
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET AS test_kafka_offset
@@ -189,6 +200,7 @@ id creature
 
 # Test that `WITH (START OFFSET=<whatever>)` works
 > CREATE SOURCE upsert_fast_forward
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START OFFSET = [6], TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -200,6 +212,7 @@ id creature
 
 # test include metadata
 > CREATE SOURCE upsert_metadata
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET, PARTITION
@@ -215,6 +228,7 @@ id   creature      offset  partition
 
 # test include metadata respects metadata order
 > CREATE SOURCE upsert_metadata_reordered
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET

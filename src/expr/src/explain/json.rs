@@ -11,7 +11,7 @@
 
 use mz_repr::explain::json::DisplayJson;
 
-use super::{ExplainMultiPlan, ExplainSinglePlan};
+use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource, PushdownInfo};
 
 impl<'a, T: 'a> DisplayJson for ExplainSinglePlan<'a, T>
 where
@@ -42,12 +42,25 @@ where
         let sources = self
             .sources
             .iter()
-            .map(|(id, op)| {
-                serde_json::json!({
-                    "id": id,
-                    "op": op
-                })
-            })
+            .map(
+                |ExplainSource {
+                     id,
+                     op,
+                     pushdown_info,
+                 }| {
+                    let mut json = serde_json::json!({
+                        "id": id,
+                        "op": op,
+                    });
+
+                    if let Some(PushdownInfo { pushdown }) = pushdown_info {
+                        let object = json.as_object_mut().unwrap();
+                        object.insert("pushdown".to_owned(), serde_json::json!(pushdown));
+                    }
+
+                    json
+                },
+            )
             .collect::<Vec<_>>();
 
         let result = serde_json::json!({ "plans": plans, "sources": sources });

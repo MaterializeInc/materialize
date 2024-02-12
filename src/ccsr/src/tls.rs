@@ -9,11 +9,9 @@
 
 //! TLS certificates and identities.
 
-use openssl::pkcs12::Pkcs12;
-use openssl::pkey::PKey;
-use openssl::stack::Stack;
-use openssl::x509::X509;
 use serde::{Deserialize, Serialize};
+
+use mz_tls_util::pkcs12der_from_pem;
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
 ///
@@ -25,30 +23,13 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Reimplements [`reqwest::Certificate::from_pem`] in terms of OpenSSL.
-    ///
-    /// The implementation in reqwest requires rustls.
-    pub fn from_pem(pem: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
-        let pkey = PKey::private_key_from_pem(pem)?;
-        let mut certs = Stack::new()?;
-        let mut cert_iter = X509::stack_from_pem(pem)?.into_iter();
-        let cert = cert_iter
-            .next()
-            .expect("X509::stack_from_pem always returns at least one certificate");
-        for cert in cert_iter {
-            certs.push(cert)?;
-        }
-        let mut pkcs_builder = Pkcs12::builder();
-        pkcs_builder.ca(certs);
-        // We build a PKCS #12 archive solely to have something to pass to
-        // `reqwest::Identity::from_pkcs12_der`, so the password and friendly
-        // name don't matter.
-        let pass = String::new();
-        let friendly_name = "";
-        let der = pkcs_builder
-            .build(&pass, friendly_name, &pkey, &cert)?
-            .to_der()?;
-        Ok(Identity { der, pass })
+    /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
+    pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
+        let archive = pkcs12der_from_pem(key, cert)?;
+        Ok(Identity {
+            der: archive.der,
+            pass: archive.pass,
+        })
     }
 
     /// Wraps [`reqwest::Identity::from_pkcs12_der`].

@@ -9,9 +9,10 @@
 
 syntax = "proto3";
 
-import "repr/src/chrono.proto";
+import "proto/src/chrono.proto";
 import "repr/src/adt/date.proto";
 import "repr/src/adt/interval.proto";
+import "repr/src/adt/mz_acl_item.proto";
 
 package mz_repr.row;
 
@@ -48,9 +49,9 @@ message ProtoDatum {
         // Of these, I'd guess Timestamp and UUID are probably the first ones
         // we'd bless followed by Date and Time.
         mz_repr.adt.date.ProtoDate date = 16;
-        mz_repr.chrono.ProtoNaiveTime time = 17;
-        mz_repr.chrono.ProtoNaiveDateTime timestamp = 18;
-        mz_repr.chrono.ProtoNaiveDateTime timestamp_tz = 19;
+        mz_proto.chrono.ProtoNaiveTime time = 17;
+        mz_proto.chrono.ProtoNaiveDateTime timestamp = 18;
+        mz_proto.chrono.ProtoNaiveDateTime timestamp_tz = 19;
         mz_repr.adt.interval.ProtoInterval interval = 20;
         ProtoArray array = 21;
         ProtoRow list = 22;
@@ -63,6 +64,8 @@ message ProtoDatum {
         uint64 uint64 = 29;
         uint64 mz_timestamp = 30;
         ProtoRange range = 31;
+        mz_repr.adt.mz_acl_item.ProtoMzAclItem mz_acl_item = 32;
+        mz_repr.adt.mz_acl_item.ProtoAclItem acl_item = 33;
     }
 }
 
@@ -100,7 +103,7 @@ message ProtoArray {
 }
 
 message ProtoArrayDimension {
-    uint64 lower_bound = 1;
+    int64 lower_bound = 1;
     uint64 length = 2;
 }
 

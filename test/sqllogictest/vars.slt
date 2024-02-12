@@ -164,6 +164,61 @@ SET transaction_isolation = 'snapshot isolation'
 statement ok
 SET transaction_isolation = 'strict serializable'
 
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement ok
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+statement ok
+SET TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+statement ok
+BEGIN;
+
+statement ok
+SET TRANSACTION ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement ok
+COMMIT
+
+query T
+SHOW transaction_isolation
+----
+serializable
+
+## Last isolation level write wins
+statement ok
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE, ISOLATION LEVEL STRICT SERIALIZABLE
+
+query T
+SHOW transaction_isolation
+----
+strict serializable
+
+statement error Expected transaction mode, found EOF
+SET TRANSACTION
+
+statement error SET TRANSACTION <access-mode> are not supported
+SET TRANSACTION READ ONLY
+
 # Test that a failed transaction will not commit var changes.
 
 statement ok
@@ -240,7 +295,7 @@ SET cluster_replica = 'r1'
 query T
 SELECT current_setting('cluster') || '.' || current_setting('cluster_replica')
 ----
-default.r1
+quickstart.r1
 
 query T
 SELECT current_setting('max_tables')
@@ -287,5 +342,402 @@ COMPLETE 0
 ISO, MDY
 COMPLETE 1
 
-statement error parameter "database" requires a "string" value
+statement error parameter "database" cannot have value "one","two": expects a single value
 set database = one, two
+
+# Test invalid values for float vars
+# TODO(jkosh44) the error messages here are bad, but the best we can do right now. A user will
+# never see this anyway since it's only exposed to admins.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_credit_consumption_rate = '-100.5'
+----
+db error: ERROR: parameter "max_credit_consumption_rate" cannot have value "-100.5": only supports non-negative, non-NaN numeric values
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_credit_consumption_rate = NaN
+----
+db error: ERROR: parameter "max_credit_consumption_rate" cannot have value "NaN": only supports non-negative, non-NaN numeric values
+
+statement ok
+SET SCHEMA 'non-resolvable-name'
+
+statement ok
+SET SCHEMA TO 'non-resolvable-name'
+
+statement ok
+SET SCHEMA = 'non-resolvable-name'
+
+query T
+SHOW SCHEMA
+----
+NULL
+
+statement ok
+SET SCHEMA TO 'public'
+
+query T
+SHOW SCHEMA
+----
+public
+
+statement error Expected end of statement, found comma
+SET SCHEMA TO public, private, playground
+
+statement ok
+CREATE SCHEMA s
+
+statement ok
+SET SCHEMA TO s
+
+query T
+SHOW SCHEMA
+----
+s
+
+statement ok
+RESET SCHEMA
+
+query T
+SHOW SCHEMA
+----
+public
+
+statement ok
+SET SCHEMA TO s
+
+query T
+SHOW SCHEMA
+----
+s
+
+statement ok
+SET SCHEMA TO DEFAULT
+
+query T
+SHOW SCHEMA
+----
+public
+
+query error db error: ERROR: SHOW variable in subqueries not yet supported
+SELECT * FROM (show client_encoding)
+
+statement ok
+SET max_query_result_size = 100
+
+query T
+SELECT generate_series(1, 2)
+----
+1
+2
+
+query error db error: ERROR: result exceeds max size of 100 B
+SELECT generate_series(1, 10)
+
+# Regression for #22724
+# Ensure duplicate rows don't overcount bytes in the presence of LIMIT.
+query T
+SELECT x FROM (VALUES ('{"row": 1}')) AS a (x), generate_series(1, 50000) LIMIT 1
+----
+{"row": 1}
+
+# Ensure that a large ordering key but small projection does not count against the result size limit.
+query I
+select 1 from (select array_agg(generate_series) x from generate_series(1, 1000000)) order by x limit 1
+----
+1
+
+statement ok
+RESET max_query_result_size
+
+statement ok
+CREATE ROLE parker;
+
+statement ok
+ALTER ROLE parker SET cluster TO foo;
+
+query T
+SHOW cluster;
+----
+quickstart
+
+simple conn=parker_1,user=parker
+SHOW cluster;
+----
+foo
+COMPLETE 1
+
+simple conn=parker_1,user=parker
+ALTER ROLE parker RESET cluster;
+----
+COMPLETE 0
+
+# Altering the Role defaults does not take effect until you restart your session, this matches
+# Postgres.
+simple conn=parker_1,user=parker
+SHOW cluster;
+----
+foo
+COMPLETE 1
+
+# A new connection gets us a new session.
+simple conn=parker_2,user=parker
+SHOW cluster;
+----
+quickstart
+COMPLETE 1
+
+# Roles can alter their own variables.
+simple conn=parker_2,user=parker
+ALTER ROLE parker SET cluster TO bar;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+SET cluster TO session_var;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+session_var
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+RESET cluster;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+SET cluster TO in_transaction;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+in_transaction
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+COMMIT;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+in_transaction
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+RESET cluster;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SET LOCAL cluster TO local_transaction;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+local_transaction
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=parker_3,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+SHOW search_path;
+----
+public
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+ALTER ROLE parker SET search_path TO foo, bar, baz;
+----
+COMPLETE 0
+
+simple conn=parker_4,user=parker
+SHOW search_path;
+----
+foo, bar, baz
+COMPLETE 1
+
+simple conn=parker_3,user=parker
+ALTER ROLE parker SET search_path TO DEFAULT;
+----
+COMPLETE 0
+
+simple conn=parker_5,user=parker
+SHOW search_path;
+----
+public
+COMPLETE 1
+
+statement ok
+CREATE ROLE joe;
+
+# You can set variable values for yourself, but you need CREATEROLE privileges to set them for
+# other roles.
+simple conn=parker_3,user=parker
+ALTER ROLE joe SET cluster TO wont_work;
+----
+db error: ERROR: permission denied for SYSTEM
+
+statement ok
+ALTER ROLE joe SET cluster TO will_work
+
+simple conn=joe,user=joe
+SHOW cluster;
+----
+will_work
+COMPLETE 1
+
+# Should not be able to set a system variable.
+simple conn=parker_3,user=parker
+ALTER ROLE parker SET metrics_retention TO 10;
+----
+db error: ERROR: unrecognized configuration parameter "metrics_retention"
+
+# Should not be able to set a variable that does not exist.
+simple conn=parker_3,user=parker
+ALTER ROLE parker SET i_am_a_fake_variable TO 10;
+----
+db error: ERROR: unrecognized configuration parameter "i_am_a_fake_variable"
+
+# mz_system cannot set a system variable.
+simple conn=mz_system,user=mz_system
+ALTER ROLE parker SET metrics_retention TO 10;
+----
+db error: ERROR: unrecognized configuration parameter "metrics_retention"
+
+# Role defaults should override a change to the system default.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster TO new_system_default
+----
+COMPLETE 0
+
+simple conn=joe_1,user=joe
+SHOW cluster;
+----
+will_work
+COMPLETE 1
+
+# Reset the role default, so new sessions should get the system default.
+simple conn=joe_1,user=joe
+ALTER ROLE joe RESET cluster;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+new_system_default
+COMPLETE 1
+
+simple conn=joe_2,user=joe
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SET LOCAL cluster TO 'txn_specific_cluster';
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+txn_specific_cluster
+COMPLETE 1
+
+simple conn=joe_2,user=joe
+COMMIT;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+new_system_default
+COMPLETE 1
+
+simple conn=joe_2,user=joe
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SET cluster TO 'foo_bar';
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+foo_bar
+COMPLETE 1
+
+simple conn=joe_2,user=joe
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+new_system_default
+COMPLETE 1
+
+# Not all session variables can be overriden.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET server_version TO this_wont_work
+----
+db error: ERROR: unrecognized configuration parameter "server_version"
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET emit_trace_id_notice TO true
+----
+db error: ERROR: unrecognized configuration parameter "emit_trace_id_notice"

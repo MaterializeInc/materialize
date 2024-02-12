@@ -1,0 +1,309 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! TopK planning logic.
+//!
+//! We provide a plan ([TopKPlan]) encoding variants of the TopK operator, and provide
+//! implementations specific to plan variants.
+//!
+//! The TopK variants can be distinguished as follows:
+//! * A [MonotonicTop1Plan] maintains a single row per key and is suitable for monotonic inputs.
+//! * A [MonotonicTopKPlan] maintains up to K rows per key and is suitable for monotonic inputs.
+//! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
+
+use mz_expr::ColumnOrder;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+
+use crate::plan::bucketing_of_expected_group_size;
+
+include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.top_k.rs"));
+
+/// A plan encapsulating different variants to compute a TopK operation.
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub enum TopKPlan {
+    /// A plan for Top1 for monotonic inputs.
+    MonotonicTop1(MonotonicTop1Plan),
+    /// A plan for TopK for monotonic inputs.
+    MonotonicTopK(MonotonicTopKPlan),
+    /// A plan for generic TopK operations.
+    Basic(BasicTopKPlan),
+}
+
+impl TopKPlan {
+    /// Create a plan from the information provided. Here we decide on which of the TopK plan
+    /// variants to select.
+    ///
+    /// * `group_key` - The columns serving as the group key.
+    /// * `order_key` - The columns specifying an ordering withing each group.
+    /// * `offset` - The number of rows to skip at the top. Provide 0 to reveal all rows.
+    /// * `limit` - An optional limit of how many rows should be revealed.
+    /// * `arity` - The number of columns in the input and output.
+    /// * `monotonic` - `true` if the input is monotonic.
+    /// * `expected_group_size` - A hint about how many rows will have the same group key.
+    pub(crate) fn create_from(
+        group_key: Vec<usize>,
+        order_key: Vec<ColumnOrder>,
+        offset: usize,
+        limit: Option<mz_expr::MirScalarExpr>,
+        arity: usize,
+        monotonic: bool,
+        expected_group_size: Option<u64>,
+    ) -> Self {
+        // Capture whether the limit is a literal integer first.
+        let limit_as_int64 = limit.as_ref().and_then(|l| l.as_literal_int64());
+
+        if monotonic && offset == 0 && limit_as_int64 == Some(1) {
+            TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                group_key,
+                order_key,
+                must_consolidate: false,
+            })
+        } else if monotonic && offset == 0 {
+            // For monotonic inputs, we are able to retract inputs that can no longer be produced
+            // as outputs. Any inputs beyond `offset + limit` will never again be produced as
+            // outputs, and can be removed. The simplest form of this is when `offset == 0` and
+            // these removable records are those in the input not produced in the output.
+            // TODO: consider broadening this optimization to `offset > 0` by first filtering
+            // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
+            // of `offset` and `limit`, discarding only the records not produced in the intermediate
+            // stage.
+            TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                group_key,
+                order_key,
+                limit,
+                arity,
+                must_consolidate: false,
+            })
+        } else {
+            // A plan for all other inputs
+            TopKPlan::Basic(BasicTopKPlan {
+                group_key,
+                order_key,
+                offset,
+                limit,
+                arity,
+                buckets: bucketing_of_expected_group_size(expected_group_size),
+            })
+        }
+    }
+
+    /// Upgrades from a basic topk plan to a monotonic plan, if necessary, and
+    /// sets consolidation requirements.
+    pub fn as_monotonic(&mut self, must_consolidate: bool) {
+        match self {
+            TopKPlan::Basic(plan) => {
+                if plan.offset == 0 {
+                    *self = if plan.limit.as_ref().and_then(|l| l.as_literal_int64()) == Some(1) {
+                        TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                            group_key: plan.group_key.clone(),
+                            order_key: plan.order_key.clone(),
+                            must_consolidate,
+                        })
+                    } else {
+                        TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                            group_key: plan.group_key.clone(),
+                            order_key: plan.order_key.clone(),
+                            limit: plan.limit.clone(),
+                            arity: plan.arity,
+                            must_consolidate,
+                        })
+                    }
+                }
+            }
+            TopKPlan::MonotonicTop1(plan) => {
+                plan.must_consolidate = must_consolidate;
+            }
+            TopKPlan::MonotonicTopK(plan) => {
+                plan.must_consolidate = must_consolidate;
+            }
+        }
+    }
+}
+
+impl RustType<ProtoTopKPlan> for TopKPlan {
+    fn into_proto(&self) -> ProtoTopKPlan {
+        use crate::plan::top_k::proto_top_k_plan::Kind::*;
+
+        ProtoTopKPlan {
+            kind: match self {
+                TopKPlan::Basic(plan) => Some(Basic(plan.into_proto())),
+                TopKPlan::MonotonicTop1(plan) => Some(MonotonicTop1(plan.into_proto())),
+                TopKPlan::MonotonicTopK(plan) => Some(MonotonicTopK(plan.into_proto())),
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoTopKPlan) -> Result<Self, TryFromProtoError> {
+        use crate::plan::top_k::proto_top_k_plan::Kind::*;
+
+        match proto.kind {
+            Some(Basic(plan)) => Ok(TopKPlan::Basic(plan.into_rust()?)),
+            Some(MonotonicTop1(plan)) => Ok(TopKPlan::MonotonicTop1(plan.into_rust()?)),
+            Some(MonotonicTopK(plan)) => Ok(TopKPlan::MonotonicTopK(plan.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field("ProtoTopKPlan::kind")),
+        }
+    }
+}
+
+/// A plan for monotonic TopKs with an offset of 0 and a limit of 1.
+///
+/// If the input to a TopK is monotonic (aka append-only aka no retractions) then we
+/// don't have to worry about keeping every row we've seen around forever. Instead,
+/// the reduce can incrementally compute a new answer by looking at just the old TopK
+/// for a key and the incremental data.
+///
+/// This optimization generalizes to any TopK over a monotonic source, but we special
+/// case only TopK with offset=0 and limit=1 (aka Top1) for now. This is because (1)
+/// Top1 can merge in each incremental row in constant space and time while the
+/// generalized solution needs something like a priority queue and (2) we expect Top1
+/// will be a common pattern used to turn a Kafka source's "upsert" semantics into
+/// differential's semantics. (2) is especially interesting because Kafka is
+/// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
+/// Materialize and commonly used by users.
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct MonotonicTop1Plan {
+    /// The columns that form the key for each group.
+    pub group_key: Vec<usize>,
+    /// Ordering that is used within each group.
+    pub order_key: Vec<mz_expr::ColumnOrder>,
+    /// True if the input is not physically monotonic, and the operator must perform
+    /// consolidation to remove potential negations. The operator implementation is
+    /// free to consolidate as late as possible while ensuring correctness, so it is
+    /// not a requirement that the input be directly subjected to consolidation.
+    /// More details in the monotonic one-shot `SELECT`s design doc.[^1]
+    ///
+    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
+    pub must_consolidate: bool,
+}
+
+impl RustType<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
+    fn into_proto(&self) -> ProtoMonotonicTop1Plan {
+        ProtoMonotonicTop1Plan {
+            group_key: self.group_key.into_proto(),
+            order_key: self.order_key.into_proto(),
+            must_consolidate: self.must_consolidate.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoMonotonicTop1Plan) -> Result<Self, TryFromProtoError> {
+        Ok(MonotonicTop1Plan {
+            group_key: proto.group_key.into_rust()?,
+            order_key: proto.order_key.into_rust()?,
+            must_consolidate: proto.must_consolidate.into_rust()?,
+        })
+    }
+}
+
+/// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct MonotonicTopKPlan {
+    /// The columns that form the key for each group.
+    pub group_key: Vec<usize>,
+    /// Ordering that is used within each group.
+    pub order_key: Vec<mz_expr::ColumnOrder>,
+    /// Optionally, an upper bound on the per-group ordinal position of the
+    /// records to produce from each group.
+    pub limit: Option<mz_expr::MirScalarExpr>,
+    /// The number of columns in the input and output.
+    pub arity: usize,
+    /// True if the input is not physically monotonic, and the operator must perform
+    /// consolidation to remove potential negations. The operator implementation is
+    /// free to consolidate as late as possible while ensuring correctness, so it is
+    /// not a requirement that the input be directly subjected to consolidation.
+    /// More details in the monotonic one-shot `SELECT`s design doc.[^1]
+    ///
+    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
+    pub must_consolidate: bool,
+}
+
+impl RustType<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
+    fn into_proto(&self) -> ProtoMonotonicTopKPlan {
+        ProtoMonotonicTopKPlan {
+            group_key: self.group_key.into_proto(),
+            order_key: self.order_key.into_proto(),
+            limit: self.limit.into_proto(),
+            arity: self.arity.into_proto(),
+            must_consolidate: self.must_consolidate.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoMonotonicTopKPlan) -> Result<Self, TryFromProtoError> {
+        Ok(MonotonicTopKPlan {
+            group_key: proto.group_key.into_rust()?,
+            order_key: proto.order_key.into_rust()?,
+            limit: proto.limit.into_rust()?,
+            arity: proto.arity.into_rust()?,
+            must_consolidate: proto.must_consolidate.into_rust()?,
+        })
+    }
+}
+
+/// A plan for generic TopKs that don't fit any more specific category.
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct BasicTopKPlan {
+    /// The columns that form the key for each group.
+    pub group_key: Vec<usize>,
+    /// Ordering that is used within each group.
+    pub order_key: Vec<mz_expr::ColumnOrder>,
+    /// Optionally, an upper bound on the per-group ordinal position of the
+    /// records to produce from each group.
+    pub limit: Option<mz_expr::MirScalarExpr>,
+    /// A lower bound on the per-group ordinal position of the records to
+    /// produce from each group.
+    ///
+    /// This can be set to zero to have no effect.
+    pub offset: usize,
+    /// The number of columns in the input and output.
+    pub arity: usize,
+    /// Bucket sizes for hierarchical stages of TopK.  Should be decreasing.
+    pub buckets: Vec<u64>,
+}
+
+impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
+    fn into_proto(&self) -> ProtoBasicTopKPlan {
+        ProtoBasicTopKPlan {
+            group_key: self.group_key.into_proto(),
+            order_key: self.order_key.into_proto(),
+            limit: self.limit.into_proto(),
+            offset: self.offset.into_proto(),
+            arity: self.arity.into_proto(),
+            buckets: self.buckets.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoBasicTopKPlan) -> Result<Self, TryFromProtoError> {
+        Ok(BasicTopKPlan {
+            group_key: proto.group_key.into_rust()?,
+            order_key: proto.order_key.into_rust()?,
+            limit: proto.limit.into_rust()?,
+            offset: proto.offset.into_rust()?,
+            arity: proto.arity.into_rust()?,
+            buckets: proto.buckets.into_rust()?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #[mz_ore::test]
+        fn top_k_plan_protobuf_roundtrip(expect in any::<TopKPlan>()) {
+            let actual = protobuf_roundtrip::<_, ProtoTopKPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+}

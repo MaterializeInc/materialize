@@ -300,7 +300,7 @@ SELECT '2147483647.4'::float8::int4;
 ----
 2147483647
 
-query error integer out of range
+query error "2147483648" integer out of range
 SELECT '2147483647.6'::float8::int4
 
 query I
@@ -308,7 +308,7 @@ SELECT '-2147483648.4'::float8::int4
 ----
 -2147483648
 
-query error integer out of range
+query error "-2147483649" integer out of range
 SELECT '-2147483648.6'::float8::int4
 
 query I
@@ -316,7 +316,7 @@ SELECT '9223372036854773760'::float8::int8
 ----
 9223372036854773760
 
-query error bigint out of range
+query error "9223372036854776000" bigint out of range
 SELECT '9223372036854775807'::float8::int8
 
 query I
@@ -324,10 +324,10 @@ SELECT '-9223372036854775808.5'::float8::int8
 ----
 -9223372036854775808
 
-query error bigint out of range
+query error "-9223372036854780000" bigint out of range
 SELECT '-9223372036854780000'::float8::int8
 
-query error bigint out of range
+query error "922337203685477600000" bigint out of range
 SELECT '922337203685477580700.0'::float8::int8
 
 query RI rowsort

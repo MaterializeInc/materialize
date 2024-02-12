@@ -1,0 +1,135 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+query IIIII
+SELECT
+    datediff('year', '2023-05-08', '2023-06-07'),
+    datediff('month', '2023-05-08', '2023-06-07'),
+    datediff('week', '2023-05-08', '2023-06-07'),
+    datediff('day', '2023-05-08', '2023-06-07'),
+    datediff('hour', '2023-05-08', '2023-06-07')
+----
+0 1 4 30 720
+
+query IIIIIIII
+SELECT
+    datediff('millennia', '2000-12-31', '2001-01-01'),
+    datediff('century', '2000-12-31', '2001-01-01'),
+    datediff('decade', '2000-12-31', '2001-01-01'),
+    datediff('year', '2000-12-31', '2001-01-01'),
+    datediff('quarter', '2000-12-31', '2001-01-01'),
+    datediff('month', '2000-12-31', '2001-01-01'),
+    datediff('year', '2000-12-31', '2001-01-01'),
+    datediff('day', '2000-12-31', '2001-01-01')
+----
+1 1 0 1 1 1 1 1
+
+query IIIII
+SELECT
+    datediff('year', '1998-01-01', '2000-06-01'),
+    datediff('quarter', '1998-01-01', '2000-06-01'),
+    datediff('month', '1998-01-01', '2000-06-01'),
+    datediff('week', '1998-01-01', '2000-06-01'),
+    datediff('day', '1998-01-01', '2000-06-01')
+----
+2 9 29 126 882
+
+query I
+SELECT datediff('month', '2023-05-08', '2024-06-08');
+----
+13
+
+query I
+SELECT datediff('day', '2023-06-08', '2023-06-07');
+----
+-1
+
+# Make sure we correctly handle leap years
+query I
+SELECT datediff('day', '2004-03-01', '2004-02-28');
+----
+-2
+
+query I
+SELECT datediff('day', '2005-03-01', '2005-02-28');
+----
+-1
+
+query I
+SELECT datediff('day', '2005-02-01', '2004-02-01');
+----
+-366
+
+query I
+SELECT datediff('day', '2004-02-01', '2005-02-01');
+----
+366
+
+query I
+SELECT datediff('day', '2005-03-01', '2004-03-01');
+----
+-365
+
+query I
+SELECT datediff('hour', '2017/08/25 07:00', '2017/08/25 12:45');
+----
+5
+
+query I
+SELECT datediff('hour', '2023-01-01', '2023-01-03 05:04:03');
+----
+53
+
+query I
+SELECT datediff('days', '2008-06-01 09:59:59 EST', '2008-07-04 09:59:59 EST');
+----
+33
+
+query T
+SELECT to_timestamp(-210833720368);
+----
+4713-12-10 21:40:32+00 BC
+
+query T
+SELECT to_timestamp(0);
+----
+1970-01-01 00:00:00+00
+
+query T
+SELECT to_timestamp(8200000000000);
+----
+261817-08-28 09:46:40+00
+
+query T
+SELECT datediff('mil', '0001-01-01', '2000-01-01');
+----
+1
+
+query IIIII
+SELECT
+    datediff('usec', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('ms', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('s', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('m', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('h', to_timestamp(-210833720368), to_timestamp(8200000000000))
+----
+8410833720368000000 8410833720368000 8410833720368 140180562006 2336342700
+
+query IIIIII
+SELECT
+    datediff('days', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('months', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('years', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('decade', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('century', to_timestamp(-210833720368), to_timestamp(8200000000000)),
+    datediff('millennia', to_timestamp(-210833720368), to_timestamp(8200000000000))
+----
+97347612 3198344 266529 26653 2667 267

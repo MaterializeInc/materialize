@@ -15,8 +15,8 @@ FROM pg_catalog.pg_proc
 WHERE proname = 'substring'
 ORDER BY oid
 ----
-substring  20003  936  NULL  25
-substring  20003  937  NULL  25
+substring  20004  936  NULL  25
+substring  20004  937  NULL  25
 
 query TIIII
 SELECT oprname, oid, oprresult, oprleft, oprright
@@ -37,11 +37,11 @@ ORDER BY oid
 +  1363  1114  1083  1082
 +  1758  1700  1700  1700
 +  1800  1083  1083  1186
-+  1849  1186  1186  1083
++  1849  1083  1186  1083
 +  2066  1114  1114  1186
 +  2551  1114  1186  1082
-+  2553  1186  1186  1114
-+  2554  1186  1186  1184
++  2553  1114  1186  1114
++  2554  1184  1186  1184
 +  2555  1082  1082  23
 +  3898  3831  3831  3831
 +  16433  2276  0  2276

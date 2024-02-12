@@ -38,22 +38,21 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::ops::Deref;
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use mz_ore::collections::CollectionExt;
-use tracing::warn;
-
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use tracing::warn;
 
-use super::is_null;
+use crate::avro::is_null;
 
 pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
     let schema = serde_json::from_str(schema)?;
@@ -211,8 +210,12 @@ fn validate_schema_2(
         SchemaPiece::Float => ScalarType::Float32,
         SchemaPiece::Double => ScalarType::Float64,
         SchemaPiece::Date => ScalarType::Date,
-        SchemaPiece::TimestampMilli => ScalarType::Timestamp,
-        SchemaPiece::TimestampMicro => ScalarType::Timestamp,
+        SchemaPiece::TimestampMilli => ScalarType::Timestamp {
+            precision: Some(TimestampPrecision::try_from(3).unwrap()),
+        },
+        SchemaPiece::TimestampMicro => ScalarType::Timestamp {
+            precision: Some(TimestampPrecision::try_from(6).unwrap()),
+        },
         SchemaPiece::Decimal {
             precision, scale, ..
         } => {
@@ -291,16 +294,16 @@ fn validate_schema_2(
     })
 }
 
-pub struct ConfluentAvroResolver<C> {
+pub struct ConfluentAvroResolver {
     reader_schema: Schema,
-    writer_schemas: Option<SchemaCache<C>>,
+    writer_schemas: Option<SchemaCache>,
     confluent_wire_format: bool,
 }
 
-impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
+impl ConfluentAvroResolver {
     pub fn new(
         reader_schema: &str,
-        ccsr_client: Option<C>,
+        ccsr_client: Option<mz_ccsr::Client>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
@@ -315,7 +318,7 @@ impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
     pub async fn resolve<'a, 'b>(
         &'a mut self,
         mut bytes: &'b [u8],
-    ) -> anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)> {
+    ) -> anyhow::Result<anyhow::Result<(&'b [u8], &'a Schema, Option<i32>)>> {
         let (resolved_schema, schema_id) = match &mut self.writer_schemas {
             Some(cache) => {
                 debug_assert!(
@@ -324,14 +327,21 @@ impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
                      that can lead to this branch"
                 );
                 // XXX(guswynn): use destructuring assignments when they are stable
-                let (schema_id, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
+                let (schema_id, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes)
+                {
+                    Ok(ok) => ok,
+                    Err(err) => return Ok(Err(err)),
+                };
                 bytes = adjusted_bytes;
-                let schema = cache
+                let result = cache
                     .get(schema_id, &self.reader_schema)
-                    .await
-                    .with_context(|| {
-                        format!("failed to resolve Avro schema (id = {})", schema_id)
-                    })?;
+                    // The outer Result describes transient errors so use ? here to propagate
+                    .await?
+                    .with_context(|| format!("failed to resolve Avro schema (id = {})", schema_id));
+                let schema = match result {
+                    Ok(schema) => schema,
+                    Err(err) => return Ok(Err(err)),
+                };
                 (schema, Some(schema_id))
             }
 
@@ -341,17 +351,20 @@ impl<C: Deref<Target = mz_ccsr::Client>> ConfluentAvroResolver<C> {
             None => {
                 if self.confluent_wire_format {
                     // validate and just move the bytes buffer ahead
-                    let (_, adjusted_bytes) = crate::confluent::extract_avro_header(bytes)?;
+                    let (_, adjusted_bytes) = match crate::confluent::extract_avro_header(bytes) {
+                        Ok(ok) => ok,
+                        Err(err) => return Ok(Err(err)),
+                    };
                     bytes = adjusted_bytes;
                 }
                 (&self.reader_schema, None)
             }
         };
-        Ok((bytes, resolved_schema, schema_id))
+        Ok(Ok((bytes, resolved_schema, schema_id)))
     }
 }
 
-impl<C> fmt::Debug for ConfluentAvroResolver<C> {
+impl fmt::Debug for ConfluentAvroResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("ConfluentAvroResolver")
             .field("reader_schema", &self.reader_schema)
@@ -368,13 +381,13 @@ impl<C> fmt::Debug for ConfluentAvroResolver<C> {
 }
 
 #[derive(Debug)]
-struct SchemaCache<C> {
+struct SchemaCache {
     cache: BTreeMap<i32, Result<Schema, AvroError>>,
-    ccsr_client: C,
+    ccsr_client: mz_ccsr::Client,
 }
 
-impl<C: Deref<Target = mz_ccsr::Client>> SchemaCache<C> {
-    fn new(ccsr_client: C) -> Result<SchemaCache<C>, anyhow::Error> {
+impl SchemaCache {
+    fn new(ccsr_client: mz_ccsr::Client) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: BTreeMap::new(),
             ccsr_client,
@@ -386,7 +399,11 @@ impl<C: Deref<Target = mz_ccsr::Client>> SchemaCache<C> {
     /// that this schema cache was initialized with, returns the schema directly.
     /// If not, performs schema resolution on the reader and writer and
     /// returns the result.
-    async fn get(&mut self, id: i32, reader_schema: &Schema) -> anyhow::Result<&Schema> {
+    async fn get(
+        &mut self,
+        id: i32,
+        reader_schema: &Schema,
+    ) -> anyhow::Result<anyhow::Result<&Schema>> {
         let entry = match self.cache.entry(id) {
             Entry::Occupied(o) => o.into_mut(),
             Entry::Vacant(v) => {
@@ -424,6 +441,6 @@ impl<C: Deref<Target = mz_ccsr::Client>> SchemaCache<C> {
                 v.insert(result)
             }
         };
-        entry.as_ref().map_err(|e| anyhow::Error::new(e.clone()))
+        Ok(entry.as_ref().map_err(|e| anyhow::Error::new(e.clone())))
     }
 }

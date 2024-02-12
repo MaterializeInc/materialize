@@ -18,13 +18,13 @@ ALTER TABLE update_update REPLICA IDENTITY FULL;
 INSERT INTO update_update VALUES (1);
 INSERT INTO update_update VALUES (10);
 
-$ schema-registry-wait subject=postgres.public.update_update-value
+$ schema-registry-wait topic=postgres.public.update_update
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE update_update
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.update_update')

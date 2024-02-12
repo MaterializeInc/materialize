@@ -43,3 +43,9 @@ SELECT * FROM data, (VALUES (2)) ncols, csv_extract(ncols.column1, data.input)
 
 query error db error: ERROR: csv_extract number of columns must be a positive integer literal
 SELECT * FROM data, csv_extract((SELECT 2), data.input)
+
+query error db error: ERROR: attempt to create relation with too many columns, 8193 max: 8192
+SELECT * FROM data, csv_extract(8193, data.input)
+
+statement ok
+SELECT * FROM data, csv_extract(8192, data.input)

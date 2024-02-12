@@ -10,94 +10,204 @@
 //! Logic for processing [`Coordinator`] messages. The [`Coordinator`] receives
 //! messages from various sources (ex: controller, clients, background tasks, etc).
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::collections::{btree_map, BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
-use chrono::DurationRound;
-use mz_persist_client::usage::ShardsUsage;
-use rand::{rngs, Rng, SeedableRng};
-use tracing::{event, warn, Level};
-
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
+use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
+use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
+use opentelemetry::trace::TraceContextExt;
+use rand::{rngs, Rng, SeedableRng};
+use tracing::{event, warn, Instrument, Level};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::client::ConnectionId;
-use crate::command::{Command, ExecuteResponse};
-use crate::coord::appends::{BuiltinTableUpdateSource, Deferred};
-use crate::coord::timestamp_selection::TimestampContext;
+use crate::command::Command;
+use crate::coord::appends::Deferred;
+use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
-    Coordinator, CreateSourceStatementReady, Message, PendingReadTxn, RealTimeRecencyContext,
-    SinkConnectionReady,
+    AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
+    PeekStage, PeekStageTimestampReadHold, PlanValidity, PurifiedStatementReady,
+    RealTimeRecencyContext,
 };
-use crate::util::ResultExt;
-use crate::{catalog, AdapterError, AdapterNotice};
+use crate::session::Session;
+use crate::statement_logging::StatementLifecycleEvent;
+use crate::util::{ComputeSinkId, ResultExt};
+use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
-    pub(crate) async fn handle_message(&mut self, msg: Message) {
-        match msg {
-            Message::Command(cmd) => self.message_command(cmd).await,
-            Message::ControllerReady => {
-                if let Some(m) = self
-                    .controller
-                    .process()
-                    .await
-                    .expect("`process` never returns an error")
-                {
-                    self.message_controller(m).await
+    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
+    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
+    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    ///
+    /// We pass in a span from the outside, rather than instrumenting this
+    /// method using `#instrument[...]` or calling `.instrument()` at the
+    /// callsite so that we can correctly instrument the boxed future here _and_
+    /// so that we can stitch up the OpenTelemetryContext when we're processing
+    /// a `Message::Command` or other commands that pass around a context.
+    pub(crate) fn handle_message<'a>(
+        &'a mut self,
+        span: tracing::Span,
+        msg: Message,
+    ) -> LocalBoxFuture<'a, ()> {
+        async move {
+            match msg {
+                Message::Command(otel_ctx, cmd) => {
+                    // TODO: We need a Span that is not none for the otel_ctx to attach the parent
+                    // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
+                    // can downgrade this to a debug_span.
+                    let span = tracing::info_span!("message_command").or_current();
+                    span.in_scope(|| otel_ctx.attach_as_parent());
+                    self.message_command(cmd).instrument(span).await
+                }
+                Message::ControllerReady => {
+                    if let Some(m) = self
+                        .controller
+                        .process()
+                        .await
+                        .expect("`process` never returns an error")
+                    {
+                        self.message_controller(m).await
+                    }
+                }
+                Message::PurifiedStatementReady(ready) => {
+                    self.message_purified_statement_ready(ready).await
+                }
+                Message::CreateConnectionValidationReady(ready) => {
+                    self.message_create_connection_validation_ready(ready).await
+                }
+                Message::AlterConnectionValidationReady(ready) => {
+                    self.message_alter_connection_validation_ready(ready).await
+                }
+                Message::WriteLockGrant(write_lock_guard) => {
+                    self.message_write_lock_grant(write_lock_guard).await;
+                }
+                Message::GroupCommitInitiate(span, permit) => {
+                    // Add an OpenTelemetry link to our current span.
+                    tracing::Span::current().add_link(span.context().span().span_context().clone());
+                    self.try_group_commit(permit).instrument(span).await
+                }
+                Message::GroupCommitApply(timestamp, responses, write_lock_guard, permit) => {
+                    self.group_commit_apply(timestamp, responses, write_lock_guard, permit)
+                        .await;
+                }
+                Message::AdvanceTimelines => {
+                    self.advance_timelines().await;
+                }
+                Message::ClusterEvent(event) => self.message_cluster_event(event).await,
+                // Processing this message DOES NOT send a response to the client;
+                // in any situation where you use it, you must also have a code
+                // path that responds to the client (e.g. reporting an error).
+                Message::RemovePendingPeeks { conn_id } => {
+                    self.cancel_pending_peeks(&conn_id);
+                }
+                Message::LinearizeReads => {
+                    self.message_linearize_reads().await;
+                }
+                Message::StorageUsageFetch => {
+                    self.storage_usage_fetch().await;
+                }
+                Message::StorageUsageUpdate(sizes) => {
+                    self.storage_usage_update(sizes).await;
+                }
+                Message::RealTimeRecencyTimestamp {
+                    conn_id,
+                    real_time_recency_ts,
+                    validity,
+                } => {
+                    self.message_real_time_recency_timestamp(
+                        conn_id,
+                        real_time_recency_ts,
+                        validity,
+                    )
+                    .await;
+                }
+                Message::RetireExecute {
+                    otel_ctx,
+                    data,
+                    reason,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.retire_execution(reason, data);
+                }
+                Message::ExecuteSingleStatementTransaction {
+                    ctx,
+                    otel_ctx,
+                    stmt,
+                    params,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_execute_single_statement_transaction(ctx, stmt, params)
+                        .await;
+                }
+                Message::PeekStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.execute_peek_stage(ctx, otel_ctx, stage).await;
+                }
+                Message::CreateIndexStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.execute_create_index_stage(ctx, stage, otel_ctx).await;
+                }
+                Message::CreateViewStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_create_view_stage(ctx, stage, otel_ctx).await;
+                }
+                Message::CreateMaterializedViewStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.execute_create_materialized_view_stage(ctx, stage, otel_ctx)
+                        .await;
+                }
+                Message::SubscribeStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_subscribe_stage(ctx, stage, otel_ctx).await;
+                }
+                Message::DrainStatementLog => {
+                    self.drain_statement_log().await;
+                }
+                Message::PrivateLinkVpcEndpointEvents(events) => {
+                    self.controller
+                        .storage
+                        .record_introspection_updates(
+                            mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
+                            events
+                                .into_iter()
+                                .map(|e| (mz_repr::Row::from(e), 1))
+                                .collect(),
+                        )
+                        .await;
                 }
             }
-            Message::CreateSourceStatementReady(ready) => {
-                self.message_create_source_statement_ready(ready).await
-            }
-            Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
-            Message::WriteLockGrant(write_lock_guard) => {
-                self.message_write_lock_grant(write_lock_guard).await;
-            }
-            Message::GroupCommitInitiate => {
-                self.try_group_commit().await;
-            }
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard)
-                    .await;
-            }
-            Message::AdvanceTimelines => {
-                self.advance_timelines().await;
-            }
-            Message::ClusterEvent(event) => self.message_cluster_event(event).await,
-            // Processing this message DOES NOT send a response to the client;
-            // in any situation where you use it, you must also have a code
-            // path that responds to the client (e.g. reporting an error).
-            Message::RemovePendingPeeks { conn_id } => {
-                self.cancel_pending_peeks(&conn_id);
-            }
-            Message::LinearizeReads(pending_read_txns) => {
-                self.message_linearize_reads(pending_read_txns).await;
-            }
-            Message::StorageUsageFetch => {
-                self.storage_usage_fetch().await;
-            }
-            Message::StorageUsageUpdate(sizes) => {
-                self.storage_usage_update(sizes).await;
-            }
-            Message::RealTimeRecencyTimestamp {
-                conn_id,
-                transient_revision,
-                real_time_recency_ts,
-            } => {
-                self.message_real_time_recency_timestamp(
-                    conn_id,
-                    transient_revision,
-                    real_time_recency_ts,
-                )
-                .await;
-            }
         }
+        .instrument(span)
+        .boxed_local()
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -127,6 +237,7 @@ impl Coordinator {
                     // `mz_storage_usage_by_shard` table.
                     persist_location: _,
                     relation_desc: _,
+                    txns_shard: _,
                 } = &collection.collection_metadata;
                 [*remap_shard, *status_shard, Some(*data_shard)].into_iter()
             })
@@ -142,16 +253,7 @@ impl Coordinator {
         // requires a slow scan of the underlying storage engine.
         task::spawn(|| "storage_usage_fetch", async move {
             let collection_metric_timer = collection_metric.start_timer();
-            let mut shard_sizes = client.shards_usage().await;
-
-            // Don't record usage for shards that are no longer live.
-            // Technically the storage is in use, but we never free it, and
-            // we don't want to bill the customer for it.
-            //
-            // See: https://github.com/MaterializeInc/materialize/issues/8185
-            shard_sizes
-                .by_shard
-                .retain(|shard_id, _| live_shards.contains(shard_id));
+            let shard_sizes = client.shards_usage_referenced(live_shards).await;
             collection_metric_timer.observe_duration();
 
             // It is not an error for shard sizes to become ready after
@@ -163,7 +265,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn storage_usage_update(&mut self, shards_usage: ShardsUsage) {
+    async fn storage_usage_update(&mut self, shards_usage: ShardsUsageReferenced) {
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
         // finished, not when it started, so that we don't write data with a
@@ -174,25 +276,18 @@ impl Coordinator {
         for (shard_id, shard_usage) in shards_usage.by_shard {
             ops.push(catalog::Op::UpdateStorageUsage {
                 shard_id: Some(shard_id.to_string()),
-                size_bytes: shard_usage.referenced_bytes(),
-                collection_timestamp,
-            });
-        }
-        if shards_usage.unattributable_bytes > 0 {
-            ops.push(catalog::Op::UpdateStorageUsage {
-                shard_id: None,
-                size_bytes: shards_usage.unattributable_bytes,
+                size_bytes: shard_usage.size_bytes(),
                 collection_timestamp,
             });
         }
 
-        if let Err(err) = self.catalog_transact(None, ops).await {
+        if let Err(err) = self.catalog_transact(None::<&Session>, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
-        self.schedule_storage_usage_collection();
+        self.schedule_storage_usage_collection().await;
     }
 
-    pub fn schedule_storage_usage_collection(&self) {
+    pub async fn schedule_storage_usage_collection(&self) {
         // Instead of using an `tokio::timer::Interval`, we calculate the time until the next
         // usage collection and wait for that amount of time. This is so we can keep the intervals
         // consistent even across restarts. If collection takes too long, it is possible that
@@ -203,7 +298,7 @@ impl Coordinator {
         const SEED_LEN: usize = 32;
         let mut seed = [0; SEED_LEN];
         for (i, byte) in self
-            .catalog
+            .catalog()
             .state()
             .config()
             .environment_id
@@ -220,7 +315,7 @@ impl Coordinator {
                 .expect("storage usage collection interval must fit into u64");
         let offset =
             rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
-        let now_ts: EpochMillis = self.peek_local_write_ts().into();
+        let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
         // 2) Determine the amount of ms between now and the next collection time.
         let previous_collection_ts =
@@ -262,43 +357,13 @@ impl Coordinator {
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
                     let remove = active_subscribe.process_response(response);
                     if remove {
+                        let csid = ComputeSinkId {
+                            cluster_id: active_subscribe.cluster_id,
+                            global_id: sink_id,
+                        };
+                        self.drop_compute_sinks([csid]);
                         self.remove_active_subscribe(sink_id).await;
                     }
-                }
-            }
-            ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
-                let replica_status_interval = chrono::Duration::seconds(60);
-                let new = when
-                    .duration_trunc(replica_status_interval)
-                    .expect("Time coarsening should not fail");
-                let hb = match self
-                    .transient_replica_metadata
-                    .entry(replica_id)
-                    .or_insert_with(|| Some(Default::default()))
-                {
-                    // `None` is the tombstone for a removed replica
-                    None => return,
-                    Some(md) => &mut md.last_heartbeat,
-                };
-                let old = std::mem::replace(hb, Some(new));
-
-                if old.as_ref() != Some(&new) {
-                    let retraction = old.map(|old| {
-                        self.catalog
-                            .state()
-                            .pack_replica_heartbeat_update(replica_id, old, -1)
-                    });
-                    let insertion = self
-                        .catalog
-                        .state()
-                        .pack_replica_heartbeat_update(replica_id, new, 1);
-                    let updates = if let Some(retraction) = retraction {
-                        vec![retraction, insertion]
-                    } else {
-                        vec![insertion]
-                    };
-                    self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
-                        .await;
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
@@ -314,12 +379,12 @@ impl Coordinator {
                 let old = std::mem::replace(m, Some(new.clone()));
                 if old.as_ref() != Some(&new) {
                     let retractions = old.map(|old| {
-                        self.catalog
+                        self.catalog()
                             .state()
                             .pack_replica_metric_updates(replica_id, &old, -1)
                     });
                     let insertions = self
-                        .catalog
+                        .catalog()
                         .state()
                         .pack_replica_metric_updates(replica_id, &new, 1);
                     let updates = if let Some(retractions) = retractions {
@@ -330,59 +395,31 @@ impl Coordinator {
                     } else {
                         insertions
                     };
-                    self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
-                        .await;
+                    self.builtin_table_update().background(updates);
                 }
             }
-            ControllerResponse::ComputeReplicaWriteFrontiers(updates) => {
-                let mut builtin_updates = vec![];
-                for (replica_id, new) in updates {
-                    let m = match self
-                        .transient_replica_metadata
-                        .entry(replica_id)
-                        .or_insert_with(|| Some(Default::default()))
-                    {
-                        // `None` is the tombstone for a removed replica
-                        None => continue,
-                        Some(md) => &mut md.write_frontiers,
-                    };
-                    let old = std::mem::replace(m, new.clone());
-                    if old != new {
-                        let retractions = self
-                            .catalog
-                            .state()
-                            .pack_replica_write_frontiers_updates(replica_id, &old, -1);
-                        builtin_updates.extend(retractions.into_iter());
-
-                        let insertions = self
-                            .catalog
-                            .state()
-                            .pack_replica_write_frontiers_updates(replica_id, &new, 1);
-                        builtin_updates.extend(insertions.into_iter());
-                    }
+            ControllerResponse::WatchSetFinished(sets) => {
+                for set in sets {
+                    let (id, ev) = set
+                        .downcast_ref::<(StatementLoggingId, StatementLifecycleEvent)>()
+                        .expect("we currently log all watch sets with this type");
+                    self.record_statement_lifecycle_event(id, ev);
                 }
-
-                self.send_builtin_table_updates(
-                    builtin_updates,
-                    BuiltinTableUpdateSource::Background,
-                )
-                .await;
             }
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx, session))]
-    async fn message_create_source_statement_ready(
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn message_purified_statement_ready(
         &mut self,
-        CreateSourceStatementReady {
-            mut session,
-            tx,
+        PurifiedStatementReady {
+            ctx,
             result,
             params,
-            depends_on,
+            resolved_ids,
             original_stmt,
             otel_ctx,
-        }: CreateSourceStatementReady,
+        }: PurifiedStatementReady,
     ) {
         otel_ctx.attach_as_parent();
 
@@ -392,141 +429,189 @@ impl Coordinator {
         // "unknown connector" error, or pick up a new connector that has
         // replaced the dropped connector.
         //
-        // WARNING: If we support `ALTER CONNECTION`, we'll need to also check
-        // for connectors that were altered while we were purifying.
-        if !depends_on
+        // n.b. an `ALTER CONNECTION` occurring during purification is OK
+        // because we always look up/populate a connection's state after
+        // committing to the catalog, so are guaranteed to see the connection's
+        // most recent version.
+        if !resolved_ids
+            .0
             .iter()
-            .all(|id| self.catalog.try_get_entry(id).is_some())
+            .all(|id| self.catalog().try_get_entry(id).is_some())
         {
-            self.handle_execute_inner(original_stmt, params, session, tx)
-                .await;
+            self.handle_execute_inner(original_stmt, params, ctx).await;
             return;
         }
 
         let (subsource_stmts, stmt) = match result {
             Ok(ok) => ok,
-            Err(e) => return tx.send(Err(e), session),
+            Err(e) => return ctx.retire(Err(e)),
         };
 
-        let mut plans: Vec<CreateSourcePlans> = vec![];
+        let mut create_source_plans: Vec<CreateSourcePlans> = vec![];
         let mut id_allocation = BTreeMap::new();
 
         // First we'll allocate global ids for each subsource and plan them
         for (transient_id, subsource_stmt) in subsource_stmts {
-            let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&subsource_stmt));
-            let source_id = match self.catalog.allocate_user_id().await {
+            let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
+            let source_id = match self.catalog_mut().allocate_user_id().await {
                 Ok(id) => id,
-                Err(e) => return tx.send(Err(e.into()), session),
+                Err(e) => return ctx.retire(Err(e.into())),
             };
             let plan = match self.plan_statement(
-                &mut session,
+                ctx.session(),
                 Statement::CreateSubsource(subsource_stmt),
                 &params,
+                &resolved_ids,
             ) {
                 Ok(Plan::CreateSource(plan)) => plan,
                 Ok(_) => {
                     unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
                 }
-                Err(e) => return tx.send(Err(e), session),
+                Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
-            plans.push((source_id, plan, depends_on).into());
+            create_source_plans.push(CreateSourcePlans {
+                source_id,
+                plan,
+                resolved_ids,
+            });
         }
 
         // Then, we'll rewrite the source statement to point to the newly minted global ids and
         // plan it too
         let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
             Ok(ok) => ok,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => return ctx.retire(Err(e.into())),
         };
-        let depends_on = Vec::from_iter(mz_sql::names::visit_dependencies(&stmt));
-        let source_id = match self.catalog.allocate_user_id().await {
-            Ok(id) => id,
-            Err(e) => return tx.send(Err(e.into()), session),
-        };
-        let plan = match self.plan_statement(&mut session, Statement::CreateSource(stmt), &params) {
-            Ok(Plan::CreateSource(plan)) => plan,
-            Ok(_) => {
-                unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource")
-            }
-            Err(e) => return tx.send(Err(e), session),
-        };
-        plans.push((source_id, plan, depends_on).into());
 
-        // Finally, sequence all plans in one go
-        self.sequence_plan(tx, session, Plan::CreateSources(plans), Vec::new())
-            .await;
+        let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+
+        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+            Ok(Plan::CreateSource(plan)) => {
+                let source_id = match self.catalog_mut().allocate_user_id().await {
+                    Ok(id) => id,
+                    Err(e) => return ctx.retire(Err(e.into())),
+                };
+
+                create_source_plans.push(CreateSourcePlans {
+                    source_id,
+                    plan,
+                    resolved_ids,
+                });
+
+                // Finally, sequence all plans in one go
+                self.sequence_plan(
+                    ctx,
+                    Plan::CreateSources(create_source_plans),
+                    ResolvedIds(BTreeSet::new()),
+                )
+                .await;
+            }
+            Ok(Plan::AlterSource(alter_source)) => {
+                self.sequence_plan(
+                    ctx,
+                    Plan::PurifiedAlterSource {
+                        alter_source,
+                        subsources: create_source_plans,
+                    },
+                    ResolvedIds(BTreeSet::new()),
+                )
+                .await;
+            }
+            Ok(plan @ Plan::AlterNoop(..)) => {
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .await
+            }
+            Ok(plan @ Plan::CreateSink(_)) => {
+                assert!(
+                    create_source_plans.is_empty(),
+                    "CREATE SINK does not generate source plans"
+                );
+
+                self.sequence_plan(ctx, plan, resolved_ids).await
+            }
+            Ok(p) => {
+                unreachable!("{:?} is not purified", p)
+            }
+            Err(e) => ctx.retire(Err(e)),
+        };
     }
 
-    #[tracing::instrument(level = "debug", skip(self, session_and_tx))]
-    async fn message_sink_connection_ready(
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn message_create_connection_validation_ready(
         &mut self,
-        SinkConnectionReady {
-            session_and_tx,
-            id,
-            oid,
-            create_export_token,
+        CreateConnectionValidationReady {
+            mut ctx,
             result,
-        }: SinkConnectionReady,
+            connection_gid,
+            mut plan_validity,
+            otel_ctx,
+        }: CreateConnectionValidationReady,
     ) {
-        match result {
-            Ok(connection) => {
-                // NOTE: we must not fail from here on out. We have a
-                // connection, which means there is external state (like
-                // a Kafka topic) that's been created on our behalf. If
-                // we fail now, we'll leak that external state.
-                if self.catalog.try_get_entry(&id).is_some() {
-                    // TODO(benesch): this `expect` here is possibly scary, but
-                    // no better solution presents itself. Possibly sinks should
-                    // have an error bit, and an error here would set the error
-                    // bit on the sink.
-                    self.handle_sink_connection_ready(
-                        id,
-                        oid,
-                        connection,
-                        create_export_token,
-                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
-                    )
-                    .await
-                    // XXX(chae): I really don't like this -- especially as we're now doing cross
-                    // process calls to start a sink.
-                    .expect("sinks should be validated by sequence_create_sink");
-                } else {
-                    // Another session dropped the sink while we were
-                    // creating the connection. Report to the client that
-                    // we created the sink, because from their
-                    // perspective we did, as there is state (e.g. a
-                    // Kafka topic) they need to clean up.
-                }
-                if let Some((session, tx)) = session_and_tx {
-                    tx.send(Ok(ExecuteResponse::CreatedSink), session);
-                }
-            }
-            Err(e) => {
-                // Drop the placeholder sink if still present.
-                if self.catalog.try_get_entry(&id).is_some() {
-                    let ops = self.catalog.drop_items_ops(&[id]);
-                    self.catalog_transact(
-                        session_and_tx.as_ref().map(|(ref session, _tx)| session),
-                        ops,
-                    )
-                    .await
-                    .expect("deleting placeholder sink cannot fail");
-                } else {
-                    // Another session may have dropped the placeholder sink while we were
-                    // attempting to create the connection, in which case we don't need to do
-                    // anything.
-                }
-                // Drop the placeholder sink in the storage controller
-                let () = self
-                    .controller
-                    .storage
-                    .cancel_prepare_export(create_export_token);
-                if let Some((session, tx)) = session_and_tx {
-                    tx.send(Err(e), session);
-                }
-            }
+        otel_ctx.attach_as_parent();
+
+        // Ensure that all dependencies still exist after validation, as a
+        // `DROP SECRET` may have sneaked in.
+        //
+        // WARNING: If we support `ALTER SECRET`, we'll need to also check
+        // for connectors that were altered while we were purifying.
+        if let Err(e) = plan_validity.check(self.catalog()) {
+            let _ = self.secrets_controller.delete(connection_gid).await;
+            return ctx.retire(Err(e));
         }
+
+        let plan = match result {
+            Ok(ok) => ok,
+            Err(e) => {
+                let _ = self.secrets_controller.delete(connection_gid).await;
+                return ctx.retire(Err(e));
+            }
+        };
+
+        let result = self
+            .sequence_create_connection_stage_finish(
+                ctx.session_mut(),
+                connection_gid,
+                plan,
+                ResolvedIds(plan_validity.dependency_ids),
+            )
+            .await;
+        ctx.retire(result);
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn message_alter_connection_validation_ready(
+        &mut self,
+        AlterConnectionValidationReady {
+            mut ctx,
+            result,
+            connection_gid,
+            mut plan_validity,
+            otel_ctx,
+        }: AlterConnectionValidationReady,
+    ) {
+        otel_ctx.attach_as_parent();
+
+        // Ensure that all dependencies still exist after validation, as a
+        // `DROP SECRET` may have sneaked in.
+        //
+        // WARNING: If we support `ALTER SECRET`, we'll need to also check
+        // for connectors that were altered while we were purifying.
+        if let Err(e) = plan_validity.check(self.catalog()) {
+            return ctx.retire(Err(e));
+        }
+
+        let conn = match result {
+            Ok(ok) => ok,
+            Err(e) => {
+                return ctx.retire(Err(e));
+            }
+        };
+
+        let result = self
+            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_gid, conn)
+            .await;
+        ctx.retire(result);
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -539,14 +624,21 @@ impl Coordinator {
         if let Some(ready) = self.write_lock_wait_group.pop_front() {
             match ready {
                 Deferred::Plan(mut ready) => {
-                    ready.session.grant_write_lock(write_lock_guard);
-                    // Write statements never need to track catalog
-                    // dependencies.
-                    let depends_on = vec![];
-                    self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
-                        .await;
+                    ready.ctx.session_mut().grant_write_lock(write_lock_guard);
+                    if let Err(e) = ready.validity.check(self.catalog()) {
+                        ready.ctx.retire(Err(e))
+                    } else {
+                        // Write statements never need to track resolved IDs (NOTE: This is not the
+                        // same thing as plan dependencies, which we do need to re-validate).
+                        let resolved_ids = ResolvedIds(BTreeSet::new());
+                        self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
+                            .await;
+                    }
                 }
-                Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
+                Deferred::GroupCommit => {
+                    self.group_commit_initiate(Some(write_lock_guard), None)
+                        .await
+                }
             }
         }
         // N.B. if no deferred plans, write lock is released by drop
@@ -559,10 +651,10 @@ impl Coordinator {
 
         // It is possible that we receive a status update for a replica that has
         // already been dropped from the catalog. Just ignore these events.
-        let Some(cluster) = self.catalog.try_get_cluster(event.cluster_id) else {
+        let Some(cluster) = self.catalog().try_get_cluster(event.cluster_id) else {
             return;
         };
-        let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
+        let Some(replica) = cluster.replica(event.replica_id) else {
             return;
         };
 
@@ -570,7 +662,7 @@ impl Coordinator {
             let old_status = replica.status();
 
             self.catalog_transact(
-                None,
+                None::<&Session>,
                 vec![catalog::Op::UpdateClusterReplicaStatus {
                     event: event.clone(),
                 }],
@@ -578,8 +670,8 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("updating cluster status cannot fail");
 
-            let cluster = self.catalog.get_cluster(event.cluster_id);
-            let replica = &cluster.replicas_by_id[&event.replica_id];
+            let cluster = self.catalog().get_cluster(event.cluster_id);
+            let replica = cluster.replica(event.replica_id).expect("Replica exists");
             let new_status = replica.status();
 
             if old_status != new_status {
@@ -598,25 +690,61 @@ impl Coordinator {
     ///   1. Holding back any results that were executed at some point in the future, until the
     ///   containing timeline has advanced to that point in the future.
     ///   2. Confirming that we are still the current leader before sending results to the client.
-    async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingReadTxn>) {
+    async fn message_linearize_reads(&mut self) {
         let mut shortest_wait = Duration::from_millis(0);
         let mut ready_txns = Vec::new();
-        let mut deferred_txns = Vec::new();
 
-        for read_txn in pending_read_txns {
-            if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
-                read_txn.timestamp_context()
+        // Cache for `TimestampOracle::read_ts` calls. These are somewhat
+        // expensive so we cache the value. This is correct since all we're
+        // risking is being too conservative. We will not accidentally "release"
+        // a result too early.
+        let mut cached_oracle_ts = BTreeMap::new();
+
+        for (conn_id, mut read_txn) in std::mem::take(&mut self.pending_linearize_read_txns) {
+            if let TimestampContext::TimelineTimestamp {
+                timeline,
+                chosen_ts,
+                oracle_ts,
+            } = read_txn.timestamp_context()
             {
-                let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
-                let read_ts = timestamp_oracle.read_ts();
-                if timestamp <= read_ts {
+                let oracle_ts = match oracle_ts {
+                    Some(oracle_ts) => oracle_ts,
+                    None => {
+                        // There was no oracle timestamp, so no need to delay.
+                        ready_txns.push(read_txn);
+                        continue;
+                    }
+                };
+
+                if chosen_ts <= oracle_ts {
+                    // Chosen ts was already <= the oracle ts, so we're good
+                    // to go!
+                    ready_txns.push(read_txn);
+                    continue;
+                }
+
+                // See what the oracle timestamp is now and delay when needed.
+                let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
+                let current_oracle_ts = match current_oracle_ts {
+                    btree_map::Entry::Vacant(entry) => {
+                        let timestamp_oracle = self.get_timestamp_oracle(timeline);
+                        let read_ts = timestamp_oracle.read_ts().await;
+                        entry.insert(read_ts.clone());
+                        read_ts
+                    }
+                    btree_map::Entry::Occupied(entry) => entry.get().clone(),
+                };
+
+                if *chosen_ts <= current_oracle_ts {
                     ready_txns.push(read_txn);
                 } else {
-                    let wait = Duration::from_millis(timestamp.saturating_sub(read_ts).into());
+                    let wait =
+                        Duration::from_millis(chosen_ts.saturating_sub(current_oracle_ts).into());
                     if wait < shortest_wait {
                         shortest_wait = wait;
                     }
-                    deferred_txns.push(read_txn);
+                    read_txn.num_requeues += 1;
+                    self.pending_linearize_read_txns.insert(conn_id, read_txn);
                 }
             } else {
                 ready_txns.push(read_txn);
@@ -624,23 +752,48 @@ impl Coordinator {
         }
 
         if !ready_txns.is_empty() {
-            self.catalog
+            // Sniff out one ctx, this is where tracing breaks down because we
+            // do one confirm_leadership for multiple peeks.
+            let otel_ctx = ready_txns.first().expect("known to exist").otel_ctx.clone();
+            let mut span = tracing::debug_span!("message_linearize_reads");
+            otel_ctx.attach_as_parent_to(&mut span);
+
+            self.catalog_mut()
                 .confirm_leadership()
+                .instrument(span)
                 .await
                 .unwrap_or_terminate("unable to confirm leadership");
+
+            let now = Instant::now();
             for ready_txn in ready_txns {
-                ready_txn.finish();
+                let mut span = tracing::debug_span!("retire_read_results");
+                ready_txn.otel_ctx.attach_as_parent_to(&mut span);
+                let _entered = span.enter();
+                self.metrics
+                    .linearize_message_seconds
+                    .with_label_values(&[
+                        ready_txn.txn.label(),
+                        if ready_txn.num_requeues == 0 {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    ])
+                    .observe((now - ready_txn.created).as_secs_f64());
+                if let Some((ctx, result)) = ready_txn.txn.finish() {
+                    ctx.retire(result);
+                }
             }
         }
 
-        if !deferred_txns.is_empty() {
+        if !self.pending_linearize_read_txns.is_empty() {
             // Cap wait time to 1s.
             let remaining_ms = std::cmp::min(shortest_wait, Duration::from_millis(1_000));
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "deferred_read_txns", async move {
                 tokio::time::sleep(remaining_ms).await;
                 // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::LinearizeReads(deferred_txns));
+                let result = internal_cmd_tx.send(Message::LinearizeReads);
                 if let Err(e) = result {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                 }
@@ -653,8 +806,8 @@ impl Coordinator {
     async fn message_real_time_recency_timestamp(
         &mut self,
         conn_id: ConnectionId,
-        transient_revision: u64,
         real_time_recency_ts: mz_repr::Timestamp,
+        mut validity: PlanValidity,
     ) {
         let real_time_recency_context =
             match self.pending_real_time_recency_timestamp.remove(&conn_id) {
@@ -663,68 +816,61 @@ impl Coordinator {
                 None => return,
             };
 
-        // Re-validate that the catalog hasn't changed.
-        if transient_revision != self.catalog.transient_revision() {
-            // TODO(jkosh44) It would be preferable to re-validate the query instead of blindly failing.
-            let (tx, session) = real_time_recency_context.take_tx_and_session();
-            return tx.send(Err(AdapterError::Unstructured(anyhow!("Catalog contents have changed mid-query due to concurrent DDL, please re-try query"))), session);
+        if let Err(err) = validity.check(self.catalog()) {
+            let ctx = real_time_recency_context.take_context();
+            ctx.retire(Err(err));
+            return;
         }
 
         match real_time_recency_context {
             RealTimeRecencyContext::ExplainTimestamp {
-                tx,
-                session,
+                mut ctx,
                 format,
                 cluster_id,
                 optimized_plan,
                 id_bundle,
-            } => tx.send(
-                self.sequence_explain_timestamp_finish(
-                    &session,
-                    format,
-                    cluster_id,
-                    optimized_plan,
-                    id_bundle,
-                    Some(real_time_recency_ts),
-                ),
-                session,
-            ),
-            RealTimeRecencyContext::Peek {
-                tx,
-                finishing,
-                copy_to,
-                source,
-                mut session,
-                cluster_id,
                 when,
-                target_replica,
-                view_id,
-                index_id,
-                timeline_context,
-                source_ids,
-                id_bundle,
-                in_immediate_multi_stmt_txn,
             } => {
-                tx.send(
-                    self.sequence_peek_finish(
-                        finishing,
-                        copy_to,
-                        source,
-                        &mut session,
+                let result = self
+                    .sequence_explain_timestamp_finish(
+                        &mut ctx,
+                        format,
                         cluster_id,
-                        when,
-                        target_replica,
-                        view_id,
-                        index_id,
-                        timeline_context,
-                        source_ids,
+                        optimized_plan,
                         id_bundle,
-                        in_immediate_multi_stmt_txn,
+                        when,
                         Some(real_time_recency_ts),
                     )
-                    .await,
-                    session,
-                );
+                    .await;
+                ctx.retire(result);
+            }
+            RealTimeRecencyContext::Peek {
+                ctx,
+                root_otel_ctx,
+                plan,
+                target_replica,
+                timeline_context,
+                oracle_read_ts,
+                source_ids,
+                optimizer,
+                explain_ctx,
+            } => {
+                self.execute_peek_stage(
+                    ctx,
+                    root_otel_ctx,
+                    PeekStage::TimestampReadHold(PeekStageTimestampReadHold {
+                        validity,
+                        plan,
+                        target_replica,
+                        timeline_context,
+                        oracle_read_ts,
+                        source_ids,
+                        real_time_recency_ts: Some(real_time_recency_ts),
+                        optimizer,
+                        explain_ctx,
+                    }),
+                )
+                .await;
             }
         }
     }

@@ -9,13 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::{Datum, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Datum, Row};
-
-use self::proto_map_filter_project::ProtoPredicate;
+use crate::linear::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -35,7 +34,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 /// expressions in `self.expressions`, even though this is not something
 /// we can directly evaluate. The plan creation methods will defensively
 /// ensure that the right thing happens.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Ord, PartialOrd)]
 pub struct MapFilterProject {
     /// A sequence of expressions that should be appended to the row.
     ///
@@ -1120,14 +1119,18 @@ impl MapFilterProject {
         let mut reference_count = vec![0; input_arity + self.expressions.len()];
         // Increment reference counts for each use
         for expr in self.expressions.iter() {
-            for col in expr.support().into_iter() {
-                reference_count[col] += 1;
-            }
+            expr.visit_pre(|e| {
+                if let MirScalarExpr::Column(i) = e {
+                    reference_count[*i] += 1;
+                }
+            });
         }
         for (_, pred) in self.predicates.iter() {
-            for col in pred.support().into_iter() {
-                reference_count[col] += 1;
-            }
+            pred.visit_pre(|e| {
+                if let MirScalarExpr::Column(i) = e {
+                    reference_count[*i] += 1;
+                }
+            });
         }
         for proj in self.projection.iter() {
             reference_count[*proj] += 1;
@@ -1426,12 +1429,11 @@ pub mod plan {
     use std::collections::BTreeMap;
     use std::iter;
 
+    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+    use mz_repr::{Datum, Diff, Row, RowArena};
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
-
-    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use mz_repr::{Datum, Diff, Row, RowArena};
 
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
@@ -1439,9 +1441,9 @@ pub mod plan {
     };
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
     pub struct SafeMfpPlan {
-        mfp: MapFilterProject,
+        pub(crate) mfp: MapFilterProject,
     }
 
     impl RustType<ProtoSafeMfpPlan> for SafeMfpPlan {
@@ -1478,11 +1480,11 @@ pub mod plan {
         /// The `row` is not cleared first, but emptied if the function
         /// returns `Ok(Some(row)).
         #[inline(always)]
-        pub fn evaluate_into<'a>(
+        pub fn evaluate_into<'a, 'row>(
             &'a self,
             datums: &mut Vec<Datum<'a>>,
             arena: &'a RowArena,
-            row_buf: &'a mut Row,
+            row_buf: &'row mut Row,
         ) -> Result<Option<Row>, EvalError> {
             let passed_predicates = self.evaluate_inner(datums, arena)?;
             if !passed_predicates {
@@ -1544,6 +1546,11 @@ pub mod plan {
             self.mfp.predicates.iter().any(|(_pos, e)| e.could_error())
                 || self.mfp.expressions.iter().any(|e| e.could_error())
         }
+
+        /// Returns true when `Self` is the identity.
+        pub fn is_identity(&self) -> bool {
+            self.mfp.is_identity()
+        }
     }
 
     impl std::ops::Deref for SafeMfpPlan {
@@ -1565,13 +1572,13 @@ pub mod plan {
     #[derive(Arbitrary, Clone, Debug, PartialEq)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
-        mfp: SafeMfpPlan,
+        pub(crate) mfp: SafeMfpPlan,
         /// Expressions that when evaluated lower-bound `MzNow`.
         #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
-        lower_bounds: Vec<MirScalarExpr>,
+        pub(crate) lower_bounds: Vec<MirScalarExpr>,
         /// Expressions that when evaluated upper-bound `MzNow`.
         #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
-        upper_bounds: Vec<MirScalarExpr>,
+        pub(crate) upper_bounds: Vec<MirScalarExpr>,
     }
 
     impl RustType<ProtoMfpPlan> for MfpPlan {
@@ -1773,13 +1780,11 @@ pub mod plan {
         {
             match self.mfp.evaluate_inner(datums, arena) {
                 Err(e) => {
-                    return Some(Err((e.into(), time, diff)))
-                        .into_iter()
-                        .chain(None.into_iter());
+                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                 }
                 Ok(true) => {}
                 Ok(false) => {
-                    return None.into_iter().chain(None.into_iter());
+                    return None.into_iter().chain(None);
                 }
             }
 
@@ -1814,7 +1819,7 @@ pub mod plan {
 
             // If the lower bound exceeds our `until` frontier, it should not appear in the output.
             if !valid_time(&lower_bound) {
-                return None.into_iter().chain(None.into_iter());
+                return None.into_iter().chain(None);
             }
 
             // If there are any upper bounds, determine the minimum upper bound.
@@ -1868,9 +1873,9 @@ pub mod plan {
                 let upper_opt =
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
-                lower.into_iter().chain(upper_opt.into_iter())
+                lower.into_iter().chain(upper_opt)
             } else {
-                None.into_iter().chain(None.into_iter())
+                None.into_iter().chain(None)
             }
         }
 
@@ -1885,14 +1890,17 @@ pub mod plan {
 
 #[cfg(test)]
 mod tests {
-    use super::plan::*;
-    use super::*;
     use mz_proto::protobuf_roundtrip;
+
+    use crate::linear::plan::*;
+
+    use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
         fn mfp_plan_protobuf_roundtrip(expect in any::<MfpPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoMfpPlan>(&expect);
             assert!(actual.is_ok());

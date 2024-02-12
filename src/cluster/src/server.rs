@@ -14,21 +14,23 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
+use differential_dataflow::trace::ExertionLogic;
 use futures::future;
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
+use mz_ore::halt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::tracing::TracingHandle;
+use mz_persist_client::cache::PersistClientCache;
+use mz_service::client::{GenericClient, Partitionable, Partitioned};
+use mz_service::local::LocalClient;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
-use mz_ore::cast::CastFrom;
-use mz_ore::halt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_persist_client::cache::PersistClientCache;
-use mz_service::client::{GenericClient, Partitionable, Partitioned};
-use mz_service::local::LocalClient;
 
 use crate::communication::initialize_networking;
 
@@ -41,6 +43,8 @@ pub struct ClusterConfig {
     pub metrics_registry: MetricsRegistry,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
 }
 
 /// A client managing access to the local portion of a Timely cluster
@@ -56,6 +60,8 @@ where
     persist_clients: Arc<PersistClientCache>,
     /// The handle to the Tokio runtime.
     tokio_handle: tokio::runtime::Handle,
+    /// A process-global handle to tracing configuration.
+    tracing_handle: Arc<TracingHandle>,
     worker: Worker,
 }
 
@@ -106,6 +112,7 @@ where
                 Arc::clone(&timely_container),
                 Arc::clone(&config.persist_clients),
                 tokio_executor.clone(),
+                Arc::clone(&config.tracing_handle),
                 worker_config,
             );
             let client = Box::new(client);
@@ -127,6 +134,7 @@ where
         timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
         persist_clients: Arc<PersistClientCache>,
         tokio_handle: tokio::runtime::Handle,
+        tracing_handle: Arc<TracingHandle>,
         worker_config: Worker,
     ) -> Self {
         Self {
@@ -134,6 +142,7 @@ where
             inner: None,
             persist_clients,
             tokio_handle,
+            tracing_handle,
             worker: worker_config,
         }
     }
@@ -143,6 +152,7 @@ where
         config: TimelyConfig,
         epoch: ClusterStartupEpoch,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer<C, R, Worker::Activatable>, Error> {
         info!("Building timely container with config {config:?}");
@@ -160,12 +170,58 @@ where
         .await?;
 
         let mut worker_config = WorkerConfig::default();
+
+        let idle_merge_effort = config.idle_arrangement_merge_effort;
+        // We want a value of `0` to disable idle merging. DD will only disable idle merging if we
+        // configure the effort to `None`, not when we set it to `Some(0)`.
+        let idle_merge_effort = (idle_merge_effort > 0).then_some(idle_merge_effort);
+
+        // By default, only set the idle_merge_effort
         differential_dataflow::configure(
             &mut worker_config,
             &differential_dataflow::Config {
-                idle_merge_effort: Some(isize::cast_from(config.idle_arrangement_merge_effort)),
+                idle_merge_effort: idle_merge_effort.map(CastFrom::cast_from),
             },
         );
+
+        // We set a custom exertion logic for idle_merge_effort of 0, and proportionality > 0.
+        // This avoids turning on proportionality for replicas with default idle merge effort.
+        if idle_merge_effort.is_none() && config.arrangement_exert_proportionality > 0 {
+            let idle_merge_effort = Some(1000);
+
+            // ExertionLogic defines a function to determine if a spine is sufficiently tidied.
+            // Its arguments are an iterator over the index of a layer, the count of batches in the
+            // layer and the length of batches at the layer. The iterator enumerates layers from the
+            // largest to the smallest layer.
+
+            let arc: ExertionLogic = Arc::new(move |layers| {
+                let mut prop = config.arrangement_exert_proportionality;
+
+                // Layers are ordered from largest to smallest.
+                // Skip to the largest occupied layer.
+                let layers = layers.skip_while(|(_idx, count, _len)| *count == 0);
+
+                let mut first = true;
+                for (_idx, count, len) in layers {
+                    if count > 1 {
+                        // Found an in-progress merge that we should continue.
+                        return idle_merge_effort;
+                    }
+
+                    if !first && prop > 0 && len > 0 {
+                        // Found a non-empty batch within `arrangement_exert_proportionality` of
+                        // the largest one.
+                        return idle_merge_effort;
+                    }
+
+                    first = false;
+                    prop /= 2;
+                }
+
+                None
+            });
+            worker_config.set::<ExertionLogic>("differential/default_exert_logic".to_string(), arc);
+        }
 
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let timely_worker_index = timely_worker.index();
@@ -175,11 +231,13 @@ where
                 .unwrap();
             let persist_clients = Arc::clone(&persist_clients);
             let user_worker_config = user_worker_config.clone();
+            let tracing_handle = Arc::clone(&tracing_handle);
             Worker::build_and_run(
                 user_worker_config,
                 timely_worker,
                 client_rx,
                 persist_clients,
+                tracing_handle,
             )
         })
         .map_err(|e| anyhow!("{e}"))?;
@@ -206,6 +264,7 @@ where
 
         let persist_clients = Arc::clone(&self.persist_clients);
         let handle = self.tokio_handle.clone();
+        let tracing_handle = Arc::clone(&self.tracing_handle);
 
         let worker_config = self.worker.clone();
         let mut timely_lock = self.timely_container.lock().await;
@@ -221,17 +280,19 @@ where
                 info!("Timely already initialized; re-using.",);
                 existing
             }
-            None => {
-                let build_timely_result =
-                    Self::build_timely(worker_config, config, epoch, persist_clients, handle).await;
-                match build_timely_result {
-                    Err(e) => {
-                        warn!("timely initialization failed: {e:#}");
-                        return Err(e);
-                    }
-                    Ok(ok) => ok,
-                }
-            }
+            None => Self::build_timely(
+                worker_config,
+                config,
+                epoch,
+                persist_clients,
+                tracing_handle,
+                handle,
+            )
+            .await
+            .map_err(|e| {
+                warn!("timely initialization failed: {}", e.display_with_causes());
+                e
+            })?,
         };
 
         let (command_txs, command_rxs): (Vec<_>, Vec<_>) =
@@ -278,7 +339,7 @@ impl<Client: Debug, Worker: crate::types::AsRunnableWorker<C, R>, C, R> Debug
 impl<Worker, C, R> GenericClient<C, R>
     for ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>
 where
-    C: Send + Debug + crate::types::TryIntoTimelyConfig + 'static,
+    C: Send + Debug + mz_cluster_client::client::TryIntoTimelyConfig + 'static,
     R: Send + Debug + 'static,
     (C, R): Partitionable<C, R>,
     Worker: crate::types::AsRunnableWorker<C, R> + Send + Sync + Clone + 'static,

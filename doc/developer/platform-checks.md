@@ -101,17 +101,19 @@ must either be `TEMPORARY` or be explicitly dropped at the end of the section.
 
 ## Adding the Check to the tests
 
-All checks are located in the `misc/python/materialize/checks/` directory, functionally grouped in files. A `Check` that performs
+All checks are located in the `misc/python/materialize/checks/all_checks` directory, functionally grouped in files. A `Check` that performs
 the creation of a particular type of resource is usually placed in the same file as the `Check` that validates the deletion of the
 same resource type.
 
-Checks need to be imported into the `test/platform_checks/mzcompose.py` file:
+## Ignoring a Check
+To ignore a `Check`, annotate it with `@disabled(ignore_reason="due to #...")`.
 
-```
-from materialize.checks.my_new_check_file import *  # noqa: F401 F403
-```
+## Externally-idempotent Checks
 
-The `noqa` directives are used to enable wildcard imports.
+If a check performs non-idempotent actions against third-party services, such as ingesting non-UPSERT data into a
+Kafka or Postgres source, it needs to be annotated with `@external_idempotence(False)`. This Check will not be run
+in Scenarios, such as some Backup+Restore scenarios, that may need to run a `manipulate()` phase twice.
+
 
 # Writing a Scenario
 
@@ -149,9 +151,9 @@ class DropCreateDefaultReplica(Action):
     def execute(self, c: Composition) -> None:
         c.sql(
             """
-           DROP CLUSTER REPLICA default.r1;
-           CREATE CLUSTER REPLICA default.r1 SIZE '1';
-        """
+            ALTER CLUSTER quickstart SET (REPLICATION FACTOR 0);
+            ALTER CLUSTER quickstart SET (SIZE '1', REPLICATION FACTOR 1);
+            """
         )
 ```
 

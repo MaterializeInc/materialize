@@ -11,13 +11,13 @@ import argparse
 import datetime
 import json
 import sys
-from typing import Any, Dict, List
+from typing import Any
 
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import (
     DEFAULT_INSTANCE_PROFILE_NAME,
     DEFAULT_SECURITY_GROUP_NAME,
-    ROOT,
+    MZ_ROOT,
     MachineDesc,
     launch_cluster,
     mssh,
@@ -28,7 +28,7 @@ from materialize.scratch import (
 MAX_AGE_DAYS = 1.5
 
 
-def multi_json(s: str) -> List[Dict[Any, Any]]:
+def multi_json(s: str) -> list[dict[Any, Any]]:
     """Read zero or more JSON objects from a string,
     without requiring each of them to be on its own line.
 
@@ -122,16 +122,16 @@ def run(args: argparse.Namespace) -> None:
     extra_tags["LaunchedBy"] = whoami()
 
     if args.machine:
-        with open(ROOT / "misc" / "scratch" / "{}.json".format(args.machine)) as f:
+        with open(MZ_ROOT / "misc" / "scratch" / f"{args.machine}.json") as f:
 
-            print("Reading machine configs from {}".format(f.name))
+            print(f"Reading machine configs from {f.name}")
             descs = [MachineDesc.parse_obj(obj) for obj in multi_json(f.read())]
     else:
         print("Reading machine configs from stdin...")
         descs = [MachineDesc.parse_obj(obj) for obj in multi_json(sys.stdin.read())]
 
     if args.ssh and len(descs) != 1:
-        raise RuntimeError("Cannot use `--ssh` with {} instances".format(len(descs)))
+        raise RuntimeError(f"Cannot use `--ssh` with {len(descs)} instances")
 
     if args.max_age_days <= 0:
         raise RuntimeError(f"max_age_days must be positive, got {args.max_age_days}")
@@ -152,5 +152,5 @@ def run(args: argparse.Namespace) -> None:
     print_instances(instances, args.output_format)
 
     if args.ssh:
-        print("ssh-ing into: {}".format(instances[0].instance_id))
+        print(f"ssh-ing into: {instances[0].instance_id}")
         mssh(instances[0], "")

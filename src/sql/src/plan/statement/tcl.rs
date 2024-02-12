@@ -9,8 +9,10 @@
 
 //! Transaction control language (TCL).
 //!
-//! This module houses the handlers for statements that manipulate the session,
+//! This module houses the handlers for statements that manipulate the session's transaction,
 //! like `BEGIN` and `COMMIT`.
+
+use mz_sql_parser::ast::TransactionIsolationLevel;
 
 use crate::ast::{
     CommitStatement, RollbackStatement, SetTransactionStatement, StartTransactionStatement,
@@ -18,10 +20,9 @@ use crate::ast::{
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    AbortTransactionPlan, CommitTransactionPlan, Plan, PlanError, StartTransactionPlan,
-    TransactionType,
+    AbortTransactionPlan, CommitTransactionPlan, Plan, PlanError, SetTransactionPlan,
+    StartTransactionPlan, TransactionType,
 };
-use mz_sql_parser::ast::TransactionIsolationLevel;
 
 pub fn describe_start_transaction(
     _: &StatementContext,
@@ -45,14 +46,14 @@ pub fn describe_set_transaction(
     _: &StatementContext,
     _: SetTransactionStatement,
 ) -> Result<StatementDesc, PlanError> {
-    bail_unsupported!("SET TRANSACTION")
+    Ok(StatementDesc::new(None))
 }
 
 pub fn plan_set_transaction(
     _: &StatementContext,
-    _: SetTransactionStatement,
+    SetTransactionStatement { local, modes }: SetTransactionStatement,
 ) -> Result<Plan, PlanError> {
-    bail_unsupported!("SET TRANSACTION")
+    Ok(Plan::SetTransaction(SetTransactionPlan { local, modes }))
 }
 
 fn verify_transaction_modes(

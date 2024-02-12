@@ -43,14 +43,20 @@ see [`tracing`] and [`tracing-subscriber`] for more info!
 
 You may have noticed that log events have [`level`]s. In materialize binaries, we only print
 events that are level `INFO` or more urgent. You can control this level by using the
-`MZ_LOG_FILTER` environment variable to control the level at a _per-crate_, _per-module_ granularity.
+`log_filter` system variable to control the level at a _per-crate_, _per-module_, and
+even _per-span_ granularity.
 
 For example:
 ```
-bin/environmentd -- --log-filter=my_interesting_module::sub_module=trace,error
+ALTER SYSTEM SET log_filter='my_interesting_module::sub_module=trace,error';
 ```
-logs ALL events in the specific module, but only `error` events for everything else. See [`Targets`] for more examples.
+logs ALL events in the specific module, but only `error` events for everything else. See [`EnvFilter`] for more examples.
 
+Like all system variables, it is also possible to set a log filter default when initially invoking `environmentd`:
+
+```
+./bin/environmentd -- --system-parameter-default=log_filter=my_interesting_module::sub_module=trace,error
+```
 
 Note that this value is passed through to all compute and storage instances when running locally.
 In the future, it is possible to add per-service filtering, if deemed useful.
@@ -138,16 +144,14 @@ _automatically_ collected and exported to analysis tools with _no additional wor
 ### Setup
 
 - For local setup, use the instructions here:
-<https://github.com/MaterializeInc/materialize/tree/main/misc/opentelemetry> to setup a local OpenTelemetry collector
-and ui to view traces.
-- TODO(guswynn): cloud honeycomb setup when its available
-- TODO(guswynn): link to demo video
+<https://github.com/MaterializeInc/materialize/tree/main/misc/monitoring> to setup a local OpenTelemetry collector
+  (Tempo) and UI (Grafana) to view traces.
 
 ### Span visualization
 
-OpenTelemetry UI's like the [Jaeger] one in the local setup _are extraordinarly powerful tools for debugging_. They allow you to visualize
+OpenTelemetry UI's like the Grafana/Tempo one in the local setup _are extraordinarly powerful tools for debugging_. They allow you to visualize
 and inspect the exact control flow graph of your service, including the latency of each operation, and contextual recorded fields. See
-[Best Pratices](#best-practices) for more information.
+[Best Practices](#best-practices) for more information.
 
 ### Distributed tracing
 [OpenTelemetry] allows us to associate `tracing` spans _from distributed services_ with each other, allowing us to not only visualize
@@ -158,8 +162,6 @@ See (TODO(guswynn): fill this in) for a demo on how this works.
 # Best Practices
 
 ## Setup tracing for all communication between services.
-TODO(guswynn): clean this up when https://github.com/MaterializeInc/materialize/issues/13019 is done.
-
 This is important to ensure that complex interactions between services can be debugged.
 
 ## Choose the appropriate abstraction for the queue you are piloting.
@@ -218,6 +220,52 @@ and `mz_ore::tracing::OpenTelemetryContext::attach_as_parent()` on the receiving
 - `TRACE`:
   - exceedingly verbose information intended only for local debugging/tracing
 
+## Accessing Tracing Data Locally
+
+To setup trace collection locally, start the `../../misc/monitoring` composition. It will spin up Tempo to
+automatically start storing traces, and Grafana to visualize them.
+
+Then start `./bin/environmentd --monitoring`.
+
+### Setting the Trace Filter
+
+By default, `./bin/environmentd` will only emit `INFO`-level spans. The filter is controlled through the
+`opentelemetry_filter` system variable and can be toggled dynamically:
+
+```
+> psql -U mz_system -h localhost -p 6877
+
+mz_system=> ALTER SYSTEM SET opentelemetry_filter="debug";
+```
+
+Or on startup:
+
+```
+./bin/environmentd --reset --monitoring -- --system-parameter-default='opentelemetry_filter=debug'
+```
+
+More details on [the filter syntax] can be found in Notion.
+
+### Trace ID Notices
+
+It's often valuable to see the traces associated with specific queries. This can be done
+by setting the session variable:
+
+```
+SET emit_trace_id_notice = true;
+```
+
+Then each subsequent query will emit a NOTICE containing the trace ID for its execution:
+
+```
+materialize=> SELECT 1;
+NOTICE:  trace id: 65e87c160063307a9d1221f78ae55cf8
+```
+
+This trace ID can then be plugged into Grafana's TraceQL lookup for an exact match:
+
+![grafana tempo trace id lookup](./assets/grafana-tempo-trace-id-lookup.png)
+
 
 
 
@@ -234,6 +282,6 @@ and `mz_ore::tracing::OpenTelemetryContext::attach_as_parent()` on the receiving
 [many crates]: https://docs.rs/tracing/latest/tracing/#related-crates
 [OpenTelemetry]: https://opentelemetry.io/
 [here]: https://docs.rs/tracing/latest/tracing/struct.Span.html#in-asynchronous-code
-[Jaeger]: https://www.jaegertracing.io/
 [`tracing::Span`]: https://docs.rs/tracing/latest/tracing/struct.Span.html
 [the docs]: https://dev.materialize.com/api/rust/mz_ore/tracing/struct.OpenTelemetryContext.html
+[the filter syntax]: https://www.notion.so/materialize/Filtering-Logs-and-Traces-6e8fcce8f39e4b45b94ea2923cce05dc?pvs=4

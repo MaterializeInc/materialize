@@ -76,7 +76,7 @@ $ kafka-create-topic topic=data partitions=3
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 # Ingest the data in the reverse order but in separate partitions
 $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schema=${key-schema} partition=2
@@ -89,6 +89,7 @@ $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schem
 {"a":1} {"before":null,"after":{"row":{"a":1,"b":1}},"source":{"file":"binlog","pos":1,"row":0,"snapshot":{"boolean":false}}, "op": "c"}
 
 > CREATE SOURCE multipartition
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

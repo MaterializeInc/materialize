@@ -14,8 +14,6 @@ use std::rc::Rc;
 
 use anyhow::anyhow;
 use differential_dataflow::capture::{Message, Progress};
-use serde_json::json;
-
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::schema::{FullName, Schema, SchemaNode};
 use mz_avro::types::Scalar;
@@ -25,8 +23,9 @@ use mz_avro::{
 };
 use mz_avro_derive::AvroDecodable;
 use mz_repr::{Diff, Row, Timestamp};
+use serde_json::json;
 
-use super::decode::RowWrapper;
+use crate::avro::decode::RowWrapper;
 
 pub fn extract_data_columns<'a>(schema: &'a Schema) -> anyhow::Result<SchemaNode<'a>> {
     let data_name = FullName::from_parts("data", Some("com.materialize.cdc"), "");
@@ -231,14 +230,14 @@ mod tests {
     use std::collections::BTreeMap;
 
     use mz_avro::types::Value;
-    use mz_avro::AvroDeserializer;
-    use mz_avro::GeneralDeserializer;
+    use mz_avro::{AvroDeserializer, GeneralDeserializer};
     use mz_repr::{ColumnName, ColumnType, RelationDesc, Row, ScalarType};
 
-    use super::*;
     use crate::avro::encode_datums_as_avro;
     use crate::encode::column_names_and_types;
     use crate::json::build_row_schema_json;
+
+    use super::*;
 
     /// Collected state to encode update batches and progress statements.
     #[derive(Debug)]
@@ -257,7 +256,7 @@ mod tests {
         pub fn encode_updates(&self, updates: &[(Row, i64, i64)]) -> Value {
             let mut enc_updates = Vec::new();
             for (data, time, diff) in updates {
-                let enc_data = encode_datums_as_avro(&**data, &self.columns);
+                let enc_data = encode_datums_as_avro(&*data, &self.columns);
                 let enc_time = Value::Long(time.clone());
                 let enc_diff = Value::Long(diff.clone());
                 enc_updates.push(Value::Record(vec![
@@ -309,7 +308,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
     fn test_roundtrip() {
         let desc = RelationDesc::empty()
             .with_column("id", ScalarType::Int64.nullable(false))
@@ -320,6 +320,8 @@ mod tests {
             &crate::encode::column_names_and_types(desc),
             "data",
             &BTreeMap::new(),
+            None,
+            &Default::default(),
         )
         .unwrap();
         let schema = build_schema(row_schema);

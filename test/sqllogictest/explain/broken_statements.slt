@@ -1,0 +1,115 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for panics in the optimizer pipeline. Unfortunately we don't have a good
+# way to inject a panic after the global optimization stage, which is why we
+# only test that:
+#
+# 1. The RAW returns a result.
+# 2. The DECORRELATED returns a result.
+# 3. The OPTIMIZED plan an error.
+# 4. The PHYSICAL PLAN returns an error.
+# 5. The OPTIMIZER TRACE returns a partial.
+#
+# Further, we do this for each statement type supported as an explainee.
+
+# Enable feature flags required for this test
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unsafe_functions = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_broken = true
+----
+COMPLETE 0
+
+mode cockroach
+
+# EXPLAIN ... BROKEN <select>
+# ---------------------------
+
+# EXPLAIN RAW PLAN
+statement ok
+EXPLAIN RAW PLAN FOR BROKEN
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# EXPLAIN DECORRELATED PLAN
+statement ok
+EXPLAIN DECORRELATED PLAN FOR BROKEN
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# EXPLAIN OPTIMIZED PLAN
+statement error internal error: stage `optimize/global` not present
+EXPLAIN OPTIMIZED PLAN FOR BROKEN
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# EXPLAIN PHYSICAL PLAN
+statement error internal error: stage `optimize/finalize_dataflow` not present
+EXPLAIN PHYSICAL PLAN FOR BROKEN
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# EXPLAIN OPTIMIZER TRACE
+statement ok
+EXPLAIN OPTIMIZER TRACE FOR BROKEN
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+
+# EXPLAIN ... BROKEN CREATE MATERIALIZED VIEW
+# -------------------------------------------
+
+# EXPLAIN RAW PLAN
+statement ok
+EXPLAIN RAW PLAN FOR BROKEN
+CREATE MATERIALIZED VIEW mv AS
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# EXPLAIN DECORRELATED PLAN
+statement ok
+EXPLAIN DECORRELATED PLAN FOR BROKEN
+CREATE MATERIALIZED VIEW mv AS
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# EXPLAIN OPTIMIZED PLAN
+statement error internal error: stage `optimize/global` not present
+EXPLAIN OPTIMIZED PLAN FOR BROKEN
+CREATE MATERIALIZED VIEW mv AS
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# EXPLAIN PHYSICAL PLAN
+statement error internal error: stage `optimize/finalize_dataflow` not present
+EXPLAIN PHYSICAL PLAN FOR BROKEN
+CREATE MATERIALIZED VIEW mv AS
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# EXPLAIN OPTIMIZER TRACE
+statement ok
+EXPLAIN OPTIMIZER TRACE FOR BROKEN
+CREATE MATERIALIZED VIEW mv AS
+SELECT mz_unsafe.mz_panic('forced optimizer panic');
+
+# Regression test for #24398
+statement error internal error: stage `optimize/global` not present
+EXPLAIN OPTIMIZED PLAN FOR BROKEN
+CREATE MATERIALIZED VIEW mv AS
+SELECT pg_catalog.now();
+
+statement error cannot materialize call to current_timestamp
+EXPLAIN PHYSICAL PLAN FOR
+CREATE MATERIALIZED VIEW mv AS
+SELECT pg_catalog.now();
+
+
+# EXPLAIN ... BROKEN CREATE INDEX
+# -------------------------------
+
+# We cannot test this at the moment because there is no way to create a view
+# that will panic if selected without breaking the optimizer pipeline. To do
+# that, an `mz_panic` variant guarded by a boolean.

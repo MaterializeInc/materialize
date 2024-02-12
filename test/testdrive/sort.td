@@ -19,10 +19,11 @@ $ set schema={
 $ kafka-create-topic topic=foobar
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE foobar FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foobar-${testdrive.seed}')
+> CREATE SOURCE foobar
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foobar-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42

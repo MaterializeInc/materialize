@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 global:
-  scrape_interval: 15s
+  scrape_interval: 5s
 scrape_configs:
   - job_name: environmentd
     static_configs:
@@ -20,7 +20,7 @@ scrape_configs:
     file_sd_configs:
     - files:
       - /mnt/services/*.json
-      refresh_interval: 30s
+      refresh_interval: 5s
     relabel_configs:
       # Rewrite references to 127.0.0.1 or 0.0.0.0 to host.docker.internal,
       # since the services are running on the host.
@@ -44,3 +44,9 @@ scrape_configs:
         separator: "-"
         target_label: pod
         replacement: $1-0
+  - job_name: prometheus
+    static_configs:
+      - targets: [ localhost:9090 ]
+  - job_name: tempo
+    static_configs:
+      - targets: [ tempo:3200 ]

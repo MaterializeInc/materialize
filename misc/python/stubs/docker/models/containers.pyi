@@ -7,17 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Dict, List
+from typing import Any
 
 class Container:
-    attrs: Dict[str, Any]
+    attrs: dict[str, Any]
     def reload(self) -> None: ...
 
 class ContainerCollection:
     def run(
         self,
         image: str,
-        args: List[str] = ...,
+        args: list[str] = ...,
         network_mode: str = ...,
         detach: bool = ...,
     ) -> Container: ...

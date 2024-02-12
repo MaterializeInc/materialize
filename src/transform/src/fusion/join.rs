@@ -21,10 +21,11 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
-use crate::{TransformArgs, TransformError};
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_repr::RelationType;
+
+use crate::{TransformCtx, TransformError};
 
 /// Fuses multiple `Join` operators into one `Join` operator.
 ///
@@ -35,16 +36,19 @@ pub struct Join;
 
 impl crate::Transform for Join {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "join_fusion")
     )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
+        // We need to stick with post-order here because `action` only fuses a
+        // Join with its direct children. This means that we can only fuse a
+        // tree of Join nodes in a single pass if we work bottom-up.
         relation.try_visit_mut_post(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
@@ -142,22 +146,22 @@ impl JoinBuilder {
         // Update and push all of the variables.
         for mut equivalence in equivalences.drain(..) {
             for expr in equivalence.iter_mut() {
-                expr.visit_mut_post(&mut |e| {
+                expr.visit_pre_mut(|e| {
                     if let MirScalarExpr::Column(c) = e {
                         *c += self.num_columns;
                     }
-                })?;
+                });
             }
             self.equivalences.push(equivalence);
         }
 
         if let Some(mut predicates) = predicates {
             for mut expr in predicates.drain(..) {
-                expr.visit_mut_post(&mut |e| {
+                expr.visit_pre_mut(|e| {
                     if let MirScalarExpr::Column(c) = e {
                         *c += self.num_columns;
                     }
-                })?;
+                });
                 self.predicates.push(expr);
             }
         }

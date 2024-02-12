@@ -6,19 +6,18 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import json
+import time
 from textwrap import dedent
 
-import pg8000.exceptions
-
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Cockroach,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.ui import UIError
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
@@ -27,15 +26,69 @@ SERVICES = [
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Materialized(),
-    Testdrive(),
+    Testdrive(
+        entrypoint_extra=[
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+        ],
+    ),
     testdrive_no_reset,
     Cockroach(setup_materialize=True),
 ]
 
 
+def workflow_retain_history(c: Composition) -> None:
+    def check_retain_history(name: str):
+        start = time.time()
+        while True:
+            ts = c.sql_query(
+                f"EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM retain_{name}"
+            )
+            ts = ts[0][0]
+            ts = json.loads(ts)
+            source = ts["sources"][0]
+            since = source["read_frontier"][0]
+            upper = source["write_frontier"][0]
+            if upper - since > 2000:
+                break
+            end = time.time()
+            # seconds since start
+            elapsed = end - start
+            if elapsed > 10:
+                raise UIError("timeout hit while waiting for retain history")
+            time.sleep(0.5)
+
+    def check_retain_history_for(names: list[str]):
+        for name in names:
+            check_retain_history(name)
+
+    c.up("materialized")
+    c.sql(
+        "ALTER SYSTEM SET enable_logical_compaction_window = true",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql("CREATE TABLE retain_t (i INT)")
+    c.sql("INSERT INTO retain_t VALUES (1)")
+    c.sql(
+        "CREATE MATERIALIZED VIEW retain_mv WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM retain_t"
+    )
+    c.sql(
+        "CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '5s')"
+    )
+    names = ["mv", "s"]
+    check_retain_history_for(names)
+
+    # Ensure that RETAIN HISTORY is respected on boot.
+    c.kill("materialized")
+    c.up("materialized")
+    check_retain_history_for(names)
+
+    c.kill("materialized")
+
+
 def workflow_github_8021(c: Composition) -> None:
     c.up("materialized")
-    c.run("testdrive", "github-8021.td")
+    c.run_testdrive_files("github-8021.td")
 
     # Ensure MZ can boot
     c.kill("materialized")
@@ -128,7 +181,7 @@ def workflow_audit_log(c: Composition) -> None:
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
         c.up("zookeeper", "kafka", "schema-registry", "materialized")
-        c.run("testdrive", "timelines.td")
+        c.run_testdrive_files("timelines.td")
         c.rm(
             "zookeeper",
             "kafka",
@@ -160,22 +213,9 @@ def workflow_stash(c: Composition) -> None:
 
         cursor.execute("CREATE TABLE b (i INT)")
 
-        c.rm("cockroach")
-        c.up("cockroach")
-
-        # CockroachDB cleared its database, so this should fail.
-        #
-        # Depending on timing, this can fail in one of two ways. The stash error
-        # comes from the stash complaining. The network error comes from pg8000
-        # complaining because Materialize panicked.
-        try:
-            # Reusing the existing connection means we don't need to worry about
-            # detecting `ConnectionRefused` errors
-            cursor.execute("CREATE TABLE c (i INT)")
-            raise Exception("expected unreachable")
-        except pg8000.exceptions.InterfaceError as e:
-            if str(e) != "network error":
-                raise e
+        # No implicit restart as sanity check here, will panic:
+        # https://github.com/MaterializeInc/materialize/issues/20510
+        c.down(sanity_restart_mz=False)
 
 
 def workflow_storage_managed_collections(c: Composition) -> None:
@@ -187,8 +227,8 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     # Storage collections are eventually consistent, so loop to be sure updates
     # have made it.
 
-    user_shards = None
-    while user_shards == None:
+    user_shards: list[str] = []
+    while len(user_shards) == 0:
         user_shards = c.sql_query(
             "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
         )
@@ -198,8 +238,8 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     c.up("materialized")
 
     # Verify the shard mappings are still present and have not changed.
-    restart_user_shards = None
-    while restart_user_shards == None:
+    restart_user_shards: list[str] = []
+    while len(restart_user_shards) == 0:
         restart_user_shards = c.sql_query(
             "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
         )
@@ -281,15 +321,128 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             """
             > SHOW allowed_cluster_replica_sizes
             "\\"1\\", \\"2\\""
+
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
+            # Reset for following tests
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM RESET allowed_cluster_replica_sizes
+            """
+        ),
+    )
+
+
+def workflow_drop_materialize_database(c: Composition) -> None:
+    c.up("materialized")
+
+    # Drop materialize database
+    c.sql(
+        "DROP DATABASE materialize",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Restart mz.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify that materialize hasn't blown up
+    c.sql("SELECT 1")
+
+    # Restore for next tests
+    c.sql(
+        "CREATE DATABASE materialize",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO materialize",
+        port=6877,
+        user="mz_system",
+    )
+
+
+def workflow_bound_size_mz_status_history(c: Composition) -> None:
+    c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.up("testdrive_no_reset", persistent=True)
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            $ kafka-create-topic topic=status-history
+
+            > CREATE CONNECTION kafka_conn
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+            > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                URL '${testdrive.schema-registry-url}'
+              );
+
+            > CREATE SOURCE kafka_source
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
+              FORMAT TEXT
+
+            > CREATE SINK kafka_sink
+              FROM kafka_source
+              INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+              ENVELOPE DEBEZIUM
+
+            $ kafka-verify-topic sink=materialize.public.kafka_sink
+            """
+        ),
+    )
+
+    # Fill mz_source_status_history and mz_sink_status_history up with enough events
+    for i in range(10):
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent(
+                """
+                > ALTER CONNECTION kafka_conn SET (SECURITY PROTOCOL PLAINTEXT)
+                """
+            ),
+        )
+
+    # Verify that we have enough events so that they can be truncated
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT COUNT(*) > 7 FROM mz_internal.mz_source_status_history
+            true
+
+            > SELECT COUNT(*) > 7 FROM mz_internal.mz_sink_status_history
+            true
+            """
+        ),
+    )
+
+    # Restart mz.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify that we have fewer events now
+    # 7 because the truncation default is 5, and the restarted
+    # objects produce a new starting and running event.
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
+            7
+
+            > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
+            7
             """
         ),
     )
 
 
 def workflow_default(c: Composition) -> None:
-    c.workflow("github-17578")
-    c.workflow("github-8021")
-    c.workflow("audit-log")
-    c.workflow("timelines")
-    c.workflow("stash")
-    c.workflow("allowed-cluster-replica-sizes")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)

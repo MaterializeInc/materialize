@@ -16,6 +16,7 @@ use anyhow::{anyhow, bail};
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
 use once_cell::sync::Lazy;
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
@@ -105,7 +106,7 @@ static DAY_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
         i32::MIN,
     )
 });
-static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
+pub static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
     Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64).unwrap()
 });
 
@@ -374,6 +375,11 @@ impl Interval {
             i128::from(self.days),
         ).unwrap() +
         i128::from(self.micros)
+    }
+
+    /// Computes the total number of milliseconds in the interval. Discards fractional milliseconds!
+    pub fn as_milliseconds(&self) -> i128 {
+        self.as_microseconds() / 1000
     }
 
     /// Converts this `Interval`'s duration into `chrono::Duration`.
@@ -770,11 +776,26 @@ impl fmt::Display for Interval {
     }
 }
 
+impl Arbitrary for Interval {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<i32>(), any::<i32>(), any::<i64>())
+            .prop_map(|(months, days, micros)| Interval {
+                months,
+                days,
+                micros,
+            })
+            .boxed()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn interval_fmt() {
         fn mon(mon: i32) -> String {
             Interval {
@@ -1019,7 +1040,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_interval_value_truncate_low_fields() {
         use DateTimeField::*;
 
@@ -1133,7 +1154,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_interval_value_truncate_high_fields() {
         use DateTimeField::*;
 
@@ -1226,7 +1247,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_convert_date_time_unit() {
         assert_eq!(
             Some(1_123_200_000_000),

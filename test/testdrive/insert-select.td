@@ -42,9 +42,7 @@ contains:column "i" is of type integer but expression is of type text
 
 > INSERT INTO t VALUES (11, 12, 'f')
 
-! INSERT INTO t SELECT * FROM (
-    VALUES (13, 14, 'g')
-  );
+! INSERT INTO t SELECT * FROM t;
 contains:cannot be run inside a transaction block
 
 > COMMIT
@@ -58,10 +56,9 @@ contains:cannot be run inside a transaction block
 
 > BEGIN
 
-! INSERT INTO t SELECT * FROM (
-    VALUES (11, 12, 'f')
+> INSERT INTO t SELECT * FROM (
+    VALUES (17, 18, 'i')
   );
-contains:cannot be run inside a transaction block
 
 > COMMIT
 
@@ -93,9 +90,10 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 15, "b": 16, "c": "h"}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE source_data
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -113,6 +111,7 @@ contains:invalid selection
 9 10 e
 11 12 f
 13 14 g
+17 18 i
 
 # Multiple connections
 
@@ -173,3 +172,18 @@ INSERT INTO c SELECT * FROM s;
 2
 3
 3
+
+# Test DELETE and INSERT INTO SELECT in Serializable mode.
+
+> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
+
+> DELETE FROM t
+
+> SELECT * FROM t
+
+> INSERT INTO t (i, f, t) SELECT a, b, c FROM v;
+
+> SELECT * FROM t
+11 12 f
+
+> SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';

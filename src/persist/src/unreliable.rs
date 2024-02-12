@@ -16,13 +16,14 @@ use std::time::{Instant, UNIX_EPOCH};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use rand::prelude::SmallRng;
 use rand::{Rng, SeedableRng};
 use tracing::trace;
 
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
-    VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
+    SeqNo, VersionedData,
 };
 
 #[derive(Debug)]
@@ -140,7 +141,7 @@ impl UnreliableBlob {
 
 #[async_trait]
 impl Blob for UnreliableBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         self.handle.run_op("get", || self.blob.get(key)).await
     }
 
@@ -165,6 +166,12 @@ impl Blob for UnreliableBlob {
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         self.handle.run_op("delete", || self.blob.delete(key)).await
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.handle
+            .run_op("restore", || self.blob.restore(key))
+            .await
+    }
 }
 
 /// An unreliable delegate to [Consensus].
@@ -183,6 +190,11 @@ impl UnreliableConsensus {
 
 #[async_trait]
 impl Consensus for UnreliableConsensus {
+    fn list_keys(&self) -> ResultStream<String> {
+        // TODO: run_op for streams
+        self.consensus.list_keys()
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         self.handle
             .run_op("head", || self.consensus.head(key))
@@ -226,7 +238,8 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn unreliable_blob() {
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let handle = UnreliableHandle::default();
@@ -257,7 +270,8 @@ mod tests {
         assert!(blob.get("a").await.is_err());
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn unreliable_consensus() {
         let consensus = Arc::new(MemConsensus::default());
         let handle = UnreliableHandle::default();

@@ -1,4 +1,3 @@
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -29,7 +28,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "123"}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -40,6 +39,7 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
   );
 
 > CREATE SOURCE s1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-materialized-views-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
@@ -58,12 +58,17 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 > SELECT * FROM v1;
 3
 
-> CREATE SINK sink1 FROM v1
+> CREATE SINK sink1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+$ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true
+
 > CREATE SOURCE sink1_check
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-materialized-views-sink-${testdrive.seed}'
   )

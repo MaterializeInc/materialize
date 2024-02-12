@@ -35,8 +35,14 @@ SHOW CREATE SINK my_view_sink;
 ```nofmt
                name              |                                                                                                        create_sql
 ---------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- materialize.public.my_view_sink | CREATE SINK "materialize"."public"."my_view_sink" FROM "materialize"."public"."my_view" INTO KAFKA CONNECTION "materialize"."public"."kafka_conn" (TOPIC 'my_view_sink') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection ENVELOPE DEBEZIUM WITH (SIZE = '3xsmall')
+ materialize.public.my_view_sink | CREATE SINK "materialize"."public"."my_view_sink" IN CLUSTER "c" FROM "materialize"."public"."my_view" INTO KAFKA CONNECTION "materialize"."public"."kafka_conn" (TOPIC 'my_view_sink') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection ENVELOPE DEBEZIUM
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the sink.
 
 ## Related pages
 

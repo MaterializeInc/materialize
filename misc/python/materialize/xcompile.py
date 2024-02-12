@@ -13,9 +13,8 @@ import os
 import platform
 import sys
 from enum import Enum
-from typing import Dict, List, Optional
 
-from materialize import ROOT, spawn
+from materialize import MZ_ROOT, spawn
 
 
 class Arch(Enum):
@@ -54,9 +53,40 @@ def target(arch: Arch) -> str:
     return f"{arch}-unknown-linux-gnu"
 
 
+def target_cpu(arch: Arch) -> str:
+    """
+    Return the CPU micro architecture, assuming a Linux target, we should use for Rust compilation.
+
+    Sync: This target-cpu should be kept in sync with the one in ci-builder and .cargo/config.
+    """
+    if arch == Arch.X86_64:
+        return "x86-64-v3"
+    elif arch == Arch.AARCH64:
+        return "neoverse-n1"
+    else:
+        raise RuntimeError("unreachable")
+
+
+def target_features(arch: Arch) -> list[str]:
+    """
+    Returns a list of CPU features we should enable for Rust compilation.
+
+    Note: We also specify the CPU target when compiling Rust which should enable the majority of
+    available CPU features.
+
+    Sync: This list of features should be kept in sync with the one in ci-builder and .cargo/config.
+    """
+    if arch == Arch.X86_64:
+        return ["+aes"]
+    elif arch == Arch.AARCH64:
+        return ["+aes", "+sha2"]
+    else:
+        raise RuntimeError("unreachable")
+
+
 def cargo(
-    arch: Arch, subcommand: str, rustflags: List[str], channel: Optional[str] = None
-) -> List[str]:
+    arch: Arch, subcommand: str, rustflags: list[str], channel: str | None = None
+) -> list[str]:
     """Construct a Cargo invocation for cross compiling.
 
     Args:
@@ -71,10 +101,15 @@ def cargo(
     """
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
+    _target_cpu = target_cpu(arch)
+    _target_features = ",".join(target_features(arch))
 
     rustflags += [
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Csymbol-mangling-version=v0",
+        f"-Ctarget-cpu={_target_cpu}",
+        f"-Ctarget-feature={_target_features}",
+        "--cfg=tokio_unstable",
     ]
 
     if sys.platform == "darwin":
@@ -82,16 +117,16 @@ def cargo(
         sysroot = spawn.capture([f"{_target}-cc", "-print-sysroot"]).strip()
         rustflags += [f"-L{sysroot}/lib"]
         extra_env = {
-            f"CMAKE_SYSTEM_NAME": "Linux",
+            "CMAKE_SYSTEM_NAME": "Linux",
             f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
-            f"CARGO_TARGET_DIR": str(ROOT / "target-xcompile"),
-            f"TARGET_AR": f"{_target}-ar",
-            f"TARGET_CPP": f"{_target}-cpp",
-            f"TARGET_CC": f"{_target}-cc",
-            f"TARGET_CXX": f"{_target}-c++",
-            f"TARGET_CXXSTDLIB": "static=stdc++",
-            f"TARGET_LD": f"{_target}-ld",
-            f"TARGET_RANLIB": f"{_target}-ranlib",
+            "CARGO_TARGET_DIR": str(MZ_ROOT / "target-xcompile"),
+            "TARGET_AR": f"{_target}-ar",
+            "TARGET_CPP": f"{_target}-cpp",
+            "TARGET_CC": f"{_target}-cc",
+            "TARGET_CXX": f"{_target}-c++",
+            "TARGET_CXXSTDLIB": "static=stdc++",
+            "TARGET_LD": f"{_target}-ld",
+            "TARGET_RANLIB": f"{_target}-ranlib",
         }
     else:
         # NOTE(benesch): The required Rust flags have to be duplicated with
@@ -101,7 +136,7 @@ def cargo(
             "-Clink-arg=-fuse-ld=lld",
             f"-L/opt/x-tools/{_target}/{_target}/sysroot/lib",
         ]
-        extra_env: Dict[str, str] = {}
+        extra_env: dict[str, str] = {}
 
     env = {
         **extra_env,
@@ -119,26 +154,31 @@ def cargo(
     ]
 
 
-def tool(arch: Arch, name: str, channel: Optional[str] = None) -> List[str]:
+def tool(
+    arch: Arch, name: str, channel: str | None = None, prefix_name: bool = True
+) -> list[str]:
     """Constructs a cross-compiling binutils tool invocation.
 
     Args:
         arch: The CPU architecture to build for.
         name: The name of the binutils tool to invoke.
         channel: The Rust toolchain channel to use. Either None/"stable" or "nightly".
+        prefix_name: Whether or not the tool name should be prefixed with the target
+            architecture.
 
     Returns:
         A list of arguments specifying the beginning of the command to invoke.
     """
     if sys.platform == "darwin":
         _bootstrap_darwin(arch)
+    tool_name = f"{target(arch)}-{name}" if prefix_name else name
     return [
         *_enter_builder(arch, channel),
-        f"{target(arch)}-{name}",
+        tool_name,
     ]
 
 
-def _enter_builder(arch: Arch, channel: Optional[str] = None) -> List[str]:
+def _enter_builder(arch: Arch, channel: str | None = None) -> list[str]:
     if "MZ_DEV_CI_BUILDER" in os.environ or sys.platform == "darwin":
         return []
     else:
@@ -156,7 +196,7 @@ def _bootstrap_darwin(arch: Arch) -> None:
     # cross-compiling toolchain on the host and use that instead.
 
     BOOTSTRAP_VERSION = "4"
-    BOOTSTRAP_FILE = ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
+    BOOTSTRAP_FILE = MZ_ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
     try:
         contents = BOOTSTRAP_FILE.read_text()
     except FileNotFoundError:

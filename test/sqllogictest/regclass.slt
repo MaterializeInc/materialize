@@ -1,0 +1,279 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+reset-server
+
+# regclass
+
+statement OK
+create schema s
+
+statement ok
+CREATE TABLE t(i int);
+
+statement ok
+CREATE TABLE s.t(i int);
+
+statement ok
+CREATE DATABASE d;
+
+statement ok
+CREATE TABLE d.public.t();
+
+statement ok
+CREATE MATERIALIZED VIEW m AS SELECT * FROM t;
+
+statement ok
+CREATE MATERIALIZED VIEW s.m AS SELECT * FROM s.t;
+
+query T
+SELECT 't'::regclass::oid::int
+----
+20696
+
+query T
+SELECT 's.t'::regclass::oid::int
+----
+20697
+
+query T
+SELECT 't'::regclass = 's.t'::regclass
+----
+false
+
+query T
+SELECT 'public.t'::regclass::text;
+----
+t
+
+query T
+SELECT 't'::regclass::text;
+----
+t
+
+query T
+SELECT 's.t'::regclass::text;
+----
+s.t
+
+statement ok
+SET search_path = s, public
+
+query T
+SELECT 's.t'::regclass::text;
+----
+t
+
+query T
+SELECT 't'::regclass::oid::int
+----
+20697
+
+query T
+SELECT 'public.t'::regclass::text;
+----
+public.t
+
+statement ok
+SET search_path = public
+
+query T
+SELECT 's.t'::regclass::text;
+----
+s.t
+
+query T
+SELECT 'public.t'::regclass::text;
+----
+t
+
+query T
+SELECT 'd.public.t'::regclass::text;
+----
+d.public.t
+
+query T
+SELECT 'm'::regclass::oid::int
+----
+20701
+
+query T
+SELECT 's.m'::regclass::oid::int
+----
+20702
+
+query T
+SELECT 'm'::regclass = 's.m'::regclass
+----
+false
+
+query error db error: ERROR: relation "abs" does not exist
+SELECT 'abs'::regclass
+
+query error db error: ERROR: relation "dne" does not exist
+SELECT 'dne'::regclass
+
+statement ok
+CREATE TABLE "2"()
+
+query T
+SELECT 2::regclass
+----
+2
+
+query T
+SELECT '2'::regclass
+----
+2
+
+# PG supports this
+query error db error: ERROR: string is not a valid identifier: "2"
+SELECT '2'::text::regclass
+
+query B
+SELECT '"2"'::regclass != 2
+----
+true
+
+query T
+SELECT '"2"'::regclass::text
+----
+2
+
+statement ok
+CREATE TABLE "2x"()
+
+query T
+SELECT '"2x"'::regclass::text
+----
+2x
+
+query error db error: ERROR: relation "dne" does not exist
+SELECT 'dne'::regclass;
+
+# Check that we handle functions and classes w/ same name
+statement ok
+CREATE TABLE array_length();
+
+query T
+SELECT 'array_length'::regclass::text;
+----
+array_length
+
+query T
+SELECT 'array_length'::regproc::text;
+----
+array_length
+
+# Check that we handle types and classes w/ same name
+statement ok
+CREATE TABLE int4();
+
+query T
+SELECT 'int4'::regclass::text;
+----
+int4
+
+query T
+SELECT 'int4'::regtype::text;
+----
+int4
+
+query T
+SELECT 'int4'::regclass::oid = 'int4'::regtype::oid;
+----
+false
+
+query T
+SELECT 1::regclass
+----
+1
+
+query T
+SELECT 1::int4::regclass
+----
+1
+
+query T
+SELECT 1::oid::regclass
+----
+1
+
+query T
+SELECT 1::oid::regclass::oid
+----
+1
+
+query T
+SELECT '1'::regclass
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regclass
+----
+1
+
+query T
+SELECT '1'::regclass::text
+----
+1
+
+query T
+SELECT 'mz_tables'::regclass::text
+----
+mz_tables
+
+query B
+SELECT 'mz_tables'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
+----
+true
+
+query B
+SELECT 'mz_tables'::regclass::oid = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
+----
+true
+
+# This shouldn't be an error but seems to be impacted by
+# some evaluation order issue akin to #17189
+# # Regression for 9194
+# query B
+# select 'mz_tables'::regclass::oid::text::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
+# ----
+# true
+
+query error relation "nonexistent" does not exist
+SELECT 'nonexistent'::regclass
+
+statement ok
+CREATE TABLE text_to_regclass (a text);
+
+statement ok
+INSERT INTO text_to_regclass VALUES (NULL), ('mz_tables');
+
+# Overflows its stack in debug mode
+# query T
+# SELECT a::regclass::text FROM text_to_regclass ORDER BY a
+# ----
+# mz_tables
+# NULL
+
+# Make sure that there are no classes with duplicate OIDs
+query I
+select oid from (select count(*) as cnt, oid from pg_catalog.pg_class group by oid) where cnt>1
+----
+
+query T
+SELECT NULL::regclass::text
+----
+NULL
+
+# ensure that all existing types can be cast to their respective names
+statement OK
+select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)

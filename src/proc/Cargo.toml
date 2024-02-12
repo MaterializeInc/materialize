@@ -1,0 +1,25 @@
+[package]
+name = "mz-proc"
+description = "Utility for introspecting the running process."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = true
+license = "Apache-2.0"
+authors = [
+    "Brennan Vincent <brennan@materialize.com>",
+]
+repository = "https://github.com/MaterializeInc/materialize"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.66"
+libc = "0.2.138"
+mz-ore = { path = "../ore", features = ["async"], default-features = false }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[package.metadata.cargo-udeps.ignore]
+# "anyhow" and "mz-ore" only used on linux
+normal = ["anyhow", "mz-ore", "workspace-hack"]

@@ -16,13 +16,13 @@ CREATE TABLE uuid_type (pk_col UUID PRIMARY KEY, nopk_col UUID);
 ALTER TABLE uuid_type REPLICA IDENTITY FULL;
 INSERT INTO uuid_type VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
 
-$ schema-registry-wait subject=postgres.public.uuid_type-value
+$ schema-registry-wait topic=postgres.public.uuid_type
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE uuid_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.uuid_type')

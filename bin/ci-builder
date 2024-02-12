@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-NIGHTLY_RUST_DATE=2023-01-03
+NIGHTLY_RUST_DATE=2023-11-19
 
 cd "$(dirname "$0")/.."
 
@@ -60,12 +60,44 @@ arch_go=$(arch_go "$arch_gcc")
 
 cid_file=ci/builder/.${channel%%-*}.cidfile
 
-rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu
+rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu,llvm-tools-preview
 if [[ $rust_version = nightly ]]; then
     rust_components+=,miri-preview
 else
     rust_components+=,clippy-preview,rustfmt-preview
 fi
+
+# Target a specific CPU to get better performance, i.e. use more modern instructions.
+#
+# All of the x86-64 and ARM hardware we run in production support the v3 and neoverse-n1 micro
+# architectures, respectively.
+#
+# Sync: This target-cpu should be kept in sync with the one in ci-builder and .cargo/config.
+x86_64_target_cpu="x86-64-v3"
+aarch64_target_cpu="neoverse-n1"
+
+rust_cpu_target=""
+case "$arch_gcc" in
+    x86_64) rust_cpu_target="$x86_64_target_cpu" ;;
+    aarch64) rust_cpu_target="$aarch64_target_cpu" ;;
+    *) die "unknown host architecture \"$arch\"" ;;
+esac
+
+# Enable specific CPU features that we know our cloud infra supports.
+#
+# Note: specifying a target_cpu enables many features, these are specific ones that target_cpu
+# might miss.
+#
+# Sync: This list of features should be kept in sync with the one in xcompile and .cargo/config.
+x86_64_target_features="+aes"
+aaarch64_target_features="+aes,+sha2"
+
+rust_target_features=""
+case "$arch_gcc" in
+    x86_64) rust_target_features="$x86_64_target_features" ;;
+    aarch64) rust_target_features="$aaarch64_target_features" ;;
+    *) die "unknown host architecture \"$arch\"" ;;
+esac
 
 uid=$(id -u)
 gid=$(id -g)
@@ -81,6 +113,8 @@ build() {
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
+        --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
+        --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
         --tag materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
         "$@" ci/builder
@@ -103,7 +137,7 @@ files=$(cat \
         <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
     | LC_ALL=C sort -z \
-    | xargs -0 sha1sum)
+    | xargs -0 "$shasum")
 files+="
 rust-version:$rust_version
 rust-date:$rust_date
@@ -134,6 +168,29 @@ case "$cmd" in
         docker push materialize/ci-builder:"$cache_tag"
         ;;
     run)
+        docker_command=()
+
+        detach_container=false
+        container_name_param=""
+
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --detach)
+                    detach_container=true
+                    shift # past argument
+                    ;;
+                --name)
+                    container_name_param="$2"
+                    shift # past argument
+                    shift # past value
+                    ;;
+                *)
+                    docker_command+=("$1")
+                    shift # past argument
+                    ;;
+            esac
+        done
+
         mkdir -p target-xcompile ~/.kube
         args=(
             --cidfile "$cid_file"
@@ -147,16 +204,44 @@ case "$cmd" in
             --env AWS_SECRET_ACCESS_KEY
             --env AWS_SESSION_TOKEN
             --env CI
+            --env CI_COVERAGE_ENABLED
+            --env CI_FINAL_PREFLIGHT_CHECK_VERSION
+            --env CI_FINAL_PREFLIGHT_CHECK_ROLLBACK
+            --env CI_TEST_SELECTION
+            --env CLOUDTEST_CLUSTER_DEFINITION_FILE
+            --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
+            --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
             --env GITHUB_TOKEN
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
             --env NIGHTLY_CANARY_APP_PASSWORD
-            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY
-            --env NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET
+            --env MZ_CLI_APP_PASSWORD
+            --env MZ_SOFT_ASSERTIONS
+            --env NO_COLOR
+            --env NPM_TOKEN
+            --env POLAR_SIGNALS_API_TOKEN
+            --env PRODUCTION_SANDBOX_APP_PASSWORD
             --env PYPI_TOKEN
+            --env MZ_DEV_BUILD_SHA
+            --env BUILDKITE_SENTRY_DSN
+            # For Miri with nightly Rust
+            --env ZOOKEEPER_ADDR
+            --env KAFKA_ADDRS
+            --env SCHEMA_REGISTRY_URL
+            --env POSTGRES_URL
+            --env COCKROACH_URL
         )
-        for env in $(printenv | grep '^BUILDKITE' | sed 's/=.*//'); do
+
+        if [[ $detach_container == "true" ]]; then
+            args+=("--detach")
+        fi
+
+        if [[ -n "$container_name_param" ]]; then
+            args+=("--name=$container_name_param")
+        fi
+
+        for env in $(printenv | grep -E '^(BUILDKITE|MZCOMPOSE)' | sed 's/=.*//'); do
             args+=(--env "$env")
         done
         if [[ -t 1 ]]; then
@@ -231,7 +316,7 @@ case "$cmd" in
             )
         fi
         rm -f "$cid_file"
-        docker run "${args[@]}" "materialize/ci-builder:$tag" "$@"
+        docker run "${args[@]}" "materialize/ci-builder:$tag" "${docker_command[@]}"
         ;;
     root-shell)
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh

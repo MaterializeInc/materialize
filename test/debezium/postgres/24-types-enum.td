@@ -16,13 +16,13 @@ CREATE TYPE enum1 AS ENUM ('val1', 'val2');
 CREATE TABLE enum_type ( f1 enum1, f2 INTEGER PRIMARY KEY);
 INSERT INTO enum_type VALUES ('val1', 0), ('val2', 1);
 
-$ schema-registry-wait subject=postgres.public.enum_type-value
+$ schema-registry-wait topic=postgres.public.enum_type
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE enum_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.enum_type')

@@ -7,12 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional
-
-def split(sql: str) -> List[str]: ...
+def split(sql: str) -> list[str]: ...
 def format(
     sql: str,
-    encoding: Optional[str] = ...,
+    encoding: str | None = ...,
     *,
     keyword_case: str = ...,
     identifier_case: str = ...,

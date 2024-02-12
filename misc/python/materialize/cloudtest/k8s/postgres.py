@@ -22,17 +22,26 @@ from kubernetes.client import (
     V1ServiceSpec,
 )
 
-from materialize.cloudtest.k8s import K8sDeployment, K8sService
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class PostgresService(K8sService):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        namespace: str,
+    ) -> None:
+        super().__init__(namespace)
         service_port = V1ServicePort(name="sql", port=5432)
 
         self.service = V1Service(
             api_version="v1",
             kind="Service",
-            metadata=V1ObjectMeta(name="postgres", labels={"app": "postgres"}),
+            metadata=V1ObjectMeta(
+                name="postgres", namespace=namespace, labels={"app": "postgres"}
+            ),
             spec=V1ServiceSpec(
                 type="NodePort",
                 ports=[service_port],
@@ -42,7 +51,8 @@ class PostgresService(K8sService):
 
 
 class PostgresDeployment(K8sDeployment):
-    def __init__(self) -> None:
+    def __init__(self, namespace: str, apply_node_selectors: bool) -> None:
+        super().__init__(namespace)
         env = [
             V1EnvVar(name="POSTGRESDB", value="postgres"),
             V1EnvVar(name="POSTGRES_PASSWORD", value="postgres"),
@@ -56,9 +66,13 @@ class PostgresDeployment(K8sDeployment):
             ports=ports,
         )
 
+        node_selector = None
+        if apply_node_selectors:
+            node_selector = {"supporting-services": "true"}
+
         template = V1PodTemplateSpec(
-            metadata=V1ObjectMeta(labels={"app": "postgres"}),
-            spec=V1PodSpec(containers=[container]),
+            metadata=V1ObjectMeta(namespace=namespace, labels={"app": "postgres"}),
+            spec=V1PodSpec(containers=[container], node_selector=node_selector),
         )
 
         selector = V1LabelSelector(match_labels={"app": "postgres"})
@@ -68,12 +82,15 @@ class PostgresDeployment(K8sDeployment):
         self.deployment = V1Deployment(
             api_version="apps/v1",
             kind="Deployment",
-            metadata=V1ObjectMeta(name="postgres"),
+            metadata=V1ObjectMeta(name="postgres", namespace=namespace),
             spec=spec,
         )
 
 
-POSTGRES_RESOURCES = [
-    PostgresService(),
-    PostgresDeployment(),
-]
+def postgres_resources(
+    namespace: str = DEFAULT_K8S_NAMESPACE, apply_node_selectors: bool = False
+) -> list[K8sResource]:
+    return [
+        PostgresService(namespace),
+        PostgresDeployment(namespace, apply_node_selectors),
+    ]

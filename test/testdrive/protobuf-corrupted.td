@@ -28,10 +28,11 @@ $ kafka-ingest format=bytes topic=total-garbage
 garbage
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE total_garbage FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-total-garbage-${testdrive.seed}')
+> CREATE SOURCE total_garbage
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-total-garbage-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.OneInt' USING SCHEMA '${simple-schema}'
 
 ! SELECT * FROM total_garbage
@@ -42,8 +43,9 @@ $ kafka-create-topic topic=wrong-message
 $ kafka-ingest topic=wrong-message format=protobuf descriptor-file=simple.pb message=OneInt
 {"f": 1}
 
-> CREATE SOURCE wrong_message FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-wrong-message-${testdrive.seed}')
+> CREATE SOURCE wrong_message
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-wrong-message-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.OneString' USING SCHEMA '${simple-schema}'
 
 ! SELECT * FROM wrong_message

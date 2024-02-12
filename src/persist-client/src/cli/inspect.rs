@@ -19,35 +19,29 @@ use anyhow::anyhow;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::Description;
-use mz_persist_types::codec_impls::TodoSchema;
-use prost::Message;
-
-use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
+use prost::Message;
 use serde_json::json;
 
-use crate::async_runtime::CpuHeavyRuntime;
-use crate::cli::admin::{make_blob, make_consensus};
+use crate::async_runtime::IsolatedRuntime;
+use crate::cache::StateCache;
+use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
 use crate::error::CodecConcreteType;
-use crate::fetch::EncodedPart;
-use crate::internal::encoding::UntypedState;
+use crate::fetch::{Cursor, EncodedPart};
+use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
-    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey,
+    BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
-use crate::internal::state::{ProtoStateDiff, ProtoStateRollup, State};
+use crate::internal::state::{ProtoRollup, ProtoStateDiff, State};
+use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
-use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
-
-const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
-    version: "10000000.0.0+test",
-    sha: "0000000000000000000000000000000000000000",
-    time: "",
-};
+use crate::{Metrics, PersistClient, PersistConfig, ShardId};
 
 /// Commands for read-only inspection of persist state
 #[derive(Debug, clap::Args)]
@@ -181,39 +175,6 @@ pub struct StateRollupArgs {
     pub(crate) rollup_key: Option<String>,
 }
 
-/// Arguments for viewing the current state of a given shard
-#[derive(Debug, Clone, clap::Parser)]
-pub struct StateArgs {
-    /// Shard to view
-    #[clap(long)]
-    pub(crate) shard_id: String,
-
-    /// Consensus to use.
-    ///
-    /// When connecting to a deployed environment's consensus table, the Postgres/CRDB connection
-    /// string must contain the database name and `options=--search_path=consensus`.
-    ///
-    /// When connecting to Cockroach Cloud, use the following format:
-    ///
-    /// ```text
-    /// postgresql://<user>:$COCKROACH_PW@<hostname>:<port>/environment_<environment-id>
-    ///   ?sslmode=verify-full
-    ///   &sslrootcert=/path/to/cockroach-cloud/certs/cluster-ca.crt
-    ///   &options=--search_path=consensus
-    /// ```
-    ///
-    #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
-    pub(crate) consensus_uri: String,
-
-    /// Blob to use
-    ///
-    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
-    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
-    /// URI scoped to the environment's bucket prefix.
-    #[clap(long, env = "BLOB_URI")]
-    pub(crate) blob_uri: String,
-}
-
 /// Fetches the current state of a given shard
 pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serialize, anyhow::Error> {
     let shard_id = args.shard_id();
@@ -223,9 +184,8 @@ pub async fn fetch_latest_state(args: &StateArgs) -> Result<impl serde::Serializ
         .await;
     let state = state_versions
         .fetch_current_state::<u64>(&shard_id, versions.0.clone())
-        .await
-        .into_proto();
-    Ok(state)
+        .await;
+    Ok(Rollup::from_untyped_state_without_diffs(state).into_proto())
 }
 
 /// Fetches a state rollup of a given shard. If the seqno is not provided, choose the latest;
@@ -249,7 +209,7 @@ pub async fn fetch_state_rollup(
         .get(&rollup_key.complete(&shard_id))
         .await?
         .expect("fetching the specified state rollup");
-    let proto = ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
+    let proto = ProtoRollup::decode(rollup_buf).expect("invalid encoded state");
     Ok(proto)
 }
 
@@ -282,8 +242,7 @@ pub async fn fetch_state_rollups(args: &StateArgs) -> Result<impl serde::Seriali
             .await
             .unwrap();
         if let Some(rollup_buf) = rollup_buf {
-            let proto =
-                ProtoStateRollup::decode(rollup_buf.as_slice()).expect("invalid encoded state");
+            let proto = ProtoRollup::decode(rollup_buf).expect("invalid encoded state");
             rollup_states.insert(key.to_string(), proto);
         }
     }
@@ -305,7 +264,7 @@ pub async fn fetch_state_diffs(
         .expect("requested shard should exist")
         .check_ts_codec()?;
     while let Some(_) = state_iter.next(|_| {}) {
-        live_states.push(state_iter.into_proto());
+        live_states.push(state_iter.into_rollup_proto_without_diffs());
     }
 
     Ok(live_states)
@@ -368,7 +327,7 @@ pub async fn blob_batch_part(
     partial_key: String,
     limit: usize,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
@@ -381,12 +340,13 @@ pub async fn blob_batch_part(
     let part = BlobTraceBatchPart::<u64>::decode(&part).expect("decodable");
     let desc = part.desc.clone();
 
-    let mut encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
+    let encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
     let mut out = BatchPartOutput {
         desc,
         updates: Vec::new(),
     };
-    while let Some((k, v, t, d)) = encoded_part.next() {
+    let mut cursor = Cursor::default();
+    while let Some((k, v, t, d)) = cursor.pop(&encoded_part) {
         if out.updates.len() > limit {
             break;
         }
@@ -395,7 +355,7 @@ pub async fn blob_batch_part(
             v: format!("{:?}", PrettyBytes(v)),
             t,
             d: i64::from_le_bytes(d),
-        })
+        });
     }
 
     Ok(out)
@@ -423,7 +383,7 @@ struct BlobCounts {
 
 /// Fetches the blob count for given path
 pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
@@ -453,7 +413,7 @@ pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow
 
 /// Rummages through S3 to find the latest rollup for each shard, then calculates summary stats.
 pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
@@ -499,7 +459,7 @@ pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
         };
 
         let state: State<u64> =
-            UntypedState::decode(&cfg.build_version, &rollup).check_ts_codec(&shard)?;
+            UntypedState::decode(&cfg.build_version, rollup).check_ts_codec(&shard)?;
 
         let leased_readers = state.collections.leased_readers.len();
         let critical_readers = state.collections.critical_readers.len();
@@ -578,8 +538,15 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     }
 
     let mut unreferenced_blobs = UnreferencedBlobs::default();
+    // In the future, this is likely to include a "grace period" so recent but non-current
+    // versions are also considered live
+    let minimum_version = WriterKey::for_version(&state_versions.cfg.build_version);
     for (part, writer) in all_parts {
-        if !known_writers.contains(&writer) && !known_parts.contains(&part) {
+        let is_unreferenced = match writer {
+            WriterKey::Id(writer) => !known_writers.contains(&writer),
+            version @ WriterKey::Version(_) => version < minimum_version,
+        };
+        if is_unreferenced && !known_parts.contains(&part) {
             unreferenced_blobs.batch_parts.insert(part);
         }
     }
@@ -599,26 +566,33 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     } else {
         Some(args.shard_id())
     };
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics_registry = MetricsRegistry::new();
     let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-    let cpu_heavy_runtime = Arc::new(CpuHeavyRuntime::new());
+    let isolated_runtime = Arc::new(IsolatedRuntime::default());
+    let state_cache = Arc::new(StateCache::new(
+        &cfg,
+        Arc::clone(&metrics),
+        Arc::new(NoopPubSubSender),
+    ));
     let usage = StorageUsageClient::open(PersistClient::new(
         cfg,
         blob,
         consensus,
         metrics,
-        cpu_heavy_runtime,
+        isolated_runtime,
+        state_cache,
+        Arc::new(NoopPubSubSender),
     )?);
 
     if let Some(shard_id) = shard_id {
-        let usage = usage.shard_usage(shard_id).await;
+        let usage = usage.shard_usage_audit(shard_id).await;
         println!("{}\n{}", shard_id, usage);
     } else {
-        let usage = usage.shards_usage().await;
+        let usage = usage.shards_usage_audit().await;
         let mut by_shard = usage.by_shard.iter().collect::<Vec<_>>();
         by_shard.sort_by_key(|(_, x)| x.total_bytes());
         by_shard.reverse();
@@ -629,24 +603,6 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     }
 
     Ok(())
-}
-
-// All `inspect` command are read-only.
-const NO_COMMIT: bool = false;
-
-impl StateArgs {
-    fn shard_id(&self) -> ShardId {
-        ShardId::from_str(&self.shard_id).expect("invalid shard id")
-    }
-
-    async fn open(&self) -> Result<StateVersions, anyhow::Error> {
-        let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-        let consensus =
-            make_consensus(&cfg, &self.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-        let blob = make_blob(&cfg, &self.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-        Ok(StateVersions::new(cfg, consensus, blob, metrics))
-    }
 }
 
 /// The following is a very terrible hack that no one should draw inspiration from. Currently State

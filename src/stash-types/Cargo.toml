@@ -1,0 +1,24 @@
+[package]
+name = "mz-stash-types"
+description = "Shared types for the `mz-stash*` crates"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.66"
+mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
+mz-proto = { path = "../proto" }
+paste = "1.0.11"
+prometheus = { version = "0.13.3", default-features = false }
+prost = { version = "0.11.9", features = ["no-recursion-limit"] }
+serde = "1.0.152"
+tokio-postgres = { version = "0.7.8", features = ["with-serde_json-1"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

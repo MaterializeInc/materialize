@@ -1,0 +1,90 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Start from a pristine server
+reset-server
+
+query T
+SHOW cluster
+----
+quickstart
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster TO foo;
+----
+COMPLETE 0
+
+statement ok
+CREATE ROLE parker;
+
+simple conn=parker_1,user=parker
+SHOW cluster;
+----
+foo
+COMPLETE 1
+
+simple conn=parker_1,user=parker
+SET cluster TO bar;
+----
+COMPLETE 0
+
+simple conn=parker_1,user=parker
+SHOW cluster;
+----
+bar
+COMPLETE 1
+
+simple conn=parker_1,user=parker
+DISCARD ALL;
+----
+COMPLETE 0
+
+# After DISCARD ALL we should still respect the system default.
+simple conn=parker_1,user=parker
+SHOW cluster;
+----
+foo
+COMPLETE 1
+
+simple conn=parker_1,user=parker
+ALTER ROLE parker SET cluster TO baz;
+----
+COMPLETE 0
+
+# Use a new connection.
+simple conn=parker_2,user=parker
+SHOW cluster
+----
+baz
+COMPLETE 1
+
+simple conn=parker_2,user=parker
+SET cluster TO other_other;
+----
+COMPLETE 0
+
+simple conn=parker_2,user=parker
+SHOW cluster
+----
+other_other
+COMPLETE 1
+
+simple conn=parker_2,user=parker
+DISCARD ALL;
+----
+COMPLETE 0
+
+# After DISCARD ALL we should still respect the Role default.
+simple conn=parker_2,user=parker
+SHOW cluster
+----
+baz
+COMPLETE 1

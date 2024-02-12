@@ -9,12 +9,11 @@
 
 use std::fmt;
 
+use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
+use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 
 use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
@@ -61,6 +60,10 @@ impl LazyUnaryFunc for CastRangeToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         // TODO? if typeconv was in expr, we could determine this
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -115,6 +118,10 @@ impl LazyUnaryFunc for RangeLower {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        true // Ranges are sorted by lower first.
+    }
 }
 
 impl fmt::Display for RangeLower {
@@ -167,6 +174,10 @@ impl LazyUnaryFunc for RangeUpper {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

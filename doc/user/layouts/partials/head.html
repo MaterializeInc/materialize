@@ -58,10 +58,13 @@
 />
 <link rel="canonical" href="{{ .Permalink }}" />
 
+
 {{/* Include all JavaScript files here */}}
+<script src="https://cmp.osano.com/Azz7yeT5NmUe93yp/01cb9c3f-e1eb-4e74-9255-1280e80cdc28/osano.js"></script>
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/anchor-js/anchor.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/simple-scrollspy@2.0.3/dist/simple-scrollspy.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
 
 {{/* Sass processing here */}} {{ $style := resources.Get "sass/main.scss" |
 toCSS | fingerprint }}
@@ -84,18 +87,13 @@ toCSS | fingerprint }}
 </script>
 
 {{if hugo.IsProduction}} {{/* Google Analytics */}}
-<script
-  async
-  src="https://www.googletagmanager.com/gtag/js?id=UA-138552650-1"
-></script>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-HYXTGZN2KT"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
-  function gtag() {
-    dataLayer.push(arguments);
-  }
-  gtag("js", new Date());
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
 
-  gtag("config", "UA-138552650-1");
+  gtag('config', 'G-HYXTGZN2KT');
 </script>
 
 {{/* Leadfeeder */}}
@@ -144,22 +142,22 @@ toCSS | fingerprint }}
 <script>
   $(document).ready(function () {
     // make nav-tab lists from tab-panes
-    $(".tab-content")
-      .find(".tab-pane")
-      .each(function (idx, item) {
-        var navTabs = $(this).closest(".code-tabs").find(".nav-tabs"),
-          title = $(this).attr("title");
-        navTabs.append('<li><a href="#">' + title + "</a></li");
-      });
+    $(".tab-content").each(function (idx, tab) {
+      $(tab)
+        .find(".tab-pane")
+        .each(function (item) {
+          var navTabs = $(this).closest(".code-tabs").find(".nav-tabs"),
+            title = $(this).attr("title"),
+            id = title
+              .toLowerCase()
+              .replace(/ /g, "-")
+              .replace(/[^\w-]+/g, "");
+          navTabs.append(`<li><a href="#${id}-t${idx}">${title}</a></li>`);
+        });
+    });
 
-    // activate first tab and tab-pane
-    $(".nav-tabs li:first-child").addClass("active").click();
-    $(".tab-content div:first-child").addClass("active").click();
-
-    // click
+    // handle click events
     $(".nav-tabs a").click(function (e) {
-      e.preventDefault();
-
       var tab = $(this).parent(),
         tabIndex = tab.index(),
         tabPanel = $(this).closest(".code-tabs"),
@@ -168,5 +166,11 @@ toCSS | fingerprint }}
       tab.addClass("active");
       tabPane.addClass("active");
     });
+
+    // activate first tab
+    $(".nav-tabs li:first-child a").click();
+    // if the url anchor matches the id of a tab, activate that tab
+    var deeplinkedTab = $(`.nav-tabs a[href='${document.location.hash}']`);
+    if (deeplinkedTab) deeplinkedTab.click().get(0).scrollIntoView();
   });
 </script>

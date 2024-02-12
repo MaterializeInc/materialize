@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! See if there are predicates of the form `<expr>=literal` that can be sped up using an index.
+//! See if there are predicates of the form `<expr> = literal` that can be sped up using an index.
 //! More specifically, look for an MFP on top of a Get, where the MFP has an appropriate filter, and
 //! the Get has a matching index. Convert these to `IndexedFilter` joins, which is a semi-join with
 //! a constant collection.
@@ -18,8 +18,8 @@
 //! `SELECT f1, f2, f3 FROM t, (SELECT * FROM (VALUES (lit1, lit2))) as filter_list
 //!  WHERE t.f1 = filter_list.column1 AND t.f2 = filter_list.column2`
 
-use crate::canonicalize_mfp::CanonicalizeMfp;
-use crate::{IndexOracle, TransformArgs};
+use std::collections::{BTreeMap, BTreeSet};
+
 use itertools::Itertools;
 use mz_expr::canonicalize::canonicalize_predicates;
 use mz_expr::visit::{Visit, VisitChildren};
@@ -30,7 +30,10 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
 use mz_repr::{GlobalId, Row};
-use std::collections::{BTreeMap, BTreeSet};
+
+use crate::canonicalize_mfp::CanonicalizeMfp;
+use crate::notice::IndexTooWideForLiteralConstraints;
+use crate::TransformCtx;
 
 /// Convert literal constraints into `IndexedFilter` joins.
 #[derive(Debug)]
@@ -38,17 +41,17 @@ pub struct LiteralConstraints;
 
 impl crate::Transform for LiteralConstraints {
     #[tracing::instrument(
-    target = "optimizer"
-    level = "trace",
-    skip_all,
-    fields(path.segment = "literal_constraints")
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "literal_constraints")
     )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        args: TransformArgs,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let result = self.action(relation, args.indexes);
+        let result = self.action(relation, ctx);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -58,10 +61,10 @@ impl LiteralConstraints {
     fn action(
         &self,
         relation: &mut MirRelationExpr,
-        indexes: &dyn IndexOracle,
+        transform_ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
-        relation.try_visit_mut_children(|e| self.action(e, indexes))?;
+        relation.try_visit_mut_children(|e| self.action(e, transform_ctx))?;
 
         if let MirRelationExpr::Get {
             id: Id::Global(id), ..
@@ -70,7 +73,7 @@ impl LiteralConstraints {
             let orig_mfp = mfp.clone();
 
             // Preparation for the literal constraints detection.
-            Self::inline_literal_constraints(&mut mfp)?;
+            Self::inline_literal_constraints(&mut mfp);
             Self::list_of_predicates_to_and_of_predicates(&mut mfp);
             Self::distribute_and_over_or(&mut mfp)?;
             Self::unary_and(&mut mfp);
@@ -80,8 +83,8 @@ impl LiteralConstraints {
             fn undo_preparation(
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
-                relation: &mut MirRelationExpr,
-            ) -> Result<(), RecursionLimitError> {
+                relation: &MirRelationExpr,
+            ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
                 LiteralConstraints::canonicalize_predicates(mfp, relation);
@@ -91,12 +94,11 @@ impl LiteralConstraints {
                 // so in those cases we might have a more complicated MFP than the original MFP
                 // (despite the removal of the literal constraints and/or contradicting OR args).
                 // So let's use the simpler one.
-                if LiteralConstraints::predicates_size(orig_mfp)?
-                    < LiteralConstraints::predicates_size(mfp)?
+                if LiteralConstraints::predicates_size(orig_mfp)
+                    < LiteralConstraints::predicates_size(mfp)
                 {
                     *mfp = orig_mfp.clone();
                 }
-                Ok(())
             }
 
             let removed_contradicting_or_args = Self::remove_impossible_or_args(&mut mfp)?;
@@ -104,20 +106,20 @@ impl LiteralConstraints {
             // todo: We might want to also call `canonicalize_equivalences`,
             // see near the end of literal_constraints.slt.
 
-            let key_val = Self::detect_literal_constraints(&mfp, id, indexes);
+            let key_val = Self::detect_literal_constraints(&mfp, id, transform_ctx);
 
             match key_val {
                 None => {
                     // We didn't find a usable index, so no chance to remove literal constraints.
                     // But, we might have removed contradicting OR args.
                     if removed_contradicting_or_args {
-                        undo_preparation(&mut mfp, &orig_mfp, relation)?;
+                        undo_preparation(&mut mfp, &orig_mfp, relation);
                     } else {
                         // We didn't remove anything, so let's go with the original MFP.
                         mfp = orig_mfp;
                     }
                 }
-                Some((key, possible_vals)) => {
+                Some((idx_id, key, possible_vals)) => {
                     // We found a usable index. We'll try to remove the corresponding literal
                     // constraints.
                     if Self::remove_literal_constraints(&mut mfp, &key)
@@ -125,7 +127,7 @@ impl LiteralConstraints {
                     {
                         // We were able to remove the literal constraints or contradicting OR args,
                         // so we would like to use this new MFP, so we try undoing the preparation.
-                        undo_preparation(&mut mfp, &orig_mfp, relation)?;
+                        undo_preparation(&mut mfp, &orig_mfp, relation);
                     } else {
                         // We were not able to remove the literal constraint, so `mfp` is
                         // equivalent to `orig_mfp`, but `orig_mfp` is often simpler (or the same).
@@ -141,13 +143,24 @@ impl LiteralConstraints {
                         typ: mz_repr::RelationType {
                             column_types: key
                                 .iter()
-                                .map(|e| e.typ(&inp_typ.column_types))
+                                .map(|e| {
+                                    e.typ(&inp_typ.column_types)
+                                        // We make sure to not include a null in `expr_eq_literal`.
+                                        .nullable(false)
+                                })
                                 .collect(),
-                            keys: vec![],
+                            // (Note that the key inference for `MirRelationExpr::Constant` inspects
+                            // the constant values to detect keys not listed within the node, but it
+                            // can only detect a single-column key this way. A multi-column key is
+                            // common here, so we explicitly add it.)
+                            keys: vec![(0..key.len()).collect()],
                         },
-                    };
+                    }
+                    .arrange_by(&[(0..key.len()).map(MirScalarExpr::Column).collect_vec()]);
 
                     *relation = MirRelationExpr::Join {
+                        // It's important to keep the `filter_list` in the second position.
+                        // Both the lowering and EXPLAIN depends on this.
                         inputs: vec![relation.clone().arrange_by(&[key.clone()]), filter_list],
                         equivalences: key
                             .iter()
@@ -156,7 +169,7 @@ impl LiteralConstraints {
                                 vec![(*e).clone(), MirScalarExpr::column(i + inp_typ.arity())]
                             })
                             .collect(),
-                        implementation: IndexedFilter(inp_id, key.clone(), possible_vals),
+                        implementation: IndexedFilter(inp_id, idx_id, key.clone(), possible_vals),
                     };
 
                     // Rebuild the MFP to add the projection that removes the columns coming from
@@ -177,37 +190,45 @@ impl LiteralConstraints {
         Ok(())
     }
 
-    /// Detects literal constraints in an MFP on top of a get of `id`.
-    /// For example, for `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`,
-    /// it returns `Some([f1, f2], [[3,5], [7,9]])`
+    /// Detects literal constraints in an MFP on top of a Get of `id`, and a matching index that can
+    /// be used to speed up the Filter of the MFP.
+    ///
+    /// For example, if there is an index on `(f1, f2)`, and the Filter is
+    /// `(f1 = 3 AND f2 = 5) OR (f1 = 7 AND f2 = 9)`, it returns `Some([f1, f2], [[3,5], [7,9]])`.
+    ///
     /// We can use an index if each argument of the OR includes a literal constraint on each of the
     /// key fields of the index. Extra predicates inside the OR arguments are ok.
+    ///
+    /// Returns (idx_id, idx_key, values to lookup in the index).
     fn detect_literal_constraints(
         mfp: &MapFilterProject,
-        id: GlobalId,
-        indexes: &dyn IndexOracle,
-    ) -> Option<(Vec<MirScalarExpr>, Vec<Row>)> {
-        // If each OR argument constrains each key field, then the following inner fn returns the
-        // constraining literal values as a Vec<Row>, where each Row corresponds to one OR argument,
-        // and each value in the Row corresponds to one key field.
-        //
-        // The bool shows whether we needed to inverse cast equalities to match them up with key
-        // fields. The inverse cast enables index usage when an implicit cast is wrapping a key
-        // field. E.g., if `a` is smallint, and the user writes `a = 5`, then HIR inserts an
-        // implicit cast: `smallint_to_integer(a) = 5`, which we invert to `a = 5`, where the
-        // `5` is a smallint literal. For more details on the inversion, see
-        // `invert_casts_on_expr_eq_literal_inner`.
-        fn each_or_arg_constrains_each_key_field(
-            key: &[MirScalarExpr],
-            or_args: Vec<MirScalarExpr>,
-        ) -> Option<(Vec<Row>, bool)> {
+        get_id: GlobalId,
+        transform_ctx: &mut TransformCtx,
+    ) -> Option<(GlobalId, Vec<MirScalarExpr>, Vec<Row>)> {
+        // Checks whether an index with the specified key can be used to speed up the given filter.
+        // See comment of `IndexMatch`.
+        fn match_index(key: &[MirScalarExpr], or_args: &Vec<MirScalarExpr>) -> IndexMatch {
+            if key.is_empty() {
+                // Nothing to do with an index that has an empty key.
+                return IndexMatch::UnusableNoSubset;
+            }
+            if !key.iter().all_unique() {
+                // This is a weird index. Why does it have duplicate key expressions?
+                return IndexMatch::UnusableNoSubset;
+            }
             let mut literal_values = Vec::new();
             let mut inv_cast_any = false;
+            // This starts with all key fields of the index.
+            // At the end, it will contain a subset S of index key fields such that if the index had
+            // only S as its key, then the index would be usable.
+            let mut usable_key_fields = key.iter().collect::<BTreeSet<_>>();
+            let mut usable = true;
             for or_arg in or_args {
                 let mut row = Row::default();
                 let mut packer = row.packer();
                 for key_field in key {
                     let and_args = or_arg.and_or_args(VariadicFunc::And);
+                    // Let's find a constraint for this key field
                     if let Some((literal, inv_cast)) = and_args
                         .iter()
                         .find_map(|and_arg| and_arg.expr_eq_literal(key_field))
@@ -217,38 +238,113 @@ impl LiteralConstraints {
                         packer.push(literal.unpack_first());
                         inv_cast_any |= inv_cast;
                     } else {
-                        return None;
+                        // There is an `or_arg` where we didn't find a constraint for a key field,
+                        // so the index is unusable. Throw out the field from the usable fields.
+                        usable = false;
+                        usable_key_fields.remove(key_field);
+                        if usable_key_fields.is_empty() {
+                            return IndexMatch::UnusableNoSubset;
+                        }
                     }
                 }
                 literal_values.push(row);
             }
-            // We should deduplicate, because a constraint can be duplicated by
-            // `distribute_and_over_or`. For example: `IN ('l1', 'l2') AND (a > 0 OR a < 5)`. Here,
-            // the 2 args of the OR will cause the IN constraints to be duplicated. This doesn't
-            // alter the meaning of the expression when evaluated as a filter, but if we extract
-            // those literals 2 times into `literal_values` then the Peek code will look up those
-            // keys from the index 2 times, leading to duplicate results.
-            literal_values.sort();
-            literal_values.dedup();
-            Some((literal_values, inv_cast_any))
+            if usable {
+                // We should deduplicate, because a constraint can be duplicated by
+                // `distribute_and_over_or`. For example: `IN ('l1', 'l2') AND (a > 0 OR a < 5)`:
+                // the 2 args of the OR will cause the IN constraints to be duplicated. This doesn't
+                // alter the meaning of the expression when evaluated as a filter, but if we extract
+                // those literals 2 times into `literal_values` then the Peek code will look up
+                // those keys from the index 2 times, leading to duplicate results.
+                literal_values.sort();
+                literal_values.dedup();
+                IndexMatch::Usable(literal_values, inv_cast_any)
+            } else {
+                if usable_key_fields.is_empty() {
+                    IndexMatch::UnusableNoSubset
+                } else {
+                    IndexMatch::UnusableTooWide(
+                        usable_key_fields.into_iter().cloned().collect_vec(),
+                    )
+                }
+            }
         }
 
-        indexes
-            .indexes_on(id)
-            .filter_map(|key| {
-                let possible_vals = if key.is_empty() {
-                    None
-                } else {
-                    let or_args = Self::get_or_args(mfp);
-                    each_or_arg_constrains_each_key_field(key, or_args)
-                };
-                possible_vals.map(|(vals, inv_cast)| (key.to_owned(), vals, inv_cast))
+        let or_args = Self::get_or_args(mfp);
+
+        let index_matches = transform_ctx
+            .indexes
+            .indexes_on(get_id)
+            .map(|(index_id, key)| (index_id, key.to_owned(), match_index(key, &or_args)))
+            .collect_vec();
+
+        let result = index_matches
+            .iter()
+            .cloned()
+            .filter_map(|(idx_id, key, index_match)| match index_match {
+                IndexMatch::Usable(vals, inv_cast) => Some((idx_id, key, vals, inv_cast)),
+                _ => None,
             })
             // Maximize:
             //  1. number of predicates that are sped using a single index.
             //  2. whether we are using a simpler index by having removed a cast from the key expr.
-            .max_by_key(|(key, _val, inv_cast)| (key.len(), *inv_cast))
-            .map(|(key, val, _inv_cast)| (key, val))
+            .max_by_key(|(_idx_id, key, _vals, inv_cast)| (key.len(), *inv_cast))
+            .map(|(idx_id, key, vals, _inv_cast)| (idx_id, key, vals));
+
+        if result.is_none() && !or_args.is_empty() {
+            // Let's see if we can give a hint to the user.
+            index_matches
+                .into_iter()
+                .for_each(|(index_id, index_key, index_match)| {
+                    match index_match {
+                        IndexMatch::UnusableTooWide(usable_subset) => {
+                            // see comment of `UnusableTooWide`
+                            assert!(!usable_subset.is_empty());
+                            // Determine literal values that we would get if the index was on
+                            // `usable_subset`.
+                            let literal_values = match match_index(&usable_subset, &or_args) {
+                                IndexMatch::Usable(literal_vals, _) => literal_vals,
+                                _ => unreachable!(), // `usable_subset` would make the index usable.
+                            };
+
+                            // Let's come up with a recommendation for what columns to index:
+                            // Intersect literal constraints across all OR args. (Which might
+                            // include columns that are NOT in this index, and therefore not in
+                            // `usable_subset`.)
+                            let recommended_key = or_args
+                                .iter()
+                                .map(|or_arg| {
+                                    let and_args = or_arg.and_or_args(VariadicFunc::And);
+                                    and_args
+                                        .iter()
+                                        .filter_map(|and_arg| and_arg.any_expr_eq_literal())
+                                        .collect::<BTreeSet<_>>()
+                                })
+                                .reduce(|fields1, fields2| {
+                                    fields1.intersection(&fields2).cloned().collect()
+                                })
+                                // The unwrap is safe because above we checked `!or_args.is_empty()`
+                                .unwrap()
+                                .into_iter()
+                                .collect_vec();
+
+                            transform_ctx.dataflow_metainfo.push_optimizer_notice_dedup(
+                                IndexTooWideForLiteralConstraints {
+                                    index_id,
+                                    index_key,
+                                    usable_subset,
+                                    literal_values,
+                                    index_on_id: get_id,
+                                    recommended_key,
+                                },
+                            )
+                        }
+                        _ => (),
+                    }
+                });
+        }
+
+        result
     }
 
     /// Removes the expressions that [LiteralConstraints::detect_literal_constraints] found, if
@@ -433,22 +529,22 @@ impl LiteralConstraints {
 
     /// Makes the job of [LiteralConstraints::detect_literal_constraints] easier by undoing some CSE to
     /// reconstruct literal constraints.
-    fn inline_literal_constraints(mfp: &mut MapFilterProject) -> Result<(), RecursionLimitError> {
+    fn inline_literal_constraints(mfp: &mut MapFilterProject) {
         let mut should_inline = vec![false; mfp.input_arity + mfp.expressions.len()];
         // Mark those expressions for inlining that contain a subexpression of the form
         // `<xxx> = <lit>` or `<lit> = <xxx>`.
         for (i, e) in mfp.expressions.iter().enumerate() {
-            e.visit_post(&mut |s| {
+            e.visit_pre(|s| {
                 if s.any_expr_eq_literal().is_some() {
                     should_inline[i + mfp.input_arity] = true;
                 }
-            })?;
+            });
         }
         // Whenever
         // `<Column(i)> = <lit>` or `<lit> = <Column(i)>`
         // appears in a predicate, mark the ith expression to be inlined.
         for (_before, p) in mfp.predicates.iter() {
-            p.visit_post(&mut |e| {
+            p.visit_pre(|e| {
                 if let MirScalarExpr::CallBinary {
                     func: BinaryFunc::Eq,
                     expr1,
@@ -470,11 +566,10 @@ impl LiteralConstraints {
                         }
                     }
                 }
-            })?;
+            });
         }
         // Perform the marked inlinings.
         mfp.perform_inlining(should_inline);
-        Ok(())
     }
 
     /// MFPs have a Vec of predicates `[p1, p2, ...]`, which logically represents `p1 AND p2 AND ...`.
@@ -539,7 +634,7 @@ impl LiteralConstraints {
         mfp.predicates.iter_mut().try_for_each(|(_, p)| {
             let mut old_p = MirScalarExpr::column(0);
             while old_p != *p {
-                let size = p.size()?;
+                let size = p.size();
                 // We might make the expression exponentially larger, so we should have some limit.
                 // Below 1000 (e.g., a single IN list of ~300 elements, or 3 IN lists of 4-5
                 // elements each), we are <10 ms for a single IN list, and even less for multiple IN
@@ -627,11 +722,34 @@ impl LiteralConstraints {
         }
     }
 
-    fn predicates_size(mfp: &MapFilterProject) -> Result<usize, RecursionLimitError> {
+    fn predicates_size(mfp: &MapFilterProject) -> usize {
         let mut sum = 0;
         for (_, p) in mfp.predicates.iter() {
-            sum = sum + p.size()?;
+            sum = sum + p.size();
         }
-        Ok(sum)
+        sum
     }
+}
+
+/// Whether an index is usable to speed up a Filter with literal constraints.
+#[derive(Clone)]
+enum IndexMatch {
+    /// The index is usable, that is, each OR argument constrains each key field.
+    ///
+    /// The `Vec<Row>` has the constraining literal values, where each Row corresponds to one OR
+    /// argument, and each value in the Row corresponds to one key field.
+    ///
+    /// The `bool` indicates whether we needed to inverse cast equalities to match them up with key
+    /// fields. The inverse cast enables index usage when an implicit cast is wrapping a key field.
+    /// E.g., if `a` is smallint, and the user writes `a = 5`, then HIR inserts an implicit cast:
+    /// `smallint_to_integer(a) = 5`, which we invert to `a = 5`, where the `5` is a smallint
+    /// literal. For more details on the inversion, see `invert_casts_on_expr_eq_literal_inner`.
+    Usable(Vec<Row>, bool),
+    /// The index is unusable. However, there is a subset of key fields such that if the index would
+    /// be only on this subset, then it would be usable.
+    /// Note: this Vec is never empty. (If it were empty, then we'd get `UnusableNoSubset` instead.)
+    UnusableTooWide(Vec<MirScalarExpr>),
+    /// The index is unusable. Moreover, none of its key fields could be used as an alternate index
+    /// to speed up this filter.
+    UnusableNoSubset,
 }

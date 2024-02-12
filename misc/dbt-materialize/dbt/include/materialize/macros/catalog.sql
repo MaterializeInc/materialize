@@ -24,17 +24,27 @@
             d.name as table_database,
             s.name as table_schema,
             o.name as table_name,
-            case when o.type = 'materialized-view' then 'materializedview' else o.type end as table_type,
-            '' as table_comment,
+            case when o.type = 'materialized-view' then 'materialized_view'
+                 --This macro is used for the dbt documentation. We use
+                 --the source type in mz_sources here instead of that
+                 --in mz_objects to correctly report subsources.
+                 when o.type = 'source' and so.type = 'subsource' then so.type
+                 when o.type = 'source' and so.type = 'progress' then so.type
+                 else o.type end as table_type,
+            obj_desc.comment as table_comment,
             c.name as column_name,
             c.position as column_index,
             c.type as column_type,
-            '' as column_comment,
-            '' as table_owner
+            col_desc.comment as column_comment,
+            r.name as table_owner
         from mz_objects o
         join mz_schemas s on o.schema_id = s.id
         join mz_databases d on s.database_id = d.id and d.name = '{{ database }}'
         join mz_columns c on c.id = o.id
+        join mz_roles r on o.owner_id = r.id
+        left join mz_sources so on o.id = so.id
+        left outer join mz_internal.mz_comments obj_desc on (o.id = obj_desc.id and obj_desc.object_sub_id is null)
+        left outer join mz_internal.mz_comments col_desc on (o.id = col_desc.id and col_desc.object_sub_id = c.position)
         where s.name in (
             {%- for schema in schemas -%}
                 '{{ schema }}' {%- if not loop.last %}, {% endif -%}

@@ -1,0 +1,467 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Start from a pristine server
+reset-server
+
+# Enable comments.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_comment TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE a ( x int8, y text, z jsonb );
+
+statement ok
+COMMENT ON TABLE a IS 'foo_table';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+table  NULL  foo_table
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  foo_table
+
+statement ok
+COMMENT ON COLUMN a.y IS 'load_bearing';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+table  NULL  foo_table
+table  2  load_bearing
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  foo_table
+2  load_bearing
+
+statement ok
+CREATE TABLE b ( ts timestamptz );
+
+statement ok
+COMMENT ON COLUMN b.ts IS 'utc_timestamp';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+table  NULL  foo_table
+table  2  load_bearing
+table  1  utc_timestamp
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  foo_table
+2  load_bearing
+1  utc_timestamp
+
+statement ok
+COMMENT ON TABLE b IS 'foo_table';
+
+statement ok
+DROP TABLE a;
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+table  NULL foo_table
+table  1  utc_timestamp
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  foo_table
+1  utc_timestamp
+
+statement ok
+COMMENT ON TABLE b IS NULL
+
+statement ok
+COMMENT ON COLUMN b.ts IS NULL
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+
+statement error unknown catalog item 'c'
+COMMENT ON TABLE c IS 'does_not_exist';
+
+statement error column "b.does_not_exist" does not exist
+COMMENT ON COLUMN b.does_not_exist IS 'foo';
+
+statement ok
+CREATE INDEX b_idx ON b (ts);
+
+statement ok
+COMMENT ON INDEX b_idx IS 'speed_up';
+
+statement ok
+CREATE VIEW c (col_1, col_2) AS VALUES ('a', 'b');
+
+statement ok
+COMMENT ON VIEW c IS 'this_is_a_view';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+index NULL  speed_up
+view  NULL  this_is_a_view
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  speed_up
+0  this_is_a_view
+
+statement ok
+DROP TABLE b CASCADE;
+
+statement ok
+COMMENT ON COLUMN c.col_1 IS 'this_works';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+view  1  this_works
+view  NULL  this_is_a_view
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+1  this_works
+0  this_is_a_view
+
+statement ok
+CREATE MATERIALIZED VIEW mv ( x ) AS SELECT 1
+
+statement ok
+COMMENT ON COLUMN mv.x IS 'comment_mat_view_col';
+
+statement ok
+COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+view  1  this_works
+view  NULL  this_is_a_view
+materialized-view  NULL  mat_foo
+materialized-view  1  comment_mat_view_col
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  mat_foo
+1  this_works
+0  this_is_a_view
+1  comment_mat_view_col
+
+statement ok
+DROP VIEW c;
+
+statement ok
+DROP MATERIALIZED VIEW mv;
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+
+statement ok
+CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
+
+statement ok
+COMMENT ON CLUSTER comment_cluster IS 'careful_now';
+
+statement ok
+COMMENT ON CLUSTER REPLICA comment_cluster.r2 IS 'second_replicator';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+cluster NULL careful_now
+cluster-replica NULL second_replicator
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+
+statement ok
+DROP CLUSTER REPLICA comment_cluster.r2;
+
+statement ok
+CREATE SOURCE my_webhook IN CLUSTER comment_cluster FROM WEBHOOK BODY FORMAT TEXT;
+
+statement ok
+COMMENT ON SOURCE my_webhook IS 'all_the_data';
+
+statement ok
+COMMENT ON COLUMN my_webhook.body IS 'json_blob';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+source  1  json_blob
+source  NULL  all_the_data
+cluster  NULL  careful_now
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+1  json_blob
+0  all_the_data
+
+statement ok
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
+
+statement ok
+COMMENT ON TYPE int4_list IS 'supercool_list';
+
+statement ok
+CREATE TYPE custom_type AS (x integer, y int4_list);
+
+statement ok
+CREATE TYPE custom_map_type AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
+
+statement ok
+COMMENT ON TYPE custom_map_type IS 'custom_map_type_comment';
+
+statement error cannot be depended upon
+COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
+
+statement ok
+CREATE TYPE custom_list_type AS LIST (ELEMENT TYPE = custom_type)
+
+statement ok
+COMMENT ON TYPE custom_list_type IS 'custom_list_type_comment';
+
+statement error cannot be depended upon
+COMMENT ON COLUMN custom_list_type.element IS 'comment_on_element';
+
+statement error cannot be depended upon
+COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
+
+statement ok
+COMMENT ON TYPE custom_type IS 'custom_type_comment';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+source   1      json_blob
+type     NULL   supercool_list
+source   NULL   all_the_data
+cluster  NULL   careful_now
+type     NULL   custom_type_comment
+type     NULL   custom_map_type_comment
+type     NULL   custom_list_type_comment
+
+statement ok
+DROP TYPE custom_map_type;
+
+statement ok
+DROP TYPE custom_list_type;
+
+statement ok
+COMMENT ON COLUMN custom_type.x IS 'custom_type_x_comment';
+
+statement ok
+COMMENT ON COLUMN custom_type.y IS 'custom_type_y_comment';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+source   1      json_blob
+type     NULL   supercool_list
+source   NULL   all_the_data
+cluster  NULL   careful_now
+type     NULL   custom_type_comment
+type     1      custom_type_x_comment
+type     2      custom_type_y_comment
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+1 json_blob
+0 all_the_data
+0 supercool_list
+0 custom_type_comment
+1 custom_type_x_comment
+2 custom_type_y_comment
+
+statement ok
+DROP CLUSTER comment_cluster CASCADE;
+
+statement ok
+CREATE SECRET my_secret AS 'foobar';
+
+statement ok
+COMMENT ON SECRET my_secret IS 'supersecret';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+secret NULL supersecret
+type NULL supercool_list
+type     NULL   custom_type_comment
+type     1      custom_type_x_comment
+type     2      custom_type_y_comment
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  supercool_list
+0 custom_type_comment
+1 custom_type_x_comment
+2 custom_type_y_comment
+
+statement ok
+CREATE DATABASE comment_on_db;
+
+statement ok
+CREATE SCHEMA comment_on_schema;
+
+statement ok
+COMMENT ON DATABASE comment_on_db IS 'this_is_my_db';
+
+statement ok
+COMMENT ON SCHEMA comment_on_schema IS 'this_is_my_schema';
+
+statement ok
+DROP SECRET my_secret;
+
+statement ok
+DROP TYPE custom_type;
+
+statement ok
+DROP TYPE int4_list;
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+database NULL this_is_my_db
+schema NULL this_is_my_schema
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  this_is_my_schema
+
+statement ok
+DROP DATABASE comment_on_db;
+
+statement ok
+DROP SCHEMA comment_on_schema;
+
+# Test RBAC.
+
+statement ok
+CREATE ROLE student;
+
+statement ok
+COMMENT ON ROLE student IS 'limited_role';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+role NULL limited_role
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+
+statement ok
+CREATE TABLE foo ( x int8 );
+
+simple conn=student,user=student
+COMMENT ON TABLE foo IS 'comment_from_student';
+----
+db error: ERROR: must be owner of TABLE materialize.public.foo
+
+statement ok
+CREATE ROLE teacher;
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO student;
+----
+COMPLETE 0
+
+simple conn=student,user=student
+COMMENT ON ROLE teacher IS 'foo';
+----
+COMPLETE 0
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+role NULL foo
+role NULL limited_role
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM student;
+----
+COMPLETE 0
+
+# To comment on a Role you must have the CREATEROLE privilege.
+simple conn=student,user=student
+COMMENT ON ROLE teacher IS 'updated_teacher_comment';
+----
+db error: ERROR: permission denied for SYSTEM
+
+statement ok
+DROP ROLE student;
+
+statement ok
+DROP ROLE teacher;
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+
+statement error must be owner of DATABASE materialize
+COMMENT ON DATABASE materialize IS 'main_db';
+
+statement error must be owner of SCHEMA materialize.public
+COMMENT ON SCHEMA public IS 'everyone_has_access';
+
+simple conn=mz_system,user=mz_system
+COMMENT ON DATABASE materialize IS 'main_db';
+----
+COMPLETE 0
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+database  NULL  main_db
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----

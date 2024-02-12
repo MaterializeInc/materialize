@@ -12,32 +12,37 @@
 use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::num::NonZeroUsize;
+use std::fmt::{Display, Formatter};
+use std::num::{NonZeroU64, NonZeroUsize};
 
 use bytesize::ByteSize;
 use itertools::Itertools;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
+use mz_ore::num::NonNeg;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::text::text_string_at;
-use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
+use mz_repr::explain::{
+    DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
+};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use timely::container::columnation::{Columnation, CopyRegion};
 
+use crate::explain::{HumanizedExpr, HumanizerMode};
+use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::visit::{Visit, VisitChildren};
+use crate::Id::Local;
 use crate::{
     func as scalar_func, EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc,
     VariadicFunc,
 };
-
-use self::func::{AggregateFunc, LagLeadType, TableFunc};
 
 pub mod canonicalize;
 pub mod func;
@@ -52,17 +57,17 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.rs"));
 ///
 /// For example, in MIR we could have long chains of
 /// - (1) `Let` bindings,
-/// - (2) `CallBinary` calls with associative functions such as `OR` and `+`
+/// - (2) `CallBinary` calls with associative functions such as `+`
 ///
 /// Until we fix those, we need to stick with the larger recursion limit.
 pub const RECURSION_LIMIT: usize = 2048;
 
 /// A trait for types that describe how to build a collection.
 pub trait CollectionPlan {
-    /// Appends global identifiers on which this plan depends to `out`.
+    /// Collects the set of global identifiers from dataflows referenced in Get.
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>);
 
-    /// Returns the global identifiers on which this plan depends.
+    /// Returns the set of global identifiers from dataflows referenced in Get.
     ///
     /// See [`CollectionPlan::depends_on_into`] to reuse an existing `BTreeSet`.
     fn depends_on(&self) -> BTreeSet<GlobalId> {
@@ -100,6 +105,13 @@ pub enum MirRelationExpr {
         id: Id,
         /// Schema of the collection.
         typ: RelationType,
+        /// If this is a global Get, this will indicate whether we are going to read from Persist or
+        /// from an index, or from a different object in `objects_to_build`. If it's an index, then
+        /// how downstream dataflow operations will use this index is also recorded. This is filled
+        /// by `prune_and_annotate_dataflow_index_imports`. Note that this is not used by the
+        /// lowering to LIR, but is used only by EXPLAIN.
+        #[mzreflect(ignore)]
+        access_strategy: AccessStrategy,
     },
     /// Introduce a temporary dataflow.
     ///
@@ -134,6 +146,12 @@ pub enum MirRelationExpr {
         ids: Vec<LocalId>,
         /// The collections to be bound to each `id`.
         values: Vec<MirRelationExpr>,
+        /// Maximum number of iterations, after which we should artificially force a fixpoint.
+        /// (We don't error when reaching the limit, just return the current state as final result.)
+        /// The per-`LetRec` limit that the user specified is initially copied to each binding to
+        /// accommodate slicing and merging of `LetRec`s in MIR transforms (e.g., `NormalizeLets`).
+        #[mzreflect(ignore)]
+        limits: Vec<Option<LetRecLimit>>,
         /// The result of the `Let`, evaluated with `id` bound to `value`.
         body: Box<MirRelationExpr>,
     },
@@ -220,7 +238,7 @@ pub enum MirRelationExpr {
         monotonic: bool,
         /// User hint: expected number of values per group key. Used to optimize physical rendering.
         #[serde(default)]
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     },
     /// Groups and orders within each group, limiting output.
     ///
@@ -234,13 +252,16 @@ pub enum MirRelationExpr {
         order_key: Vec<ColumnOrder>,
         /// Number of records to retain
         #[serde(default)]
-        limit: Option<usize>,
+        limit: Option<MirScalarExpr>,
         /// Number of records to skip
         #[serde(default)]
         offset: usize,
         /// True iff the input is known to monotonically increase (only addition of records).
         #[serde(default)]
         monotonic: bool,
+        /// User-supplied hint: how many rows will have the same group key.
+        #[serde(default)]
+        expected_group_size: Option<u64>,
     },
     /// Return a dataflow where the row counts are negated
     ///
@@ -358,6 +379,21 @@ impl MirRelationExpr {
         RelationType::new(column_types).with_keys(unique_keys)
     }
 
+    /// Reports the column types of the relation given the column types of the
+    /// input relations.
+    ///
+    /// This method delegates to `try_col_with_input_cols`, panicing if an `Err`
+    /// variant is returned.
+    pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ColumnType>
+    where
+        I: Iterator<Item = &'a Vec<ColumnType>>,
+    {
+        match self.try_col_with_input_cols(input_types) {
+            Ok(col_types) => col_types,
+            Err(err) => panic!("{err}"),
+        }
+    }
+
     /// Reports the column types of the relation given the column types of the input relations.
     ///
     /// `input_types` is required to contain the column types for the input relations of
@@ -369,14 +405,38 @@ impl MirRelationExpr {
     ///
     /// It is meant to be used during post-order traversals to compute column types
     /// incrementally.
-    pub fn col_with_input_cols<'a, I>(&self, mut input_types: I) -> Vec<ColumnType>
+    pub fn try_col_with_input_cols<'a, I>(
+        &self,
+        mut input_types: I,
+    ) -> Result<Vec<ColumnType>, String>
     where
         I: Iterator<Item = &'a Vec<ColumnType>>,
     {
         use MirRelationExpr::*;
 
-        match self {
-            Constant { typ, .. } | Get { typ, .. } => typ.column_types.clone(),
+        let col_types = match self {
+            Constant { rows, typ } => {
+                let mut col_types = typ.column_types.clone();
+                let mut seen_null = vec![false; typ.arity()];
+                if let Ok(rows) = rows {
+                    for (row, _diff) in rows {
+                        for (datum, i) in row.iter().zip_eq(0..typ.arity()) {
+                            if datum.is_null() {
+                                seen_null[i] = true;
+                            }
+                        }
+                    }
+                }
+                for (&seen_null, i) in seen_null.iter().zip_eq(0..typ.arity()) {
+                    if !seen_null {
+                        col_types[i].nullable = false;
+                    } else {
+                        assert!(col_types[i].nullable);
+                    }
+                }
+                col_types
+            }
+            Get { typ, .. } => typ.column_types.clone(),
             Project { outputs, .. } => {
                 let input = input_types.next().unwrap();
                 outputs.iter().map(|&i| input[i].clone()).collect()
@@ -395,41 +455,34 @@ impl MirRelationExpr {
             }
             Filter { predicates, .. } => {
                 let mut result = input_types.next().unwrap().clone();
-                // Augment non-nullability of columns, by observing either
-                // 1. Predicates that explicitly test for null values, and
-                // 2. Columns that if null would make a predicate be null.
-                let mut nonnull_required_columns = BTreeSet::new();
-                for predicate in predicates {
-                    // Add any columns that being null would force the predicate to be null.
-                    // Should that happen, the row would be discarded.
-                    predicate.non_null_requirements(&mut nonnull_required_columns);
-                    // Test for explicit checks that a column is non-null.
-                    if let MirScalarExpr::CallUnary {
-                        func: UnaryFunc::Not(scalar_func::Not),
-                        expr,
-                    } = predicate
-                    {
-                        if let MirScalarExpr::CallUnary {
-                            func: UnaryFunc::IsNull(scalar_func::IsNull),
-                            expr,
-                        } = &**expr
-                        {
-                            if let MirScalarExpr::Column(c) = &**expr {
-                                result[*c].nullable = false;
-                            }
-                        }
-                    }
-                }
+
                 // Set as nonnull any columns where null values would cause
                 // any predicate to evaluate to null.
-                for column in nonnull_required_columns.into_iter() {
+                for column in non_nullable_columns(predicates) {
                     result[column].nullable = false;
                 }
                 result
             }
-            // Iterating and cloning types inside the flat_map() avoids allocating Vec<>,
-            // as clones are directly added to column_types Vec<>.
-            Join { .. } => input_types.flat_map(|cols| cols.to_owned()).collect(),
+            Join { equivalences, .. } => {
+                // Concatenate input column types
+                let mut types = input_types.flat_map(|cols| cols.to_owned()).collect_vec();
+                // In an equivalence class, if any column is non-null, then make all non-null
+                for equivalence in equivalences {
+                    let col_inds = equivalence
+                        .iter()
+                        .filter_map(|expr| match expr {
+                            MirScalarExpr::Column(col) => Some(*col),
+                            _ => None,
+                        })
+                        .collect_vec();
+                    if col_inds.iter().any(|i| !types.get(*i).unwrap().nullable) {
+                        for i in col_inds {
+                            types.get_mut(i).unwrap().nullable = false;
+                        }
+                    }
+                }
+                types
+            }
             Reduce {
                 group_key,
                 aggregates,
@@ -459,13 +512,14 @@ impl MirRelationExpr {
                     for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
                         *base_col = base_col
                             .union(col)
-                            .map_err(|e| format!("{}\nIn {:#?}", e, self))
-                            .unwrap();
+                            .map_err(|e| format!("{}\nin plan:\n{}", e, self.pretty()))?;
                     }
                 }
                 result
             }
-        }
+        };
+
+        Ok(col_types)
     }
 
     /// Reports the unique keys of the relation given the arities and the unique
@@ -492,7 +546,7 @@ impl MirRelationExpr {
     {
         use MirRelationExpr::*;
 
-        match self {
+        let mut keys = match self {
             Constant {
                 rows: Ok(rows),
                 typ,
@@ -755,7 +809,7 @@ impl MirRelationExpr {
                 // If `limit` is `Some(1)` then the group key will become
                 // a unique key, as there will be only one record with that key.
                 let mut result = input_keys.next().unwrap().clone();
-                if limit == &Some(1) {
+                if limit.as_ref().and_then(|x| x.as_literal_int64()) == Some(1) {
                     result.push(group_key.clone())
                 }
                 result
@@ -797,6 +851,7 @@ impl MirRelationExpr {
                 if let MirRelationExpr::Get {
                     id: first_id,
                     typ: _,
+                    ..
                 } = base_with_project_stripped
                 {
                     if inputs.len() == 1 {
@@ -807,6 +862,7 @@ impl MirRelationExpr {
                                         if let MirRelationExpr::Get {
                                             id: second_id,
                                             typ: _,
+                                            ..
                                         } = input
                                         {
                                             if first_id == second_id {
@@ -830,7 +886,10 @@ impl MirRelationExpr {
                 // Important: do not inherit keys of either input, as not unique.
                 result
             }
-        }
+        };
+        keys.sort();
+        keys.dedup();
+        keys
     }
 
     /// The number of columns in the relation.
@@ -1018,6 +1077,7 @@ impl MirRelationExpr {
         MirRelationExpr::Get {
             id: Id::Global(id),
             typ,
+            access_strategy: AccessStrategy::UnknownOrLocal,
         }
     }
 
@@ -1192,7 +1252,7 @@ impl MirRelationExpr {
         self,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
-        expected_group_size: Option<usize>,
+        expected_group_size: Option<u64>,
     ) -> Self {
         MirRelationExpr::Reduce {
             input: Box::new(self),
@@ -1213,8 +1273,9 @@ impl MirRelationExpr {
         self,
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
-        limit: Option<usize>,
+        limit: Option<MirScalarExpr>,
         offset: usize,
+        expected_group_size: Option<u64>,
     ) -> Self {
         MirRelationExpr::TopK {
             input: Box::new(self),
@@ -1222,6 +1283,7 @@ impl MirRelationExpr {
             order_key,
             limit,
             offset,
+            expected_group_size,
             monotonic: false,
         }
     }
@@ -1402,9 +1464,9 @@ impl MirRelationExpr {
     }
 
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> super::MirRelationExpr
+    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> MirRelationExpr
     where
-        Body: FnOnce(&mut IdGen, MirRelationExpr) -> super::MirRelationExpr,
+        Body: FnOnce(&mut IdGen, MirRelationExpr) -> MirRelationExpr,
     {
         if let MirRelationExpr::Get { .. } = self {
             // already done
@@ -1414,6 +1476,7 @@ impl MirRelationExpr {
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ: self.typ(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get);
             MirRelationExpr::Let {
@@ -1441,6 +1504,7 @@ impl MirRelationExpr {
             let get = MirRelationExpr::Get {
                 id: Id::Local(id),
                 typ: self.typ(),
+                access_strategy: AccessStrategy::UnknownOrLocal,
             };
             let body = (body)(id_gen, get)?;
             Ok(MirRelationExpr::Let {
@@ -1544,11 +1608,44 @@ impl MirRelationExpr {
                     f(expr)?;
                 }
             }
-            Join { equivalences, .. } => {
+            Join {
+                equivalences,
+                implementation,
+                ..
+            } => {
                 for equivalence in equivalences {
                     for expr in equivalence {
                         f(expr)?;
                     }
+                }
+                match implementation {
+                    JoinImplementation::Differential((_, start_key, _), order) => {
+                        for start_key in start_key {
+                            for k in start_key {
+                                f(k)?;
+                            }
+                        }
+                        for (_, lookup_key, _) in order {
+                            for k in lookup_key {
+                                f(k)?;
+                            }
+                        }
+                    }
+                    JoinImplementation::DeltaQuery(paths) => {
+                        for path in paths {
+                            for (_, lookup_key, _) in path {
+                                for k in lookup_key {
+                                    f(k)?;
+                                }
+                            }
+                        }
+                    }
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, index_key, _) => {
+                        for k in index_key {
+                            f(k)?;
+                        }
+                    }
+                    JoinImplementation::Unimplemented => {} // No scalar exprs
                 }
             }
             ArrangeBy { keys, .. } => {
@@ -1570,12 +1667,16 @@ impl MirRelationExpr {
                     f(&mut agg.expr)?;
                 }
             }
+            TopK { limit, .. } => {
+                if let Some(s) = limit {
+                    f(s)?;
+                }
+            }
             Constant { .. }
             | Get { .. }
             | Let { .. }
             | LetRec { .. }
             | Project { .. }
-            | TopK { .. }
             | Negate { .. }
             | Threshold { .. }
             | Union { .. } => (),
@@ -1658,12 +1759,16 @@ impl MirRelationExpr {
                     f(&agg.expr)?;
                 }
             }
+            TopK { limit, .. } => {
+                if let Some(s) = limit {
+                    f(s)?;
+                }
+            }
             Constant { .. }
             | Get { .. }
             | Let { .. }
             | LetRec { .. }
             | Project { .. }
-            | TopK { .. }
             | Negate { .. }
             | Threshold { .. }
             | Union { .. } => (),
@@ -1702,10 +1807,12 @@ impl MirRelationExpr {
     /// Leaves `self` in an unusable state, so this should only be used if `self` is about to be
     /// dropped or otherwise overwritten.
     pub fn destroy_carefully(&mut self) {
-        #[allow(deprecated)] // Having `maybe_grow` and no limit is the point here
-        self.visit_mut_post_nolimit(&mut |e| {
-            e.take_dangerous();
-        });
+        let mut todo = vec![self.take_dangerous()];
+        while let Some(mut expr) = todo.pop() {
+            for child in expr.children_mut() {
+                todo.push(child.take_dangerous());
+            }
+        }
     }
 
     /// Computes the size (total number of nodes) and maximum depth of a MirRelationExpr for
@@ -1723,9 +1830,40 @@ impl MirRelationExpr {
         dfs(self, &mut size, &mut max_depth, 1);
         (size, max_depth)
     }
+
+    /// The MirRelationExpr is considered potentially expensive if and only if
+    /// at least one of the following conditions is true:
+    ///
+    ///  - It contains at least one FlatMap or a Reduce operator.
+    ///  - It contains at least one MirScalarExpr with a function call.
+    ///
+    /// !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
+    /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    pub fn could_run_expensive_function(&self) -> bool {
+        let mut result = false;
+        self.visit_pre(&mut |e: &MirRelationExpr| {
+            use MirRelationExpr::*;
+            use MirScalarExpr::*;
+            if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
+                result |= match scalar {
+                    Column(_) | Literal(_, _) | CallUnmaterializable(_) | If { .. } => false,
+                    // Function calls are considered expensive
+                    CallUnary { .. } | CallBinary { .. } | CallVariadic { .. } => true,
+                };
+                Ok(())
+            }) {
+                // Conservatively set `true` if on RecursionLimitError.
+                result = true;
+            }
+            // FlatMap has a table function; Reduce has an aggregate function.
+            // Other constructs use MirScalarExpr to run a function
+            result |= matches!(e, FlatMap { .. } | Reduce { .. });
+        });
+        result
+    }
 }
 
-// Temporary implementation for working with `LetRec`.
+// `LetRec` helpers
 impl MirRelationExpr {
     /// True when `expr` contains a `LetRec` AST node.
     pub fn is_recursive(self: &MirRelationExpr) -> bool {
@@ -1739,16 +1877,64 @@ impl MirRelationExpr {
         false
     }
 
+    /// Given the ids and values of a LetRec, it computes the subset of ids that are used across
+    /// iterations. These are those ids that have a reference before they are defined, when reading
+    /// all the bindings in order.
+    ///
+    /// For example:
+    /// ```SQL
+    /// WITH MUTUALLY RECURSIVE
+    ///     x(...) AS f(z),
+    ///     y(...) AS g(x),
+    ///     z(...) AS h(y)
+    /// ...;
+    /// ```
+    /// Here, only `z` is returned, because `x` and `y` are referenced only within the same
+    /// iteration.
+    ///
+    /// Note that if a binding references itself, that is also returned.
+    pub fn recursive_ids(ids: &[LocalId], values: &[MirRelationExpr]) -> BTreeSet<LocalId> {
+        let mut used_across_iterations = BTreeSet::new();
+        let mut defined = BTreeSet::new();
+        for (binding_id, value) in itertools::zip_eq(ids.iter(), values.iter()) {
+            value.visit_pre(|expr| {
+                if let MirRelationExpr::Get {
+                    id: Local(get_id), ..
+                } = expr
+                {
+                    // If we haven't seen a definition for it yet, then this will refer
+                    // to the previous iteration.
+                    // The `ids.contains` part of the condition is needed to exclude
+                    // those ids that are not really in this LetRec, but either an inner
+                    // or outer one.
+                    if !defined.contains(get_id) && ids.contains(get_id) {
+                        used_across_iterations.insert(*get_id);
+                    }
+                }
+            });
+            defined.insert(*binding_id);
+        }
+        used_across_iterations
+    }
+
     /// Replaces `LetRec` nodes with a stack of `Let` nodes.
     ///
     /// In each `Let` binding, uses of `Get` in `value` that are not at strictly greater
     /// identifiers are rewritten to be the constant collection.
     /// This makes the computation perform exactly "one" iteration.
+    ///
+    /// This was used only temporarily while developing `LetRec`.
     pub fn make_nonrecursive(self: &mut MirRelationExpr) {
         let mut deadlist = BTreeSet::new();
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
-            if let MirRelationExpr::LetRec { ids, values, body } = expr {
+            if let MirRelationExpr::LetRec {
+                ids,
+                values,
+                limits: _,
+                body,
+            } = expr
+            {
                 let ids_values = values
                     .drain(..)
                     .zip(ids)
@@ -1781,9 +1967,108 @@ impl MirRelationExpr {
             }
         }
     }
+
+    /// For each Id `id'` referenced in `expr`, if it is larger or equal than `id`, then record in
+    /// `expire_whens` that when `id'` is redefined, then we should expire the information that
+    /// we are holding about `id`. Call `do_expirations` with `expire_whens` at each Id
+    /// redefinition.
+    ///
+    /// IMPORTANT: Relies on the numbering of Ids to be what `renumber_bindings` gives.
+    pub fn collect_expirations(
+        id: LocalId,
+        expr: &MirRelationExpr,
+        expire_whens: &mut BTreeMap<LocalId, Vec<LocalId>>,
+    ) {
+        expr.visit_pre(|e| {
+            if let MirRelationExpr::Get {
+                id: Id::Local(referenced_id),
+                ..
+            } = e
+            {
+                // The following check needs `renumber_bindings` to have run recently
+                if referenced_id >= &id {
+                    expire_whens
+                        .entry(*referenced_id)
+                        .or_insert_with(Vec::new)
+                        .push(id);
+                }
+            }
+        });
+    }
+
+    /// Call this function when `id` is redefined. It modifies `id_infos` by removing information
+    /// about such Ids whose information depended on the earlier definition of `id`, according to
+    /// `expire_whens`. Also modifies `expire_whens`: it removes the currently processed entry.
+    pub fn do_expirations<I>(
+        redefined_id: LocalId,
+        expire_whens: &mut BTreeMap<LocalId, Vec<LocalId>>,
+        id_infos: &mut BTreeMap<LocalId, I>,
+    ) -> Vec<(LocalId, I)> {
+        let mut expired_infos = Vec::new();
+        if let Some(expirations) = expire_whens.remove(&redefined_id) {
+            for expired_id in expirations.into_iter() {
+                if let Some(offer) = id_infos.remove(&expired_id) {
+                    expired_infos.push((expired_id, offer));
+                }
+            }
+        }
+        expired_infos
+    }
+}
+/// Augment non-nullability of columns, by observing either
+/// 1. Predicates that explicitly test for null values, and
+/// 2. Columns that if null would make a predicate be null.
+pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
+    let mut nonnull_required_columns = BTreeSet::new();
+    for predicate in predicates {
+        // Add any columns that being null would force the predicate to be null.
+        // Should that happen, the row would be discarded.
+        predicate.non_null_requirements(&mut nonnull_required_columns);
+
+        /*
+        Test for explicit checks that a column is non-null.
+
+        This analysis is ad hoc, and will miss things:
+
+        materialize=> create table a(x int, y int);
+        CREATE TABLE
+        materialize=> explain with(types) select x from a where (y=x and y is not null) or x is not null;
+        Optimized Plan
+        --------------------------------------------------------------------------------------------------------
+        Explained Query:                                                                                      +
+        Project (#0) // { types: "(integer?)" }                                                             +
+        Filter ((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))) // { types: "(integer?, integer?)" }+
+        Get materialize.public.a // { types: "(integer?, integer?)" }                                   +
+                                                                                  +
+        Source materialize.public.a                                                                           +
+        filter=(((#0) IS NOT NULL OR ((#1) IS NOT NULL AND (#0 = #1))))                                     +
+
+        (1 row)
+        */
+
+        if let MirScalarExpr::CallUnary {
+            func: UnaryFunc::Not(scalar_func::Not),
+            expr,
+        } = predicate
+        {
+            if let MirScalarExpr::CallUnary {
+                func: UnaryFunc::IsNull(scalar_func::IsNull),
+                expr,
+            } = &**expr
+            {
+                if let MirScalarExpr::Column(c) = &**expr {
+                    nonnull_required_columns.insert(*c);
+                }
+            }
+        }
+    }
+
+    nonnull_required_columns
 }
 
 impl CollectionPlan for MirRelationExpr {
+    // !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
+    // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let MirRelationExpr::Get {
             id: Id::Global(id), ..
@@ -1962,7 +2247,18 @@ impl VisitChildren<Self> for MirRelationExpr {
 
 /// Specification for an ordering by a column.
 #[derive(
-    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
 )]
 pub struct ColumnOrder {
     /// The column index.
@@ -1973,6 +2269,10 @@ pub struct ColumnOrder {
     /// Whether to sort nulls last.
     #[serde(default)]
     pub nulls_last: bool,
+}
+
+impl Columnation for ColumnOrder {
+    type InnerRegion = CopyRegion<Self>;
 }
 
 impl RustType<ProtoColumnOrder> for ColumnOrder {
@@ -1993,14 +2293,18 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
     }
 }
 
-impl fmt::Display for ColumnOrder {
+impl<'a, M> fmt::Display for HumanizedExpr<'a, ColumnOrder, M>
+where
+    M: HumanizerMode,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // If you modify this, then please also attend to Display for ColumnOrderWithExpr!
         write!(
             f,
-            "#{} {} {}",
-            self.column,
-            if self.desc { "desc" } else { "asc" },
-            if self.nulls_last {
+            "{} {} {}",
+            self.child(&self.expr.column),
+            if self.expr.desc { "desc" } else { "asc" },
+            if self.expr.nulls_last {
                 "nulls_last"
             } else {
                 "nulls_first"
@@ -2160,6 +2464,25 @@ impl AggregateExpr {
                 }
             }
 
+            AggregateFunc::MapAgg { value_type, .. } => {
+                let record = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::MapBuild {
+                        value_type: value_type.clone(),
+                    },
+                    exprs: (0..2)
+                        .map(|i| {
+                            record
+                                .clone()
+                                .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(i)))
+                        })
+                        .collect(),
+                }
+            }
+
             // StringAgg takes nested records of strings and outputs a string
             AggregateFunc::StringAgg { .. } => self
                 .expr
@@ -2173,84 +2496,13 @@ impl AggregateExpr {
                 .clone()
                 .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
 
-            // RowNumber takes a list of records and outputs a list containing exactly 1 element
+            // RowNumber, Rank, DenseRank take a list of records and output a list containing exactly 1 element
             AggregateFunc::RowNumber { .. } => {
-                let list = self
-                    .expr
-                    .clone()
-                    // extract the list within the record
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-
-                // extract the expression within the list
-                let record = MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListIndex,
-                    exprs: vec![
-                        list,
-                        MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                    ],
-                };
-
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: self
-                            .typ(input_type)
-                            .scalar_type
-                            .unwrap_list_element_type()
-                            .clone(),
-                    },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?row_number?"),
-                                ColumnName::from("?record?"),
-                            ],
-                        },
-                        exprs: vec![
-                            MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                            record,
-                        ],
-                    }],
-                }
+                self.on_unique_ranking_window_funcs(input_type, "?row_number?")
             }
-
-            // DenseRank takes a list of records and outputs a list containing exactly 1 element
+            AggregateFunc::Rank { .. } => self.on_unique_ranking_window_funcs(input_type, "?rank?"),
             AggregateFunc::DenseRank { .. } => {
-                let list = self
-                    .expr
-                    .clone()
-                    // extract the list within the record
-                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-
-                // extract the expression within the list
-                let record = MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListIndex,
-                    exprs: vec![
-                        list,
-                        MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                    ],
-                };
-
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
-                        elem_type: self
-                            .typ(input_type)
-                            .scalar_type
-                            .unwrap_list_element_type()
-                            .clone(),
-                    },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
-                            field_names: vec![
-                                ColumnName::from("?dense_rank?"),
-                                ColumnName::from("?record?"),
-                            ],
-                        },
-                        exprs: vec![
-                            MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
-                            record,
-                        ],
-                    }],
-                }
+                self.on_unique_ranking_window_funcs(input_type, "?dense_rank?")
             }
 
             // The input type for LagLead is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
@@ -2411,6 +2663,65 @@ impl AggregateExpr {
                 }
             }
 
+            // The input type for window aggs is a ((OriginalRow, InputValue), OrderByExprs...)
+            // See an example MIR in `window_func_applied_to`.
+            AggregateFunc::WindowAggregate {
+                wrapped_aggregate,
+                window_frame,
+                ..
+            } => {
+                // TODO: deduplicate code between the various window function cases.
+
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let window_agg_return_type = return_type.unwrap_record_element_type()[0].clone();
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the input value
+                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                // If the window frame includes the current (single) row, evaluate the aggregate on
+                // that row. Otherwise, return the default value for the aggregate.
+                let value = if window_frame.includes_current_row() {
+                    AggregateExpr {
+                        func: (**wrapped_aggregate).clone(),
+                        expr,
+                        distinct: false, // We have just one input element; DISTINCT doesn't matter.
+                    }
+                    .on_unique(input_type)
+                } else {
+                    MirScalarExpr::literal_ok(wrapped_aggregate.default(), window_agg_return_type)
+                };
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?window_agg?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![value, original_row],
+                    }],
+                }
+            }
+
             // All other variants should return the argument to the aggregation.
             AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt16
@@ -2427,6 +2738,7 @@ impl AggregateExpr {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MaxInterval
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2442,12 +2754,54 @@ impl AggregateExpr {
             | AggregateFunc::MinDate
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
+            | AggregateFunc::MinInterval
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
             | AggregateFunc::Any
             | AggregateFunc::All
             | AggregateFunc::Dummy => self.expr.clone(),
+        }
+    }
+
+    /// `on_unique` for ROW_NUMBER, RANK, DENSE_RANK
+    pub fn on_unique_ranking_window_funcs(
+        &self,
+        input_type: &[ColumnType],
+        col_name: &str,
+    ) -> MirScalarExpr {
+        let list = self
+            .expr
+            .clone()
+            // extract the list within the record
+            .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+        // extract the expression within the list
+        let record = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::ListIndex,
+            exprs: vec![
+                list,
+                MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+            ],
+        };
+
+        MirScalarExpr::CallVariadic {
+            func: VariadicFunc::ListCreate {
+                elem_type: self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone(),
+            },
+            exprs: vec![MirScalarExpr::CallVariadic {
+                func: VariadicFunc::RecordCreate {
+                    field_names: vec![ColumnName::from(col_name), ColumnName::from("?record?")],
+                },
+                exprs: vec![
+                    MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                    record,
+                ],
+            }],
         }
     }
 
@@ -2512,8 +2866,13 @@ pub enum JoinImplementation {
     /// This gets translated to a Differential join during MIR -> LIR lowering, but we still want
     /// to represent it in MIR, because the fast path detection wants to match on this.
     ///
-    /// Consists of (`<view id>`, `<keys of index>`, `<constants>`)
-    IndexedFilter(GlobalId, Vec<MirScalarExpr>, #[mzreflect(ignore)] Vec<Row>),
+    /// Consists of (`<coll_id>`, `<index_id>`, `<index_key>`, `<constants>`)
+    IndexedFilter(
+        GlobalId,
+        GlobalId,
+        Vec<MirScalarExpr>,
+        #[mzreflect(ignore)] Vec<Row>,
+    ),
     /// No implementation yet selected.
     Unimplemented,
 }
@@ -2559,6 +2918,8 @@ pub struct JoinInputCharacteristics {
     pub key_length: usize,
     /// Indicates that there will be no additional in-memory footprint.
     pub arranged: bool,
+    /// Estimated cardinality (lower is better)
+    pub cardinality: Option<std::cmp::Reverse<usize>>,
     /// Characteristics of the filter that is applied at this input.
     pub filters: FilterCharacteristics,
     /// We want to prefer input earlier in the input list, for stability of ordering.
@@ -2571,6 +2932,7 @@ impl JoinInputCharacteristics {
         unique_key: bool,
         key_length: usize,
         arranged: bool,
+        cardinality: Option<usize>,
         filters: FilterCharacteristics,
         input: usize,
     ) -> Self {
@@ -2578,6 +2940,7 @@ impl JoinInputCharacteristics {
             unique_key,
             key_length,
             arranged,
+            cardinality: cardinality.map(std::cmp::Reverse),
             filters,
             input: std::cmp::Reverse(input),
         }
@@ -2594,6 +2957,9 @@ impl JoinInputCharacteristics {
         }
         if self.arranged {
             e.push_str("A");
+        }
+        if let Some(std::cmp::Reverse(cardinality)) = self.cardinality {
+            e.push_str(&format!("|{cardinality}|"));
         }
         e.push_str(&self.filters.explain());
         e
@@ -2612,7 +2978,7 @@ pub struct RowSetFinishing {
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
     /// Include only as many rows (after offset).
-    pub limit: Option<usize>,
+    pub limit: Option<NonNeg<i64>>,
     /// Omit as many rows.
     pub offset: usize,
     /// Include only given columns.
@@ -2640,6 +3006,15 @@ impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
 }
 
 impl RowSetFinishing {
+    /// Returns a trivial finishing, i.e., that does nothing to the result set.
+    pub fn trivial(arity: usize) -> RowSetFinishing {
+        RowSetFinishing {
+            order_by: Vec::new(),
+            limit: None,
+            offset: 0,
+            project: (0..arity).collect(),
+        }
+    }
     /// True if the finishing does nothing to any result set.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.limit.is_none()
@@ -2674,7 +3049,7 @@ impl RowSetFinishing {
         &self,
         mut rows: Vec<(Row, NonZeroUsize)>,
         // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
-        max_result_size: u32,
+        max_result_size: u64,
     ) -> Result<Vec<Row>, String> {
         let max_result_size = usize::cast_from(max_result_size);
         let mut left_datum_vec = mz_repr::DatumVec::new();
@@ -2700,34 +3075,43 @@ impl RowSetFinishing {
             *nth_diff = NonZeroUsize::new(nth_diff.get() - offset_kth_copy).unwrap();
         }
 
-        let limit = self.limit.unwrap_or(usize::MAX);
+        let limit = self.limit.unwrap_or(NonNeg::<i64>::max());
 
-        // Count how many rows we'd expand into, returning early from the whole function
-        // if we don't have enough memory to expand the result, or break early from the
-        // iteration once we pass our limit.
-        let mut num_rows = 0;
-        let mut num_bytes: usize = 0;
-        for (row, count) in &rows[offset_nth_row..] {
-            num_rows += count.get();
-            num_bytes = num_bytes.saturating_add(count.get().saturating_mul(row.byte_len()));
+        // The code below is logically equivalent to:
+        //
+        // let mut total = 0;
+        // for (_, count) in &rows[offset_nth_row..] {
+        //     total += count.get();
+        // }
+        // let return_size = std::cmp::min(total, limit);
+        //
+        // but it breaks early if the limit is reached, instead of scanning the entire code.
+        let return_row_count = rows[offset_nth_row..]
+            .iter()
+            .try_fold(0, |sum: usize, (_, count)| {
+                let new_sum = sum.saturating_add(count.get());
+                if new_sum > usize::cast_from(u64::from(limit)) {
+                    None
+                } else {
+                    Some(new_sum)
+                }
+            })
+            .unwrap_or_else(|| usize::cast_from(u64::from(limit)));
 
-            // Check that result fits into max_result_size.
-            if num_bytes > max_result_size {
-                return Err(format!(
-                    "result exceeds max size of {}",
-                    ByteSize::b(u64::cast_from(max_result_size))
-                ));
-            }
-
-            // Stop iterating if we've passed limit.
-            if num_rows > limit {
-                break;
-            }
+        // Check that the bytes allocated in the Vec below will be less than the minimum possible
+        // byte limit (i.e., if zero rows spill to heap). We still have to check each row below
+        // because they could spill to heap and end up using more memory.
+        const MINIMUM_ROW_BYTES: usize = std::mem::size_of::<Row>();
+        let bytes_to_be_allocated = MINIMUM_ROW_BYTES.saturating_mul(return_row_count);
+        if bytes_to_be_allocated > max_result_size {
+            return Err(format!(
+                "result exceeds max size of {}",
+                ByteSize::b(u64::cast_from(max_result_size))
+            ));
         }
-        let return_size = std::cmp::min(num_rows, limit);
 
-        let mut ret = Vec::with_capacity(return_size);
-        let mut remaining = limit;
+        let mut ret = Vec::with_capacity(return_row_count);
+        let mut remaining = usize::cast_from(u64::from(limit));
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut total_bytes = 0;
@@ -2817,6 +3201,16 @@ pub struct WindowFrame {
     pub start_bound: WindowFrameBound,
     /// Where the frame ends
     pub end_bound: WindowFrameBound,
+}
+
+impl Display for WindowFrame {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} between {} and {}",
+            self.units, self.start_bound, self.end_bound
+        )
+    }
 }
 
 impl WindowFrame {
@@ -2915,6 +3309,16 @@ pub enum WindowFrameUnits {
     Groups,
 }
 
+impl Display for WindowFrameUnits {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            WindowFrameUnits::Rows => write!(f, "rows"),
+            WindowFrameUnits::Range => write!(f, "range"),
+            WindowFrameUnits::Groups => write!(f, "groups"),
+        }
+    }
+}
+
 impl RustType<proto_window_frame::ProtoWindowFrameUnits> for WindowFrameUnits {
     fn into_proto(&self) -> proto_window_frame::ProtoWindowFrameUnits {
         use proto_window_frame::proto_window_frame_units::Kind::*;
@@ -2964,6 +3368,18 @@ pub enum WindowFrameBound {
     UnboundedFollowing,
 }
 
+impl Display for WindowFrameBound {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            WindowFrameBound::UnboundedPreceding => write!(f, "unbounded preceding"),
+            WindowFrameBound::OffsetPreceding(offset) => write!(f, "{} preceding", offset),
+            WindowFrameBound::CurrentRow => write!(f, "current row"),
+            WindowFrameBound::OffsetFollowing(offset) => write!(f, "{} following", offset),
+            WindowFrameBound::UnboundedFollowing => write!(f, "unbounded following"),
+        }
+    }
+}
+
 impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
     fn into_proto(&self) -> proto_window_frame::ProtoWindowFrameBound {
         use proto_window_frame::proto_window_frame_bound::Kind::*;
@@ -2995,17 +3411,69 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
     }
 }
 
+/// Maximum iterations for a LetRec.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct LetRecLimit {
+    /// Maximum number of iterations to evaluate.
+    pub max_iters: NonZeroU64,
+    /// Whether to throw an error when reaching the above limit.
+    /// If true, we simply use the current contents of each Id as the final result.
+    pub return_at_limit: bool,
+}
+
+impl LetRecLimit {
+    /// Compute the smallest limit from a Vec of `LetRecLimit`s.
+    pub fn min_max_iter(limits: &Vec<Option<LetRecLimit>>) -> Option<u64> {
+        limits
+            .iter()
+            .filter_map(|l| l.as_ref().map(|l| l.max_iters.get()))
+            .min()
+    }
+
+    /// The default value of `LetRecLimit::return_at_limit` when using the RECURSION LIMIT option of
+    /// WMR without ERROR AT or RETURN AT.
+    pub const RETURN_AT_LIMIT_DEFAULT: bool = false;
+}
+
+impl Display for LetRecLimit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[recursion_limit={}", self.max_iters)?;
+        if self.return_at_limit != LetRecLimit::RETURN_AT_LIMIT_DEFAULT {
+            write!(f, ", return_at_limit")?;
+        }
+        write!(f, "]")
+    }
+}
+
+/// For a global Get, this indicates whether we are going to read from Persist or from an index.
+/// (See comment in MirRelationExpr::Get.)
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+pub enum AccessStrategy {
+    /// It's either a local Get (a CTE), or unknown at the time.
+    /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to
+    /// one of the other variants.
+    UnknownOrLocal,
+    /// The Get will read from Persist.
+    Persist,
+    /// The Get will read from an index or indexes: (index id, how the index will be used).
+    Index(Vec<(GlobalId, IndexUsageType)>),
+    /// The Get will read a collection that is computed by the same dataflow, but in a different
+    /// `BuildDesc` in `objects_to_build`.
+    SameDataflow,
+}
+
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
     use mz_proto::protobuf_roundtrip;
     use mz_repr::explain::text::text_string_at;
+    use proptest::prelude::*;
+
+    use crate::explain::HumanizedExplain;
 
     use super::*;
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn column_order_protobuf_roundtrip(expect in any::<ColumnOrder>()) {
             let actual = protobuf_roundtrip::<_, ProtoColumnOrder>(&expect);
             assert!(actual.is_ok());
@@ -3014,7 +3482,8 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
             let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
             assert!(actual.is_ok());
@@ -3023,7 +3492,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn window_frame_units_protobuf_roundtrip(expect in any::<WindowFrameUnits>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameUnits>(&expect);
             assert!(actual.is_ok());
@@ -3032,7 +3501,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn window_frame_bound_protobuf_roundtrip(expect in any::<WindowFrameBound>()) {
             let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameBound>(&expect);
             assert!(actual.is_ok());
@@ -3041,7 +3510,7 @@ mod tests {
     }
 
     proptest! {
-        #[test]
+        #[mz_ore::test]
         fn window_frame_protobuf_roundtrip(expect in any::<WindowFrame>()) {
             let actual = protobuf_roundtrip::<_, ProtoWindowFrame>(&expect);
             assert!(actual.is_ok());
@@ -3049,7 +3518,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_row_set_finishing_as_text() {
         let finishing = RowSetFinishing {
             order_by: vec![ColumnOrder {
@@ -3057,12 +3526,15 @@ mod tests {
                 desc: true,
                 nulls_last: true,
             }],
-            limit: Some(7),
+            limit: Some(NonNeg::try_from(7).unwrap()),
             offset: Default::default(),
             project: vec![1, 3, 4, 5],
         };
 
-        let act = text_string_at(&finishing, mz_ore::str::Indent::default);
+        let mode = HumanizedExplain::new(false);
+        let expr = mode.expr(&finishing, None);
+
+        let act = text_string_at(&expr, mz_ore::str::Indent::default);
 
         let exp = {
             use mz_ore::fmt::FormatBuffer;

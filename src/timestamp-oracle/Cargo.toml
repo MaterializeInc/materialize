@@ -1,0 +1,31 @@
+[package]
+name = "mz-timestamp-oracle"
+description = "Materialize's Timestamp Oracle."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.66"
+async-trait = "0.1.68"
+dec = "0.4.8"
+deadpool-postgres = "0.10.3"
+futures = "0.3.25"
+mz-adapter-types = { path = "../adapter-types" }
+mz-ore = { path = "../ore", features = ["chrono", "async", "tracing_"] }
+mz-pgrepr = { path = "../pgrepr" }
+mz-postgres-client = { path = "../postgres-client" }
+mz-repr = { path = "../repr", features = ["tracing_"] }
+rand = "0.8.5"
+serde = "1.0.152"
+tokio = { version = "1.32.0", features = ["rt", "time"] }
+tracing = "0.1.37"
+uuid = { version = "1.7.0", features = ["v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

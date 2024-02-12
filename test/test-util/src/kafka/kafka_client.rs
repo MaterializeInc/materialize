@@ -36,7 +36,7 @@ impl KafkaClient {
             config.set(*key, *val);
         }
 
-        let producer = config.create_with_context(MzClientContext)?;
+        let producer = config.create_with_context(MzClientContext::default())?;
 
         Ok(KafkaClient {
             producer,

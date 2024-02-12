@@ -9,8 +9,8 @@
 
 mode cockroach
 
-query error cannot show create for system object mz_internal.mz_storage_shards
-SHOW CREATE SOURCE mz_internal.mz_storage_shards
+query error db error: ERROR: cannot show create for system object mz_internal\.mz_source_statistics
+SHOW CREATE SOURCE mz_internal.mz_source_statistics
 
-query error cannot show create for system object mz_catalog.mz_tables
+query error db error: ERROR: cannot show create for system object mz_catalog\.mz_tables
 SHOW CREATE TABLE mz_tables

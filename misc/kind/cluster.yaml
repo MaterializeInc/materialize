@@ -22,6 +22,7 @@ kubeadmConfigPatches:
         "service-node-port-range": "32000-32063"
 nodes:
   - role: control-plane
+    image: kindest/node:v1.26.6
     extraPortMappings:
       - containerPort: 32000
         hostPort: 32000
@@ -153,5 +154,36 @@ nodes:
         hostPort: 32063
 
   - role: worker
+    labels:
+      materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "1"
+      topology.kubernetes.io/zone: "1"
   - role: worker
+    labels:
+      materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "2"
+      topology.kubernetes.io/zone: "2"
   - role: worker
+    labels:
+      materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "3"
+      topology.kubernetes.io/zone: "3"
+
+  # no-disk
+  - role: worker
+    labels:
+      materialize.cloud/disk: false
+      materialize.cloud/availability-zone: "1"
+      topology.kubernetes.io/zone: "1"
+
+  # others
+  - role: worker
+    labels:
+      materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "3"
+      topology.kubernetes.io/zone: "3"
+  - role: worker
+    labels:
+      materialize.cloud/disk: true
+      materialize.cloud/availability-zone: "3"
+      topology.kubernetes.io/zone: "3"

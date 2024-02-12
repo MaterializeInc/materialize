@@ -9,9 +9,9 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.table_capabilities import TableExists
@@ -27,10 +27,10 @@ class CreateTableParameterized(ActionFactory):
         self.max_rows_per_action = max_rows_per_action
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning}
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning}
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_table_name = capabilities.get_free_capability_name(
             TableExists, self.max_tables
         )
@@ -52,6 +52,10 @@ class CreateTableParameterized(ActionFactory):
 
 class CreateTable(Action):
     """Creates a table on the Mz instance. 50% of the tables have a default index."""
+
+    @classmethod
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning}
 
     def __init__(self, table: TableExists, capabilities: Capabilities) -> None:
         assert (
@@ -76,7 +80,7 @@ class CreateTable(Action):
             )
         )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.table]
 
 
@@ -84,30 +88,52 @@ class ValidateTable(Action):
     """Validates that a single table contains data that is consistent with the expected min/max watermark."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, TableExists}
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning, TableExists}
 
-    def __init__(self, capabilities: Capabilities) -> None:
-        self.table = random.choice(capabilities.get(TableExists))
+    def __init__(
+        self, capabilities: Capabilities, table: TableExists | None = None
+    ) -> None:
+        if table is not None:
+            self.table = table
+        else:
+            self.table = random.choice(capabilities.get(TableExists))
+
+        self.select_limit = random.choices([True, False], weights=[0.2, 0.8], k=1)[0]
         super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
-        c.testdrive(
-            dedent(
-                f"""
-                > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
-                {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
-                """
+        # Validating via SELECT ... LIMIT is expensive as it requires creating a temporary table
+        # Therefore, only use it in 20% of validations.
+        if self.select_limit:
+            c.testdrive(
+                dedent(
+                    f"""
+                    > CREATE TEMPORARY TABLE {self.table.name}_select_limit (f1 INTEGER);
+                    > INSERT INTO {self.table.name}_select_limit SELECT * FROM {self.table.name} LIMIT 999999999;
+                    > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name}_select_limit;
+                    {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
+                    > DROP TABLE {self.table.name}_select_limit
+                    """
+                )
             )
-        )
+        else:
+            c.testdrive(
+                dedent(
+                    f"""
+                    > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
+                    {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
+                    """
+                )
+            )
 
 
 class DML(Action):
     """Performs an INSERT, DELETE or UPDATE against a table."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
-        return {MzIsRunning, TableExists}
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning, TableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.table = random.choice(capabilities.get(TableExists))

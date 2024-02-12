@@ -40,6 +40,117 @@ $connection = connect('MATERIALIZE_HOST', 6875, 'materialize', 'MATERIALIZE_USER
 
 You can add the above code to a `config.php` file and then include it in your application with `require 'connect.php';`.
 
+## Create tables
+
+Most data in Materialize will stream in via an external system, but a [`TABLE` in Materialize](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
+
+To create a table named `countries` in Materialize:
+
+```php
+<?php
+// Include the Postgres connection details
+require 'connect.php';
+
+$sql = 'CREATE TABLE IF NOT EXISTS countries (
+    code CHAR(2),
+    name TEXT
+)';
+
+$statement = $connection->prepare($sql);
+$statement->execute();
+```
+
+## Insert data into tables
+
+**Basic Example:** [Insert a row](/sql/insert/) of data into the `countries` table in Materialize.
+
+```php
+<?php
+// Include the Postgres connection details
+require 'connect.php';
+
+$sql = 'INSERT INTO countries (name, code) VALUES (?, ?)';
+$statement = $connection->prepare($sql);
+$statement->execute(['United States', 'US']);
+$statement->execute(['Canada', 'CA']);
+$statement->execute(['Mexico', 'MX']);
+$statement->execute(['Germany', 'DE']);
+
+$countStmt = "SELECT COUNT(*) FROM countries";
+$count = $connection->query($countStmt);
+while (($row = $count->fetch(PDO::FETCH_ASSOC)) !== false) {
+    var_dump($row);
+}
+```
+
+## Query
+
+Querying Materialize is identical to querying a PostgreSQL database: PHP executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+
+To query the `countries` table using a `SELECT` statement:
+
+```php
+<?php
+// Include the Postgres connection details
+require 'connect.php';
+
+$sql = 'SELECT * FROM countries';
+$statement = $connection->query($sql);
+
+while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
+    var_dump($row);
+}
+```
+
+For more details, see the [PHP `PDOStatement`](https://www.php.net/manual/en/pdostatement.fetch.php) documentation.
+
+## Manage sources, views, and indexes
+
+Typically, you create sources, views, and indexes when deploying Materialize, although it is possible to use a PHP app to execute common DDL statements.
+
+### Create a source from PHP
+
+```php
+<?php
+// Include the Postgres connection details
+require 'connect.php';
+
+$sql = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;";
+
+$statement = $connection->prepare($sql);
+$statement->execute();
+
+$sources = "SHOW SOURCES";
+$statement = $connection->query($sources);
+$result = $statement->fetchAll(PDO::FETCH_ASSOC);
+var_dump($result);
+
+```
+
+For more information, see [`CREATE SOURCE`](/sql/create-source/).
+
+### Create a view from PHP
+
+```php
+<?php
+// Include the Postgres connection details
+require 'connect.php';
+
+$sql = "CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS SELECT SUM(value) FROM counter;";
+
+$statement = $connection->prepare($sql);
+$statement->execute();
+
+$views = "SHOW MATERIALIZED VIEWS";
+$statement = $connection->query($views);
+$result = $statement->fetchAll(PDO::FETCH_ASSOC);
+var_dump($result);
+```
+
+For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
+
 ## Stream
 
 To take full advantage of incrementally updated materialized views from a PHP application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
@@ -54,7 +165,7 @@ require 'connect.php';
 // Begin a transaction
 $connection->beginTransaction();
 // Declare a cursor
-$statement = $connection->prepare('DECLARE c CURSOR FOR SUBSCRIBE demo');
+$statement = $connection->prepare('DECLARE c CURSOR FOR SUBSCRIBE counter_sum WITH (FETCH = true);');
 // Execute the statement
 $statement->execute();
 
@@ -78,7 +189,7 @@ The [SUBSCRIBE output format](/sql/subscribe/#output) of `result` is an array of
                 (
                     [mz_timestamp] => 1646310999683
                     [mz_diff] => 1
-                    [my_column_one] => 'value'
+                    [sum] => 'value_1'
                 )
 
         )
@@ -88,7 +199,7 @@ The [SUBSCRIBE output format](/sql/subscribe/#output) of `result` is an array of
                 (
                     [mz_timestamp] => 1646311002682
                     [mz_diff] => -1
-                    [my_column_one] => 'value'
+                    [sum] => 'value_2'
                 )
 
         )
@@ -97,102 +208,15 @@ The [SUBSCRIBE output format](/sql/subscribe/#output) of `result` is an array of
 
 An `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 
-## Query
+## Clean up
 
-Querying Materialize is identical to querying a PostgreSQL database: PHP executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
-Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
-
-To query a view `my_view` using a `SELECT` statement:
-
-```php
-<?php
-// Include the Postgres connection details
-require 'connect.php';
-
-$sql = 'SELECT * FROM my_view';
-$statement = $connection->query($sql);
-
-while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
-    var_dump($row);
-}
+```sql
+DROP MATERIALIZED VIEW IF EXISTS counter_sum;
+DROP SOURCE IF EXISTS counter;
+DROP TABLE IF EXISTS countries;
 ```
-
-For more details, see the [PHP `PDOStatement`](https://www.php.net/manual/en/pdostatement.fetch.php) documentation.
-
-## Insert data into tables
-
-Most data in Materialize will stream in via an external system, but a [`TABLE` in Materialize](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
-
-**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize.
-
-```php
-<?php
-// Include the Postgres connection details
-require 'connect.php';
-
-$sql = 'INSERT INTO countries (name, code) VALUES (?, ?)';
-$statement = $connection->prepare($sql);
-$statement->execute(['United States', 'US']);
-$statement->execute(['Canada', 'CA']);
-$statement->execute(['Mexico', 'MX']);
-$statement->execute(['Germany', 'DE']);
-
-$countStmt = "SELECT COUNT(*) FROM countries";
-$count = $connection->query($countStmt);
-while (($row = $count->fetch(PDO::FETCH_ASSOC)) !== false) {
-    var_dump($row);
-}
-```
-
-## Manage sources, views, and indexes
-
-Typically, you create sources, views, and indexes when deploying Materialize, although it is possible to use a PHP app to execute common DDL statements.
-
-### Create a source from PHP
-
-```php
-<?php
-// Include the Postgres connection details
-require 'connect.php';
-
-$sql = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER";
-
-$statement = $connection->prepare($sql);
-$statement->execute();
-
-$sources = "SHOW SOURCES";
-$statement = $connection->query($sources);
-$result = $statement->fetchAll(PDO::FETCH_ASSOC);
-var_dump($result);
-
-```
-
-For more information, see [`CREATE SOURCE`](/sql/create-source/).
-
-### Create a view from PHP
-
-```php
-<?php
-// Include the Postgres connection details
-require 'connect.php';
-
-$sql = "CREATE VIEW market_orders_2 AS
-            SELECT
-                val->>'symbol' AS symbol,
-                (val->'bid_price')::float AS bid_price
-            FROM (SELECT text::jsonb AS val FROM market_orders_raw_2)";
-
-$statement = $connection->prepare($sql);
-$statement->execute();
-
-$views = "SHOW VIEWS";
-$statement = $connection->query($views);
-$result = $statement->fetchAll(PDO::FETCH_ASSOC);
-var_dump($result);
-```
-
-For more information, see [`CREATE VIEW`](/sql/create-view/).
 
 ## PHP ORMs
 

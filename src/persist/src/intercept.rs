@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 
 use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
 
@@ -76,7 +77,7 @@ impl InterceptBlob {
 
 #[async_trait]
 impl Blob for InterceptBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         self.blob.get(key).await
     }
 
@@ -105,5 +106,9 @@ impl Blob for InterceptBlob {
             Some(x) => x(key, ret),
             None => ret,
         }
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.blob.restore(key).await
     }
 }

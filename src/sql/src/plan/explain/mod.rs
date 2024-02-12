@@ -99,7 +99,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
                         // generate a `Get(local_id)` to be used as a subquery replacement
                         let mut subquery = Get {
                             id: Id::Local(local_id.clone()),
-                            typ: RelationType::empty(), // TODO (#13732)
+                            typ: RelationType::empty(), // TODO (aalexandrov)
                         };
                         // swap the current subquery with the replacement
                         std::mem::swap(expr, &mut subquery);
@@ -144,7 +144,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
 fn id_gen(expr: &HirRelationExpr) -> Result<impl Iterator<Item = LocalId>, RecursionLimitError> {
     let mut max_id = 0_u64;
 
-    expr.visit_post(&mut |expr| {
+    expr.visit_pre(&mut |expr| {
         match expr {
             HirRelationExpr::Let { id, .. } => max_id = std::cmp::max(max_id, id.into()),
             _ => (),

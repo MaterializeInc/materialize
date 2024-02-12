@@ -78,15 +78,29 @@ CREATE TABLE bar (
 * If you use Visual Studio Code, @benesch has made a syntax highlighter for
   sqllogictest, which you can find
   [here](https://marketplace.visualstudio.com/items?itemName=benesch.sqllogictest).
-* If you run `cargo run --bin sqllogictest -- <path_to_test_file>
-  --rewrite-results`, sqllogictest will automatically replace the expected
-  results with the actual results. The main time you use this argument is if you
-  have made an improvement to the query planner and need to update the expected
-  plan for every `EXPLAIN PLAN` query.
-* If you want to debug a sqllogictest run via debugger, use `rust-lldb --
-  target/debug/sqllogictest <path_to_test_file_to_run>`. Do not use `rust-gdb`
-  to debug sqllogictest on MacOS because gdb will print a bunch of error
-  messages and then freeze.
+* If you run
+  ```bash
+  bin/sqllogictest -- --rewrite-results <path_to_test_file>
+  ```
+  sqllogictest will automatically replace the expected results with the actual
+  results. The main time you use this argument is if you have made an improvement to
+  the query planner and need to update the expected plan for every `EXPLAIN` query.
+* If you want to debug a sqllogictest run via debugger, use one of the following
+
+  ```bash
+  bin/sqllogictest --wrapper 'rust-lldb --' -- <paths_to_test_files_to_run>
+  (lldb) run
+  (lldb) bt
+
+  bin/sqllogictest --wrapper 'rust-gdb --args' -- <paths_to_test_files_to_run>
+  (gdb) run
+  (gdb) bt
+  ```
+  See [GDB to LLDB command map](https://lldb.llvm.org/use/map.html) for more
+  details. *Note*:
+
+  Do not use `rust-gdb` to debug sqllogictest on MacOS because `gdb` will print
+  a bunch of error messages and then freeze.
 
 ## Materialize-specific behavior in sqllogictest
 
@@ -125,6 +139,19 @@ on which system commands like `ALTER SYSTEM` can be used.
 
 The output is one line per row, one "COMPLETE X" (where X is the
 number of affected rows) per statement, or an error message.
+
+When using the `multiline` keyword it is possible to have output consisting of
+multiple lines, up to the `EOF` keyword, which is still followed by `COMPLETE`:
+
+> simple multiline,conn=materialize,user=materialize
+> EXPLAIN MATERIALIZED VIEW mv;
+> ----
+> materialize.public.mv:
+>   Constant
+>     - (1)
+>
+> EOF
+> COMPLETE 1
 
 ### `copy` extension
 
@@ -273,6 +300,50 @@ same file. Most of the time, we use `mode cockroach`. The times when we use
     SELECT 314.3820897445435::float
     ----
     314.3820897445435
+    ```
+
+3. In `mode standard` when interpreting a Numeric as an Int we round down to the nearest whole
+   number.
+
+    ```
+    mode standard
+
+    query I
+    SELECT '1.9'::numeric
+    ----
+    1
+
+    query I
+    SELECT '1.5'::numeric
+    ----
+    1
+
+    query I
+    SELECT '1.1'::numeric
+    ----
+    1
+    ```
+
+   `mode cockroach` on the otherhand uses a strategy of rounding half up. That is we round to the
+   nearest integer and halfway values are rounded up.
+
+    ```
+    mode cockroach
+
+    query I
+    SELECT '1.9'::numeric
+    ----
+    2
+
+    query I
+    SELECT '1.5'::numeric
+    ----
+    2
+
+    query I
+    SELECT '1.1'::numeric
+    ----
+    1
     ```
 
 ### multiline

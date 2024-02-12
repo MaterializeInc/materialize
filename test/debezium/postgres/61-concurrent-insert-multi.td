@@ -21,15 +21,15 @@ CREATE TABLE insert_multi_table2 (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_multi_table2 REPLICA IDENTITY FULL;
 INSERT INTO insert_multi_table2 VALUES (0);
 
-$ schema-registry-wait subject=postgres.public.insert_multi_table1-value
+$ schema-registry-wait topic=postgres.public.insert_multi_table1
 
-$ schema-registry-wait subject=postgres.public.insert_multi_table2-value
+$ schema-registry-wait topic=postgres.public.insert_multi_table2
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE insert_multi_table1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_multi_table1')

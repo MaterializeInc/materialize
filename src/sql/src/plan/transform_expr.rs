@@ -12,10 +12,9 @@
 use std::collections::BTreeMap;
 use std::mem;
 
-use once_cell::sync::Lazy;
-
 use mz_expr::VariadicFunc;
 use mz_repr::{ColumnType, RelationType, ScalarType};
+use once_cell::sync::Lazy;
 
 use crate::plan::expr::{AbstractExpr, AggregateFunc, HirRelationExpr, HirScalarExpr};
 
@@ -114,7 +113,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     /// ```
     ///
     /// and returns the expression fragments `EXISTS (<subquery 1>)` and
-    //// `(<subquery 2>) = e` in the `out` vector.
+    /// `(<subquery 2>) = e` in the `out` vector.
     fn extract_conjuncted_subqueries(expr: &mut HirScalarExpr, out: &mut Vec<HirScalarExpr>) {
         match expr {
             HirScalarExpr::CallVariadic {

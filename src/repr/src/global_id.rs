@@ -11,13 +11,11 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
-use columnation::{CloneRegion, Columnation};
+use columnation::{Columnation, CopyRegion};
+use mz_lowertest::MzReflect;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_lowertest::MzReflect;
-
-use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 
@@ -123,5 +121,5 @@ impl RustType<ProtoGlobalId> for GlobalId {
 }
 
 impl Columnation for GlobalId {
-    type InnerRegion = CloneRegion<GlobalId>;
+    type InnerRegion = CopyRegion<GlobalId>;
 }

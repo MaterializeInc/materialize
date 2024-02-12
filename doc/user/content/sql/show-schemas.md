@@ -1,15 +1,12 @@
 ---
 title: "SHOW SCHEMAS"
-description: "`SHOW SCHEMAS` returns a list of all schemas available to your Materialize instances."
+description: "`SHOW SCHEMAS` returns a list of all schemas available in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
-`SHOW SCHEMAS` returns a list of all schemas available to your Materialize
-instances.
+`SHOW SCHEMAS` returns a list of all schemas available in Materialize.
 
 ## Syntax
 

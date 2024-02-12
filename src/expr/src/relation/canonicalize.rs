@@ -13,6 +13,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_ore::soft_assert_or_log;
 use mz_repr::{ColumnType, Datum, ScalarType};
 
 use crate::visit::Visit;
@@ -175,8 +176,7 @@ fn rank_complexity(expr: &MirScalarExpr) -> usize {
         return 0;
     }
     let mut non_literal_count = 1;
-    #[allow(deprecated)]
-    expr.visit_post_nolimit(&mut |e| {
+    expr.visit_pre(|e| {
         if !e.is_literal() {
             non_literal_count += 1
         }
@@ -204,6 +204,13 @@ where
 /// Additionally, it also removes IS NOT NULL predicates if there is another
 /// null rejecting predicate for the same sub-expression.
 pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types: &[ColumnType]) {
+    soft_assert_or_log!(
+        predicates
+            .iter()
+            .all(|p| p.typ(column_types).scalar_type == ScalarType::Bool),
+        "cannot canonicalize predicates that are not of type bool"
+    );
+
     // 1) Reduce each individual predicate.
     predicates.iter_mut().for_each(|p| p.reduce(column_types));
 
@@ -350,10 +357,12 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
         completed.push(predicate_to_apply);
     }
 
-    if completed
-        .iter()
-        .any(|p| p.is_literal_false() || p.is_literal_null())
-    {
+    if completed.iter().any(|p| {
+        (p.is_literal_false() || p.is_literal_null()) &&
+        // This extra check is only needed if we determine that the soft-assert
+        // at the top of this function would ever fail for a good reason.
+        p.typ(column_types).scalar_type == ScalarType::Bool
+    }) {
         // all rows get filtered away if any predicate is null or false.
         *predicates = vec![MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool)]
     } else {

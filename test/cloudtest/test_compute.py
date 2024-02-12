@@ -7,12 +7,21 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import copy
+import json
+import logging
+import time
+
 import pytest
 from pg8000.exceptions import InterfaceError
 
-from materialize.cloudtest.application import MaterializeApplication
-from materialize.cloudtest.exists import exists, not_exists
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
+from materialize.cloudtest.util.cluster import cluster_pod_name, cluster_service_name
+from materialize.cloudtest.util.exists import exists, not_exists
+from materialize.cloudtest.util.wait import wait
+
+LOGGER = logging.getLogger(__name__)
 
 
 def test_cluster_sizing(mz: MaterializeApplication) -> None:
@@ -33,7 +42,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
     assert replica_id is not None
 
     for compute_id in range(0, SIZE):
-        compute_pod = f"pod/cluster-{cluster_id}-replica-{replica_id}-{compute_id}"
+        compute_pod = cluster_pod_name(cluster_id, replica_id, compute_id)
         wait(condition="condition=Ready", resource=compute_pod)
 
     mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
@@ -47,7 +56,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
 def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
     """Test that dropping a cluster or replica causes the associated clusterds to shut down."""
 
-    print(f"Testing cluster shutdown with failpoint={failpoint}")
+    LOGGER.info(f"Testing cluster shutdown with failpoint={failpoint}")
 
     mz.set_environmentd_failpoints(failpoint)
 
@@ -58,7 +67,7 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
         try:
             mz.environmentd.sql(sql)
         except InterfaceError as e:
-            print(f"Expected SQL error: {e}")
+            LOGGER.error(f"Expected SQL error: {e}")
 
     mz.environmentd.sql(
         "CREATE CLUSTER shutdown1 REPLICAS (shutdown_replica1 (SIZE '1'), shutdown_replica2 (SIZE '1'))"
@@ -77,11 +86,11 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
         )[0][0]
         assert replica_id is not None
 
-        compute_pod = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+        compute_pod = cluster_pod_name(cluster_id, replica_id)
         compute_pods[replica_name] = compute_pod
         wait(condition="condition=Ready", resource=compute_pod)
 
-        compute_svc = f"service/cluster-{cluster_id}-replica-{replica_id}"
+        compute_svc = cluster_service_name(cluster_id, replica_id)
         compute_svcs[replica_name] = compute_svc
         exists(resource=compute_svc)
 
@@ -94,3 +103,147 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
     not_exists(resource=compute_svcs["shutdown_replica2"])
 
     mz.set_environmentd_failpoints("")
+
+
+def get_value_from_label(
+    mz: MaterializeApplication, cluster_id: str, replica_id: str, jsonpath: str
+) -> str:
+    return mz.kubectl(
+        "get",
+        "pods",
+        f"--selector=cluster.environmentd.materialize.cloud/cluster-id={cluster_id},cluster.environmentd.materialize.cloud/replica-id={replica_id}",
+        "-o",
+        "jsonpath='{.items[*]." + jsonpath + "}'",
+    )
+
+
+def get_node_selector(
+    mz: MaterializeApplication, cluster_id: str, replica_id: str
+) -> str:
+    return get_value_from_label(mz, cluster_id, replica_id, "spec.nodeSelector")
+
+
+def test_disk_label(mz: MaterializeApplication) -> None:
+    """Test that cluster replicas have the correct materialize.cloud/disk labels"""
+
+    # If cluster_always_use_disk is set to true, it will take precedence over the DISK keyword in CREATE CLUSTER.
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET cluster_always_use_disk = false;",
+        port="internal",
+        user="mz_system",
+    )
+
+    for value in ("true", "false"):
+        mz.environmentd.sql(
+            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-1', DISK = {value}"
+        )
+
+        (cluster_id, replica_id) = mz.environmentd.sql_query(
+            f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'disk_{value}'"
+        )[0]
+        assert cluster_id is not None
+        assert replica_id is not None
+
+        node_selectors = get_node_selector(mz, cluster_id, replica_id)
+        assert (
+            node_selectors
+            == f'\'{{"materialize.cloud/disk":"{value}"}} {{"materialize.cloud/disk":"{value}"}}\''
+        ), node_selectors
+
+        mz.environmentd.sql(f"DROP CLUSTER disk_{value} CASCADE")
+
+    # Reset
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET cluster_always_use_disk = true;",
+        port="internal",
+        user="mz_system",
+    )
+
+
+def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
+    """Test that --cluster-replica-sizes mapping is respected"""
+    # Some time for existing cluster drops to complete so we don't try to spin them up again
+    time.sleep(5)
+    cluster_replica_size_map = {
+        "small": {
+            "scale": 1,
+            "workers": 1,
+            "cpu_limit": None,
+            "memory_limit": None,
+            "disk_limit": None,
+            "credits_per_hour": "1",
+            "disabled": False,
+            "selectors": {"key1": "value1"},
+        },
+        "medium": {
+            "scale": 1,
+            "workers": 1,
+            "cpu_limit": None,
+            "memory_limit": None,
+            "disk_limit": None,
+            "credits_per_hour": "1",
+            "disabled": False,
+            "selectors": {"key2": "value2", "key3": "value3"},
+        },
+        # for existing clusters
+        "1": {
+            "scale": 1,
+            "workers": 1,
+            "cpu_limit": None,
+            "memory_limit": None,
+            "disk_limit": None,
+            "disabled": False,
+            "credits_per_hour": "1",
+        },
+        "2-1": {
+            "scale": 2,
+            "workers": 2,
+            "cpu_limit": None,
+            "memory_limit": None,
+            "disk_limit": None,
+            "disabled": False,
+            "credits_per_hour": "2",
+        },
+    }
+
+    stateful_set = [
+        resource
+        for resource in mz.resources
+        if type(resource) == EnvironmentdStatefulSet
+    ]
+    assert len(stateful_set) == 1
+    stateful_set = copy.deepcopy(stateful_set[0])
+    stateful_set.env["MZ_CLUSTER_REPLICA_SIZES"] = json.dumps(cluster_replica_size_map)
+    stateful_set.extra_args.append("--bootstrap-default-cluster-replica-size=1")
+    stateful_set.replace()
+    mz.wait_for_sql()
+
+    for key, value in {
+        "small": cluster_replica_size_map["small"],
+        "medium": cluster_replica_size_map["medium"],
+    }.items():
+        mz.environmentd.sql(f"CREATE CLUSTER scale_{key} MANAGED, SIZE = '{key}'")
+        (cluster_id, replica_id) = mz.environmentd.sql_query(
+            f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'scale_{key}'"
+        )[0]
+        assert cluster_id is not None
+        assert replica_id is not None
+
+        expected = value.get("selectors", {}) | {"materialize.cloud/disk": "true"}
+        node_selectors = json.loads(get_node_selector(mz, cluster_id, replica_id)[1:-1])
+        assert (
+            node_selectors == expected
+        ), f"actual: {node_selectors}, but expected {expected}"
+
+        mz.environmentd.sql(f"DROP CLUSTER scale_{key} CASCADE")
+
+    # Cleanup
+    stateful_set = [
+        resource
+        for resource in mz.resources
+        if type(resource) == EnvironmentdStatefulSet
+    ]
+    assert len(stateful_set) == 1
+    stateful_set = stateful_set[0]
+    stateful_set.replace()
+    mz.wait_for_sql()

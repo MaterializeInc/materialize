@@ -31,7 +31,7 @@ def main() -> None:
     now = datetime.datetime.utcnow()
     scratch.launch_cluster(
         [desc],
-        nonce=now.replace(tzinfo=datetime.timezone.utc).isoformat(),
+        nonce=now.replace(tzinfo=datetime.UTC).isoformat(),
         # Keep alive for at least a day.
         delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
     )

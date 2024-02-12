@@ -22,11 +22,15 @@ from kubernetes.client import (
     V1ServiceSpec,
 )
 
-from materialize.cloudtest.k8s import K8sDeployment, K8sService
+from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
+from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
+from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class SshDeployment(K8sDeployment):
-    def __init__(self) -> None:
+    def __init__(self, namespace: str, apply_node_selectors: bool) -> None:
+        super().__init__(namespace)
         env = [
             V1EnvVar(name="SSH_USERS", value="mz:1000:1000"),
             V1EnvVar(name="TCP_FORWARDING", value="true"),
@@ -39,9 +43,13 @@ class SshDeployment(K8sDeployment):
             ports=ports,
         )
 
+        node_selector = None
+        if apply_node_selectors:
+            node_selector = {"supporting-services": "true"}
+
         template = V1PodTemplateSpec(
             metadata=V1ObjectMeta(labels={"app": "ssh-bastion-host"}),
-            spec=V1PodSpec(containers=[container]),
+            spec=V1PodSpec(containers=[container], node_selector=node_selector),
         )
 
         selector = V1LabelSelector(match_labels={"app": "ssh-bastion-host"})
@@ -57,7 +65,8 @@ class SshDeployment(K8sDeployment):
 
 
 class SshService(K8sService):
-    def __init__(self) -> None:
+    def __init__(self, namespace: str) -> None:
+        super().__init__(namespace)
         ports = [
             V1ServicePort(name="ssh", port=22),
         ]
@@ -72,4 +81,7 @@ class SshService(K8sService):
         )
 
 
-SSH_RESOURCES = [SshDeployment(), SshService()]
+def ssh_resources(
+    namespace: str = DEFAULT_K8S_NAMESPACE, apply_node_selectors: bool = False
+) -> list[K8sResource]:
+    return [SshDeployment(namespace, apply_node_selectors), SshService(namespace)]

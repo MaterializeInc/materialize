@@ -719,7 +719,7 @@ test
 
 # TODO(benesch): this should have the following error instead.
 # query error invalid input syntax for type numeric: "foo"
-query error UNION types text and numeric cannot be matched
+query error UNION types numeric and text cannot be matched
 SELECT '3.4'::numeric UNION SELECT 'foo'
 
 query TT colnames

@@ -11,7 +11,7 @@
 # Make sure that TOAST-ed values are handled correctly.
 #
 # TOAST-ed values are values larger than around 8Kb
-# see https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-toasted-values
+# see https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-toasteds
 # and https://www.postgresql.org/docs/current/storage-toast.html
 #
 
@@ -20,13 +20,13 @@ CREATE TABLE toasted_full (f1 text, f2 INTEGER PRIMARY KEY);
 ALTER TABLE toasted_full REPLICA IDENTITY FULL;
 INSERT INTO toasted_full VALUES (NULL, 0), (REPEAT('a', 32 * 1024) || 'b', 1);
 
-$ schema-registry-wait subject=postgres.public.toasted_full-value
+$ schema-registry-wait topic=postgres.public.toasted_full
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE toasted_full
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.toasted_full')

@@ -28,7 +28,7 @@ Detail | Info
 For details about casting, including contexts, see [Functions:
 Cast](../../functions/cast).
 
-Integer, numeric, and text casts must be in the form of milliseconds since the Unix epoch.
+Integer and numeric casts must be in the form of milliseconds since the Unix epoch. Casting from `text` can be either also in the form of milliseconds since the Unix epoch or in a human-readable form that is the same as for the [`timestamptz`](../timestamptz) type.
 
 From | To | Required context
 -----|----|--------

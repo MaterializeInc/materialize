@@ -46,7 +46,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(date_col), pg_typeof(time_col), pg_typeof(timestamp_col) FROM t1 LIMIT 1;
-date time timestamp
+date time "timestamp without time zone"
 
 > SELECT * FROM t1;
 2011-11-11 11:11:11.123456 "2011-11-11 11:11:11.123456"

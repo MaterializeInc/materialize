@@ -53,11 +53,10 @@
 //! assert_eq!(res, Err("contrived failure"));
 //! ```
 
-use std::cmp;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::thread;
+use std::{cmp, thread};
 
 use futures::{ready, Stream, StreamExt};
 use pin_project::pin_project;
@@ -143,7 +142,7 @@ impl Retry {
     /// [`retry`](Retry::retry) will return the last error.
     ///
     /// Calls to `max_tries` will override any previous calls to `max_tries`.
-    ////
+    ///
     /// # Panics
     ///
     /// Panics if `max_tries` is zero.
@@ -282,6 +281,37 @@ impl Retry {
             }
         }
         Err(err.expect("retry produces at least one element"))
+    }
+
+    /// Like [`Retry::retry_async`] but can pass around user specified state.
+    pub async fn retry_async_with_state<F, S, U, R, T, E>(
+        self,
+        mut user_state: S,
+        mut f: F,
+    ) -> (S, Result<T, E>)
+    where
+        F: FnMut(RetryState, S) -> U,
+        U: Future<Output = (S, R)>,
+        R: Into<RetryResult<T, E>>,
+    {
+        let stream = self.into_retry_stream();
+        tokio::pin!(stream);
+        let mut err = None;
+        while let Some(retry_state) = stream.next().await {
+            let (s, r) = f(retry_state, user_state).await;
+            match r.into() {
+                RetryResult::Ok(v) => return (s, Ok(v)),
+                RetryResult::FatalErr(e) => return (s, Err(e)),
+                RetryResult::RetryableErr(e) => {
+                    err = Some(e);
+                    user_state = s;
+                }
+            }
+        }
+        (
+            user_state,
+            Err(err.expect("retry produces at least one element")),
+        )
     }
 
     /// Convert into [`RetryStream`]
@@ -482,7 +512,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_retry_success() {
         let mut states = vec![];
         let res = Retry::default()
@@ -515,7 +545,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_success() {
         let mut states = vec![];
@@ -552,7 +582,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     async fn test_retry_fatal() {
         let mut states = vec![];
         let res = Retry::default()
@@ -581,7 +611,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_fatal() {
         let mut states = vec![];
@@ -614,7 +644,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_fail_max_tries() {
         let mut states = vec![];
@@ -645,7 +675,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_fail_max_tries() {
         let mut states = vec![];
@@ -677,34 +707,34 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_test_macro::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     fn test_retry_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
-            .initial_backoff(Duration::from_millis(5))
-            .max_duration(Duration::from_millis(10))
+            .initial_backoff(Duration::from_millis(10))
+            .max_duration(Duration::from_millis(20))
             .retry(|state| {
                 states.push(state);
                 Err::<(), _>("injected")
             });
         assert_eq!(res, Err("injected"));
 
-        // The first try should indicate a next backoff of exactly 5ms.
+        // The first try should indicate a next backoff of exactly 10ms.
         assert_eq!(
             states[0],
             RetryState {
                 i: 0,
-                next_backoff: Some(Duration::from_millis(5))
+                next_backoff: Some(Duration::from_millis(10))
             },
         );
 
-        // The next try should indicate a next backoff of between 0 and 5ms. The
+        // The next try should indicate a next backoff of between 0 and 10ms. The
         // exact value depends on how long it took for the first try itself to
         // execute.
         assert_eq!(states[1].i, 1);
         let backoff = states[1].next_backoff.unwrap();
-        assert!(backoff > Duration::from_millis(0) && backoff < Duration::from_millis(5));
+        assert!(backoff > Duration::from_millis(0) && backoff < Duration::from_millis(10));
 
         // The final try should indicate that the operation is complete with
         // a next backoff of None.
@@ -717,8 +747,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    #[ignore] // TODO: Reenable when #24933 is fixed
     async fn test_retry_async_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
@@ -761,7 +792,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_test_macro::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     fn test_retry_fail_clamp_backoff() {
         let mut states = vec![];
@@ -797,7 +828,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_fail_clamp_backoff() {
         let mut states = vec![];
@@ -836,7 +867,7 @@ mod tests {
 
     /// Test that canceling retry operations surface the last error when the
     /// underlying future is not explicitly timed out.
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_canceling_uncanceled_failure() {
         let res = Retry::default()
@@ -848,7 +879,7 @@ mod tests {
 
     /// Test that canceling retry operations surface the last error when the
     /// underlying future *is* not explicitly timed out.
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_canceling_canceled_failure() {
         let res = Retry::default()
@@ -867,7 +898,7 @@ mod tests {
 
     /// Test that the "deadline has elapsed" error is surfaced when there is
     /// no other error to surface.
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_async_canceling_canceled_first_failure() {
         let res = Retry::default()
@@ -880,7 +911,7 @@ mod tests {
         assert_eq!(res.unwrap_err().to_string(), "deadline has elapsed");
     }
 
-    #[tokio::test]
+    #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
     async fn test_retry_reader() {
         use tokio::io::AsyncReadExt;
@@ -920,5 +951,46 @@ mod tests {
         let mut data = Vec::new();
         reader.read_to_end(&mut data).await.unwrap();
         assert_eq!(data, vec![b'A'; 256]);
+    }
+
+    #[mz_test_macro::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    async fn test_retry_async_state() {
+        struct S {
+            i: i64,
+        }
+        impl S {
+            #[allow(clippy::unused_async)]
+            async fn try_inc(&mut self) -> Result<i64, ()> {
+                self.i += 1;
+                if self.i > 10 {
+                    Ok(self.i)
+                } else {
+                    Err(())
+                }
+            }
+        }
+
+        let s = S { i: 0 };
+        let (_new_s, res) = Retry::default()
+            .max_tries(10)
+            .clamp_backoff(Duration::from_nanos(0))
+            .retry_async_with_state(s, |_, mut s| async {
+                let res = s.try_inc().await;
+                (s, res)
+            })
+            .await;
+        assert_eq!(res, Err(()));
+
+        let s = S { i: 0 };
+        let (_new_s, res) = Retry::default()
+            .max_tries(11)
+            .clamp_backoff(Duration::from_nanos(0))
+            .retry_async_with_state(s, |_, mut s| async {
+                let res = s.try_inc().await;
+                (s, res)
+            })
+            .await;
+        assert_eq!(res, Ok(11));
     }
 }

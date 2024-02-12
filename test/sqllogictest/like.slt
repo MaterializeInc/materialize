@@ -1,0 +1,132 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# We have some tests also in cockroach/like.slt, but those go through const folding. The below tests avoid const folding.
+
+statement ok
+CREATE TABLE t(s string, like_pat string, regex_pat string);
+
+statement ok
+INSERT INTO t VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s LIKE 'a%';
+----
+Explained Query:
+  Project (#0)
+    Filter like["a%"](#0)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(like["a%"](#0))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s LIKE 'a%';
+----
+abc
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s ILIKE 'a%';
+----
+Explained Query:
+  Project (#0)
+    Filter ilike["a%"](#0)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(ilike["a%"](#0))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s ILIKE 'a%';
+----
+ABC
+abc
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s NOT ILIKE 'a%';
+----
+Explained Query:
+  Project (#0)
+    Filter NOT(ilike["a%"](#0))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(NOT(ilike["a%"](#0)))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s NOT ILIKE 'a%';
+----
+ccc
+
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE NOT (s ILIKE 'a%');
+----
+Explained Query:
+  Project (#0)
+    Filter NOT(ilike["a%"](#0))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(NOT(ilike["a%"](#0)))
+
+EOF
+
+# Binary versions (MirScalarExpr::reduce changes them into unary when the pattern is a constant, which we prevent here.)
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s LIKE like_pat;
+----
+Explained Query:
+  Project (#0)
+    Filter (#0 like #1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#0 like #1))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s LIKE like_pat;
+----
+abc
+
+query T multiline
+EXPLAIN
+SELECT s FROM t WHERE s ILIKE like_pat;
+----
+Explained Query:
+  Project (#0)
+    Filter (#0 ilike #1)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#0 ilike #1))
+
+EOF
+
+query T
+SELECT s FROM t WHERE s ILIKE like_pat;
+----
+ABC
+abc

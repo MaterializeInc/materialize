@@ -1,0 +1,26 @@
+---
+source: src/catalog/src/durable/upgrade/persist/v44_to_v45.rs
+expression: actions
+---
+[
+    Insert(
+        StateUpdateKind {
+            kind: Some(
+                Config(
+                    Config {
+                        key: Some(
+                            ConfigKey {
+                                key: "system_config_synced",
+                            },
+                        ),
+                        value: Some(
+                            ConfigValue {
+                                value: 0,
+                            },
+                        ),
+                    },
+                ),
+            ),
+        },
+    ),
+]

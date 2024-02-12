@@ -9,13 +9,8 @@
 
 mode cockroach
 
-# Since mz_now() is a custom function, the postgres client will look it up in the catalog on
-# first use. If the first use happens to be in a transaction, then we can get unexpected time
-# domain errors. This is an annoying hack to load the information in the postgres client before
-# we start any transactions.
-query T rowsort
-SELECT mz_now() LIMIT 0
-----
+# This is to make the id in the EXPLAIN SHOW VIEWS test stable.
+reset-server
 
 statement ok
 CREATE TABLE t (i INT);
@@ -68,13 +63,13 @@ COMPLETE 1
 2
 COMPLETE 1
 
-query error Transactions can only reference objects in the same timedomain.
+query error db error: ERROR: querying the following items "materialize\.public\.t" is not allowed from the "mz_introspection" cluster
 SELECT * FROM t;
 
 statement ok
 ROLLBACK
 
-# Test that user table and system tables cannot be mixed in a transaction because they
+# Test that user table and mz_catalog system tables cannot be mixed in a transaction because they
 # belong to different timedomains.
 
 statement ok
@@ -84,8 +79,10 @@ query I rowsort
 SELECT * FROM t
 ----
 
+# This may stop failing in the future if a view in pg_catalog starts to depend on this. In that case
+# just change this query to select from an object that isn't referenced from pg_catalog.
 query error Transactions can only reference objects in the same timedomain.
-SELECT * FROM mz_views
+SELECT * FROM mz_internal.mz_show_default_privileges
 
 statement ok
 ROLLBACK
@@ -170,6 +167,58 @@ query I rowsort
 SELECT 1 FROM pg_attribute LIMIT 1
 ----
 1
+
+statement ok
+COMMIT
+
+# Verify that system tables are always included in read txns, even if not
+# mentioned in the first query.
+simple
+BEGIN;
+SELECT * FROM t;
+SELECT n.nspname = ANY(current_schemas(true)), n.nspname, t.typname FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON t.typnamespace = n.oid WHERE t.oid = 2249;
+COMMIT;
+----
+COMPLETE 0
+COMPLETE 0
+t,pg_catalog,record
+COMPLETE 1
+COMPLETE 0
+
+simple
+BEGIN;
+SELECT row(1, 2);
+SELECT n.nspname = ANY(current_schemas(true)), n.nspname, t.typname FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON t.typnamespace = n.oid WHERE t.oid = 2249;
+COMMIT;
+----
+COMPLETE 0
+(1,2)
+COMPLETE 1
+t,pg_catalog,record
+COMPLETE 1
+COMPLETE 0
+
+# Test that queries aren't auto-routed to mz_introspection mid-transaction.
+
+statement ok
+BEGIN
+
+query I
+SELECT * FROM t
+----
+
+query T multiline
+EXPLAIN SHOW VIEWS
+----
+Explained Query:
+  Project (#3)
+    Filter (#2 = "u3")
+      ReadStorage mz_catalog.mz_views
+
+Source mz_catalog.mz_views
+  filter=((#2 = "u3"))
+
+EOF
 
 statement ok
 COMMIT

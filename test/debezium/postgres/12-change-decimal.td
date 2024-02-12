@@ -17,13 +17,13 @@ CREATE TABLE alter_change_decimal (f1 DECIMAL(5,3), f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_change_decimal REPLICA IDENTITY FULL;
 INSERT INTO alter_change_decimal VALUES (0, 0),(NULL, 1),(12.345, 2);
 
-$ schema-registry-wait subject=postgres.public.alter_change_decimal-value
+$ schema-registry-wait topic=postgres.public.alter_change_decimal
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE alter_change_decimal
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_change_decimal')

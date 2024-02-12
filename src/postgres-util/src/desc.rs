@@ -9,25 +9,95 @@
 
 //! Descriptions of PostgreSQL objects.
 
-use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy};
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
-use mz_proto::{RustType, TryFromProtoError};
+use anyhow::bail;
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use proptest::prelude::any;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use tokio_postgres::types::Oid;
+use tracing::warn;
 
 include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.desc.rs"));
 
-/// Describes a table in a PostgreSQL database.
+/// Describes a schema in a PostgreSQL database.
+///
+/// <https://www.postgresql.org/docs/current/catalog-pg-namespace.html>
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PostgresSchemaDesc {
+    /// The OID of the schema.
+    pub oid: Oid,
+    /// The name of the schema.
+    pub name: String,
+    /// Owner of the namespace
+    pub owner: Oid,
+}
+
+/// Describes a table in a PostgreSQL database.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresTableDesc {
     /// The OID of the table.
-    pub oid: u32,
+    pub oid: Oid,
     /// The name of the schema that the table belongs to.
     pub namespace: String,
     /// The name of the table.
     pub name: String,
-    /// The description of each column, in order.
+    /// The description of each column, in order of their position in the table.
+    #[proptest(strategy = "proptest::collection::vec(any::<PostgresColumnDesc>(), 1..4)")]
     pub columns: Vec<PostgresColumnDesc>,
+    /// Applicable keys for this table (i.e. primary key and unique
+    /// constraints).
+    #[proptest(strategy = "proptest::collection::btree_set(any::<PostgresKeyDesc>(), 1..4)")]
+    pub keys: BTreeSet<PostgresKeyDesc>,
+}
+
+impl PostgresTableDesc {
+    /// Determines if two `PostgresTableDesc` are compatible with one another in
+    /// a way that Materialize can handle.
+    ///
+    /// Currently this means that the values are equal except for the following
+    /// exceptions:
+    /// - `self`'s columns are a compatible prefix of `other`'s columns.
+    ///   Compatibility is defined as returning `true` for
+    ///   `PostgresColumnDesc::is_compatible`.
+    /// - `self`'s keys are all present in `other`
+    pub fn determine_compatibility(&self, other: &PostgresTableDesc) -> Result<(), anyhow::Error> {
+        if self == other {
+            return Ok(());
+        }
+
+        let PostgresTableDesc {
+            oid: other_oid,
+            namespace: other_namespace,
+            name: other_name,
+            columns: other_cols,
+            keys: other_keys,
+        } = other;
+
+        // Table columns cannot change position, so only need to ensure that
+        // `self.columns` is a prefix of `other_cols`.
+        if self.columns.len() <= other_cols.len()
+            && self.columns.iter().zip(other_cols.iter()).all(|(s, o)| s.is_compatible(o))
+            && &self.name == other_name
+            && &self.oid == other_oid
+            && &self.namespace == other_namespace
+            // Our keys are all still present in exactly the same shape.
+            && self.keys.difference(other_keys).next().is_none()
+        {
+            Ok(())
+        } else {
+            warn!(
+                "Error validating table in publication. Expected: {:?} Actual: {:?}",
+                &self, other
+            );
+            bail!(
+                "source table {} with oid {} has been altered",
+                self.name,
+                self.oid
+            )
+        }
+    }
 }
 
 impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
@@ -37,6 +107,7 @@ impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
             namespace: self.namespace.clone(),
             name: self.name.clone(),
             columns: self.columns.iter().map(|c| c.into_proto()).collect(),
+            keys: self.keys.iter().map(PostgresKeyDesc::into_proto).collect(),
         }
     }
 
@@ -50,92 +121,118 @@ impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
                 .into_iter()
                 .map(PostgresColumnDesc::from_proto)
                 .collect::<Result<_, _>>()?,
+            keys: proto
+                .keys
+                .into_iter()
+                .map(PostgresKeyDesc::from_proto)
+                .collect::<Result<_, _>>()?,
         })
     }
 }
 
-impl Arbitrary for PostgresTableDesc {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<String>(),
-            any::<String>(),
-            any::<u32>(),
-            any::<Vec<PostgresColumnDesc>>(),
-        )
-            .prop_map(|(name, namespace, oid, columns)| PostgresTableDesc {
-                name,
-                namespace,
-                oid,
-                columns,
-            })
-            .boxed()
-    }
-}
-
 /// Describes a column in a [`PostgresTableDesc`].
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresColumnDesc {
     /// The name of the column.
     pub name: String,
+    /// The column's monotonic position in its table, i.e. "this was the _i_th
+    /// column created" irrespective of the current number of columns.
+    pub col_num: u16,
     /// The OID of the column's type.
-    pub type_oid: u32,
+    pub type_oid: Oid,
     /// The modifier for the column's type.
     pub type_mod: i32,
     /// True if the column lacks a `NOT NULL` constraint.
     pub nullable: bool,
-    /// Whether the column is part of the table's primary key.
+}
+
+impl PostgresColumnDesc {
+    /// Determines if data a relation with a structure of `other` can be treated
+    /// the same as `self`.
     ///
-    /// TODO(benesch): this doesn't look descriptive enough. The order of the
-    /// columns in the primary key matters too.
-    pub primary_key: bool,
+    /// Note that this function somewhat unnecessarily errors if the names
+    /// differ; this is negotiable but we want users to understand the fixedness
+    /// of names in our schemas.
+    fn is_compatible(&self, other: &PostgresColumnDesc) -> bool {
+        self.name == other.name
+            && self.col_num == other.col_num
+            && self.type_oid == other.type_oid
+            && self.type_mod == other.type_mod
+            // Columns are compatible if:
+            // - self is nullable; introducing a not null constraint doesn't
+            //   change this column's behavior.
+            // - self and other are both not nullable
+            && (self.nullable || self.nullable == other.nullable)
+    }
 }
 
 impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
     fn into_proto(&self) -> ProtoPostgresColumnDesc {
         ProtoPostgresColumnDesc {
             name: self.name.clone(),
+            col_num: Some(self.col_num.into()),
             type_oid: self.type_oid,
             type_mod: self.type_mod,
             nullable: self.nullable,
-            primary_key: self.primary_key,
         }
     }
 
     fn from_proto(proto: ProtoPostgresColumnDesc) -> Result<Self, TryFromProtoError> {
         Ok(PostgresColumnDesc {
             name: proto.name,
+            col_num: {
+                let v: u32 = proto
+                    .col_num
+                    .into_rust_if_some("ProtoPostgresColumnDesc::col_num")?;
+                u16::try_from(v).expect("u16 must roundtrip")
+            },
             type_oid: proto.type_oid,
             type_mod: proto.type_mod,
             nullable: proto.nullable,
-            primary_key: proto.primary_key,
         })
     }
 }
 
-impl Arbitrary for PostgresColumnDesc {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
+/// Describes a key in a [`PostgresTableDesc`].
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord, Arbitrary)]
+pub struct PostgresKeyDesc {
+    /// This key is derived from the `pg_constraint` with this OID.
+    pub oid: Oid,
+    /// The name of the constraints.
+    pub name: String,
+    /// The `attnum` of the columns comprising the key. `attnum` is a unique identifier for a column
+    /// in a PG table; see <https://www.postgresql.org/docs/current/catalog-pg-attribute.html>
+    #[proptest(strategy = "proptest::collection::vec(any::<u16>(), 0..4)")]
+    pub cols: Vec<u16>,
+    /// Whether or not this key is the primary key.
+    pub is_primary: bool,
+    /// If this constraint was generated with NULLS NOT DISTINCT; see
+    /// <https://www.postgresql.org/about/featurematrix/detail/392/>
+    pub nulls_not_distinct: bool,
+}
 
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<String>(),
-            any::<u32>(),
-            any::<i32>(),
-            any::<bool>(),
-            any::<bool>(),
-        )
-            .prop_map(
-                |(name, type_oid, type_mod, nullable, primary_key)| PostgresColumnDesc {
-                    name,
-                    type_oid,
-                    type_mod,
-                    nullable,
-                    primary_key,
-                },
-            )
-            .boxed()
+impl RustType<ProtoPostgresKeyDesc> for PostgresKeyDesc {
+    fn into_proto(&self) -> ProtoPostgresKeyDesc {
+        ProtoPostgresKeyDesc {
+            oid: self.oid,
+            name: self.name.clone(),
+            cols: self.cols.clone().into_iter().map(u32::from).collect(),
+            is_primary: self.is_primary,
+            nulls_not_distinct: self.nulls_not_distinct,
+        }
+    }
+
+    fn from_proto(proto: ProtoPostgresKeyDesc) -> Result<Self, TryFromProtoError> {
+        Ok(PostgresKeyDesc {
+            oid: proto.oid,
+            name: proto.name,
+            cols: proto
+                .cols
+                .into_iter()
+                .map(|c| c.try_into().expect("values roundtrip"))
+                .collect(),
+            is_primary: proto.is_primary,
+            nulls_not_distinct: proto.nulls_not_distinct,
+        })
     }
 }

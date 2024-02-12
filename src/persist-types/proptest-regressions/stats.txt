@@ -1,0 +1,18 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc dbeaf5be7c581d2a5eb4959b72b1ffc1b9a980160516e2f9a5753dbac0385ec7 # shrinks to x = "߿®"
+cc cf0b08c15f4e230cbb1424d6c70c968b4c05d2cc1789ea858edf62b07b80d9fd # shrinks to a = false, b = true
+cc 021b901f6ec8e072f42220f7e4c32dbbc07b1a57e47f87db4a7ac9a66d247561 # shrinks to prefix = "®Σ®ぁ     0ꧏAa", a = "T", b = "AA a"

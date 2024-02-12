@@ -12,7 +12,7 @@ menu:
 for the embedded `SELECT` statement.
 
 The results of a view can be incrementally maintained **in memory** within a
-[cluster](/overview/key-concepts/#clusters) by creating an [index](../create-index).
+[cluster](/get-started/key-concepts/#clusters) by creating an [index](../create-index).
 This allows you to serve queries without the overhead of
 materializing the view.
 
@@ -59,6 +59,15 @@ AS
         ON purchase.user_id = user.id
     GROUP BY region.id;
 ```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of existing `view_name` if `OR REPLACE` is specified.
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the view definition.
+- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 

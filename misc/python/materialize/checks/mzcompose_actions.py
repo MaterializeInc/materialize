@@ -7,71 +7,250 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import TYPE_CHECKING, List, Optional
+import json
+import time
+from textwrap import dedent
+from typing import TYPE_CHECKING, Any
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
-from materialize.mzcompose.services import Clusterd, Materialized
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.ssh_bastion_host import (
+    setup_default_ssh_test_connection,
+)
 
 if TYPE_CHECKING:
     from materialize.checks.scenarios import Scenario
 
 
 class MzcomposeAction(Action):
-    pass
+    def join(self, e: Executor) -> None:
+        # Most of these actions are already blocking
+        pass
 
 
 class StartMz(MzcomposeAction):
     def __init__(
-        self, tag: Optional[MzVersion] = None, environment_extra: List[str] = []
+        self,
+        scenario: "Scenario",
+        tag: MzVersion | None = None,
+        environment_extra: list[str] = [],
+        system_parameter_defaults: dict[str, str] | None = None,
+        additional_system_parameter_defaults: dict[str, str] = {},
+        mz_service: str | None = None,
+        catalog_store: str | None = None,
+        platform: str | None = None,
+        healthcheck: list[str] | None = None,
     ) -> None:
+        if healthcheck is None:
+            healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
         self.tag = tag
         self.environment_extra = environment_extra
+        self.system_parameter_defaults = system_parameter_defaults
+        self.additional_system_parameter_defaults = additional_system_parameter_defaults
+        self.catalog_store = catalog_store or (
+            "shadow"
+            if scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev")
+            else "stash"
+        )
+        self.healthcheck = healthcheck
+        self.mz_service = mz_service
+        self.platform = platform
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
         image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
-        print(f"Starting Mz using image {image}")
+        print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
+
+        # Before #22790, this parameter needs to be set to False to avoid a panic
+        # Importantly, the environmentd must boot with the flag set to False, so we have to set it here
+        # By the time ConfigureMz() arrives to run ALTER SYSTEM SET, it is already too late
+        # to disable it, as problematic introspection dataflows have been created already
+        if (
+            self.tag
+            and "enable_specialized_arrangements"
+            not in self.additional_system_parameter_defaults
+        ):
+            self.additional_system_parameter_defaults[
+                "enable_specialized_arrangements"
+            ] = "false"
+
         mz = Materialized(
+            name=self.mz_service,
             image=image,
             external_cockroach=True,
+            external_minio=True,
             environment_extra=self.environment_extra,
+            system_parameter_defaults=self.system_parameter_defaults,
+            additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+            sanity_restart=False,
+            catalog_store=self.catalog_store,
+            platform=self.platform,
+            healthcheck=self.healthcheck,
         )
 
         with c.override(mz):
-            c.up("materialized")
+            c.up("materialized" if self.mz_service is None else self.mz_service)
 
-        for config_param in [
-            "max_tables",
-            "max_sinks",
-            "max_sources",
-            "max_materialized_views",
-            "max_secrets",
-        ]:
-            c.sql(
-                f"ALTER SYSTEM SET {config_param} TO 1000",
-                user="mz_system",
-                port=6877,
+            # If we start up Materialize with MZ_DEPLOY_GENERATION, then it
+            # stays in a stuck state when the preflight-check is completed. So
+            # we can't connect to it yet to run any commands.
+            if any(
+                env.startswith("MZ_DEPLOY_GENERATION=")
+                for env in self.environment_extra
+            ):
+                return
+
+            # This should live in ssh.py and alter_connection.py, but accessing the
+            # ssh bastion host from inside a check is not possible currently.
+            for i in range(4):
+                ssh_tunnel_name = f"ssh_tunnel_{i}"
+                setup_default_ssh_test_connection(
+                    c, ssh_tunnel_name, mz_service=self.mz_service
+                )
+
+            mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
+            if self.tag:
+                assert (
+                    self.tag == mz_version
+                ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
+            else:
+                version_cargo = MzVersion.parse_cargo()
+                assert (
+                    version_cargo == mz_version
+                ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
+
+            e.current_mz_version = mz_version
+
+
+class ConfigureMz(MzcomposeAction):
+    def __init__(self, scenario: "Scenario", mz_service: str | None = None) -> None:
+        self.handle: Any | None = None
+        self.mz_service = mz_service
+        self.scenario = scenario
+
+    def execute(self, e: Executor) -> None:
+        input = dedent(
+            """
+            # Run any query to have the materialize user implicitly created if
+            # it didn't exist yet. Required for the GRANT later.
+            > SELECT 1;
+            1
+            """
+        )
+
+        system_settings = {
+            "ALTER SYSTEM SET max_tables = 1000;",
+            "ALTER SYSTEM SET max_sinks = 1000;",
+            "ALTER SYSTEM SET max_sources = 1000;",
+            "ALTER SYSTEM SET max_materialized_views = 1000;",
+            "ALTER SYSTEM SET max_objects_per_schema = 1000;",
+            "ALTER SYSTEM SET max_secrets = 1000;",
+            "ALTER SYSTEM SET max_clusters = 1000;",
+        }
+
+        # Since we already test with RBAC enabled, we have to give materialize
+        # user the relevant attributes so the existing tests keep working.
+        if (
+            MzVersion.parse_mz("v0.45.0")
+            <= e.current_mz_version
+            < MzVersion.parse_mz("v0.59.0-dev")
+        ):
+            system_settings.add(
+                "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;"
+            )
+        elif e.current_mz_version >= MzVersion.parse_mz("v0.59.0"):
+            system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
+
+        if e.current_mz_version >= MzVersion.parse_mz("v0.47.0"):
+            system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO true;")
+
+        if e.current_mz_version >= MzVersion.parse_mz(
+            "v0.51.0-dev"
+        ) and e.current_mz_version < MzVersion.parse_mz("v0.76.0-dev"):
+            system_settings.add("ALTER SYSTEM SET enable_ld_rbac_checks TO true;")
+
+        if e.current_mz_version >= MzVersion.parse_mz("v0.52.0-dev"):
+            # Since we already test with RBAC enabled, we have to give materialize
+            # user the relevant privileges so the existing tests keep working.
+            system_settings.add("GRANT CREATE ON DATABASE materialize TO materialize;")
+            system_settings.add(
+                "GRANT CREATE ON SCHEMA materialize.public TO materialize;"
+            )
+            if self.scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev"):
+                cluster_name = "quickstart"
+            else:
+                cluster_name = "default"
+            system_settings.add(
+                f"GRANT CREATE ON CLUSTER {cluster_name} TO materialize;"
             )
 
-        mz_version = MzVersion.parse_sql(c)
-        if self.tag:
-            assert (
-                self.tag == mz_version
-            ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
-        else:
-            version_cargo = MzVersion.parse_cargo()
-            assert (
-                version_cargo == mz_version
-            ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
+        if (
+            MzVersion.parse_mz("v0.58.0-dev")
+            <= e.current_mz_version
+            <= MzVersion.parse_mz("v0.63.99")
+        ):
+            system_settings.add("ALTER SYSTEM SET enable_managed_clusters = on;")
+
+        # Before #22790, enable_specialized_arrangements=on would cause a panic on upgrade
+        # This flag must be disabled by default in StartMz() and then conditionally enabled
+        # here for the versions where it is expected to work.
+        if e.current_mz_version >= MzVersion.parse_mz("v0.75.0"):
+            system_settings.add(
+                "ALTER SYSTEM SET enable_specialized_arrangements = on;"
+            )
+
+        system_settings = system_settings - e.system_settings
+
+        if system_settings:
+            input += (
+                "$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}\n"
+                + "\n".join(system_settings)
+            )
+
+        kafka_broker = "BROKER '${testdrive.kafka-addr}'"
+        print(e.current_mz_version)
+        if e.current_mz_version >= MzVersion.parse_mz("v0.78.0-dev"):
+            kafka_broker += ", SECURITY PROTOCOL PLAINTEXT"
+        input += dedent(
+            f"""
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
+
+            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+            """
+        )
+
+        self.handle = e.testdrive(input=input, mz_service=self.mz_service)
+        e.system_settings.update(system_settings)
+
+    def join(self, e: Executor) -> None:
+        e.join(self.handle)
 
 
 class KillMz(MzcomposeAction):
+    def __init__(
+        self, mz_service: str = "materialized", capture_logs: bool = False
+    ) -> None:
+        self.mz_service = mz_service
+        self.capture_logs = capture_logs
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        c.kill("materialized")
+
+        with c.override(Materialized(name=self.mz_service)):
+            c.kill(self.mz_service, wait=True)
+
+            if self.capture_logs:
+                c.capture_logs(self.mz_service)
+
+
+class Down(MzcomposeAction):
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        c.down()
 
 
 class UseClusterdCompute(MzcomposeAction):
@@ -88,27 +267,47 @@ class UseClusterdCompute(MzcomposeAction):
             else "STORAGECTL ADDRESS 'clusterd_compute_1:2100'"
         )
 
+        if self.base_version >= MzVersion(0, 55, 0):
+            c.sql(
+                "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;",
+                port=6877,
+                user="mz_system",
+            )
+        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
+            cluster_name = "quickstart"
+        else:
+            cluster_name = "default"
+
         c.sql(
             f"""
-            DROP CLUSTER REPLICA default.r1;
-            CREATE CLUSTER REPLICA default.r1
+            ALTER CLUSTER {cluster_name} SET (MANAGED = false);
+            DROP CLUSTER REPLICA {cluster_name}.r1;
+            CREATE CLUSTER REPLICA {cluster_name}.r1
                 {storage_addresses},
                 COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
                 COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;
-        """
+            """,
+            port=6877,
+            user="mz_system",
         )
 
 
 class KillClusterdCompute(MzcomposeAction):
+    def __init__(self, capture_logs: bool = False) -> None:
+        self.capture_logs = capture_logs
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
         with c.override(Clusterd(name="clusterd_compute_1")):
             c.kill("clusterd_compute_1")
 
+            if self.capture_logs:
+                c.capture_logs("clusterd_compute_1")
+
 
 class StartClusterdCompute(MzcomposeAction):
-    def __init__(self, tag: Optional[MzVersion] = None) -> None:
+    def __init__(self, tag: MzVersion | None = None) -> None:
         self.tag = tag
 
     def execute(self, e: Executor) -> None:
@@ -162,12 +361,70 @@ class KillClusterdStorage(MzcomposeAction):
 
 
 class DropCreateDefaultReplica(MzcomposeAction):
+    def __init__(self, scenario: "Scenario") -> None:
+        self.base_version = scenario.base_version()
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
+        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
+            cluster_name = "quickstart"
+        else:
+            cluster_name = "default"
+
         c.sql(
-            """
-           DROP CLUSTER REPLICA default.r1;
-           CREATE CLUSTER REPLICA default.r1 SIZE '1';
-        """
+            f"""
+            ALTER CLUSTER {cluster_name} SET (MANAGED = false);
+            DROP CLUSTER REPLICA {cluster_name}.r1;
+            CREATE CLUSTER REPLICA {cluster_name}.r1 SIZE '1';
+            """,
+            port=6877,
+            user="mz_system",
         )
+
+
+class WaitReadyMz(MzcomposeAction):
+    """Wait until environmentd is ready, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#get-apileaderstatus"""
+
+    def __init__(self, mz_service: str = "materialized") -> None:
+        self.mz_service = mz_service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+
+        while True:
+            result = json.loads(
+                c.exec(
+                    self.mz_service,
+                    "curl",
+                    "localhost:6878/api/leader/status",
+                    capture=True,
+                ).stdout
+            )
+            if result["status"] == "ReadyToPromote":
+                return
+            assert result["status"] == "Initializing", f"Unexpected status {result}"
+            print("Not ready yet, waiting 1 s")
+            time.sleep(1)
+
+
+class PromoteMz(MzcomposeAction):
+    """Promote environmentd to leader, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#post-apileaderpromote"""
+
+    def __init__(self, mz_service: str = "materialized") -> None:
+        self.mz_service = mz_service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+
+        result = json.loads(
+            c.exec(
+                self.mz_service,
+                "curl",
+                "-X",
+                "POST",
+                "http://127.0.0.1:6878/api/leader/promote",
+                capture=True,
+            ).stdout
+        )
+        assert result["result"] == "Success", f"Unexpected result {result}"

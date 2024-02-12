@@ -40,7 +40,7 @@ $ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keys
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE multipart_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multipart-key-${testdrive.seed}')

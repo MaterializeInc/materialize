@@ -40,9 +40,160 @@ SELECT a + 1 FROM foo ORDER BY a + 1
 3
 
 query I nosort
+SELECT 2*a as d
+FROM foo
+ORDER BY d;
+----
+0
+2
+4
+
+query I nosort
+SELECT 2*a as d
+FROM foo
+ORDER BY -2*a;
+----
+4
+2
+0
+
+# This looks a bit weird if we compare it with the previous two tests, but Postgres does the same
+# See https://www.postgresql.org/docs/current/queries-order.html
+# "Note that an output column name has to stand alone, that is, it cannot be used in an expression"
+query error db error: ERROR: column "d" does not exist
+SELECT 2*a as d
+FROM foo
+ORDER BY -d;
+
+query I nosort
 SELECT sum(a) FROM foo ORDER BY sum(a)
 ----
 3
+
+query error db error: ERROR: column "foo\.a" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT a FROM foo ORDER BY sum(a);
+
+query error db error: ERROR: column "foo\.a" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT sum(a) FROM foo ORDER BY a;
+
+query error db error: ERROR: column "foo\.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT sum(a) FROM foo ORDER BY sum(a), b;
+
+query error db error: ERROR: column "foo\.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT sum(a), b FROM foo ORDER BY sum(a), b;
+
+query I nosort
+SELECT sum(a)
+FROM foo
+GROUP BY b
+ORDER BY sum(a), b;
+----
+0
+1
+2
+
+query I nosort
+SELECT sum(a)
+FROM foo
+GROUP BY b
+ORDER BY -sum(a), b;
+----
+2
+1
+0
+
+query I nosort
+SELECT right_a
+FROM foo LEFT JOIN (SELECT a as right_a FROM foo WHERE a<2) ON foo.a = right_a
+GROUP BY b, right_a
+ORDER BY -right_a, -sum(foo.a), b;
+----
+1
+0
+NULL
+
+query IIT nosort
+SELECT lag(10*right_a+3) OVER (ORDER BY right_a NULLS FIRST), -sum(foo.a), b
+FROM foo LEFT JOIN (SELECT a as right_a FROM foo WHERE a<2) ON foo.a = right_a
+GROUP BY b, right_a
+ORDER BY lag(10*right_a+3) OVER (ORDER BY right_a NULLS FIRST), -sum(foo.a), b;
+----
+3  -1  one
+NULL  -2  two
+NULL  0  zero
+
+query IT nosort
+SELECT -sum(foo.a), b
+FROM foo LEFT JOIN (SELECT a as right_a FROM foo WHERE a<2) ON foo.a = right_a
+GROUP BY b, right_a
+ORDER BY lag(10*right_a+3) OVER (ORDER BY right_a NULLS FIRST), -sum(foo.a), b;
+----
+-1  one
+-2  two
+0  zero
+
+query IIT nosort
+SELECT lag(10*right_a+3) OVER (ORDER BY right_a NULLS FIRST), sum(foo.a), length(b)
+FROM foo LEFT JOIN (SELECT a as right_a FROM foo WHERE a<2) ON foo.a = right_a
+GROUP BY b, right_a
+ORDER BY lag(10*right_a+3) OVER (ORDER BY right_a NULLS FIRST), -sum(foo.a)/10, length(b) DESC NULLS FIRST;
+----
+3  1  3
+NULL  0  4
+NULL  2  3
+
+query I nosort
+SELECT 10-sum(a)
+FROM foo
+GROUP BY b
+ORDER BY 1;
+----
+8
+9
+10
+
+query error db error: ERROR: column reference 2 in ORDER BY clause is out of range \(1 \- 1\)
+SELECT 10-sum(a)
+FROM foo
+GROUP BY b
+ORDER BY 2;
+
+query II nosort
+SELECT 10-sum(a), lag(sum(a)) OVER (ORDER BY sum(a))
+FROM foo
+GROUP BY b
+ORDER BY 2;
+----
+9  0
+8  1
+10  NULL
+
+query error db error: ERROR: column reference 3 in ORDER BY clause is out of range \(1 \- 2\)
+SELECT 10-sum(a), lag(sum(a)) OVER (ORDER BY sum(a))
+FROM foo
+GROUP BY b
+ORDER BY 3;
+
+query II
+SELECT a, lag(a) OVER (ORDER BY a) as d
+FROM foo
+ORDER BY d;
+----
+1  0
+2  1
+0  NULL
+
+# When an ORDER BY refers to an output column name, the column name can't be part of a bigger expression.
+# (This is the same in Postgres.)
+query error db error: ERROR: column "d" does not exist
+SELECT a, lag(a) OVER (ORDER BY a) as d
+FROM foo
+ORDER BY -d;
+
+query error db error: ERROR: column "d" does not exist
+SELECT a, 2*a as d
+FROM foo
+ORDER BY lag(d) OVER (ORDER BY d);
 
 query I nosort
 SELECT a FROM foo ORDER BY (0-a)
@@ -85,6 +236,102 @@ SELECT DISTINCT a FROM foo ORDER BY a + 1
 # ...or a set expression.
 query error column "b" does not exist
 (SELECT a FROM foo) UNION (SELECT a FROM foo) ORDER BY b
+
+# We should pick up the column name from the first input of UNION.
+query I
+(SELECT a FROM foo)
+UNION
+(SELECT a-3 FROM foo)
+ORDER BY a;
+----
+-3
+-2
+-1
+0
+1
+2
+
+query I
+(SELECT a FROM foo)
+UNION
+(SELECT a FROM foo)
+ORDER BY a;
+----
+0
+1
+2
+
+query error ERROR: column "a" does not exist
+(SELECT a-3 FROM foo)
+UNION
+(SELECT a FROM foo)
+ORDER BY a;
+
+# We support complex expressions in the ORDER BY of a set expression (Postgres doesn't).
+query I
+(SELECT a FROM foo)
+UNION
+(SELECT a-3 FROM foo)
+ORDER BY -2*a+3;
+----
+2
+1
+0
+-1
+-2
+-3
+
+# But we don't support aggregations in the ORDER BY of a set expression (same in Postgres)
+query error db error: ERROR: aggregate functions are not allowed in ORDER BY clause of a set expression \(function pg_catalog\.sum\)
+(SELECT a FROM foo)
+UNION
+(SELECT a-3 FROM foo)
+ORDER BY sum(a);
+
+# ... or window functions (same in Postgres).
+query error db error: ERROR: window functions are not allowed in ORDER BY clause of a set expression \(function pg_catalog\.lag\)
+(SELECT a FROM foo)
+UNION
+(SELECT a-3 FROM foo)
+ORDER BY lag(a) OVER ();
+
+# We support window functions in a normal ORDER BY, though
+query I
+SELECT a FROM foo
+ORDER BY lag(a) OVER (ORDER BY a) NULLS LAST;
+----
+1
+2
+0
+
+query I
+SELECT a FROM foo
+ORDER BY lag(a) OVER (ORDER BY -a NULLS FIRST) DESC NULLS LAST;
+----
+1
+0
+2
+
+# We support subqueries in ORDER BY
+query IT
+SELECT a, b FROM foo
+ORDER BY a IN (SELECT length(b)-1 FROM foo), -a;
+----
+1  one
+0  zero
+2  two
+
+# ... even for a set expression
+query I
+(SELECT a FROM foo)
+UNION
+(SELECT a+1 FROM foo)
+ORDER BY a IN (SELECT length(b)-1 FROM foo), -a;
+----
+1
+0
+3
+2
 
 # Using a column twice and referring to it by its alias in the ORDER BY should
 # work.
@@ -615,3 +862,163 @@ SELECT row_number() OVER (ORDER BY x NULLS LAST), x FROM t;
 2 b
 3 c
 4 NULL
+
+## TopK removal when it's completely covered by the finishing.
+## See https://github.com/MaterializeInc/materialize/issues/8194
+
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t(x int, y int);
+
+# We could remove the TopK, but we don't do this on the slow path currently.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10000) LIMIT 8000;
+----
+Explained Query:
+  Finish limit=8000 output=[#0, #1]
+    TopK limit=10000
+      ReadStorage materialize.public.t
+
+EOF
+
+statement ok
+CREATE INDEX t_idx on t(x);
+
+# Same as above, but for fast path recognition we already do the TopK removal.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10) LIMIT 8;
+----
+Explained Query (fast path):
+  Finish limit=8 output=[#0, #1]
+    ReadIndex on=materialize.public.t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (fast path limit)
+
+EOF
+
+# Same as above, but the finishing would need to be modified (merge the TopK into the finishing), because the TopK's
+# LIMIT is smaller. We don't do this currently, but it wouldn't be too difficult.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 8) LIMIT 10;
+----
+Explained Query:
+  Finish limit=10 output=[#0, #1]
+    TopK limit=8
+      ReadIndex on=t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# A negative example for the TopK removal: The TopK has a grouping key, so it shouldn't be removed.
+
+query T multiline
+EXPLAIN SELECT * FROM (
+  SELECT * FROM
+    (SELECT DISTINCT x FROM t) grp,
+    LATERAL (
+        SELECT y FROM t
+        WHERE x = grp.x
+        ORDER BY y LIMIT 4
+    )
+) LIMIT 8;
+----
+Explained Query:
+  Finish limit=8 output=[#0, #1]
+    TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=4
+      Filter (#0) IS NOT NULL
+        ReadIndex on=t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# A negative example for the TopK removal: The TopK has a different ordering key, so it shouldn't be removed.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 10) ORDER BY y LIMIT 8;
+----
+Explained Query:
+  Finish order_by=[#1 asc nulls_last] limit=8 output=[#0, #1]
+    TopK order_by=[#0 asc nulls_last] limit=10
+      ReadIndex on=t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# The TopK has an ordering key, but the finishing doesn't. We could merge the TopK into the finishing, but we don't
+# currently do this.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 10) LIMIT 8;
+----
+Explained Query:
+  Finish limit=8 output=[#0, #1]
+    TopK order_by=[#0 asc nulls_last] limit=10
+      ReadIndex on=t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# Trivial finishing. We could merge the TopK into the finishing, but we don't currently do this.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 10);
+----
+Explained Query:
+  TopK order_by=[#0 asc nulls_last] limit=10
+    ReadIndex on=t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# A negative example for the TopK removal: The TopK's ordering key is a prefix of the RowSetFinishing's, so it shouldn't
+# be removed.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t ORDER BY x LIMIT 10) ORDER BY x, y LIMIT 8;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] limit=8 output=[#0, #1]
+    TopK order_by=[#0 asc nulls_last] limit=10
+      ReadIndex on=t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF
+
+# 3 nested LIMITs, so TopK fusion is needed to be able to go to fast path.
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM (SELECT * FROM t LIMIT 8) LIMIT 10) LIMIT 6;
+----
+Explained Query (fast path):
+  Finish limit=6 output=[#0, #1]
+    ReadIndex on=materialize.public.t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (fast path limit)
+
+EOF
+
+# The TopK has an offset, so we shouldn't remove it. (We could merge it into the finishing, but we don't do that
+# currently.)
+query T multiline
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10 OFFSET 3) LIMIT 8;
+----
+Explained Query:
+  Finish limit=8 output=[#0, #1]
+    TopK limit=10 offset=3
+      ReadIndex on=t t_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t_idx (*** full scan ***)
+
+EOF

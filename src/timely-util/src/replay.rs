@@ -23,11 +23,10 @@ use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
+use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
-use timely::scheduling::ActivateOnDrop;
-
-use super::activator::ActivatorTrait;
+use crate::activator::ActivatorTrait;
 
 /// Replay a capture stream into a scope with the same timestamp.
 pub trait MzReplay<T: Timestamp, D: Data, A: ActivatorTrait>: Sized {

@@ -34,6 +34,22 @@ pub trait CastFrom<T> {
     fn cast_from(from: T) -> Self;
 }
 
+/// The inverse of [`CastFrom`].
+/// Implemented automatically, just like [`std::convert::Into`].
+pub trait CastInto<T> {
+    /// Performs the cast.
+    fn cast_into(self) -> T;
+}
+
+impl<T, U> CastInto<U> for T
+where
+    U: CastFrom<T>,
+{
+    fn cast_into(self) -> U {
+        U::cast_from(self)
+    }
+}
+
 macro_rules! cast_from {
     ($from:ty, $to:ty) => {
         paste::paste! {
@@ -111,6 +127,7 @@ pub mod target64 {
 pub use target64::*;
 
 // TODO(petrosagg): remove these once the std From impls become const
+cast_from!(u8, u8);
 cast_from!(u8, u16);
 cast_from!(u8, i16);
 cast_from!(u8, u32);
@@ -119,27 +136,34 @@ cast_from!(u8, u64);
 cast_from!(u8, i64);
 cast_from!(u8, u128);
 cast_from!(u8, i128);
+cast_from!(u16, u16);
 cast_from!(u16, u32);
 cast_from!(u16, i32);
 cast_from!(u16, u64);
 cast_from!(u16, i64);
 cast_from!(u16, u128);
 cast_from!(u16, i128);
+cast_from!(u32, u32);
 cast_from!(u32, u64);
 cast_from!(u32, i64);
 cast_from!(u32, u128);
 cast_from!(u32, i128);
+cast_from!(u64, u64);
 cast_from!(u64, u128);
 cast_from!(u64, i128);
+cast_from!(i8, i8);
 cast_from!(i8, i16);
 cast_from!(i8, i32);
 cast_from!(i8, i64);
 cast_from!(i8, i128);
+cast_from!(i16, i16);
 cast_from!(i16, i32);
 cast_from!(i16, i64);
 cast_from!(i16, i128);
+cast_from!(i32, i32);
 cast_from!(i32, i64);
 cast_from!(i32, i128);
+cast_from!(i64, i64);
 cast_from!(i64, i128);
 
 /// A trait for reinterpreting casts.
@@ -218,20 +242,34 @@ try_cast_from!(u64, f64);
 
 /// A trait for potentially-lossy casts. Typically useful when converting from integers
 /// to floating point, and you want the nearest floating-point number to your integer
-/// when your integer is large.
+/// when your integer is large, or vice versa.
 pub trait CastLossy<T> {
     /// Perform the lossy cast.
     fn cast_lossy(from: T) -> Self;
 }
 
-impl CastLossy<usize> for f64 {
-    #[allow(clippy::as_conversions)]
-    fn cast_lossy(from: usize) -> Self {
-        from as f64
-    }
+/// Implement `CastLossy` for the specified types.
+macro_rules! cast_lossy {
+    ($from:ty, $to:ty) => {
+        impl crate::cast::CastLossy<$from> for $to {
+            #[allow(clippy::as_conversions)]
+            fn cast_lossy(from: $from) -> $to {
+                from as $to
+            }
+        }
+    };
 }
 
-#[test]
+cast_lossy!(usize, f64);
+cast_lossy!(isize, f64);
+cast_lossy!(f64, usize);
+cast_lossy!(i64, f64);
+cast_lossy!(f64, i64);
+cast_lossy!(u64, f64);
+cast_lossy!(f64, u64);
+cast_lossy!(f64, u32);
+
+#[mz_test_macro::test]
 fn test_try_cast_from() {
     let f64_i64_cases = vec![
         (0.0, Some(0)),

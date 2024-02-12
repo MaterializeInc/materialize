@@ -22,7 +22,7 @@
   {%- set target_relation = api.Relation.create(identifier=identifier,
                                                 schema=schema,
                                                 database=database,
-                                                type='materializedview') -%}
+                                                type='materialized_view') -%}
 
   {% if old_relation %}
     {{ adapter.drop_relation(old_relation) }}
@@ -36,6 +36,7 @@
     {{ materialize__create_materialized_view_as(target_relation, sql) }}
   {%- endcall %}
 
+  {{ create_indexes(target_relation) }}
   {% do persist_docs(target_relation, model) %}
 
   {{ run_hooks(post_hooks, inside_transaction=False) }}

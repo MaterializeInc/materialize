@@ -14,7 +14,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 mzcompose() {
-    bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 service=${BUILDKITE_PLUGIN_MZCOMPOSE_RUN:-default}
@@ -31,15 +31,30 @@ date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 # Docker Compose run, which can leave old containers or volumes around that will
 # interfere with this build.
 ci_collapsed_heading ":docker: Purging containers and volumes from previous builds"
+sudo systemctl restart docker
 mzcompose --mz-quiet kill
 mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes
+killall -9 clusterd || true # There might be remaining processes from a previous cargo-test run
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+  find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
+fi
 
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
+rm -f services.log
 
 ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
 mzcompose --mz-quiet build
+
+# Clean up cores here so that just killed processes' core files are ignored
+cores="$HOME"/cores
+rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst
+mkdir -m 777 "$cores"
+# Max 128 characters, so don't use $PWD which will make it too long
+sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%E.%t"
+echo -n "Core pattern: "
+cat /proc/sys/kernel/core_pattern
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will
@@ -49,6 +64,20 @@ if ! mzcompose --mz-quiet list-workflows | grep -q "$service"; then
     mzcompose up -d --scale "$service=0" "$service"
 fi
 
-ci_uncollapsed_heading ":docker: Running \`mzcompose run ${run_args[*]}\`"
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+    ci_uncollapsed_heading ":docker: Fetching binaries for coverage"
+    mzcompose create
+    mkdir -p coverage/
+    chmod 777 coverage/
+    # Not all tests contain all of these containers:
+    mzcompose cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
+    mzcompose cp sqllogictest:/usr/local/bin/clusterd coverage/ || true
+    mzcompose cp materialized:/usr/local/bin/environmentd coverage/ || true
+    mzcompose cp materialized:/usr/local/bin/clusterd coverage/ || true
+    mzcompose cp testdrive:/usr/local/bin/testdrive coverage/ || true
+    mzcompose cp balancerd:/usr/local/bin/balancerd coverage/ || true
+fi
+
+ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
 
 mzcompose run "${run_args[@]}" |& tee run.log

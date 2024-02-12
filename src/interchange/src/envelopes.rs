@@ -16,13 +16,12 @@ use differential_dataflow::trace::{Batch, BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
+use mz_ore::cast::CastFrom;
+use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
 use once_cell::sync::Lazy;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
-
-use mz_ore::cast::CastFrom;
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
 
 use crate::avro::DiffPair;
 
@@ -37,7 +36,13 @@ pub fn combine_at_timestamp<G: Scope, Tr>(
 ) -> Collection<G, (Option<Row>, Vec<DiffPair<Row>>), Diff>
 where
     G::Timestamp: Lattice + Copy,
-    Tr: Clone + TraceReader<Key = Option<Row>, Val = Row, Time = G::Timestamp, R = Diff>,
+    Tr: Clone
+        + for<'a> TraceReader<
+            Key<'a> = &'a Option<Row>,
+            Val<'a> = &'a Row,
+            Time = G::Timestamp,
+            Diff = Diff,
+        >,
     Tr::Batch: Batch,
 {
     let mut rows_buf = vec![];
@@ -61,7 +66,8 @@ where
                             while cursor.val_valid(&batch) {
                                 let v = cursor.val(&batch);
                                 cursor.map_times(&batch, |&t, &diff| {
-                                    let update = (t, v, usize::cast_from(diff.unsigned_abs()));
+                                    let update =
+                                        (t, v.clone(), usize::cast_from(diff.unsigned_abs()));
                                     if diff < 0 {
                                         befores.push(update);
                                     } else {

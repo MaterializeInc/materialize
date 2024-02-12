@@ -10,10 +10,9 @@
 //! Encoding and decoding support for various formats that represent binary data
 //! as text data.
 
-use uncased::UncasedStr;
-
 use mz_ore::fmt::FormatBuffer;
 use mz_repr::strconv;
+use uncased::UncasedStr;
 
 use crate::EvalError;
 

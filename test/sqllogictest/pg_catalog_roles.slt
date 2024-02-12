@@ -12,9 +12,11 @@ mode cockroach
 # Start from a pristine server
 reset-server
 
-query T
+query T rowsort
 SELECT rolname FROM pg_roles ORDER BY oid
 ----
-mz_system
-mz_introspection
 materialize
+mz_monitor
+mz_monitor_redacted
+mz_support
+mz_system

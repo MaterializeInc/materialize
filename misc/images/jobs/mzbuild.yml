@@ -10,6 +10,9 @@
 name: jobs
 pre-image:
   - type: cargo-build
-    example: persistcli
+    bin:
+      - persistcli
+      - mz-stash-debug
+      - mz-catalog-debug
     strip: false
 publish: true

@@ -12,6 +12,12 @@
 # "optimize topk when limit=1 and input is monotonic (append-only)"
 #
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET min_timestamp_interval = '100ms'
+
 #
 # Make sure that the general pattern of all queries in this file will use TopK and not some other future operator or optimization
 #
@@ -32,9 +38,10 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE t1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-top1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
@@ -258,3 +265,39 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 <null>
 <null>
 <null>
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SET cluster_replica = r1
+
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]] [val: empty]"
+"Arranged DistinctBy [val: empty]"
+"Arranged DistinctBy [val: empty]"
+"Arranged DistinctBy [val: empty]"
+"Arranged DistinctBy [val: empty]"
+"Arranged MonotonicTop1 partial [val: empty]"
+"Arranged MonotonicTop1 partial [val: empty]"
+"Arranged MonotonicTop1 partial [val: empty]"
+"Arranged MonotonicTop1 partial [val: empty]"
+"Arranged MonotonicTop1 partial [val: empty]"
+"Arranged MonotonicTop1 partial [val: empty]"
+"DistinctBy [val: empty]"
+"DistinctBy [val: empty]"
+"DistinctBy [val: empty]"
+"DistinctBy [val: empty]"
+DistinctByErrorCheck
+DistinctByErrorCheck
+DistinctByErrorCheck
+DistinctByErrorCheck
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1
+MonotonicTop1

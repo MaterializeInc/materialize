@@ -10,7 +10,17 @@
 # Test that a dependency chain with multiple links is properly maintained
 # across creation and deletion.
 
-$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+$ set-regex match=cluster1|quickstart replacement=<CLUSTER_NAME>
+
+$ kafka-create-topic topic=data partitions=1
+
+$ kafka-create-topic topic=data-blah partitions=1
+
+$ kafka-create-topic topic=v partitions=1
+
+$ kafka-create-topic topic=v2 partitions=1
+
+$ kafka-create-topic topic=v3 partitions=1
 
 $ set schema={
     "name": "row",
@@ -22,22 +32,25 @@ $ set schema={
   }
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
 > CREATE SOURCE s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 ! CREATE SOURCE s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 contains:source "materialize.public.s" already exists
 
 > CREATE SOURCE IF NOT EXISTS s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -50,23 +63,23 @@ contains:source "materialize.public.s" already exists
 > CREATE VIEW test3b AS SELECT * FROM test2;
 
 ! DROP VIEW test1;
-contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop view "test1": still depended upon by view "test2"
 
 ! DROP VIEW test2;
-contains:cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3a'
+contains:cannot drop view "test2": still depended upon by view "test3a"
 
 > DROP VIEW test3a;
 
 ! DROP VIEW test1;
-contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop view "test1": still depended upon by view "test2"
 
 ! DROP VIEW test2;
-contains:cannot drop materialize.public.test2: still depended upon by catalog item 'materialize.public.test3b'
+contains:cannot drop view "test2": still depended upon by view "test3b"
 
 > DROP VIEW test3b;
 
 ! DROP VIEW test1;
-contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop view "test1": still depended upon by view "test2"
 
 > DROP VIEW test2;
 
@@ -106,26 +119,35 @@ contains:unknown catalog item 'test2'
 contains:unknown catalog item 'test4'
 
 > CREATE SOURCE s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE SINK s1 FROM s
+> CREATE SINK s1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-! CREATE SINK s1 FROM s
+! CREATE SINK s1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 contains:sink "materialize.public.s1" already exists
 
-> CREATE SINK IF NOT EXISTS s1 FROM s
+> CREATE SINK IF NOT EXISTS s1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK s2 FROM s
+> CREATE SINK s2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -244,6 +266,7 @@ contains:unknown catalog item 'i4'
 # Materialized source tests
 
 > CREATE SOURCE s3
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -266,6 +289,7 @@ contains:unknown catalog item 'j1'
 # Test cascade deletes all indexes associated with cascaded sources and views
 
 > CREATE SOURCE s4
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -302,6 +326,7 @@ contains:unknown catalog item 'j2'
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
 > CREATE SOURCE s5
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -317,14 +342,14 @@ contains:unknown catalog item 'j2'
 > CREATE VIEW v1 AS SELECT CAST('{2}' AS int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
 > CREATE TABLE t1 (custom int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.t1'
+contains:cannot drop type "int4_list": still depended upon by table "t1"
 
 > DROP TABLE t1
 
@@ -333,28 +358,28 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 > CREATE VIEW v1 AS SELECT * FROM ( SELECT CAST('{2}' AS int4_list) )
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS SELECT CAST(CAST('{2}' AS int4_list) AS text)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS VALUES (CAST('{2}' AS int4_list))
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS SELECT MIN(CAST(CAST('{1}' AS int4_list) AS string))
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
@@ -365,7 +390,7 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 > CREATE TEMPORARY TABLE t1 (f1 int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'mz_temp.t1'
+contains:cannot drop type "int4_list": still depended upon by table "t1"
 
 > DROP TABLE t1
 
@@ -374,14 +399,14 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 > CREATE INDEX i1 ON t1 (CAST(f1 AS int4_list))
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.i1'
+contains:cannot drop type "int4_list": still depended upon by index "i1"
 
 > DROP TABLE t1
 
 > CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.int4_list_list'
+contains:cannot drop type "int4_list": still depended upon by type "int4_list_list"
 
 > DROP TYPE int4_list_list
 
@@ -407,7 +432,7 @@ contains:cannot drop materialize.public.int4_list: still depended upon by catalo
 2
 
 ! CREATE OR REPLACE VIEW v3 AS SELECT 3
-contains:cannot drop materialize.public.v3: still depended upon by catalog item 'materialize.public.v4'
+contains:cannot drop view "v3": still depended upon by view "v4"
 
 > CREATE OR REPLACE VIEW v4 AS SELECT 3
 > SELECT * FROM v4
@@ -427,7 +452,7 @@ contains:cannot drop materialize.public.v3: still depended upon by catalog item 
 > CREATE VIEW test2 AS SELECT * FROM test1;
 
 ! DROP VIEW test1;
-contains:cannot drop materialize.public.test1: still depended upon by catalog item 'materialize.public.test2'
+contains:cannot drop view "test1": still depended upon by view "test2"
 
 # Succeeds even though it's dependent on.
 > CREATE VIEW IF NOT EXISTS test1 AS SELECT 2 as b;

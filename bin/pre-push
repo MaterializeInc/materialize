@@ -13,13 +13,15 @@
 
 set -euo pipefail
 
-SHLIB_NOT_IN_CI=1
-
 . misc/shlib/shlib.bash
 
-ci_try bin/lint
-ci_try cargo fmt -- --check
-ci_try cargo clippy --all-targets -- -D warnings
-ci_try bin/doc --no-deps
+# this runs all of lint-fast.sh
+try bin/lint
 
-ci_status_report
+# part of lint-slow.sh because it requires building code
+try cargo clippy --all-targets -- -D warnings
+
+# part of lint-slow.sh because it requires building code
+try bin/doc --no-deps
+
+try_status_report

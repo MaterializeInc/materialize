@@ -34,9 +34,10 @@ $ kafka-ingest format=avro topic=avro-types-null2int schema=${null} timestamp=1
 {"f1": null}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE avro_types_null2int
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-null2int-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
@@ -55,6 +56,7 @@ $ kafka-ingest format=avro topic=avro-types-boolean2int schema=${boolean} timest
 {"f1": false}
 
 > CREATE SOURCE avro_types_boolean2int
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-boolean2int-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
@@ -74,6 +76,7 @@ $ kafka-ingest format=avro topic=avro-types-int2long schema=${int} timestamp=1
 {"f1": 123}
 
 > CREATE SOURCE avro_types_int2long
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-int2long-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${long}'
   ENVELOPE NONE
@@ -91,6 +94,7 @@ $ kafka-ingest format=avro topic=avro-types-int2float schema=${int} timestamp=1
 {"f1": 123}
 
 > CREATE SOURCE avro_types_int2float
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-int2float-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${float}'
   ENVELOPE NONE
@@ -108,6 +112,7 @@ $ kafka-ingest format=avro topic=avro-types-long2float schema=${long} timestamp=
 {"f1": 992147483647}
 
 > CREATE SOURCE avro_types_long2float
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-long2float-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${float}'
   ENVELOPE NONE
@@ -125,6 +130,7 @@ $ kafka-ingest format=avro topic=avro-types-long2int schema=${long} timestamp=1
 {"f1": 992147483647}
 
 > CREATE SOURCE avro_types_long2int
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-long2int-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
@@ -142,6 +148,7 @@ $ kafka-ingest format=avro topic=avro-types-float2double schema=${float} timesta
 {"f1": 123456789.123456789}
 
 > CREATE SOURCE avro_types_float2double
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-float2double-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${double}'
   ENVELOPE NONE
@@ -159,6 +166,7 @@ $ kafka-ingest format=avro topic=avro-types-string2bytes schema=${string} timest
 {"f1": "abc абц"}
 
 > CREATE SOURCE avro_types_string2bytes
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-string2bytes-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${bytes}'
   ENVELOPE NONE

@@ -89,6 +89,16 @@ parse-scalar
 Value(Number("9007199254740993.0"))
 
 parse-scalar
+X'deadbeef'
+----
+Value(HexString("deadbeef"))
+
+parse-scalar roundtrip
+X'deadbeef'
+----
+X'deadbeef'
+
+parse-scalar
 'one'
 ----
 Value(String("one"))
@@ -103,62 +113,150 @@ Value(HexString("deadBEEF"))
 parse-scalar
 DATE '1999-01-01'
 ----
-Cast { expr: Value(String("1999-01-01")), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01")), data_type: Other { name: Name(UnresolvedItemName([Ident("date")])), typ_mod: [] } }
 
 parse-scalar
 DATE 'invalid date'
 ----
-Cast { expr: Value(String("invalid date")), data_type: Other { name: Name(UnresolvedObjectName([Ident("date")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid date")), data_type: Other { name: Name(UnresolvedItemName([Ident("date")])), typ_mod: [] } }
 
 parse-scalar
 TIME '01:23:34'
 ----
-Cast { expr: Value(String("01:23:34")), data_type: Other { name: Name(UnresolvedObjectName([Ident("time")])), typ_mod: [] } }
+Cast { expr: Value(String("01:23:34")), data_type: Other { name: Name(UnresolvedItemName([Ident("time")])), typ_mod: [] } }
 
 parse-scalar
 TIME 'invalid time'
 ----
-Cast { expr: Value(String("invalid time")), data_type: Other { name: Name(UnresolvedObjectName([Ident("time")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid time")), data_type: Other { name: Name(UnresolvedItemName([Ident("time")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMPTZ '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP WITH TIME ZONE '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP WITHOUT TIME ZONE '1999-01-01 01:23:34.555'
 ----
-Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] } }
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP 'invalid timestamptx'
 ----
-Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMPTZ 'invalid timestamptx'
 ----
-Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP WITH TIME ZONE 'invalid timestamptx'
 ----
-Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamptz")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [] } }
 
 parse-scalar
 TIMESTAMP WITHOUT TIME ZONE 'invalid timestamptx'
 ----
-Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedObjectName([Ident("timestamp")])), typ_mod: [] } }
+Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] } }
+
+parse-scalar
+TIMESTAMP(-1) '1999-01-01 01:23:34.555'
+----
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [-1] } }
+
+parse-scalar
+TIMESTAMPTZ(-1) '1999-01-01 01:23:34.555'
+----
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [-1] } }
+
+parse-scalar
+TIMESTAMP(-1) WITH TIME ZONE '1999-01-01 01:23:34.555'
+----
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [-1] } }
+
+parse-scalar
+TIMESTAMP(-1) WITHOUT TIME ZONE '1999-01-01 01:23:34.555'
+----
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [-1] } }
+
+parse-scalar
+TIMESTAMP(3) '1970-01-01T00:00:00.666666666'
+----
+Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [3] } }
+
+parse-scalar
+TIMESTAMPTZ(3) '1970-01-01T00:00:00.666666666'
+----
+Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [3] } }
+
+parse-scalar
+TIMESTAMP(3) WITH TIME ZONE '1970-01-01T00:00:00.666666666'
+----
+Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [3] } }
+
+parse-scalar
+TIMESTAMP(3) WITHOUT TIME ZONE '1970-01-01T00:00:00.666666666'
+----
+Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [3] } }
+
+parse-scalar
+TIMESTAMP(7) '1970-01-01T00:00:00.666666666'
+----
+Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [7] } }
+
+parse-scalar
+TIMESTAMPTZ(7) '1970-01-01T00:00:00.666666666'
+----
+Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [7] } }
+
+parse-scalar
+TIMESTAMP(7) WITH TIME ZONE '1970-01-01T00:00:00.666666666'
+----
+Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [7] } }
+
+parse-scalar
+TIMESTAMP(7) WITHOUT TIME ZONE '1970-01-01T00:00:00.666666666'
+----
+Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [7] } }
+
+parse-scalar
+TIMESTAMP(9223372036854775808) '1970-01-01T00:00:00.666666666'
+----
+error: extra token after expression
+TIMESTAMP(9223372036854775808) '1970-01-01T00:00:00.666666666'
+                               ^
+
+parse-scalar
+TIMESTAMPTZ(9223372036854775808) '1970-01-01T00:00:00.666666666'
+----
+error: extra token after expression
+TIMESTAMPTZ(9223372036854775808) '1970-01-01T00:00:00.666666666'
+                                 ^
+
+parse-scalar
+TIMESTAMP(9223372036854775808) WITH TIME ZONE '1970-01-01T00:00:00.666666666'
+----
+error: extra token after expression
+TIMESTAMP(9223372036854775808) WITH TIME ZONE '1970-01-01T00:00:00.666666666'
+                               ^
+
+parse-scalar
+TIMESTAMP(9223372036854775808) WITHOUT TIME ZONE '1970-01-01T00:00:00.666666666'
+----
+error: extra token after expression
+TIMESTAMP(9223372036854775808) WITHOUT TIME ZONE '1970-01-01T00:00:00.666666666'
+                               ^
 
 parse-scalar
 INTERVAL '1' YEAR
@@ -169,6 +267,36 @@ parse-scalar
 INTERVAL 'invalid interval' YEAR
 ----
 Value(Interval(IntervalValue { value: "invalid interval", precision_high: Year, precision_low: Year, fsec_max_precision: None }))
+
+parse-scalar roundtrip
+INTERVAL '1' YEAR
+----
+INTERVAL '1' YEAR
+
+parse-scalar roundtrip
+INTERVAL '1' MONTH
+----
+INTERVAL '1' MONTH
+
+parse-scalar roundtrip
+INTERVAL '1' DAY
+----
+INTERVAL '1' DAY
+
+parse-scalar roundtrip
+INTERVAL '1' HOUR
+----
+INTERVAL '1' HOUR
+
+parse-scalar roundtrip
+INTERVAL '1' MINUTE
+----
+INTERVAL '1' MINUTE
+
+parse-scalar roundtrip
+INTERVAL '1' SECOND
+----
+INTERVAL '1'
 
 parse-scalar
 INTERVAL '1 year'
@@ -239,6 +367,31 @@ parse-scalar
 INTERVAL '01:01:01.111111111' SECOND (5)
 ----
 Value(Interval(IntervalValue { value: "01:01:01.111111111", precision_high: Year, precision_low: Second, fsec_max_precision: Some(5) }))
+
+parse-scalar roundtrip
+INTERVAL '01:01:01.111111111' SECOND(5)
+----
+INTERVAL '01:01:01.111111111' SECOND(5)
+
+parse-scalar
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND (2)
+----
+Value(Interval(IntervalValue { value: "01:01:01.111111111", precision_high: Minute, precision_low: Second, fsec_max_precision: Some(2) }))
+
+parse-scalar roundtrip
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND(2)
+----
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND(2)
+
+parse-scalar
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND
+----
+Value(Interval(IntervalValue { value: "01:01:01.111111111", precision_high: Minute, precision_low: Second, fsec_max_precision: None }))
+
+parse-scalar roundtrip
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND
+----
+INTERVAL '01:01:01.111111111' MINUTE TO SECOND
 
 # Lists
 

@@ -11,11 +11,11 @@
 #
 # fgviz — generate and launch flamegraph visualizer
 
-cargo run --bin fgviz > "$( dirname "$0" )"/../src/prof/src/http/flamegraph.html -- "$@"
+cargo run --bin fgviz > "$( dirname "$0" )"/../src/prof-http/src/http/flamegraph.html -- "$@"
 
 if ! command -v open &> /dev/null
 then
-    echo "Open 'src/prof/src/http/static/flamegraph.html' in your favorite browser."
+    echo "Open 'src/prof-http/src/http/flamegraph.html' in your favorite browser."
 else
-    open "$( dirname "$0" )"/../src/prof/src/http/flamegraph.html
+    open "$( dirname "$0" )"/../src/prof-http/src/http/flamegraph.html
 fi

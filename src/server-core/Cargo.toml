@@ -1,0 +1,25 @@
+[package]
+name = "mz-server-core"
+description = "Core functions for serving."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.66"
+clap = { version = "3.2.24", features = ["derive", "env"] }
+openssl = { version = "0.10.48", features = ["vendored"] }
+socket2 = "0.5.3"
+tokio-stream = "0.1.11"
+tracing = "0.1.37"
+futures = "0.3.25"
+mz-ore = { path = "../ore", default-features = false }
+tokio = "1.24.2"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

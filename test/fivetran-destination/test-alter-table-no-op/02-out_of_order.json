@@ -1,0 +1,26 @@
+{
+    "create_table": {
+        "test_alter_table_out_of_order": {
+            "columns": {
+                "k": "STRING",
+                "v1": "INT",
+                "v2": "STRING"
+            },
+            "primary_keys": [
+                "k"
+            ]
+        }
+    },
+    "alter_table": {
+        "test_alter_table_out_of_order": {
+            "columns": {
+                "v1": "INT",
+                "k": "STRING",
+                "v2": "STRING"
+            },
+            "primary_keys": [
+                "k"
+            ]
+        }
+    }
+}

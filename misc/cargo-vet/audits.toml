@@ -1,0 +1,1042 @@
+
+# cargo-vet audits file
+
+[criteria.maintained-and-necessary]
+description = """
+Certification of this crate means the reviewer has confirmed the crate is:
+- actively maintained
+- necessary and useful to Materialize
+- well-documented
+"""
+implies = "safe-to-deploy"
+
+[[audits.array-concat]]
+who = "Matt Arthur <matthewleearthur@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.5.2"
+
+[[audits.aws-sdk-s3]]
+who = "Matt Arthur <matthewleearthur@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.26.0"
+
+[[audits.bitvec]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.1"
+
+[[audits.core_affinity]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "safe-to-deploy"
+version = "0.8.0"
+
+[[audits.csv-async]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.2.6"
+
+[[audits.differential-dataflow]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:15b7b8dcf606580b4cf50e3f1b408da91b27b4c1"
+
+[[audits.dynfmt]]
+who = "Sean Loiselle <sean@materialize.io>"
+criteria = "safe-to-deploy"
+version = "0.1.5"
+notes = """
+The proposed usage of this crate's unsafe code is limited to inlining string
+literals from the Materialize source code. No proposed usage of this crate allows
+user input to be inlined (i.e. allowing injection attacks).
+"""
+
+[[audits.erased-serde]]
+who = "Sean Loiselle <sean@materialize.io>"
+criteria = "safe-to-deploy"
+version = "0.3.26"
+
+[[audits.funty]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "2.0.0"
+
+[[audits.futures-timer]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "3.0.2"
+
+[[audits.governor]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+
+[[audits.hibitset]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.4"
+
+[[audits.jsonwebtoken]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "8.3.0 -> 9.2.0"
+
+[[audits.launchdarkly-server-sdk]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "1.0.0 -> 1.0.0@git:df1440c8b93a192d50470d1b258615febe52f1f8"
+
+[[audits.nonzero_ext]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.3.0"
+
+[[audits.once_cell]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "1.17.1 -> 1.19.0"
+
+[[audits.opentelemetry]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.21.0"
+
+[[audits.opentelemetry-otlp]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.14.0"
+
+[[audits.opentelemetry-proto]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.4.0"
+
+[[audits.opentelemetry-semantic-conventions]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.13.0"
+
+[[audits.opentelemetry_sdk]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.21.2"
+
+[[audits.ordered-float]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "4.2.0"
+
+[[audits.quanta]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.11.1"
+
+[[audits.radium]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.7.0"
+
+[[audits.raw-cpuid]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "10.7.0"
+
+[[audits.rdkafka]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.29.0@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
+
+[[audits.rdkafka-sys]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.3.0+1.9.2@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
+
+[[audits.redox_syscall]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.3.5 -> 0.4.1"
+
+[[audits.ref-cast]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.17"
+
+[[audits.ref-cast-impl]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.17"
+
+[[audits.ring]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.16.20 -> 0.17.7"
+
+[[audits.spin]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.5.2 -> 0.9.8"
+
+[[audits.tempfile]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "3.8.0 -> 3.8.1"
+
+[[audits.timely]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+
+[[audits.timely]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+
+[[audits.timely_bytes]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+
+[[audits.timely_communication]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+
+[[audits.timely_logging]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+
+[[audits.tracing-log]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.2.0"
+
+[[audits.tracing-opentelemetry]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.22.0@git:1e0cf8be6360b16096121ccbf266eba4f38e307e"
+
+[[audits.tracing-opentelemetry]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.22.0@git:7035e641b683985cc3b8630f3b61d53c96f83695"
+
+[[audits.tracing-subscriber]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.3.18"
+
+[[audits.untrusted]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.7.1 -> 0.9.0"
+
+[[audits.uuid]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.7.0"
+
+[[audits.web-time]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.2.4"
+
+[[audits.wyz]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.5.1"
+
+[[audits.zstd]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.13.0"
+
+[[audits.zstd-safe]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+delta = "6.0.6 -> 7.0.0"
+
+[[trusted.abomonation]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2019-05-27"
+end = "2024-11-21"
+
+[[trusted.aho-corasick]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-28"
+end = "2024-11-16"
+
+[[trusted.assert_cmd]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2019-03-23"
+end = "2024-11-16"
+
+[[trusted.async-trait]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-07-23"
+end = "2024-11-16"
+
+[[trusted.aws-config]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-credential-types]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-12-29"
+end = "2024-12-17"
+
+[[trusted.aws-http]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-runtime]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2023-04-06"
+end = "2024-12-17"
+
+[[trusted.aws-sdk-s3]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-sdk-secretsmanager]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-sdk-sso]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-24"
+
+[[trusted.aws-sdk-ssooidc]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-23"
+end = "2024-12-24"
+
+[[trusted.aws-sdk-sts]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-sigv4]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-async]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-checksums]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-07-20"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-eventstream]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-http]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-json]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-query]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-runtime]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2023-04-06"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-runtime-api]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2023-04-06"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-types]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-xml]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-types]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.bincode]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-04-08"
+end = "2024-11-16"
+
+[[trusted.bstr]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-04-02"
+end = "2024-11-16"
+
+[[trusted.byteorder]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-06-09"
+end = "2024-11-16"
+
+[[trusted.bzip2-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2020-02-24"
+end = "2024-11-16"
+
+[[trusted.cc]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-01"
+end = "2024-11-16"
+
+[[trusted.clap]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2021-12-08"
+end = "2024-11-16"
+
+[[trusted.clap_derive]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2021-12-08"
+end = "2024-11-16"
+
+[[trusted.clap_lex]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-04-15"
+end = "2024-11-16"
+
+[[trusted.cmake]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-26"
+end = "2024-11-16"
+
+[[trusted.csv]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-04-05"
+end = "2024-11-16"
+
+[[trusted.csv-core]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-06-26"
+end = "2024-11-16"
+
+[[trusted.cxx]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-12-28"
+end = "2024-11-16"
+
+[[trusted.cxx-build]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2020-04-30"
+end = "2024-11-16"
+
+[[trusted.cxxbridge-flags]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2020-08-30"
+end = "2024-11-16"
+
+[[trusted.cxxbridge-macro]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2020-01-08"
+end = "2024-11-16"
+
+[[trusted.differential-dataflow]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2019-03-31"
+end = "2024-11-21"
+
+[[trusted.dyn-clone]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-12-23"
+end = "2024-11-16"
+
+[[trusted.equivalent]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2023-02-05"
+end = "2024-11-16"
+
+[[trusted.filetime]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-04-23"
+end = "2024-11-16"
+
+[[trusted.flate2]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-14"
+end = "2024-11-16"
+
+[[trusted.getopts]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-08-19"
+end = "2024-11-16"
+
+[[trusted.globset]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-04-15"
+end = "2024-11-16"
+
+[[trusted.h2]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-13"
+end = "2024-12-17"
+
+[[trusted.http]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-04-05"
+end = "2024-12-17"
+
+[[trusted.httparse]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-07-03"
+end = "2024-12-17"
+
+[[trusted.hyper]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-01"
+end = "2024-12-17"
+
+[[trusted.hyper-tls]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-19"
+end = "2024-12-17"
+
+[[trusted.indexmap]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2020-01-15"
+end = "2024-11-16"
+
+[[trusted.itoa]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-05-02"
+end = "2024-11-16"
+
+[[trusted.jobserver]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-15"
+end = "2024-11-16"
+
+[[trusted.js-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.launchdarkly-server-sdk]]
+criteria = "safe-to-deploy"
+user-id = 144672 # LaunchDarklyReleaseBot
+start = "2022-01-22"
+end = "2024-12-24"
+
+[[trusted.libc]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-29"
+end = "2024-11-16"
+
+[[trusted.link-cplusplus]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2020-01-24"
+end = "2024-11-16"
+
+[[trusted.linux-raw-sys]]
+criteria = "safe-to-deploy"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2021-06-12"
+end = "2024-11-16"
+
+[[trusted.memchr]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-07"
+end = "2024-11-16"
+
+[[trusted.mime]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-09-09"
+end = "2024-12-17"
+
+[[trusted.num-complex]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-06-10"
+end = "2024-11-16"
+
+[[trusted.num-integer]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-05-20"
+end = "2024-11-16"
+
+[[trusted.num-iter]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-05-20"
+end = "2024-11-16"
+
+[[trusted.num-rational]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-06-11"
+end = "2024-11-16"
+
+[[trusted.num_cpus]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-06-10"
+end = "2024-12-17"
+
+[[trusted.openssl-probe]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2020-08-04"
+end = "2024-11-16"
+
+[[trusted.openssl-src]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-02-25"
+end = "2024-11-16"
+
+[[trusted.paste]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-19"
+end = "2024-11-16"
+
+[[trusted.predicates]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2019-04-22"
+end = "2024-11-16"
+
+[[trusted.predicates-core]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2020-12-29"
+end = "2024-11-16"
+
+[[trusted.predicates-tree]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2020-12-29"
+end = "2024-11-16"
+
+[[trusted.prettyplease]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2022-01-04"
+end = "2024-11-16"
+
+[[trusted.proc-macro-hack]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-04-16"
+end = "2024-11-16"
+
+[[trusted.quickcheck]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-05-13"
+end = "2024-11-16"
+
+[[trusted.rayon]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-06-13"
+end = "2024-11-16"
+
+[[trusted.rayon-core]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-06-13"
+end = "2024-11-16"
+
+[[trusted.regex]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-27"
+end = "2024-11-16"
+
+[[trusted.regex-automata]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-25"
+end = "2024-11-16"
+
+[[trusted.regex-lite]]
+criteria = "maintained-and-necessary"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2023-02-28"
+end = "2024-12-17"
+
+[[trusted.regex-syntax]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-30"
+end = "2024-11-16"
+
+[[trusted.reqwest]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-04"
+end = "2024-12-17"
+
+[[trusted.rustc-demangle]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-04-12"
+end = "2024-11-16"
+
+[[trusted.rustflags]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2022-01-03"
+end = "2025-01-26"
+
+[[trusted.rustix]]
+criteria = "safe-to-deploy"
+user-id = 6825 # Dan Gohman (sunfishcode)
+start = "2021-10-29"
+end = "2024-11-16"
+
+[[trusted.ryu]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-05-02"
+end = "2024-11-16"
+
+[[trusted.same-file]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-16"
+end = "2024-11-16"
+
+[[trusted.same-file]]
+criteria = "maintained-and-necessary"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-16"
+end = "2024-12-17"
+
+[[trusted.scoped-tls]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-02-26"
+end = "2024-11-16"
+
+[[trusted.scratch]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2020-09-17"
+end = "2024-11-16"
+
+[[trusted.seq-macro]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2024-11-16"
+
+[[trusted.serde]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2024-11-16"
+
+[[trusted.serde_derive]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2024-11-16"
+
+[[trusted.serde_derive_internals]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-09-08"
+end = "2024-11-16"
+
+[[trusted.serde_json]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-02-28"
+end = "2024-11-16"
+
+[[trusted.serde_path_to_error]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-08-20"
+end = "2024-11-16"
+
+[[trusted.serde_repr]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-04-26"
+end = "2024-11-16"
+
+[[trusted.serde_spanned]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-01-20"
+end = "2024-11-16"
+
+[[trusted.serde_yaml]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-05-02"
+end = "2024-11-16"
+
+[[trusted.snap]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2020-02-14"
+end = "2024-11-16"
+
+[[trusted.socket2]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-05-06"
+end = "2024-11-16"
+
+[[trusted.streaming-iterator]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-12-13"
+end = "2024-11-16"
+
+[[trusted.syn]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-03-01"
+end = "2024-11-16"
+
+[[trusted.tar]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.termcolor]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-06-04"
+end = "2024-11-16"
+
+[[trusted.timely]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2019-03-31"
+end = "2024-11-21"
+
+[[trusted.timely_bytes]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2019-03-31"
+end = "2024-11-21"
+
+[[trusted.timely_communication]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2019-03-31"
+end = "2024-11-21"
+
+[[trusted.timely_logging]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2019-03-31"
+end = "2024-11-21"
+
+[[trusted.tokio-macros]]
+criteria = "safe-to-deploy"
+user-id = 10 # Carl Lerche (carllerche)
+start = "2019-04-24"
+end = "2024-11-16"
+
+[[trusted.tokio-test]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-05-14"
+end = "2024-11-16"
+
+[[trusted.toml]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-12-14"
+end = "2024-11-16"
+
+[[trusted.toml]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-05-16"
+end = "2024-11-16"
+
+[[trusted.toml_datetime]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2022-10-21"
+end = "2024-11-16"
+
+[[trusted.toml_edit]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2021-09-13"
+end = "2024-11-16"
+
+[[trusted.try-lock]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2020-07-10"
+end = "2024-12-17"
+
+[[trusted.unicode-ident]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2021-10-02"
+end = "2024-11-16"
+
+[[trusted.unsafe-libyaml]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2022-07-03"
+end = "2024-11-16"
+
+[[trusted.walkdir]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-06-09"
+end = "2024-11-16"
+
+[[trusted.wasi]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2020-06-03"
+end = "2024-11-16"
+
+[[trusted.wasm-bindgen]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.wasm-bindgen-backend]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.wasm-bindgen-futures]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.wasm-bindgen-macro]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.wasm-bindgen-macro-support]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.wasm-bindgen-shared]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.web-sys]]
+criteria = "safe-to-deploy"
+user-id = 1 # Alex Crichton (alexcrichton)
+start = "2019-03-04"
+end = "2024-11-16"
+
+[[trusted.winapi-util]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2020-01-11"
+end = "2024-11-16"
+
+[[trusted.windows]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-01-15"
+end = "2024-11-16"
+
+[[trusted.winnow]]
+criteria = "safe-to-deploy"
+user-id = 6743 # Ed Page (epage)
+start = "2023-02-22"
+end = "2024-11-16"

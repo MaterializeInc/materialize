@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+$ set-regex match=cluster1|quickstart replacement=<CLUSTER_NAME>
 
 ! INSERT INTO t VALUES (1, 'a');
 contains:unknown catalog item 't'
@@ -54,8 +54,8 @@ name
 t
 
 > SHOW SOURCES;
-name    type  size
-------------------
+name    type  size  cluster
+---------------------------
 
 > SHOW INDEXES ON t;
 
@@ -103,9 +103,10 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"id": "valid1", "a": 2, "b": 1}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -248,8 +249,8 @@ v
 v
 
 > SHOW SOURCES;
-name    type   size
--------------------
+name    type   size   cluster
+-----------------------------
 
 > CREATE TABLE t (a int, b text NOT NULL)
 
@@ -347,7 +348,7 @@ contains:column "a" specified more than once
 # Test pg_table_is_visible.
 > CREATE SCHEMA non_default
 > CREATE TABLE non_default.hidden (dummy int)
-> SELECT name, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 1 AND id LIKE 'u%'
+> SELECT name, pg_table_is_visible(oid) AS visible FROM mz_tables WHERE schema_id != 'u1' AND id LIKE 'u%'
 name    visible
 ---------------
 hidden  false

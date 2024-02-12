@@ -16,13 +16,13 @@ CREATE TABLE char_varchar_type (char_col CHAR(5), varchar_col VARCHAR(5), f3 INT
 ALTER TABLE char_varchar_type REPLICA IDENTITY FULL;
 INSERT INTO char_varchar_type VALUES ('a ', 'a ', 0);
 
-$ schema-registry-wait subject=postgres.public.char_varchar_type-value
+$ schema-registry-wait topic=postgres.public.char_varchar_type
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE char_varchar_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.char_varchar_type')

@@ -121,3 +121,33 @@ impl<T> OptionExt<T> for Option<T> {
         }
     }
 }
+
+/// From <https://github.com/rust-lang/rust/issues/38282#issuecomment-266275785>
+///
+/// Extend `Option` with a fallible map method.
+///
+/// (Note that the usual collect trick can't be used with Option, unless I'm missing something.)
+///
+/// # Type parameters
+///
+/// - `T`: The input `Option`'s value type
+/// - `U`: The outputs `Option`'s value type
+/// - `E`: The possible error during the mapping
+pub trait FallibleMapExt<T, U, E> {
+    /// Try to apply a fallible map function to the option
+    fn try_map<F>(&self, f: F) -> Result<Option<U>, E>
+    where
+        F: FnOnce(&T) -> Result<U, E>;
+}
+
+impl<T, U, E> FallibleMapExt<T, U, E> for Option<T> {
+    fn try_map<F>(&self, f: F) -> Result<Option<U>, E>
+    where
+        F: FnOnce(&T) -> Result<U, E>,
+    {
+        match self {
+            &Some(ref x) => f(x).map(Some),
+            &None => Ok(None),
+        }
+    }
+}

@@ -27,8 +27,9 @@ mode cockroach
 # control characters. In order for the test file to remain valid
 # printable UTF-8, we double-escape the representations below.
 
-statement ok
-SET bytea_output = escape
+# TODO: Support bytea
+#statement ok
+#SET bytea_output = escape
 
 # array construction
 
@@ -70,7 +71,7 @@ SELECT ARRAY['1}'::BYTES]
 ----
 {"\\x317d"}
 
-# TODO(jordan): #16487
+# TODO(jordan): cockroach#16487
 # query T
 # SELECT ARRAY[e'g\x10h']
 # ----
@@ -151,7 +152,7 @@ SELECT ARRAY(VALUES ('a'),('b'),('c'))
 {a,b,c}
 
 
-# TODO(justin): uncomment when #32715 is fixed.
+# TODO(justin): uncomment when cockroach#32715 is fixed.
 # query T
 # SELECT ARRAY(SELECT (1,2))
 # ----

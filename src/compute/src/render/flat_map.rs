@@ -7,17 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
+use mz_repr::{DatumVec, RowArena, SharedRow};
+use mz_timely_util::operator::StreamExt;
 use timely::dataflow::Scope;
 
-use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
-use mz_repr::{Row, RowArena};
+use crate::render::context::{CollectionBundle, Context};
 
-use crate::render::context::CollectionBundle;
-use crate::render::context::Context;
-use mz_repr::DatumVec;
-use mz_timely_util::operator::StreamExt;
-
-impl<G> Context<G, Row>
+impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
@@ -25,18 +22,17 @@ where
     /// Renders `relation_expr` followed by `map_filter_project` if provided.
     pub fn render_flat_map(
         &mut self,
-        input: CollectionBundle<G, Row>,
+        input: CollectionBundle<G>,
         func: TableFunc,
         exprs: Vec<MirScalarExpr>,
         mfp: MapFilterProject,
         input_key: Option<Vec<MirScalarExpr>>,
-    ) -> CollectionBundle<G, Row> {
+    ) -> CollectionBundle<G> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
             let mut datums = DatumVec::new();
-            let mut row_builder = Row::default();
             move |(input_row, mut time, diff)| {
                 let temp_storage = RowArena::new();
                 // Unpack datums and capture its length (to rewind MFP eval).
@@ -64,6 +60,8 @@ where
                 let temp_storage = &temp_storage;
                 let mfp_plan = &mfp_plan;
                 let output_rows_vec: Vec<_> = output_rows.collect();
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let row_builder = &mut row_builder;
                 output_rows_vec
                     .iter()

@@ -14,12 +14,21 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.adapter.utils.base_utils import BaseUtils
 from dbt.tests.adapter.utils.fixture_cast_bool_to_text import (
     models__test_cast_bool_to_text_yml,
 )
+from dbt.tests.adapter.utils.fixture_date_spine import (
+    models__test_date_spine_yml,
+)
+from dbt.tests.adapter.utils.fixture_get_intervals_between import (
+    models__test_get_intervals_between_yml,
+)
 from dbt.tests.adapter.utils.test_cast_bool_to_text import BaseCastBoolToText
 from dbt.tests.adapter.utils.test_current_timestamp import BaseCurrentTimestampAware
+from dbt.tests.adapter.utils.test_date_spine import BaseDateSpine
+from dbt.tests.adapter.utils.test_generate_series import BaseGenerateSeries
+from dbt.tests.adapter.utils.test_get_intervals_between import BaseGetIntervalsBetween
+from dbt.tests.adapter.utils.test_get_powers_of_two import BaseGetPowersOfTwo
 from dbt.tests.adapter.utils.test_listagg import BaseListagg
 from dbt.tests.adapter.utils.test_timestamps import BaseCurrentTimestamps
 
@@ -43,6 +52,49 @@ select
 from data_null
 """
 
+# The upstream test_date_spine has PostgreSQL-specific logic that doesn't
+# get picked up because it conditions on `target == "postgres"`. So we just
+# hardcode that PostgreSQL-specific logic here.
+models__test_date_spine_sql = """
+with generated_dates as (
+    {{ date_spine("day", "'2023-09-01'::date", "'2023-09-10'::date") }}
+), expected_dates as (
+    select '2023-09-01'::date as expected
+    union all
+    select '2023-09-02'::date as expected
+    union all
+    select '2023-09-03'::date as expected
+    union all
+    select '2023-09-04'::date as expected
+    union all
+    select '2023-09-05'::date as expected
+    union all
+    select '2023-09-06'::date as expected
+    union all
+    select '2023-09-07'::date as expected
+    union all
+    select '2023-09-08'::date as expected
+    union all
+    select '2023-09-09'::date as expected
+), joined as (
+    select
+        generated_dates.date_day,
+        expected_dates.expected
+    from generated_dates
+    left join expected_dates on generated_dates.date_day = expected_dates.expected
+)
+
+SELECT * from joined
+"""
+
+# The upstream get_intervals_between has PostgreSQL-specific logic that doesn't
+# get picked up because it conditions on `target == "postgres"`. So we just
+# hardcode that PostgreSQL-specific logic here.
+models__test_get_intervals_between_sql = """
+SELECT
+    {{ get_intervals_between("'2023-09-01'::date", "'2023-09-12'::date", "day") }} as intervals,
+  11 as expected
+"""
 
 # The `cast_bool_to_text` macro works as expected, but we must alter the test case
 # because set operation type conversions do not work properly.
@@ -73,12 +125,42 @@ class TestCurrentTimestamps(BaseCurrentTimestamps):
     def expected_schema(self):
         return {
             "current_timestamp": "timestamp with time zone",
-            "current_timestamp_in_utc_backcompat": "timestamp",
-            "current_timestamp_backcompat": "timestamp",
+            "current_timestamp_in_utc_backcompat": "timestamp without time zone",
+            "current_timestamp_backcompat": "timestamp without time zone",
         }
 
     pass
 
 
 class TestCurrentTimestamp(BaseCurrentTimestampAware):
+    pass
+
+
+class TestDateSpine(BaseDateSpine):
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_date_spine.yml": models__test_date_spine_yml,
+            "test_date_spine.sql": self.interpolate_macro_namespace(
+                models__test_date_spine_sql, "date_spine"
+            ),
+        }
+
+
+class TestGenerateSeries(BaseGenerateSeries):
+    pass
+
+
+class TestGetIntervalsBeteween(BaseGetIntervalsBetween):
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_get_intervals_between.yml": models__test_get_intervals_between_yml,
+            "test_get_intervals_between.sql": self.interpolate_macro_namespace(
+                models__test_get_intervals_between_sql, "get_intervals_between"
+            ),
+        }
+
+
+class TestGetPowersOfTwo(BaseGetPowersOfTwo):
     pass

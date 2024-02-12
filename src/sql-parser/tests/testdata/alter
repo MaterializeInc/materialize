@@ -1,0 +1,119 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+ALTER ROLE arjun
+----
+ALTER ROLE arjun
+=>
+AlterRole(AlterRoleStatement { name: Ident("arjun"), option: Attributes([]) })
+
+parse-statement
+ALTER ROLE frank SUPERUSER
+----
+ALTER ROLE frank SUPERUSER
+=>
+AlterRole(AlterRoleStatement { name: Ident("frank"), option: Attributes([SuperUser]) })
+
+parse-statement
+ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
+----
+ALTER ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN INHERIT NOINHERIT CREATECLUSTER NOCREATECLUSTER CREATEDB NOCREATEDB CREATEROLE NOCREATEROLE
+=>
+AlterRole(AlterRoleStatement { name: Ident("other_usr"), option: Attributes([Login, NoSuperUser, SuperUser, NoLogin, Inherit, NoInherit, CreateCluster, NoCreateCluster, CreateDB, NoCreateDB, CreateRole, NoCreateRole]) })
+
+parse-statement
+ALTER ROLE bad.qualification
+----
+error: Expected end of statement, found dot
+ALTER ROLE bad.qualification
+              ^
+
+parse-statement
+ALTER ROLE usr WITH LOGIN
+----
+ALTER ROLE usr LOGIN
+=>
+AlterRole(AlterRoleStatement { name: Ident("usr"), option: Attributes([Login]) })
+
+parse-statement
+ALTER ROLE usr WITH badopt
+----
+error: Expected end of statement, found identifier "badopt"
+ALTER ROLE usr WITH badopt
+                    ^
+
+parse-statement
+ALTER ROLE parker SET cluster TO my_cluster
+----
+ALTER ROLE parker SET cluster = my_cluster
+=>
+AlterRole(AlterRoleStatement { name: Ident("parker"), option: Variable(Set { name: Ident("cluster"), value: Values([Ident(Ident("my_cluster"))]) }) })
+
+parse-statement
+ALTER ROLE parker RESET cluster
+----
+ALTER ROLE parker RESET cluster
+=>
+AlterRole(AlterRoleStatement { name: Ident("parker"), option: Variable(Reset { name: Ident("cluster") }) })
+
+parse-statement
+ALTER SCHEMA blue SWAP WITH green
+----
+ALTER SCHEMA blue SWAP WITH green
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("blue")])), name_b: Ident("green") })
+
+parse-statement
+ALTER SCHEMA materialize.blue SWAP WITH green
+----
+ALTER SCHEMA materialize.blue SWAP WITH green
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("materialize"), Ident("blue")])), name_b: Ident("green") })
+
+parse-statement
+ALTER SCHEMA materialize.blue SWAP WITH other.green
+----
+error: Expected end of statement, found dot
+ALTER SCHEMA materialize.blue SWAP WITH other.green
+                                             ^
+
+parse-statement
+ALTER CLUSTER foo SWAP WITH bar
+----
+ALTER CLUSTER foo SWAP WITH bar
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, name_a: Cluster(Ident("foo")), name_b: Ident("bar") })
+
+parse-statement
+ALTER CLUSTER cluster.too_many SWAP WITH cluster.this_wont_work
+----
+error: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
+ALTER CLUSTER cluster.too_many SWAP WITH cluster.this_wont_work
+                     ^
+
+parse-statement
+ALTER TABLE foo RENAME TO bar
+----
+ALTER TABLE foo RENAME TO bar
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Table, if_exists: false, name: Item(UnresolvedItemName([Ident("foo")])), to_item_name: Ident("bar") })
+
+parse-statement
+ALTER SCHEMA baz RENAME to foobar
+----
+ALTER SCHEMA baz RENAME TO foobar
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: Schema, if_exists: false, name: Schema(UnresolvedSchemaName([Ident("baz")])), to_item_name: Ident("foobar") })

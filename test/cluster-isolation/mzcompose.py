@@ -7,18 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.ui import UIError
 
 SERVICES = [
     Zookeeper(),
@@ -49,11 +48,14 @@ disruptions = [
         name="pause-in-materialized-view",
         disruption=lambda c: c.testdrive(
             """
+$[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_unstable_dependencies = true;
+
 > SET cluster=cluster1
 
 > CREATE TABLE sleep_table (sleep INTEGER);
 
-> CREATE MATERIALIZED VIEW sleep_view AS SELECT mz_internal.mz_sleep(sleep) FROM sleep_table;
+> CREATE MATERIALIZED VIEW sleep_view AS SELECT mz_unsafe.mz_sleep(sleep) FROM sleep_table;
 
 > INSERT INTO sleep_table SELECT 1200 FROM generate_series(1,32)
 """,
@@ -76,9 +78,9 @@ disruptions = [
 
 > CREATE TABLE panic_table (f1 TEXT);
 
-> INSERT INTO panic_table VALUES ('panic!');
+> INSERT INTO panic_table VALUES ('forced panic');
 
-! INSERT INTO panic_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
+! INSERT INTO panic_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
 contains: statement timeout
 """,
         ),
@@ -121,7 +123,7 @@ def validate(c: Composition) -> None:
         """
 # Dataflows
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+$ set-regex match=\\d{13} replacement=<TIMESTAMP>
 
 > SET cluster=cluster2
 
@@ -139,7 +141,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Introspection tables
 
-> SHOW CLUSTERS LIKE 'cluster2'
+> SELECT name FROM (SHOW CLUSTERS LIKE 'cluster2')
 cluster2
 
 > SELECT name FROM mz_tables WHERE name = 't1';
@@ -181,7 +183,8 @@ t1
 # topic name.
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
-    PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}'
+    PROGRESS TOPIC 'testdrive-progress-${testdrive.seed}',
+    SECURITY PROTOCOL PLAINTEXT
   );
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
@@ -228,6 +231,12 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.up(*[n.name for n in nodes])
 
         c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
             """
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
@@ -270,7 +279,15 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             "testdrive",
             *[n.name for n in nodes],
         ]
-        c.kill(*cleanup_list)
+        try:
+            c.kill(*cleanup_list)
+        except UIError as e:
+            print(e)
+            # Killing multiple clusterds from the same cluster may fail
+            # as the second clusterd may have alredy exited after the first
+            # one was killed, due to the 'shared-fate' mechanism.
+            pass
+
         c.rm(*cleanup_list, destroy_volumes=True)
 
     c.rm_volumes("mzdata")

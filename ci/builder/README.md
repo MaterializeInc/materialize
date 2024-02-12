@@ -41,6 +41,9 @@ your latest changes. You can also run a command other than Bash directly:
 $ bin/ci-builder run stable echo "hello from abroad"
 ```
 
+You can specify the parameter `--detach` to start a detached Docker container.
+You can assign a name to the container using the parameter `--name`.
+
 When you're happy with your changes, open a PR. CI will build and push the
 image to Docker Hub so that no one else needs to build the image from scratch.
 

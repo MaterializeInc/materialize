@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET max_clusters = 20
+
 $ set conflictkeyschema={
     "type": "record",
     "name": "Key",
@@ -29,15 +32,17 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data key-schema=${conflict
 {"id": 1} {"id": 2, "b": 3}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE missing_key_format
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
 contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FORMAT
 
 ! CREATE SOURCE missing_key_format
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS key_col
@@ -48,7 +53,9 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
   );
 
 # "Bare" format works when the key format is in a registry
+> CREATE CLUSTER bareformatconfluent_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE bareformatconfluent
+  IN CLUSTER bareformatconfluent_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -60,26 +67,17 @@ named         id       b
 ------------------------
 1             2        3
 
-! CREATE SOURCE not_supported
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE TOPIC
-contains:INCLUDE TOPIC not yet supported
-
-! CREATE SOURCE not_supported
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE TIMESTAMP as myts, TOPIC
-contains:INCLUDE TOPIC not yet supported
-
 ! CREATE SOURCE avro_data_conflict
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
 contains: column "id" specified more than once
 
+> CREATE CLUSTER avro_data_explicit_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE avro_data_explicit (key_id, id, b)
+  IN CLUSTER avro_data_explicit_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
@@ -90,7 +88,9 @@ key_id id b
 ------------
 1 2 3
 
+> CREATE CLUSTER include_partition_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE include_partition
+  IN CLUSTER include_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE PARTITION
@@ -100,7 +100,9 @@ id b partition
 --------------
 2 3 0
 
+> CREATE CLUSTER avro_data_as_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE avro_data_as
+  IN CLUSTER avro_data_as_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
@@ -111,13 +113,17 @@ renamed_id id b
 ------------
 1 2 3
 
+> CREATE CLUSTER avro_avro_data_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE avro_avro_data (key_id, id, b)
+  IN CLUSTER avro_avro_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
 
+> CREATE CLUSTER avro_data_upsert_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE avro_data_upsert
+  IN CLUSTER avro_data_upsert_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
@@ -152,7 +158,9 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data-record key-schema=${m
 $ kafka-ingest format=avro topic=avro-data-record schema=${noconflictschema} timestamp=2 omit-key=true
 {"a": 88}
 
+> CREATE CLUSTER avro_key_record_flattened_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE avro_key_record_flattened
+  IN CLUSTER avro_key_record_flattened_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${multikeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${noconflictschema}'
@@ -165,7 +173,9 @@ id     geo    a
 <null> <null> 88
 1      nyc    99
 
+> CREATE CLUSTER avro_key_record_renamed_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE avro_key_record_renamed
+  IN CLUSTER avro_key_record_renamed_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${multikeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${noconflictschema}'
@@ -178,7 +188,10 @@ named_id named_geo a
 <null>   <null>    88
 1        nyc       99
 
+$ kafka-create-topic topic=avro-dbz partitions=1
+
 ! CREATE SOURCE avro_debezium
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-dbz-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${noconflictschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
@@ -194,7 +207,9 @@ one,1:horse,apple
 two,2:bee,honey
 :cow,grass
 
+> CREATE CLUSTER textsrc_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE textsrc
+  IN CLUSTER textsrc_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
@@ -207,7 +222,9 @@ one,1  horse,apple
 two,2  bee,honey
 <null> cow,grass
 
+> CREATE CLUSTER regexvalue_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE regexvalue
+  IN CLUSTER regexvalue_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
@@ -220,7 +237,9 @@ one,1  horse  apple
 two,2  bee    honey
 <null> cow    grass
 
+> CREATE CLUSTER regexboth_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE regexboth
+  IN CLUSTER regexboth_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
   KEY FORMAT REGEX '(?P<id_name>[^,]+),(?P<id>\w+)'
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
@@ -233,7 +252,9 @@ one     1      horse  apple
 two     2      bee    honey
 <null>  <null> cow    grass
 
+> CREATE CLUSTER regexbothnest_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE regexbothnest
+  IN CLUSTER regexbothnest_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
   KEY FORMAT REGEX '(?P<id_name>[^,]+),(?P<id>\w+)'
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
@@ -274,7 +295,9 @@ $ kafka-ingest topic=proto
 $ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Value omit-key=true
 {"measurement": 11}
 
+> CREATE CLUSTER input_proto_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input_proto
+  IN CLUSTER input_proto_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-${testdrive.seed}')
   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
@@ -293,7 +316,9 @@ $ kafka-ingest topic=proto-structured
   format=protobuf descriptor-file=test.proto message=Value
 {"id1": 1, "id2": 2} {"measurement": 10}
 
+> CREATE CLUSTER input_proto_structured_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input_proto_structured
+  IN CLUSTER input_proto_structured_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-structured-${testdrive.seed}')
   KEY FORMAT PROTOBUF MESSAGE '.KeyComplex' USING SCHEMA '${test-schema}'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
@@ -303,3 +328,55 @@ $ kafka-ingest topic=proto-structured
 key    id1  id2  measurement
 ----------------------------
 (1,2)  1    2    10
+
+#
+# Regression test for #20981
+#
+
+# For UPSERT sources with INCLUDE KEY, we expect the queries to
+# take advantage of the uniqueness propery of the key column.
+
+? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
+Explained Query:
+  Project (#0)
+    ReadStorage materialize.public.bareformatconfluent
+
+> CREATE DEFAULT INDEX ON bareformatconfluent;
+
+? EXPLAIN SELECT DISTINCT named FROM bareformatconfluent;
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=materialize.public.bareformatconfluent bareformatconfluent_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.bareformatconfluent_primary_idx (*** full scan ***)
+
+> CREATE CLUSTER envelope_none_with_key_cluster SIZE '${arg.default-storage-size}';
+> CREATE SOURCE envelope_none_with_key
+  IN CLUSTER envelope_none_with_key_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-avro-data-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE KEY AS named
+  ENVELOPE NONE
+
+# For ENVELOPE NONE with INCLUDE KEY, uniqueness is not guaranteed,
+# so we expect that query plans will contain an explicit Distinct on
+
+? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
+Explained Query:
+  Distinct project=[#0] monotonic
+    Project (#0)
+      ReadStorage materialize.public.envelope_none_with_key
+
+> CREATE DEFAULT INDEX ON envelope_none_with_key;
+
+? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
+Explained Query:
+  Distinct project=[#0] monotonic
+    Project (#0)
+      ReadIndex on=envelope_none_with_key envelope_none_with_key_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.envelope_none_with_key_primary_idx (*** full scan ***)

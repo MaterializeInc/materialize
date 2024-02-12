@@ -13,15 +13,15 @@ import sys
 import tempfile
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import all_subclasses
 
 
 class Generator:
@@ -39,8 +39,12 @@ class Generator:
     @classmethod
     def header(cls) -> None:
         print(f"\n#\n# {cls}\n#\n")
-        print("> DROP SCHEMA IF EXISTS public CASCADE;")
-        print(f"> CREATE SCHEMA public /* {cls} */;")
+        print(
+            "$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize"
+        )
+        print("DROP SCHEMA IF EXISTS public CASCADE;")
+        print(f"CREATE SCHEMA public /* {cls} */;")
+        print("GRANT ALL PRIVILEGES ON SCHEMA public TO materialize")
         print(
             "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
         )
@@ -75,6 +79,11 @@ class Generator:
 class Connections(Generator):
     @classmethod
     def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        # three extra connections for mz_system, default connection, and one
+        # since sqlparse 0.4.4
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+3};")
+
         for i in cls.all():
             print(
                 f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}"
@@ -131,10 +140,6 @@ class Subscribe(Generator):
 
 
 class Indexes(Generator):
-    COUNT = min(
-        Generator.COUNT, 100
-    )  # https://github.com/MaterializeInc/materialize/issues/11134
-
     @classmethod
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
@@ -166,15 +171,15 @@ class KafkaTopics(Generator):
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
                 FOR CONFLUENT SCHEMA REGISTRY
-                URL '${{testdrive.schema-registry-url}}';
+                URL '${testdrive.schema-registry-url}';
                 """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -188,6 +193,7 @@ class KafkaTopics(Generator):
 
             print(
                 f"""> CREATE SOURCE s{i}
+                  IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-{topic}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE;
@@ -220,21 +226,22 @@ class KafkaSourcesSameTopic(Generator):
         print('"123" {"f1": "123"}')
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${{testdrive.schema-registry-url}}';
+            URL '${testdrive.schema-registry-url}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
         for i in cls.all():
             print(
                 f"""> CREATE SOURCE s{i}
+              IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
@@ -272,20 +279,21 @@ class KafkaPartitions(Generator):
             print(f'"{i}" {{"f1": "{i}"}}')
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${{testdrive.schema-registry-url}}';
+            URL '${testdrive.schema-registry-url}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
         print(
             """> CREATE SOURCE s1
+            IN CLUSTER single_replica_cluster
             FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-partitions-${testdrive.seed}')
             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
             ENVELOPE NONE;
@@ -328,21 +336,22 @@ class KafkaRecordsEnvelopeNone(Generator):
         print('{"f1": "123"}')
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${{testdrive.schema-registry-url}}';
+            URL '${testdrive.schema-registry-url}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
         print(
-            f"""> CREATE SOURCE kafka_records_envelope_none
-              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-none-${{testdrive.seed}}')
+            """> CREATE SOURCE kafka_records_envelope_none
+              IN CLUSTER single_replica_cluster
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-none-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
               """
@@ -377,21 +386,22 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         print('{"key": "fish"} {"f1": "fish"}')
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${{testdrive.schema-registry-url}}';
+            URL '${testdrive.schema-registry-url}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
         print(
-            f"""> CREATE SOURCE kafka_records_envelope_upsert_same
-              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-same-${{testdrive.seed}}')
+            """> CREATE SOURCE kafka_records_envelope_upsert_same
+              IN CLUSTER single_replica_cluster
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-same-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
               """
@@ -429,21 +439,22 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${{testdrive.schema-registry-url}}';
+            URL '${testdrive.schema-registry-url}';
             """
         )
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
         print(
-            f"""> CREATE SOURCE kafka_records_envelope_upsert_distinct
-              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${{testdrive.seed}}')
+            """> CREATE SOURCE kafka_records_envelope_upsert_distinct
+              IN CLUSTER single_replica_cluster
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
               """
@@ -459,7 +470,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
         print('{"key": "${kafka-ingest.iteration}"}')
 
         print(
-            f"> SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct;\n0 0"
+            "> SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct;\n0 0"
         )
 
 
@@ -468,7 +479,7 @@ class KafkaSinks(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\d{13} replacement=<TIMESTAMP>")
+        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_materialized_views = {KafkaSinks.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -479,9 +490,9 @@ class KafkaSinks(Generator):
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
 
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
-            URL '${{testdrive.schema-registry-url}}';
+            URL '${testdrive.schema-registry-url}';
             """
         )
 
@@ -489,12 +500,15 @@ class KafkaSinks(Generator):
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
-                     > CREATE SINK s{i} FROM v{i}
+                     > CREATE SINK s{i}
+                       IN CLUSTER single_replica_cluster
+                       FROM v{i}
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM;
+                     $ kafka-verify-topic sink=materialize.public.s{i}
                      """
                 )
             )
@@ -515,7 +529,7 @@ class KafkaSinksSameSource(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\d{13} replacement=<TIMESTAMP>")
+        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sinks = {KafkaSinksSameSource.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -524,22 +538,25 @@ class KafkaSinksSameSource(Generator):
         )
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');"""
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);"""
         )
         print(
-            f"""> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');"""
+            """> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');"""
         )
 
         for i in cls.all():
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
-                     > CREATE SINK s{i} FROM v1
+                     > CREATE SINK s{i}
+                       IN CLUSTER single_replica_cluster
+                       FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM
+                     $ kafka-verify-topic sink=materialize.public.s{i}
                      """
                 )
             )
@@ -557,8 +574,14 @@ class Columns(Generator):
             "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
         )
         print("> INSERT INTO t VALUES (" + ", ".join(str(i) for i in cls.all()) + ");")
-        print("> SELECT " + ", ".join(f"f{i}" for i in cls.all()) + " FROM t;")
-        print(" ".join(str(i) for i in cls.all()))
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT "
+            + ", ".join(f"f{i} + 1 AS f{i}" for i in cls.all())
+            + " FROM t;"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT " + ", ".join(f"f{i} + 1" for i in cls.all()) + " FROM v;")
+        print(" ".join(str(i + 2) for i in cls.all()))
 
 
 class TablesCommaJoinNoCondition(Generator):
@@ -679,7 +702,7 @@ class SubqueriesExistWhereClause(Generator):
 class SubqueriesInWhereClauseCorrelated(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8605
+    )  # https://github.com/MaterializeInc/materialize/issues/20557
 
     @classmethod
     def body(cls) -> None:
@@ -696,7 +719,7 @@ class SubqueriesInWhereClauseCorrelated(Generator):
 class SubqueriesInWhereClauseUncorrelated(Generator):
     COUNT = min(
         Generator.COUNT, 10
-    )  # https://github.com/MaterializeInc/materialize/issues/8605
+    )  # https://github.com/MaterializeInc/materialize/issues/20557
 
     @classmethod
     def body(cls) -> None:
@@ -734,8 +757,8 @@ class SubqueriesNested(Generator):
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
-        print(f"> SELECT 1 WHERE 1 = ")
-        print("\n".join(f"  (SELECT * FROM t1 WHERE f1 = " for i in cls.all()))
+        print("> SELECT 1 WHERE 1 = ")
+        print("\n".join("  (SELECT * FROM t1 WHERE f1 = " for i in cls.all()))
         print("  1" + "".join("  )" for i in cls.all()) + ";")
         print("1")
 
@@ -920,6 +943,9 @@ class WhereExpression(Generator):
 
 
 class WhereConditionAnd(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
@@ -934,11 +960,14 @@ class WhereConditionAnd(Generator):
 
 
 class WhereConditionAndSameColumn(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
-        print(f"> CREATE TABLE t1 (f1 INTEGER);")
+        print("> CREATE TABLE t1 (f1 INTEGER);")
 
-        print(f"> INSERT INTO t1 VALUES (1);")
+        print("> INSERT INTO t1 VALUES (1);")
 
         where_condition = " AND ".join(f"f1 <= {i}" for i in cls.all())
         print(f"> SELECT f1 FROM t1 WHERE {where_condition};")
@@ -946,6 +975,9 @@ class WhereConditionAndSameColumn(Generator):
 
 
 class WhereConditionOr(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
         create_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
@@ -960,11 +992,14 @@ class WhereConditionOr(Generator):
 
 
 class WhereConditionOrSameColumn(Generator):
+    # Stack overflow, see https://github.com/MaterializeInc/materialize/issues/19327
+    COUNT = min(Generator.COUNT, 500)
+
     @classmethod
     def body(cls) -> None:
-        print(f"> CREATE TABLE t1 (f1 INTEGER);")
+        print("> CREATE TABLE t1 (f1 INTEGER);")
 
-        print(f"> INSERT INTO t1 VALUES (1);")
+        print("> INSERT INTO t1 VALUES (1);")
 
         where_condition = " OR ".join(f"f1 = {i}" for i in cls.all())
         print(f"> SELECT f1 FROM t1 WHERE {where_condition};")
@@ -1055,9 +1090,14 @@ class GroupBy(Generator):
         value_list = ", ".join("1" for i in cls.all())
         print(f"> INSERT INTO t1 VALUES ({value_list});")
 
-        column_list = ", ".join(f"f{i}" for i in cls.all())
-        print(f"> SELECT COUNT(*), {column_list} FROM t1 GROUP BY {column_list};")
-        print("1 " + " ".join("1" for i in cls.all()))
+        column_list_select = ", ".join(f"f{i} + 1 AS f{i}" for i in cls.all())
+        column_list_group_by = ", ".join(f"f{i} + 1" for i in cls.all())
+        print(
+            f"> CREATE MATERIALIZED VIEW v AS SELECT COUNT(*), {column_list_select} FROM t1 GROUP BY {column_list_group_by};"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("1 " + " ".join("2" for i in cls.all()))
 
 
 class Unions(Generator):
@@ -1087,7 +1127,7 @@ class UnionsNested(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1)")
 
-        print(f"> SELECT f1 + 0 FROM t1 UNION DISTINCT ")
+        print("> SELECT f1 + 0 FROM t1 UNION DISTINCT ")
         print(
             "\n".join(
                 f"  (SELECT f1 + {i} - {i} FROM t1 UNION DISTINCT " for i in cls.all()
@@ -1095,6 +1135,140 @@ class UnionsNested(Generator):
         )
         print("  SELECT * FROM t1 " + "".join("  )" for i in cls.all()) + ";")
         print("1")
+
+
+class CaseWhen(Generator):
+    # Originally this was working with 1000, but after moving lowering and
+    # decorrelation from the `plan_~` to the `sequence_~` method we had to
+    # reduce it a bit in order to avoid overflowing the stack. See #24076
+    # and #24820 for the latest occurrences of this.
+    COUNT = 600
+
+    @classmethod
+    def body(cls) -> None:
+        print(
+            "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
+        )
+        print("> INSERT INTO t DEFAULT VALUES")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT CASE "
+            + " ".join(f"WHEN f{i} IS NOT NULL THEN f{i}" for i in cls.all())
+            + " ELSE 123 END FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("123")
+
+
+class Coalesce(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print(
+            "> CREATE TABLE t (" + ", ".join(f"f{i} INTEGER" for i in cls.all()) + ");"
+        )
+        print("> INSERT INTO t DEFAULT VALUES")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT COALESCE("
+            + ",".join(f"f{i}" for i in cls.all())
+            + ", 123) FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT * FROM v")
+        print("123")
+
+
+class Concat(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print("> CREATE TABLE t (f STRING)")
+        print("> INSERT INTO t VALUES (REPEAT('A', 1024))")
+
+        print(
+            "> CREATE MATERIALIZED VIEW v AS SELECT CONCAT("
+            + ",".join("f" for i in cls.all())
+            + ") AS c FROM t"
+        )
+        print("> CREATE DEFAULT INDEX ON v")
+        print("> SELECT LENGTH(c) FROM v")
+        print(f"{cls.COUNT*1024}")
+
+
+class ArrayAgg(Generator):
+    COUNT = 50
+
+    @classmethod
+    def body(cls) -> None:
+        slt = dedent(
+            f"""
+            > CREATE TABLE t ({
+                ", ".join(
+                    ", ".join([
+                        f"a{i} STRING",
+                        f"b{i} STRING",
+                        f"c{i} STRING",
+                        f"d{i} STRING[]",
+                    ])
+                    for i in cls.all()
+                )
+            });
+
+            > INSERT INTO t DEFAULT VALUES;
+
+            > CREATE MATERIALIZED VIEW v2 AS SELECT {
+                ", ".join(
+                    f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
+                    for i in cls.all()
+                )
+            } FROM t GROUP BY a1;
+
+            > CREATE DEFAULT INDEX ON v2;
+
+            > SELECT COUNT(*) FROM v2;
+            1
+            """
+        ).strip()
+        print(slt)
+
+
+class FilterSubqueries(Generator):
+    """
+    Regression test for #20557.
+
+    Without the #20557 fix in #20702 this will cause `environmend` to OOM
+    because of excessive memory allocations in the `RedundantJoin` transform.
+    """
+
+    COUNT = 100
+
+    @classmethod
+    def body(cls) -> None:
+        slt = dedent(
+            f"""
+            > CREATE TABLE t1 (f1 INTEGER);
+
+            > INSERT INTO t1 VALUES (1);
+
+            # Increase SQL timeout to 10 minutes (~5 should be enough).
+            #
+            # Update: Now 15 minutes, not 10. This query appears to scale
+            # super-linear with COUNT. Here are timings for the first few
+            # multiples of 10 on a fresh staging env.
+            #
+            # 10: 200ms, 20: 375ms, 30: 1.5s, 40: 5.5s, 50: 16s, 60: 45s
+            $ set-sql-timeout duration=900s
+
+            > SELECT * FROM t1 AS a1 WHERE {
+                " AND ".join(
+                    f"f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})"
+                    for i in cls.all()
+                )
+            };
+            1
+            """
+        ).strip()
+        print(slt)
 
 
 #
@@ -1166,7 +1340,7 @@ class RowsJoinOneToOne(Generator):
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
         print(
-            f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.generate_series = a2.generate_series;"
+            "> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.generate_series = a2.generate_series;"
         )
         print(f"{cls.COUNT}")
 
@@ -1179,7 +1353,7 @@ class RowsJoinOneToMany(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
-        print(f"> SELECT COUNT(*) FROM v1 AS a1, (SELECT 1) AS a2;")
+        print("> SELECT COUNT(*) FROM v1 AS a1, (SELECT 1) AS a2;")
         print(f"{cls.COUNT}")
 
 
@@ -1191,7 +1365,7 @@ class RowsJoinCross(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {cls.COUNT});"
         )
-        print(f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2;")
+        print("> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2;")
         print(f"{cls.COUNT**2}")
 
 
@@ -1225,7 +1399,7 @@ class RowsJoinDifferential(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
-        print(f"> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.f1 = a2.f1;")
+        print("> SELECT COUNT(*) FROM v1 AS a1, v1 AS a2 WHERE a1.f1 = a2.f1;")
         print(f"{cls.COUNT}")
 
 
@@ -1237,7 +1411,7 @@ class RowsJoinOuter(Generator):
         print(
             f"> CREATE MATERIALIZED VIEW v1 AS SELECT generate_series AS f1, generate_series AS f2 FROM (SELECT * FROM generate_series(1, {cls.COUNT}));"
         )
-        print(f"> SELECT COUNT(*) FROM v1 AS a1 LEFT JOIN v1 AS a2 USING (f1);")
+        print("> SELECT COUNT(*) FROM v1 AS a1 LEFT JOIN v1 AS a2 USING (f1);")
         print(f"{cls.COUNT}")
 
 
@@ -1248,7 +1422,10 @@ SERVICES = [
     # We create all sources, sinks and dataflows by default with SIZE '1'
     # The workflow_instance_size workflow is testing multi-process clusters
     Materialized(memory="8G", default_size=1),
-    Testdrive(default_timeout="120s"),
+    Testdrive(
+        default_timeout="120s", materialize_url="postgres://materialize@balancerd:6875"
+    ),
+    Balancerd(),
 ]
 
 
@@ -1268,23 +1445,29 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.up("zookeeper", "kafka", "schema-registry")
-
-    c.up("materialized")
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "balancerd")
 
     nodes = [
         Clusterd(name="clusterd_1_1"),
         Clusterd(name="clusterd_1_2"),
         Clusterd(name="clusterd_2_1"),
         Clusterd(name="clusterd_2_2"),
+        Clusterd(name="clusterd_3_1"),
+        Clusterd(name="clusterd_3_2"),
     ]
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
 
         c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
             f"""
-            DROP CLUSTER DEFAULT cascade;
-            CREATE CLUSTER default REPLICAS (
+            DROP CLUSTER quickstart cascade;
+            CREATE CLUSTER quickstart REPLICAS (
                 replica1 (
                     STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
                     STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
@@ -1299,18 +1482,34 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102'],
                     WORKERS {args.workers}
                 )
-            )
-        """
+            );
+            DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
+            CREATE CLUSTER single_replica_cluster REPLICAS (
+                replica1 (
+                    STORAGECTL ADDRESSES ['clusterd_3_1:2100', 'clusterd_3_2:2100'],
+                    STORAGE ADDRESSES ['clusterd_3_1:2103', 'clusterd_3_2:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd_3_1:2101', 'clusterd_3_2:2101'],
+                    COMPUTE ADDRESSES ['clusterd_3_1:2102', 'clusterd_3_2:2102'],
+                    WORKERS {args.workers}
+                )
+            );
+            GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
+        """,
+            port=6877,
+            user="mz_system",
         )
 
         c.up("testdrive", persistent=True)
 
         scenarios = (
-            [globals()[args.scenario]] if args.scenario else Generator.__subclasses__()
+            [globals()[args.scenario]]
+            if args.scenario
+            else list(all_subclasses(Generator))
         )
 
         for scenario in scenarios:
             with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
+                print(f"write testdrive to {c.path}")
                 with contextlib.redirect_stdout(tmp):
                     scenario.generate()
                     sys.stdout.flush()
@@ -1369,7 +1568,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
     with c.override(*cluster_replicas):
         with c.override(Testdrive(seed=1, no_reset=True)):
-
             for n in cluster_replicas:
                 c.up(n.name)
 
@@ -1384,6 +1582,9 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     $ postgres-execute connection=mz_system
                     ALTER SYSTEM SET max_clusters = {args.clusters * 10}
                     ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
+
+                    CREATE CLUSTER single_replica_cluster SIZE = '4';
+                    GRANT ALL ON CLUSTER single_replica_cluster TO materialize;
                     """
                 )
             )
@@ -1434,6 +1635,11 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     )
 
                 c.sql(
+                    "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+                    port=6877,
+                    user="mz_system",
+                )
+                c.sql(
                     f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)
                     + ")"
@@ -1454,13 +1660,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
                          > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY
                            URL '${{testdrive.schema-registry-url}}';
 
                          > CREATE SOURCE s_{cluster_name}
+                           IN CLUSTER single_replica_cluster
                            FROM KAFKA CONNECTION kafka_conn (TOPIC
                            'testdrive-instance-size-${{testdrive.seed}}')
                            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

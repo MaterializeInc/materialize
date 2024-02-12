@@ -1,0 +1,200 @@
+---
+source: src/catalog/tests/open.rs
+expression: audit_log
+---
+[
+    V1(
+        EventV1 {
+            id: 1,
+            event_type: Grant,
+            object_type: Cluster,
+            details: AlterDefaultPrivilegeV1(
+                AlterDefaultPrivilegeV1 {
+                    role_id: "p",
+                    database_id: None,
+                    schema_id: None,
+                    grantee_id: "s2",
+                    privileges: "U",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 2,
+            event_type: Grant,
+            object_type: Database,
+            details: AlterDefaultPrivilegeV1(
+                AlterDefaultPrivilegeV1 {
+                    role_id: "p",
+                    database_id: None,
+                    schema_id: None,
+                    grantee_id: "s2",
+                    privileges: "U",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 3,
+            event_type: Grant,
+            object_type: Schema,
+            details: AlterDefaultPrivilegeV1(
+                AlterDefaultPrivilegeV1 {
+                    role_id: "p",
+                    database_id: None,
+                    schema_id: None,
+                    grantee_id: "s2",
+                    privileges: "U",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 4,
+            event_type: Grant,
+            object_type: Type,
+            details: AlterDefaultPrivilegeV1(
+                AlterDefaultPrivilegeV1 {
+                    role_id: "p",
+                    database_id: None,
+                    schema_id: None,
+                    grantee_id: "p",
+                    privileges: "U",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 5,
+            event_type: Create,
+            object_type: Database,
+            details: IdNameV1(
+                IdNameV1 {
+                    id: "u1",
+                    name: "materialize",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 6,
+            event_type: Grant,
+            object_type: Database,
+            details: UpdatePrivilegeV1(
+                UpdatePrivilegeV1 {
+                    object_id: "Du1",
+                    grantee_id: "p",
+                    grantor_id: "s1",
+                    privileges: "U",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 7,
+            event_type: Create,
+            object_type: Schema,
+            details: SchemaV2(
+                SchemaV2 {
+                    id: "3",
+                    name: "public",
+                    database_name: Some(
+                        "materialize",
+                    ),
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 8,
+            event_type: Create,
+            object_type: Cluster,
+            details: IdNameV1(
+                IdNameV1 {
+                    id: "u1",
+                    name: "quickstart",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 9,
+            event_type: Grant,
+            object_type: Cluster,
+            details: UpdatePrivilegeV1(
+                UpdatePrivilegeV1 {
+                    object_id: "Cu1",
+                    grantee_id: "p",
+                    grantor_id: "s1",
+                    privileges: "U",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 10,
+            event_type: Create,
+            object_type: ClusterReplica,
+            details: CreateClusterReplicaV1(
+                CreateClusterReplicaV1 {
+                    cluster_id: "u1",
+                    cluster_name: "quickstart",
+                    replica_id: Some(
+                        "u1",
+                    ),
+                    replica_name: "r1",
+                    logical_size: "1",
+                    disk: false,
+                    billed_as: None,
+                    internal: false,
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 11,
+            event_type: Grant,
+            object_type: System,
+            details: UpdatePrivilegeV1(
+                UpdatePrivilegeV1 {
+                    object_id: "SYSTEM",
+                    grantee_id: "s1",
+                    grantor_id: "s1",
+                    privileges: "RBN",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+]

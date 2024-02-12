@@ -79,6 +79,7 @@ body.dark {
     --bg-sub: var(--black-light);
     --card: var(--black-mid);
     --card-light: var(--black-light);
+    --color-scheme: dark;
     --divider: var(--black-lighter);
     --divider-light: var(--black-lightest);
 
@@ -100,7 +101,15 @@ body.dark {
     --shadow-default: 0 0.625rem 1.5rem 0 rgba(0, 0, 0, 0.4);
     --note: #fffad411;
     --note-border: #b9a61545;
+    --note-after: #fbe2d9;
     --note-gutter: #ffe600;
+    // NOTE(benesch): please ensure these colors stay blueish. Public preview
+    // requires a mild amount of caution. Importantly, green is not the right
+    // color, as that implies encouragement rather than caution.
+    --public-preview: #e9f7fb;
+    --public-preview-border: #c0d3d8;
+    --public-preview-after: #c0d3d8;
+    --public-preview-gutter: #186477;
 }
 
 body.light {
@@ -109,6 +118,7 @@ body.light {
     --bg-sub: var(--gray-lighter);
     --card: var(--gray-lightest);
     --card-light: var(--white);
+    --color-scheme: light;
     --divider: var(--gray);
     --divider-light: var(--gray-lighter);
 
@@ -127,9 +137,17 @@ body.light {
     --body: var(--black-light);
     --highlight: var(--purple-dark);
 
-    --note: #fffad451;
+    --note: #fffad411;
     --note-border: #b9a61545;
+    --note-after: #fbe2d9;
     --note-gutter: #7b7b29;
+    // NOTE(benesch): please ensure these colors stay blueish. Public preview
+    // requires a mild amount of caution. Importantly, green is not the right
+    // color, as that implies encouragement rather than caution.
+    --public-preview: #e9f7fb;
+    --public-preview-border: #c0d3d8;
+    --public-preview-after: #c0d3d8;
+    --public-preview-gutter: #186477;
 }
 
 *,
@@ -147,6 +165,7 @@ html {
 body {
     font-family: "Inter", sans-serif;
     color: var(--important);
+    color-scheme: var(--color-scheme);
     background: var(--bg);
     font-size: var(--base);
     line-height: 1.7;
@@ -175,6 +194,8 @@ input[type="submit"] {
     transition-delay: 50ms;
     font-family: inherit;
 }
+
+.osano-cm-widget { display: none; }
 
 /**
     The following section handles these cases:

@@ -100,9 +100,9 @@ Return // { arity: 2 }
               Join on=(#0 = #1) // { arity: 2 }
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Get l2 // { arity: 2 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Get l1 // { arity: 1 }
                 Get l1 // { arity: 1 }
             Constant // { arity: 1 }
@@ -115,7 +115,7 @@ With
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
   cte l1 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l0 =
     CrossJoin // { arity: 1 }
@@ -166,9 +166,9 @@ Return // { arity: 2 }
                           Join on=(#0 = #1) // { arity: 2 }
                             Union // { arity: 1 }
                               Negate // { arity: 1 }
-                                Distinct group_by=[#0] // { arity: 1 }
+                                Distinct project=[#0] // { arity: 1 }
                                   Get l7 // { arity: 2 }
-                              Distinct group_by=[#0] // { arity: 1 }
+                              Distinct project=[#0] // { arity: 1 }
                                 Get l5 // { arity: 1 }
                             Get l5 // { arity: 1 }
                         Constant // { arity: 1 }
@@ -193,18 +193,18 @@ With
               Join on=(#0 = #1) // { arity: 2 }
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Get l2 // { arity: 2 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Get l1 // { arity: 1 }
                 Get l1 // { arity: 1 }
             Constant // { arity: 1 }
               - (null)
   cte l5 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l4 // { arity: 2 }
   cte l4 =
-    Distinct group_by=[#0, #1] // { arity: 2 }
+    Distinct project=[#0, #1] // { arity: 2 }
       Get l3 // { arity: 2 }
   cte l3 =
     CrossJoin // { arity: 2 }
@@ -217,7 +217,7 @@ With
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
   cte l1 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l0 =
     CrossJoin // { arity: 1 }
@@ -255,9 +255,9 @@ With
           Join on=(#0 = #1) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
-                Distinct group_by=[#0] // { arity: 1 }
+                Distinct project=[#0] // { arity: 1 }
                   Get l2 // { arity: 2 }
-              Distinct group_by=[#0] // { arity: 1 }
+              Distinct project=[#0] // { arity: 1 }
                 Get l1 // { arity: 1 }
             Get l1 // { arity: 1 }
         Constant // { arity: 1 }
@@ -269,7 +269,7 @@ With
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
   cte l1 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l0 =
     CrossJoin // { arity: 1 }
@@ -329,9 +329,9 @@ Return // { arity: 3 }
                               Join on=(#0 = #1) // { arity: 2 }
                                 Union // { arity: 1 }
                                   Negate // { arity: 1 }
-                                    Distinct group_by=[#0] // { arity: 1 }
+                                    Distinct project=[#0] // { arity: 1 }
                                       Get l8 // { arity: 2 }
-                                  Distinct group_by=[#0] // { arity: 1 }
+                                  Distinct project=[#0] // { arity: 1 }
                                     Get l6 // { arity: 1 }
                                 Get l6 // { arity: 1 }
                             Constant // { arity: 1 }
@@ -351,10 +351,10 @@ With
         Get l6 // { arity: 1 }
         Get l3 // { arity: 2 }
   cte l6 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l5 // { arity: 2 }
   cte l5 =
-    Distinct group_by=[#0, #1] // { arity: 2 }
+    Distinct project=[#0, #1] // { arity: 2 }
       Get l4 // { arity: 2 }
   cte l4 =
     CrossJoin // { arity: 2 }
@@ -368,9 +368,9 @@ With
           Join on=(#0 = #1) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
-                Distinct group_by=[#0] // { arity: 1 }
+                Distinct project=[#0] // { arity: 1 }
                   Get l2 // { arity: 2 }
-              Distinct group_by=[#0] // { arity: 1 }
+              Distinct project=[#0] // { arity: 1 }
                 Get l1 // { arity: 1 }
             Get l1 // { arity: 1 }
         Constant // { arity: 1 }
@@ -382,7 +382,7 @@ With
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
   cte l1 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l0 =
     CrossJoin // { arity: 1 }
@@ -440,9 +440,9 @@ Return // { arity: 3 }
                                 Join on=(#0 = #1) // { arity: 2 }
                                   Union // { arity: 1 }
                                     Negate // { arity: 1 }
-                                      Distinct group_by=[#0] // { arity: 1 }
+                                      Distinct project=[#0] // { arity: 1 }
                                         Get l7 // { arity: 2 }
-                                    Distinct group_by=[#0] // { arity: 1 }
+                                    Distinct project=[#0] // { arity: 1 }
                                       Get l5 // { arity: 1 }
                                   Get l5 // { arity: 1 }
                               Constant // { arity: 1 }
@@ -467,20 +467,20 @@ With
               Join on=(#0 = #1) // { arity: 2 }
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Get l2 // { arity: 2 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Get l1 // { arity: 1 }
                 Get l1 // { arity: 1 }
             Constant // { arity: 1 }
               - (null)
   cte l5 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l4 // { arity: 2 }
   cte l4 =
     Filter true // { arity: 2 }
       CrossJoin // { arity: 2 }
-        Distinct group_by=[#1] // { arity: 1 }
+        Distinct project=[#1] // { arity: 1 }
           Get l3 // { arity: 2 }
         Get materialize.public.x // { arity: 1 }
   cte l3 =
@@ -494,7 +494,7 @@ With
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
   cte l1 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l0 =
     CrossJoin // { arity: 1 }

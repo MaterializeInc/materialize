@@ -66,9 +66,9 @@ Return // { arity: 3 }
                           Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) // { arity: 6 }
                             Union // { arity: 3 }
                               Negate // { arity: 3 }
-                                Distinct group_by=[#0..=#2] // { arity: 3 }
+                                Distinct project=[#0..=#2] // { arity: 3 }
                                   Get l4 // { arity: 4 }
-                              Distinct group_by=[#0..=#2] // { arity: 3 }
+                              Distinct project=[#0..=#2] // { arity: 3 }
                                 Get l2 // { arity: 3 }
                             Get l2 // { arity: 3 }
                         Constant // { arity: 1 }
@@ -87,11 +87,11 @@ With
       Map (3) // { arity: 4 }
         Get l2 // { arity: 3 }
   cte l2 =
-    Distinct group_by=[#0..=#2] // { arity: 3 }
+    Distinct project=[#0..=#2] // { arity: 3 }
       Get l1 // { arity: 3 }
   cte l1 =
     CrossJoin // { arity: 3 }
-      Distinct group_by=[#1] // { arity: 1 }
+      Distinct project=[#1] // { arity: 1 }
         Get l0 // { arity: 3 }
       Get materialize.public.t2 // { arity: 2 }
   cte l0 =

@@ -13,19 +13,19 @@ from materialize import mzbuild
 from materialize.xcompile import Arch
 
 from . import deploy_util
-from .deploy_util import VERSION
+from .deploy_util import MZ_CLI_VERSION
 
 
 def main() -> None:
     repos = [
-        mzbuild.Repository(Path("."), Arch.X86_64),
-        mzbuild.Repository(Path("."), Arch.AARCH64),
+        mzbuild.Repository(Path("."), Arch.X86_64, coverage=False),
+        mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False),
     ]
 
-    print(f"--- Tagging Docker images")
+    print("--- Tagging Docker images")
     deps = [[repo.resolve_dependencies([repo.images["mz"]])["mz"]] for repo in repos]
 
-    mzbuild.publish_multiarch_images(f"v{VERSION}", deps)
+    mzbuild.publish_multiarch_images(f"v{MZ_CLI_VERSION.str_without_prefix()}", deps)
     if deploy_util.is_latest_version():
         mzbuild.publish_multiarch_images("latest", deps)
 

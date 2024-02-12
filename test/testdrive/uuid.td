@@ -34,10 +34,11 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 {"u": "b141698b-fb7f-492d-bc8a-0d159641c7a3"}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE data FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+> CREATE SOURCE data
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > SHOW COLUMNS FROM data
@@ -59,7 +60,9 @@ u      false     uuid
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK uuid_sink_${testdrive.seed} FROM data
+> CREATE SINK uuid_sink_${testdrive.seed}
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

@@ -7,8 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, Service
-from materialize.mzcompose.services import Kafka, Zookeeper
+from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),

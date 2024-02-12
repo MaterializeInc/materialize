@@ -41,6 +41,100 @@ To create a concurrency-safe connection pool, import the [`pgxpool` package](htt
 
 The remainder of this guide uses the [`*pgx.Conn`](https://pkg.go.dev/github.com/jackc/pgx#Conn) connection handle from the [connect](#connect) section to interact with Materialize.
 
+## Create tables
+
+Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
+
+To create a table named `countries` in Materialize:
+
+```go
+createTableSQL := `
+    CREATE TABLE IF NOT EXISTS countries (
+        code CHAR(2),
+        name TEXT
+    );
+`
+
+_, err := conn.Exec(ctx, createTableSQL)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+## Insert data into tables
+
+To [insert a row](/sql/insert/) of data into a table named `countries` in Materialize:
+
+```go
+insertSQL := "INSERT INTO countries (code, name) VALUES ($1, $2)"
+
+_, err := conn.Exec(ctx, insertSQL, "GH", "GHANA")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+## Query
+
+Querying Materialize is identical to querying a PostgreSQL database: Go executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+
+Because Materialize maintains results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+
+To query the `countries` using a `SELECT` statement:
+
+```go
+rows, err := conn.Query(ctx, "SELECT * FROM countries")
+if err != nil {
+    log.Fatal(err)
+}
+
+for rows.Next() {
+    var r result
+    err = rows.Scan(&r...)
+    if err != nil {
+        log.Fatal(err)
+    }
+    // operate on result
+}
+```
+
+## Manage sources, views, and indexes
+
+Typically, you create sources, views, and indexes when deploying Materialize, but it's possible to use a Go app to execute common DDL statements.
+
+### Create a source from Go
+
+```go
+createSourceSQL := `
+    CREATE SOURCE IF NOT EXISTS counter
+    FROM LOAD GENERATOR COUNTER
+    (TICK INTERVAL '500ms');
+`
+
+_, err = conn.Exec(ctx, createSourceSQL)
+if err != nil {
+    log.Fatal(err)
+}
+```
+For more information, see [`CREATE SOURCE`](/sql/create-source/).
+
+### Create a view from Go
+
+```go
+createViewSQL := `
+    CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS
+        SELECT sum(counter)
+    FROM counter;
+`
+
+_, err = conn.Exec(ctx, createViewSQL)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
+
 ## Stream
 
 To take full advantage of incrementally updated materialized views from a Go application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
@@ -55,7 +149,7 @@ if err != nil {
 }
 defer tx.Rollback(ctx)
 
-_, err = tx.Exec(ctx, "DECLARE c CURSOR FOR SUBSCRIBE my_view")
+_, err = tx.Exec(ctx, "DECLARE c CURSOR FOR SUBSCRIBE counter_sum")
 if err != nil {
     log.Fatal(err)
     return
@@ -85,7 +179,7 @@ if err != nil {
 }
 ```
 
-The [SUBSCRIBE output format](/sql/subscribe/#output) of `subscribeResult` contains all of the columns of `my_view`, prepended with several additional columns that describe the nature of the update.  When a row of a subscribed view is **updated,** two objects will show up in the result set:
+The [SUBSCRIBE output format](/sql/subscribe/#output) of `subscribeResult` contains all of the columns of `counter_sum`, prepended with several additional columns that describe the nature of the update.  When a row of a subscribed view is **updated,** two objects will show up in the result set:
 
 ```go
 {MzTimestamp:1646868332570 MzDiff:1 row...}
@@ -94,76 +188,15 @@ The [SUBSCRIBE output format](/sql/subscribe/#output) of `subscribeResult` conta
 
 An `MzDiff` value of `-1` indicates that Materialize is deleting one row with the included values. An update is just a retraction (`MzDiff:-1`) and an insertion (`MzDiff:1`) with the same timestamp.
 
-## Query
+## Clean up
 
-Querying Materialize is identical to querying a PostgreSQL database: Go executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
-Because Materialize maintains results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
-
-To query a view `my_view` using a `SELECT` statement:
-
-```go
-rows, err := conn.Query(ctx, "SELECT * FROM my_view")
-if err != nil {
-    log.Fatal(err)
-}
-
-for rows.Next() {
-    var r result
-    err = rows.Scan(&r...)
-    if err != nil {
-        log.Fatal(err)
-    }
-    // operate on result
-}
+```sql
+DROP MATERIALIZED VIEW IF EXISTS counter_sum;
+DROP SOURCE IF EXISTS counter;
+DROP TABLE IF EXISTS countries;
 ```
-
-## Insert data into tables
-
-Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, you can use a table to join slower-moving reference or lookup data with a stream.
-
-**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize:
-
-```go
-insertSQL := "INSERT INTO countries (code, name) VALUES ($1, $2)"
-
-_, err := conn.Exec(ctx, insertSQL, "GH", "GHANA")
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-## Manage sources, views, and indexes
-
-Typically, you create sources, views, and indexes when deploying Materialize, but it's possible to use a Go app to execute common DDL statements.
-
-### Create a source from Go
-
-```go
-createSourceSQL := `CREATE SOURCE counter FROM LOAD GENERATOR COUNTER`
-
-_, err = conn.Exec(ctx, createSourceSQL)
-if err != nil {
-    log.Fatal(err)
-}
-```
-For more information, see [`CREATE SOURCE`](/sql/create-source/).
-
-### Create a view from Go
-
-```go
-createViewSQL := `CREATE VIEW market_orders_2 AS
-                    SELECT
-                        val->>'symbol' AS symbol,
-                        (val->'bid_price')::float AS bid_price
-                    FROM (SELECT text::jsonb AS val FROM market_orders_raw)`
-_, err = conn.Exec(ctx, createViewSQL)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-For more information, see [`CREATE VIEW`](/sql/create-view/).
 
 ## Go ORMs
 

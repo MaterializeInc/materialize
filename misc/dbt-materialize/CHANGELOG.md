@@ -1,5 +1,181 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Revert backport of [dbt-core #8887](https://github.com/dbt-labs/dbt-core/pull/8887),
+  which shipped with[dbt v1.7.6](https://github.com/dbt-labs/dbt-core/releases/tag/v1.7.6).
+  Non-standard types should just work™️ in model contracts as part of dbt core
+  functionality.
+
+## 1.7.3 - 2024-01-24
+
+* Support scheduled refreshes in the `materialized_view` materialization via the
+  new `refresh_interval` configuration. This is a private preview feature in
+  Materialize, so configuration details are likely to change in the future.
+
+## 1.7.2 - 2023-12-18
+
+* Backport [dbt-core #8887](https://github.com/dbt-labs/dbt-core/pull/8887) to
+  unblock users using any custom type with data contracts.
+
+## 1.7.1 - 2023-12-14
+
+* Remove the dependency of data contracts pre-flight checks on the existence of
+  the pre-installed `default` cluster. Fixes [#23600](https://github.com/MaterializeInc/materialize/issues/23600).
+
+* Work around [dbt-core #8353](https://github.com/dbt-labs/dbt-core/issues/8353)
+  while a permanent fix doesn't land in dbt Core to unblock users using UUID
+  types with data contracts.
+
+## 1.7.0 - 2023-11-20
+
+* Support specifying the materialization type used to store test failures via
+  the new [`store_failures_as` configuration](https://docs.getdbt.com/reference/resource-configs/store_failures_as).
+  Accepted values: `materialized_view` (default), `view`, `ephemeral`.
+
+  * **Project level**
+  ```yaml
+  tests:
+    my_project:
+      +store_failures_as: view
+  ```
+
+  * **Model level**
+  ```yaml
+  models:
+    - name: my_model
+      columns:
+        - name: id
+          tests:
+            - not_null:
+                config:
+                  store_failures_as: view
+            - unique:
+                config:
+                  store_failures_as: ephemeral
+  ```
+
+  If both [`store_failures`](https://docs.getdbt.com/reference/resource-configs/store_failures)
+  and `store_failures_as` are specified, `store_failures_as` takes precedence.
+
+* Mark `dbt source freshness` as not supported. Materialize supports the
+  functionality required to enable column- and metadata-based source freshness
+  checks, but the value of this feature in a real-time data warehouse is
+  limited.
+
+## 1.6.1 - 2023-11-03
+
+* Support the [`ASSERT NOT NULL` option](https://materialize.com/docs/sql/create-materialized-view/#non-null-assertions)
+  for `materialized_view` materializations via the `not_null` column-level
+  constraint.
+
+  ```yaml
+    - name: model_with_constraints
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: col_with_constraints
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: col_without_constraints
+        data_type: int
+  ```
+
+  It's important to note that other constraint types are not
+  supported, and that `not_null` constraints can only be defined at the
+  column-level (not model-level).
+
+* Work around a bug in [`--persist-docs`](https://docs.getdbt.com/reference/resource-configs/persist_docs)
+  that prevented comments from being persisted for `materialized_view`
+  materializations. See [#21878]
+  (https://github.com/MaterializeInc/materialize/pull/21878) for details.
+
+  The `--persist-docs` flag requires [Materialize >=0.68.0](https://materialize.com/docs/releases/v0.68/).
+  Previous versions **do not** have support for the `COMMENT ON` syntax, which
+  is required to persist resource descriptions as column and relation comments
+  in Materialize.
+
+* Load seeds into tables rather than materialized views.
+
+  For historical reasons, `dbt-materialize` has loaded seed data by injecting
+  the values from the CSV file in a `CREATE MATERIALIZED VIEW AS ...`
+  statement. `dbt-materialize` now creates a table and loads the values from
+  the CSV into that file, matching the behavior of other dbt adapters.
+
+## 1.6.0 - 2023-10-12
+
+* Upgrade to `dbt-postgres` v1.6.0:
+
+  * Support [model contracts](https://docs.getdbt.com/docs/collaborate/govern/model-contracts)
+    for `view`, `materialized_view` and `table` materializations.
+    Materialize does not have a notion of constraints, so [model- and column-level constraints](https://docs.getdbt.com/reference/resource-properties/constraints)
+    are **not supported**.
+
+  * Deprecate the custom `materializedview` materialization name in favor of
+    `materialized_view`, which is built-in from dbt v1.6.
+
+    **New**
+
+    ```sql
+    {{ config( materialized = 'materialized_view' )}}
+    ```
+
+    **Deprecated**
+
+    ```sql
+    {{ config( materialized = 'materializedview' )}}
+    ```
+
+    The deprecated materialization name will be removed in a future release of the
+    adapter.
+
+* Enable the `cluster` configuration for tests, which allows specifying a target
+  cluster for `dbt test` to run against (for both one-shot and [continuous testing](https://materialize.com/docs/manage/dbt/#configure-continuous-testing)).
+
+  ```yaml
+  tests:
+    example:
+      +store_failures: true
+      +schema: 'dbt_test_schema'
+      +cluster: 'dbt_test_cluster'
+  ```
+
+* Override the `dbt init` command to generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/),
+  instead of the default project generated in `dbt-core`.
+
+* **Breaking change.** Set 255 as the maximum identifier length for relation
+    names, after [#20999](https://github.com/MaterializeInc/materialize/pull/20999)
+    introduced a `max_identifier_length` session variable that enforces this
+    limit in Materialize.
+
+* Support cancelling outstanding queries when pressing Ctrl+C.
+
+## 1.5.1 - 2023-07-24
+
+* Enable the `indexes` config for `table` materializations.
+
+## 1.5.0 - 2023-07-13
+
+* Upgrade to `dbt-postgres` v1.5.0. dbt contracts and dbt constraints are **not
+  supported** in this release (see [dbt-core #7213](https://github.com/dbt-labs/dbt-core/discussions/7213#discussioncomment-5903205)).
+
+* Fix a bug in the `materialize__list_relations_without_caching` macro which
+  could cause the adapter to break for multi-output sources ([#20483](https://github.com/MaterializeInc/materialize/issues/20483)).
+
+* Expose `owner` in the dbt documentation, now that Materialize supports
+  [role-based access control (RBAC)](https://materialize.com/docs/manage/access-control/).
+
+## 1.4.1 - 2023-04-28
+
+* Let Materialize automatically run introspection queries in the
+  `mz_introspection` cluster via the new `auto_route_introspection_queries`
+  session variable, instead of hardcoding the cluster on connection.
+
+  This change requires [Materialize >=0.49.0](https://materialize.com/docs/releases/v0.49/).
+  **Users of older versions should pin `dbt-materialize` to `v1.4.0`.**
+
 ## 1.4.0 - 2023-02-03
 
 * Upgrade to `dbt-postgres` v1.4.0.
@@ -48,15 +224,14 @@
 
 * Add `cluster` to the connection parameters returned on `dbt debug`.
 
-
 * Disallow the `cluster` option for `view` materializations. In the new
   architecture, only materialized views and indexes are associated with a
   cluster.
 
 ## 1.2.0 - 2022-08-31
 
-* Enable additional configuration for indexes created on view,
-  materializedview, or source materializations. Fix to use Materialize's
+* Enable additional configuration for indexes created on `view`,
+  `materializedview`, or `source` materializations. Fix to use Materialize's
   internal naming convention when creating indexes without providing
   explicit names.
 
@@ -92,7 +267,7 @@
   ```
 
   * A new `cluster` option for indexes on view, materializedview, or source
-    materializations. If 'cluster' is not supplied, indexes will be created
+    materializations. If `cluster` is not supplied, indexes will be created
     in the cluster used to create the materialization.
 
   ```sql
@@ -246,7 +421,7 @@
 
 * Support the `sslcert`, `sslkey`, and `sslrootcert` parameters for specifying a
   TLS client certificate. Notably, this allows using `dbt-materialize` with the
-  new architecture of [Materialize](https://cloud.materialize.com).
+  new architecture of [Materialize](https://console.materialize.com).
 
 ## 0.18.1.post2 - 2021-04-21
 

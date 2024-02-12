@@ -1,23 +1,52 @@
 ---
 title: "ALTER CONNECTION"
-description: "`ALTER CONNECTION` rotates the key pairs associated with an SSH tunnel connection."
+description: "`ALTER CONNECTION` allows modifying the value of connection options and rotating secrets associated with connections"
 menu:
   main:
     parent: 'commands'
 ---
 
-`ALTER CONNECTION` rotates the key pairs associated with an
-[SSH tunnel connection].
+`ALTER CONNECTION` allows modifying the value of connection options and rotating
+secrets associated with connections. In particular, you can use this command
+to:
+
+-   Modify the parameters of a connection, such as the hostname to which it
+    points.
+-   Rotate the key pairs associated with an [SSH tunnel connection].
 
 ## Syntax
 
 {{< diagram "alter-connection.svg" >}}
 
-Field   | Use
---------|-----
-_name_  | The identifier of the connection you want to alter.
+| Field                     | Use                                                 |
+| ------------------------- | --------------------------------------------------- |
+| _name_                    | The identifier of the connection you want to alter. |
+| **SET**...                | Sets the option to the specified value.             |
+| **DROP**..., **RESET**... | Resets the specified option to its default value.   |
+| **ROTATE KEYS**           | Rotates the key pairs.                              |
+
+#### `WITH` options
+
+| Field      | Value     | Description                                                                                                                                                       |
+| ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VALIDATE` | `boolean` | Whether [connection validation](/sql/create-connection#connection-validation) should be performed. Not available with **ROTATE KEYS**.<br><br>Defaults to `true`. |
 
 ## Description
+
+### `SET`, `RESET`, `DROP`
+
+These subcommands let you modify the parameters of a connection.
+
+* **RESET** and **DROP** are synonyms and will return the parameter to its
+    original state. For instance, if the connection has a default port, **DROP**
+    will return it to the default value.
+* All provided changes are applied atomically.
+* The same parameter cannot have multiple modifications.
+
+For the available parameters for each type of connection, see [`CREATE
+CONNECTION`](/sql/create-connection).
+
+### `ROTATE KEYS`
 
 The `ROTATE KEYS` command can be used to change the key pairs associated with
 an [SSH tunnel connection] without causing downtime.
@@ -36,8 +65,8 @@ a new public key.
 After executing `ROTATE KEYS`, you should update your SSH bastion server with
 the new public keys:
 
-  * Remove the public key that was formely in the `public_key_1` column.
-  * Add the new public key from the `public_key_2` column.
+* Remove the public key that was formely in the `public_key_1` column.
+* Add the new public key from the `public_key_2` column.
 
 Throughout the entire process, the SSH bastion server is configured to permit
 authentication from at least one of the keys that Materialize will authenticate
@@ -48,10 +77,16 @@ every execution of the `ROTATE KEYS` command. If you rotate keys twice in
 succession without adding the new keys to the bastion server, Materialize will
 be unable to authenticate with the bastion server.
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+-   Ownership of the connection.
+
 ## Related pages
 
-- [`CREATE CONNECTION`](/sql/create-connection/)
-- [`SHOW CONNECTIONS`](/sql/show-connections)
+-   [`CREATE CONNECTION`](/sql/create-connection/)
+-   [`SHOW CONNECTIONS`](/sql/show-connections)
 
 [SSH tunnel connection]: /sql/create-connection/#ssh-tunnel
 [`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections

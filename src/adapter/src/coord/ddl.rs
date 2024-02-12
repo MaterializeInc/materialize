@@ -11,55 +11,182 @@
 //! and altering objects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
-use serde_json::json;
-use timely::progress::Antichain;
-use tracing::Level;
-use tracing::{event, warn};
-
+use futures::Future;
+use maplit::{btreemap, btreeset};
+use mz_adapter_types::compaction::SINCE_GRANULARITY;
+use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
-use mz_compute_client::protocol::response::PeekResponse;
-use mz_controller::clusters::{ClusterId, ReplicaId};
-use mz_ore::retry::Retry;
-use mz_ore::task;
-use mz_repr::{GlobalId, Timestamp};
-use mz_sql::names::ResolvedDatabaseSpecifier;
-use mz_sql::session::vars::{self, SystemVars, Var};
-use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
-use mz_storage_client::types::sinks::{SinkAsOf, StorageSinkConnection};
-use mz_storage_client::types::sources::{GenericSourceConnection, Timeline};
-
-use crate::catalog::{
-    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
-    TransactionResult, SYSTEM_CONN_ID,
+use mz_catalog::memory::objects::{
+    CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, Sink,
 };
-use crate::client::ConnectionId;
-use crate::coord::appends::BuiltinTableUpdateSource;
+use mz_catalog::SYSTEM_CONN_ID;
+use mz_compute_client::protocol::response::PeekResponse;
+use mz_controller::clusters::ReplicaLocation;
+use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::error::ErrorExt;
+use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
+use mz_ore::task;
+use mz_repr::adt::numeric::Numeric;
+use mz_repr::{GlobalId, Timestamp};
+use mz_sql::catalog::{CatalogCluster, CatalogSchema};
+use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
+use mz_sql::session::vars::{
+    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
+    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
+    MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
+    MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
+};
+use mz_storage_client::controller::ExportDescription;
+use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sources::GenericSourceConnection;
+use serde_json::json;
+use tracing::{event, info_span, instrument, warn, Instrument, Level};
+
+use crate::catalog::{CatalogState, Op, TransactionResult};
+use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
-use crate::session::Session;
+use crate::session::{Session, Transaction, TransactionOps};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
-use crate::{catalog, AdapterError, AdapterNotice};
-
-use super::timeline::{TimelineContext, TimelineState};
+use crate::{catalog, flags, AdapterError, AdapterNotice, TimestampProvider};
 
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
     pub(crate) dataflow_client: &'a mz_controller::Controller<T>,
+
+    // TODO: This field is currently unused. Consider removing it.
+    #[allow(dead_code)]
     pub(crate) catalog: &'a CatalogState,
 }
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::catalog_transact", skip_all)]
     pub(crate) async fn catalog_transact(
         &mut self,
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        self.catalog_transact_with(session, ops, |_| Ok(())).await
+        let (result, table_updates) = self
+            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+            .await?;
+        table_updates.await;
+
+        Ok(result)
+    }
+
+    /// Same as [`Self::catalog_transact_with`] but runs builtin table updates concurrently with
+    /// any side effects (e.g. creating collections).
+    #[instrument(name = "coord::catalog_transact_with_side_effects", skip_all)]
+    pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
+        &'c mut self,
+        session: Option<&Session>,
+        ops: Vec<catalog::Op>,
+        side_effect: F,
+    ) -> Result<(), AdapterError>
+    where
+        F: FnOnce(&'c mut Coordinator) -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let (result, table_updates) = self
+            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+            .await?;
+        let side_effects_fut = side_effect(self);
+
+        // Run our side effects concurrently with the table updates.
+        let ((), ()) = futures::future::join(
+            side_effects_fut.instrument(info_span!(
+                "coord::catalog_transact_with_side_effects::side_effects_fut"
+            )),
+            table_updates.instrument(info_span!(
+                "coord::catalog_transact_with_side_effects::table_updates"
+            )),
+        )
+        .await;
+
+        Ok(result)
+    }
+
+    /// Same as [`Self::catalog_transact_with`] without a closure passed in.
+    #[instrument(name = "coord::catalog_transact_conn", skip_all)]
+    pub(crate) async fn catalog_transact_conn(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        let (result, table_updates) = self.catalog_transact_with(conn_id, ops, |_| Ok(())).await?;
+        table_updates.await;
+        Ok(result)
+    }
+
+    /// Executes a Catalog transaction with handling if the provided `Session` is in a SQL
+    /// transaction that is executing DDL.
+    #[instrument(name = "coord::catalog_transact_with_ddl_transaction", skip_all)]
+    pub(crate) async fn catalog_transact_with_ddl_transaction(
+        &mut self,
+        session: &mut Session,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        let conn_id = session.conn_id().clone();
+        let Some(Transaction {
+            ops:
+                TransactionOps::DDL {
+                    ops: txn_ops,
+                    revision: txn_revision,
+                    state: _,
+                },
+            ..
+        }) = session.transaction().inner()
+        else {
+            return self.catalog_transact(Some(session), ops).await;
+        };
+
+        // Make sure our Catalog hasn't changed since openning the transaction.
+        if self.catalog().transient_revision() != *txn_revision {
+            return Err(AdapterError::DDLTransactionRace);
+        }
+
+        // Combine the existing ops with the new ops so we can replay them.
+        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len());
+        all_ops.extend(txn_ops.iter().cloned());
+        all_ops.extend(ops.clone());
+
+        // Run our Catalog transaction, but abort before committing.
+        let result = self
+            .catalog_transact_with(Some(&conn_id), all_ops.clone(), |state| {
+                // Return an error so we don't commit the Catalog Transaction, but include our
+                // updated state.
+                Err::<(), _>(AdapterError::DDLTransactionDryRun {
+                    new_ops: all_ops,
+                    new_state: state.catalog.clone(),
+                })
+            })
+            .await;
+
+        match result {
+            // We purposefully fail with this error to prevent committing the transaction.
+            Err(AdapterError::DDLTransactionDryRun { new_ops, new_state }) => {
+                // Adds these ops to our transaction, bailing if the Catalog has changed since we
+                // ran the transaction.
+                session.transaction_mut().add_ops(TransactionOps::DDL {
+                    ops: new_ops,
+                    state: new_state,
+                    revision: self.catalog().transient_revision(),
+                })?;
+                Ok(())
+            }
+            Ok((_result, _table_updates)) => unreachable!("unexpected success!"),
+            Err(e) => Err(e),
+        }
     }
 
     /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
@@ -71,40 +198,49 @@ impl Coordinator {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
-    /// [`DataflowDesc`]: mz_compute_client::types::dataflows::DataflowDesc
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn catalog_transact_with<F, R>(
+    /// [`DataflowDesc`]: mz_compute_types::dataflows::DataflowDesc
+    #[instrument(name = "coord::catalog_transact_with", skip_all)]
+    pub(crate) async fn catalog_transact_with<'a, F, R>(
         &mut self,
-        session: Option<&Session>,
-        mut ops: Vec<catalog::Op>,
+        conn_id: Option<&ConnectionId>,
+        ops: Vec<catalog::Op>,
         f: F,
-    ) -> Result<R, AdapterError>
+    ) -> Result<(R, BuiltinTableAppendNotify), AdapterError>
     where
         F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, AdapterError>,
     {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
-        let mut log_sources_to_drop = vec![];
+        let mut webhook_sources_to_restart = BTreeSet::new();
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
+        let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
-        let mut timelines_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
+        let mut subscribe_sinks_to_drop = vec![];
         let mut peeks_to_drop = vec![];
+        let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
+        let mut update_pg_timestamp_oracle_config = false;
         let mut update_metrics_retention = false;
+        let mut update_secrets_caching_config = false;
+        let mut update_cluster_scheduling_config = false;
+        let mut update_jemalloc_profiling_config = false;
+        let mut update_default_arrangement_merge_options = false;
+        let mut update_http_config = false;
+        let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
             match op {
-                catalog::Op::DropItem(id) => {
-                    match self.catalog.get_entry(id).item() {
+                catalog::Op::DropObject(ObjectId::Item(id)) => {
+                    match self.catalog().get_entry(id).item() {
                         CatalogItem::Table(_) => {
                             tables_to_drop.push(*id);
                         }
@@ -113,13 +249,26 @@ impl Coordinator {
                             if let DataSourceDesc::Ingestion(ingestion) = &source.data_source {
                                 match &ingestion.desc.connection {
                                     GenericSourceConnection::Postgres(conn) => {
+                                        let conn = conn
+                                            .clone()
+                                            .into_inline_connection(self.catalog().state());
                                         let config = conn
                                             .connection
-                                            .config(&*self.connection_context.secrets_reader)
+                                            .config(
+                                                self.secrets_reader(),
+                                                self.controller.storage.config(),
+                                            )
                                             .await
-                                            .unwrap_or_else(|e| {
-                                                panic!("Postgres source {id} missing secrets: {e}")
-                                            });
+                                            .map_err(|e| {
+                                                AdapterError::Storage(StorageError::Generic(
+                                                    anyhow::anyhow!(
+                                                        "error creating Postgres client for \
+                                                        dropping acquired slots: {}",
+                                                        e.display_with_causes()
+                                                    ),
+                                                ))
+                                            })?;
+
                                         replication_slots_to_drop
                                             .push((config, conn.publication_details.slot.clone()));
                                     }
@@ -127,35 +276,28 @@ impl Coordinator {
                                 }
                             }
                         }
-                        CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
-                            StorageSinkConnectionState::Ready(_) => {
-                                storage_sinks_to_drop.push(*id);
-                            }
-                            StorageSinkConnectionState::Pending(_) => (),
-                        },
-                        CatalogItem::Index(catalog::Index { cluster_id, .. }) => {
+                        CatalogItem::Sink(Sink { .. }) => {
+                            storage_sinks_to_drop.push(*id);
+                        }
+                        CatalogItem::Index(Index { cluster_id, .. }) => {
                             indexes_to_drop.push((*cluster_id, *id));
                         }
-                        CatalogItem::MaterializedView(catalog::MaterializedView {
-                            cluster_id,
-                            ..
-                        }) => {
+                        CatalogItem::MaterializedView(MaterializedView { cluster_id, .. }) => {
                             materialized_views_to_drop.push((*cluster_id, *id));
                         }
+                        CatalogItem::View(_) => views_to_drop.push(*id),
                         CatalogItem::Secret(_) => {
                             secrets_to_drop.push(*id);
                         }
-                        CatalogItem::Connection(catalog::Connection { connection, .. }) => {
+                        CatalogItem::Connection(Connection { connection, .. }) => {
                             match connection {
                                 // SSH connections have an associated secret that should be dropped
-                                mz_storage_client::types::connections::Connection::Ssh(_) => {
+                                mz_storage_types::connections::Connection::Ssh(_) => {
                                     secrets_to_drop.push(*id);
                                 }
                                 // AWS PrivateLink connections have an associated
                                 // VpcEndpoint K8S resource that should be dropped
-                                mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                    _,
-                                ) => {
+                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                                     vpc_endpoints_to_drop.push(*id);
                                 }
                                 _ => (),
@@ -164,44 +306,88 @@ impl Coordinator {
                         _ => (),
                     }
                 }
-                catalog::Op::DropCluster { id } => {
-                    let cluster = self.catalog.get_cluster(*id);
-
-                    // Drop the introspection sources
-                    let replica_logs = cluster
-                        .replicas_by_id
-                        .values()
-                        .flat_map(|replica| replica.config.compute.logging.source_ids())
-                        .map(|log_id| (*id, log_id));
-                    log_sources_to_drop.extend(replica_logs);
-
-                    // Drop the cluster itself.
+                catalog::Op::DropObject(ObjectId::Cluster(id)) => {
                     clusters_to_drop.push(*id);
+                    log_indexes_to_drop.extend(
+                        self.catalog()
+                            .get_cluster(*id)
+                            .log_indexes
+                            .values()
+                            .cloned(),
+                    );
                 }
-                catalog::Op::DropClusterReplica {
-                    cluster_id,
-                    replica_id,
-                } => {
-                    let cluster = self.catalog.get_cluster(*cluster_id);
-                    let replica = &cluster.replicas_by_id[replica_id];
-
-                    // Drop the introspection sources
-                    let replica_logs = replica
-                        .config
-                        .compute
-                        .logging
-                        .source_ids()
-                        .map(|log_id| (cluster.id, log_id));
-                    log_sources_to_drop.extend(replica_logs);
-
+                catalog::Op::DropObject(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
                     // Drop the cluster replica itself.
-                    cluster_replicas_to_drop.push((cluster.id, *replica_id));
+                    cluster_replicas_to_drop.push((*cluster_id, *replica_id));
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
-                    update_compute_config |= vars::is_compute_config_var(name);
-                    update_storage_config |= vars::is_storage_config_var(name);
+                    update_tracing_config |= vars::is_tracing_var(name);
+                    update_compute_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_compute_config_var(name);
+                    update_storage_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_storage_config_var(name);
+                    update_pg_timestamp_oracle_config |=
+                        vars::is_pg_timestamp_oracle_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
+                    update_secrets_caching_config |= vars::is_secrets_caching_var(name);
+                    update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
+                    update_jemalloc_profiling_config |=
+                        name == vars::ENABLE_JEMALLOC_PROFILING.name();
+                    update_default_arrangement_merge_options |=
+                        name == vars::DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT.name();
+                    update_default_arrangement_merge_options |=
+                        name == vars::DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY.name();
+                    update_http_config |= vars::is_http_config_var(name);
+                }
+                catalog::Op::ResetAllSystemConfiguration => {
+                    // Assume they all need to be updated.
+                    // We could see if the config's have actually changed, but
+                    // this is simpler.
+                    update_tracing_config = true;
+                    update_compute_config = true;
+                    update_storage_config = true;
+                    update_pg_timestamp_oracle_config = true;
+                    update_metrics_retention = true;
+                    update_secrets_caching_config = true;
+                    update_cluster_scheduling_config = true;
+                    update_jemalloc_profiling_config = true;
+                    update_default_arrangement_merge_options = true;
+                    update_http_config = true;
+                }
+                catalog::Op::RenameItem { id, .. } => {
+                    let item = self.catalog().get_entry(id);
+                    let is_webhook_source = item
+                        .source()
+                        .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
+                        .unwrap_or(false);
+                    if is_webhook_source {
+                        webhook_sources_to_restart.insert(*id);
+                    }
+                }
+                catalog::Op::RenameSchema {
+                    database_spec,
+                    schema_spec,
+                    ..
+                } => {
+                    let schema = self.catalog().get_schema(
+                        database_spec,
+                        schema_spec,
+                        conn_id.unwrap_or(&SYSTEM_CONN_ID),
+                    );
+                    let webhook_sources = schema.item_ids().filter(|id| {
+                        let item = self.catalog().get_entry(id);
+                        item.source()
+                            .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
+                            .unwrap_or(false)
+                    });
+                    webhook_sources_to_restart.extend(webhook_sources);
                 }
                 _ => (),
             }
@@ -209,51 +395,67 @@ impl Coordinator {
 
         let relations_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
-            .chain(log_sources_to_drop.iter().map(|(_, id)| id))
             .chain(tables_to_drop.iter())
             .chain(storage_sinks_to_drop.iter())
             .chain(indexes_to_drop.iter().map(|(_, id)| id))
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+            .chain(views_to_drop.iter())
             .collect();
 
-        // Clean up any active subscribes that rely on dropped relations.
-        let subscribe_sinks_to_drop: Vec<_> = self
-            .active_subscribes
-            .iter()
-            .filter(|(_id, sub)| !sub.dropping)
-            .filter_map(|(sink_id, sub)| {
-                sub.depends_on
-                    .iter()
-                    .find(|id| relations_to_drop.contains(id))
-                    .map(|dependent_id| (dependent_id, sink_id, sub))
-            })
-            .map(|(dependent_id, sink_id, active_subscribe)| {
-                let conn_id = active_subscribe.conn_id;
-                let entry = self.catalog.get_entry(dependent_id);
-                let name = self.catalog.resolve_full_name(entry.name(), Some(conn_id));
+        // Clean up any active subscribes that rely on dropped relations or clusters.
+        for (&global_id, subscribe) in &self.active_subscribes {
+            if subscribe.dropping {
+                continue; // don't drop subscribes twice
+            }
+            let cluster_id = subscribe.cluster_id;
+            let sink_id = ComputeSinkId {
+                cluster_id,
+                global_id,
+            };
+            let conn_id = &subscribe.conn_id;
+            if let Some(id) = subscribe
+                .depends_on
+                .iter()
+                .find(|id| relations_to_drop.contains(id))
+            {
+                let entry = self.catalog().get_entry(id);
+                let name = self
+                    .catalog()
+                    .resolve_full_name(entry.name(), Some(conn_id))
+                    .to_string();
+                subscribe_sinks_to_drop.push((
+                    conn_id.clone(),
+                    format!("relation {}", name.quoted()),
+                    sink_id,
+                ));
+            } else if clusters_to_drop.contains(&cluster_id) {
+                let name = self.catalog().get_cluster(cluster_id).name();
+                subscribe_sinks_to_drop.push((
+                    conn_id.clone(),
+                    format!("cluster {}", name.quoted()),
+                    sink_id,
+                ));
+            }
+        }
 
-                (
-                    (conn_id, name.to_string()),
-                    ComputeSinkId {
-                        cluster_id: active_subscribe.cluster_id,
-                        global_id: *sink_id,
-                    },
-                )
-            })
-            .collect();
-
-        // Clean up any pending peeks that rely on dropped relations.
+        // Clean up any pending peeks that rely on dropped relations or clusters.
         for (uuid, pending_peek) in &self.pending_peeks {
             if let Some(id) = pending_peek
                 .depends_on
                 .iter()
                 .find(|id| relations_to_drop.contains(id))
             {
-                let entry = self.catalog.get_entry(id);
+                let entry = self.catalog().get_entry(id);
                 let name = self
-                    .catalog
-                    .resolve_full_name(entry.name(), Some(pending_peek.conn_id));
-                peeks_to_drop.push((name.to_string(), uuid.clone()));
+                    .catalog()
+                    .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
+                peeks_to_drop.push((
+                    format!("relation {}", name.to_string().quoted()),
+                    uuid.clone(),
+                ));
+            } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
+                let name = self.catalog().get_cluster(pending_peek.cluster_id).name();
+                peeks_to_drop.push((format!("cluster {}", name.quoted()), uuid.clone()));
             }
         }
 
@@ -262,12 +464,10 @@ impl Coordinator {
             .chain(storage_sinks_to_drop.iter())
             .chain(tables_to_drop.iter())
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .chain(log_sources_to_drop.iter().map(|(_, id)| id))
             .cloned();
         let compute_ids_to_drop = indexes_to_drop
             .iter()
             .chain(materialized_views_to_drop.iter())
-            .chain(log_sources_to_drop.iter())
             .cloned();
 
         // Check if any Timelines would become empty, if we dropped the specified storage or
@@ -295,25 +495,8 @@ impl Coordinator {
                 Some((timeline, (empty, bundle)))
             })
             .collect();
-        timelines_to_drop.extend(
-            timeline_associations
-                .iter()
-                .filter_map(|(timeline, (is_empty, _))| is_empty.then_some(timeline))
-                .cloned(),
-        );
-        ops.extend(
-            timelines_to_drop
-                .iter()
-                .cloned()
-                .map(catalog::Op::DropTimeline),
-        );
 
-        self.validate_resource_limits(
-            &ops,
-            session
-                .map(|session| session.conn_id())
-                .unwrap_or(SYSTEM_CONN_ID),
-        )?;
+        self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
 
         // This will produce timestamps that are guaranteed to increase on each
         // call, and also never be behind the system clock. If the system clock
@@ -325,26 +508,37 @@ impl Coordinator {
         // regress or pause for 10s.
         let oracle_write_ts = self.get_local_write_ts().await.timestamp;
 
+        let Coordinator {
+            catalog,
+            controller,
+            active_conns,
+            ..
+        } = self;
+        let catalog = Arc::make_mut(catalog);
+        let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
         let TransactionResult {
             builtin_table_updates,
             audit_events,
             result,
-        } = self
-            .catalog
-            .transact(oracle_write_ts, session, ops, |catalog| {
+        } = catalog
+            .transact(oracle_write_ts, conn, ops, |catalog| {
                 f(CatalogTxn {
-                    dataflow_client: &self.controller,
+                    dataflow_client: controller,
                     catalog,
                 })
             })
             .await?;
 
+        // Append our builtin table updates, then return the notify so we can run other tasks in
+        // parallel.
+        let builtin_update_notify = self
+            .builtin_table_update()
+            .execute(builtin_table_updates)
+            .await;
+
         // No error returns are allowed after this point. Enforce this at compile time
         // by using this odd structure so we don't accidentally add a stray `?`.
         let _: () = async {
-            self.send_builtin_table_updates(builtin_table_updates, BuiltinTableUpdateSource::DDL)
-                .await;
-
             if !timeline_associations.is_empty() {
                 for (timeline, (should_be_empty, id_bundle)) in timeline_associations {
                     let became_empty =
@@ -355,38 +549,40 @@ impl Coordinator {
             if !sources_to_drop.is_empty() {
                 self.drop_sources(sources_to_drop);
             }
-            if !log_sources_to_drop.is_empty() {
-                self.drop_sources(log_sources_to_drop.into_iter().map(|(_, id)| id).collect());
-            }
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop);
+            }
+            if !webhook_sources_to_restart.is_empty() {
+                self.restart_webhook_sources(webhook_sources_to_restart);
             }
             if !storage_sinks_to_drop.is_empty() {
                 self.drop_storage_sinks(storage_sinks_to_drop);
             }
             if !subscribe_sinks_to_drop.is_empty() {
-                let (dropped_metadata, subscribe_sinks_to_drop): (Vec<_>, BTreeSet<_>) =
-                    subscribe_sinks_to_drop.into_iter().unzip();
-                for (conn_id, dropped_name) in dropped_metadata {
+                let mut sink_ids = Vec::new();
+                for (conn_id, dropped_name, sink_id) in subscribe_sinks_to_drop {
                     if let Some(conn_meta) = self.active_conns.get_mut(&conn_id) {
-                        conn_meta
-                            .drop_sinks
-                            .retain(|sink| !subscribe_sinks_to_drop.contains(sink));
+                        conn_meta.drop_sinks.retain(|id| *id != sink_id);
                         // Send notice on a best effort basis.
                         let _ = conn_meta
                             .notice_tx
                             .send(AdapterNotice::DroppedSubscribe { dropped_name });
                     }
+                    sink_ids.push(sink_id);
                 }
-                self.drop_compute_sinks(subscribe_sinks_to_drop);
+                self.drop_compute_sinks(sink_ids);
             }
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
                     if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
                         self.controller
                             .active_compute()
-                            .cancel_peeks(pending_peek.cluster_id, vec![uuid].into_iter().collect())
+                            .cancel_peek(pending_peek.cluster_id, uuid)
                             .unwrap_or_terminate("unable to cancel peek");
+                        self.retire_execution(
+                            StatementEndedExecutionReason::Canceled,
+                            pending_peek.ctx_extra,
+                        );
                         // Client may have left.
                         let _ = pending_peek.sender.send(PeekResponse::Error(format!(
                             "query could not complete because {dropped_name} was dropped"
@@ -412,6 +608,11 @@ impl Coordinator {
                     self.drop_replica(cluster_id, replica_id).await;
                 }
             }
+            if !log_indexes_to_drop.is_empty() {
+                for id in log_indexes_to_drop {
+                    self.drop_compute_read_policy(&id);
+                }
+            }
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
                     self.controller.drop_cluster(cluster_id);
@@ -423,15 +624,17 @@ impl Coordinator {
             // slot won't bubble up to the user as an error message. However, even if it
             // did (and how the code previously worked), mz has already dropped it from our
             // catalog, and so we wouldn't be able to retry anyway.
+            let ssh_tunnel_manager = self.connection_context().ssh_tunnel_manager.clone();
             if !replication_slots_to_drop.is_empty() {
                 // TODO(guswynn): see if there is more relevant info to add to this name
                 task::spawn(|| "drop_replication_slots", async move {
                     for (config, slot_name) in replication_slots_to_drop {
                         // Try to drop the replication slots, but give up after a while.
                         let _ = Retry::default()
-                            .max_duration(Duration::from_secs(30))
+                            .max_duration(Duration::from_secs(60))
                             .retry_async(|_state| async {
                                 mz_postgres_util::drop_replication_slots(
+                                    &ssh_tunnel_manager,
                                     config.clone(),
                                     &[&slot_name],
                                 )
@@ -448,15 +651,38 @@ impl Coordinator {
             if update_storage_config {
                 self.update_storage_config();
             }
+            if update_pg_timestamp_oracle_config {
+                self.update_pg_timestamp_oracle_config();
+            }
             if update_metrics_retention {
                 self.update_metrics_retention();
             }
+            if update_tracing_config {
+                self.update_tracing_config();
+            }
+            if update_secrets_caching_config {
+                self.update_secrets_caching_config();
+            }
+            if update_cluster_scheduling_config {
+                self.update_cluster_scheduling_config();
+            }
+            if update_jemalloc_profiling_config {
+                self.update_jemalloc_profiling_config().await;
+            }
+            if update_default_arrangement_merge_options {
+                self.update_default_arrangement_merge_options();
+            }
+            if update_http_config {
+                self.update_http_config();
+            }
         }
+        .instrument(info_span!("coord::catalog_transact_with::finalize"))
         .await;
 
+        let conn = conn_id.and_then(|id| self.active_conns.get(id));
         if let (Some(segment_client), Some(user_metadata)) = (
             &self.segment_client,
-            session.and_then(|s| s.user().external_metadata.as_ref()),
+            conn.and_then(|s| s.user().external_metadata.as_ref()),
         ) {
             for VersionedEvent::V1(event) in audit_events {
                 let event_type = format!(
@@ -464,8 +690,12 @@ impl Coordinator {
                     event.object_type.as_title_case(),
                     event.event_type.as_title_case()
                 );
+                // Note: when there is no ConnMeta, that means something internal to
+                // environmentd initiated the transaction, hence the default name.
+                let application_name = conn.map(|s| s.application_name()).unwrap_or("environmentd");
                 segment_client.environment_track(
-                    &self.catalog.config().environment_id,
+                    &self.catalog().config().environment_id,
+                    application_name,
                     user_metadata.user_id,
                     event_type,
                     json!({ "details": event.details.as_json() }),
@@ -473,40 +703,30 @@ impl Coordinator {
             }
         }
 
-        Ok(result)
+        // Note: It's important that we keep the function call inside macro, this way we only run
+        // the consistency checks if sort assertions are enabled.
+        mz_ore::soft_assert_eq_no_log!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
+
+        Ok((result, builtin_update_notify))
     }
 
     async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        if let Some(Some(ReplicaMetadata {
-            last_heartbeat,
-            metrics,
-            write_frontiers,
-        })) = self.transient_replica_metadata.insert(replica_id, None)
+        if let Some(Some(ReplicaMetadata { metrics })) =
+            self.transient_replica_metadata.insert(replica_id, None)
         {
             let mut updates = vec![];
-            if let Some(last_heartbeat) = last_heartbeat {
-                let retraction = self.catalog.state().pack_replica_heartbeat_update(
-                    replica_id,
-                    last_heartbeat,
-                    -1,
-                );
-                updates.push(retraction);
-            }
             if let Some(metrics) = metrics {
                 let retraction = self
-                    .catalog
+                    .catalog()
                     .state()
                     .pack_replica_metric_updates(replica_id, &metrics, -1);
                 updates.extend(retraction.into_iter());
             }
-            let retraction = self.catalog.state().pack_replica_write_frontiers_updates(
-                replica_id,
-                &write_frontiers,
-                -1,
-            );
-            updates.extend(retraction.into_iter());
-            self.send_builtin_table_updates(updates, BuiltinTableUpdateSource::Background)
-                .await;
+            self.builtin_table_update().background(updates);
         }
         self.controller
             .drop_replica(cluster_id, replica_id)
@@ -516,12 +736,19 @@ impl Coordinator {
 
     fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
+            self.active_webhooks.remove(id);
             self.drop_storage_read_policy(id);
         }
         self.controller
             .storage
             .drop_sources(sources)
             .unwrap_or_terminate("cannot fail to drop sources");
+    }
+
+    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {
+        for id in sources {
+            self.active_webhooks.remove(&id);
+        }
     }
 
     pub(crate) fn drop_compute_sinks(&mut self, sinks: impl IntoIterator<Item = ComputeSinkId>) {
@@ -542,18 +769,27 @@ impl Coordinator {
                 continue;
             }
 
-            if self.drop_compute_read_policy(&sink.global_id) {
-                by_cluster
-                    .entry(sink.cluster_id)
-                    .or_default()
-                    .push(sink.global_id);
-
-                // Mark the sink as dropped so we don't try to drop it again.
-                if let Some(sink) = self.active_subscribes.get_mut(&sink.global_id) {
-                    sink.dropping = true;
+            if !self
+                .controller
+                .compute
+                .enable_aggressive_readhold_downgrades()
+            {
+                // If aggressive downgrades are disabled, compute sinks have read policies that we
+                // must drop.
+                if !self.drop_compute_read_policy(&sink.global_id) {
+                    tracing::error!("Instructed to drop a compute sink that isn't one");
+                    continue;
                 }
-            } else {
-                tracing::error!("Instructed to drop a compute sink that isn't one");
+            }
+
+            by_cluster
+                .entry(sink.cluster_id)
+                .or_default()
+                .push(sink.global_id);
+
+            // Mark the sink as dropped so we don't try to drop it again.
+            if let Some(sink) = self.active_subscribes.get_mut(&sink.global_id) {
+                sink.dropping = true;
             }
         }
         let mut compute = self.controller.active_compute();
@@ -601,12 +837,21 @@ impl Coordinator {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
         for (cluster_id, id) in mviews {
-            if self.drop_compute_read_policy(&id) {
-                by_cluster.entry(cluster_id).or_default().push(id);
-                source_ids.push(id);
-            } else {
-                tracing::error!("Instructed to drop a materialized view that isn't one");
+            if !self
+                .controller
+                .compute
+                .enable_aggressive_readhold_downgrades()
+            {
+                // If aggressive downgrades are disabled, MV dataflows have read policies that we
+                // must drop.
+                if !self.drop_compute_read_policy(&id) {
+                    tracing::error!("Instructed to drop a materialized view that isn't one");
+                    continue;
+                }
             }
+
+            by_cluster.entry(cluster_id).or_default().push(id);
+            source_ids.push(id);
         }
 
         // Drop compute sinks.
@@ -651,85 +896,162 @@ impl Coordinator {
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    pub(crate) async fn drop_temp_items(&mut self, session: &Session) {
-        let ops = self.catalog.drop_temp_item_ops(&session.conn_id());
+    pub(crate) async fn drop_temp_items(&mut self, conn_id: &ConnectionId) {
+        let ops = self.catalog_mut().drop_temp_item_ops(conn_id);
         if ops.is_empty() {
             return;
         }
-        self.catalog_transact(Some(session), ops)
+        self.catalog_transact_conn(Some(conn_id), ops)
             .await
             .expect("unable to drop temporary items for conn_id");
     }
 
+    fn update_cluster_scheduling_config(&mut self) {
+        let config = flags::orchestrator_scheduling_config(self.catalog.system_config());
+        self.controller
+            .update_orchestrator_scheduling_config(config);
+    }
+
+    fn update_secrets_caching_config(&mut self) {
+        let config = flags::caching_config(self.catalog.system_config());
+        self.caching_secrets_reader.set_policy(config);
+    }
+
+    fn update_tracing_config(&mut self) {
+        let tracing = flags::tracing_config(self.catalog().system_config());
+        tracing.apply(&self.tracing_handle);
+    }
+
     fn update_compute_config(&mut self) {
-        let config_params = self.catalog.compute_config();
+        let config_params = flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(config_params);
     }
 
     fn update_storage_config(&mut self) {
-        let config_params = self.catalog.storage_config();
-        self.controller.storage.update_configuration(config_params);
+        let config_params = flags::storage_config(self.catalog().system_config());
+        self.controller.storage.update_parameters(config_params);
+    }
+
+    fn update_pg_timestamp_oracle_config(&mut self) {
+        let config_params = flags::pg_timstamp_oracle_config(self.catalog().system_config());
+        if let Some(config) = self.pg_timestamp_oracle_config.as_ref() {
+            config_params.apply(config)
+        }
     }
 
     fn update_metrics_retention(&mut self) {
-        let duration = self.catalog.system_config().metrics_retention();
-        let policy = ReadPolicy::lag_writes_by(Timestamp::new(
-            u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
+        let duration = self.catalog().system_config().metrics_retention();
+        let policy = ReadPolicy::lag_writes_by(
+            Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
                 tracing::error!("Absurd metrics retention duration: {duration:?}.");
                 u64::MAX
-            }),
-        ));
-        let policies = self
-            .catalog
+            })),
+            SINCE_GRANULARITY,
+        );
+        let storage_policies = self
+            .catalog()
             .entries()
-            .filter(|entry| entry.item().is_retained_metrics_relation())
+            .filter(|entry| {
+                entry.item().is_retained_metrics_object()
+                    && entry.item().is_compute_object_on_cluster().is_none()
+            })
             .map(|entry| (entry.id(), policy.clone()))
             .collect::<Vec<_>>();
-        self.update_storage_base_read_policies(policies)
+        let compute_policies = self
+            .catalog()
+            .entries()
+            .filter_map(|entry| {
+                if let (true, Some(cluster_id)) = (
+                    entry.item().is_retained_metrics_object(),
+                    entry.item().is_compute_object_on_cluster(),
+                ) {
+                    Some((cluster_id, entry.id(), policy.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        self.update_storage_base_read_policies(storage_policies);
+        self.update_compute_base_read_policies(compute_policies);
     }
 
-    async fn create_storage_export(
+    async fn update_jemalloc_profiling_config(&mut self) {
+        if self.catalog().system_config().enable_jemalloc_profiling() {
+            mz_prof::activate_jemalloc_profiling().await
+        } else {
+            mz_prof::deactivate_jemalloc_profiling().await
+        }
+    }
+
+    fn update_default_arrangement_merge_options(&mut self) {
+        let effort = self
+            .catalog()
+            .system_config()
+            .default_idle_arrangement_merge_effort();
+        self.controller
+            .compute
+            .set_default_idle_arrangement_merge_effort(effort);
+
+        let prop = self
+            .catalog()
+            .system_config()
+            .default_arrangement_exert_proportionality();
+        self.controller
+            .compute
+            .set_default_arrangement_exert_proportionality(prop);
+    }
+
+    fn update_http_config(&mut self) {
+        let webhook_request_limit = self
+            .catalog()
+            .system_config()
+            .webhook_concurrent_request_limit();
+        self.webhook_concurrency_limit
+            .set_limit(webhook_request_limit);
+    }
+
+    pub(crate) async fn create_storage_export(
         &mut self,
-        create_export_token: CreateExportToken,
+        id: GlobalId,
         sink: &Sink,
-        connection: StorageSinkConnection,
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
-        let status_id =
-            Some(self.catalog.resolve_builtin_storage_collection(
-                &crate::catalog::builtin::MZ_SINK_STATUS_HISTORY,
-            ));
+        let status_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
+        );
 
-        // The AsOf is used to determine at what time to snapshot reading from the persist collection.  This is
-        // primarily relevant when we do _not_ want to include the snapshot in the sink.  Choosing now will mean
-        // that only things going forward are exported.
-        let timeline = self
-            .get_timeline_context(sink.from)
-            .timeline()
-            .cloned()
-            .unwrap_or(Timeline::EpochMilliseconds);
-        let now = self.ensure_timeline_state(&timeline).await.oracle.read_ts();
-        let frontier = Antichain::from_elem(now);
-        let as_of = SinkAsOf {
-            frontier,
-            strict: !sink.with_snapshot,
+        // The AsOf is used to determine at what time to snapshot reading from
+        // the persist collection.  This is primarily relevant when we do _not_
+        // want to include the snapshot in the sink.
+        //
+        // We choose the smallest as_of that is legal, according to the sinked
+        // collection's since.
+        let id_bundle = crate::CollectionIdBundle {
+            storage_ids: btreeset! {sink.from},
+            compute_ids: btreemap! {},
         };
+        let as_of = self.least_valid_read(&id_bundle);
 
-        let storage_sink_from_entry = self.catalog.get_entry(&sink.from);
-        let storage_sink_desc = mz_storage_client::types::sinks::StorageSinkDesc {
+        let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
+        let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
-                .desc(&self.catalog.resolve_full_name(
+                .desc(&self.catalog().resolve_full_name(
                     storage_sink_from_entry.name(),
                     storage_sink_from_entry.conn_id(),
                 ))
                 .expect("indexes can only be built on items with descs")
                 .into_owned(),
-            connection,
-            envelope: Some(sink.envelope),
+            connection: sink
+                .connection
+                .clone()
+                .into_inline_connection(self.catalog().state()),
+            envelope: sink.envelope,
             as_of,
+            with_snapshot: sink.with_snapshot,
             status_id,
             from_storage_metadata: (),
         };
@@ -738,7 +1060,7 @@ impl Coordinator {
             .controller
             .storage
             .create_exports(vec![(
-                create_export_token,
+                id,
                 ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: sink.cluster_id,
@@ -747,69 +1069,15 @@ impl Coordinator {
             .await?)
     }
 
-    pub(crate) async fn handle_sink_connection_ready(
-        &mut self,
-        id: GlobalId,
-        oid: u32,
-        connection: StorageSinkConnection,
-        create_export_token: CreateExportToken,
-        session: Option<&Session>,
-    ) -> Result<(), AdapterError> {
-        // Update catalog entry with sink connection.
-        let entry = self.catalog.get_entry(&id);
-        let name = entry.name().clone();
-        let sink = match entry.item() {
-            CatalogItem::Sink(sink) => sink,
-            _ => unreachable!(),
-        };
-        let sink = catalog::Sink {
-            connection: StorageSinkConnectionState::Ready(connection.clone()),
-            ..sink.clone()
-        };
-
-        // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
-        let mut ops = vec![catalog::Op::DropItem(id)];
-
-        // Speculatively create the storage export before confirming in the catalog.  We chose this order of operations
-        // for the following reasons:
-        // - We want to avoid ever putting into the catalog a sink in `StorageSinkConnectionState::Ready`
-        //   if we're not able to actually create the sink for some reason
-        // - Dropping the sink will either succeed (or panic) so it's easier to reason about rolling that change back
-        //   than it is rolling back a catalog change.
-        match self
-            .create_storage_export(create_export_token, &sink, connection)
-            .await
-        {
-            Ok(()) => {
-                ops.push(catalog::Op::CreateItem {
-                    id,
-                    oid,
-                    name,
-                    item: CatalogItem::Sink(sink.clone()),
-                });
-                match self.catalog_transact(session, ops).await {
-                    Ok(()) => (),
-                    catalog_err @ Err(_) => {
-                        let () = self.drop_storage_sinks(vec![id]);
-                        catalog_err?
-                    }
-                }
-            }
-            storage_err @ Err(_) => match self.catalog_transact(session, ops).await {
-                Ok(()) => storage_err?,
-                catalog_err @ Err(_) => catalog_err?,
-            },
-        };
-        Ok(())
-    }
-
     /// Validate all resource limits in a catalog transaction and return an error if that limit is
     /// exceeded.
     fn validate_resource_limits(
         &self,
         ops: &Vec<catalog::Op>,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
     ) -> Result<(), AdapterError> {
+        let mut new_kafka_connections = 0;
+        let mut new_postgres_connections = 0;
         let mut new_aws_privatelink_connections = 0;
         let mut new_tables = 0;
         let mut new_sources = 0;
@@ -817,6 +1085,7 @@ impl Coordinator {
         let mut new_materialized_views = 0;
         let mut new_clusters = 0;
         let mut new_replicas_per_cluster = BTreeMap::new();
+        let mut new_credit_consumption_rate = Numeric::zero();
         let mut new_databases = 0;
         let mut new_schemas_per_database = BTreeMap::new();
         let mut new_objects_per_schema = BTreeMap::new();
@@ -828,7 +1097,6 @@ impl Coordinator {
                     new_databases += 1;
                 }
                 Op::CreateSchema { database_id, .. } => {
-                    // Users can't create schemas in the ambient database.
                     if let ResolvedDatabaseSpecifier::Id(database_id) = database_id {
                         *new_schemas_per_database.entry(database_id).or_insert(0) += 1;
                     }
@@ -836,20 +1104,25 @@ impl Coordinator {
                 Op::CreateRole { .. } => {
                     new_roles += 1;
                 }
-                Op::CreateCluster {
-                    linked_object_id, ..
-                } => {
-                    // Linked compute clusters don't count against the limit,
-                    // since we have a separate sources and sinks limit.
-                    //
-                    // TODO(benesch): remove the `max_sources` and `max_sinks`
-                    // limit, and set a higher max cluster limit?
-                    if linked_object_id.is_none() {
-                        new_clusters += 1;
-                    }
+                Op::CreateCluster { .. } => {
+                    // TODO(benesch): having deprecated linked clusters, remove
+                    // the `max_sources` and `max_sinks` limit, and set a higher
+                    // max cluster limit?
+                    new_clusters += 1;
                 }
-                Op::CreateClusterReplica { cluster_id, .. } => {
+                Op::CreateClusterReplica {
+                    cluster_id, config, ..
+                } => {
                     *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
+                    if let ReplicaLocation::Managed(location) = &config.location {
+                        let replica_allocation = self
+                            .catalog()
+                            .cluster_replica_sizes()
+                            .0
+                            .get(location.size_for_billing())
+                            .expect("location size is validated against the cluster replica sizes");
+                        new_credit_consumption_rate += replica_allocation.credits_per_hour
+                    }
                 }
                 Op::CreateItem { name, item, .. } => {
                     *new_objects_per_schema
@@ -859,23 +1132,26 @@ impl Coordinator {
                         ))
                         .or_insert(0) += 1;
                     match item {
-                        CatalogItem::Connection(connection) => match connection.connection {
-                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                _,
-                            ) => {
-                                new_aws_privatelink_connections += 1;
+                        CatalogItem::Connection(connection) => {
+                            use mz_storage_types::connections::Connection;
+                            match connection.connection {
+                                Connection::Kafka(_) => new_kafka_connections += 1,
+                                Connection::Postgres(_) => new_postgres_connections += 1,
+                                Connection::AwsPrivatelink(_) => {
+                                    new_aws_privatelink_connections += 1
+                                }
+                                // TODO(roshan): Implement limits for MySQL
+                                Connection::Csr(_)
+                                | Connection::Ssh(_)
+                                | Connection::Aws(_)
+                                | Connection::MySql(_) => {}
                             }
-                            _ => (),
-                        },
+                        }
                         CatalogItem::Table(_) => {
                             new_tables += 1;
                         }
                         CatalogItem::Source(source) => {
-                            if source.is_external() {
-                                // Only sources that ingest data from an external system count
-                                // towards resource limits.
-                                new_sources += 1
-                            }
+                            new_sources += source.user_controllable_persist_shard_count()
                         }
                         CatalogItem::Sink(_) => new_sinks += 1,
                         CatalogItem::MaterializedView(_) => {
@@ -891,126 +1167,198 @@ impl Coordinator {
                         | CatalogItem::Func(_) => {}
                     }
                 }
-                Op::DropDatabase { .. } => {
-                    new_databases -= 1;
-                }
-                Op::DropSchema { database_id, .. } => {
-                    *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
-                }
-                Op::DropRole { .. } => {
-                    new_roles -= 1;
-                }
-                Op::DropCluster { .. } => {
-                    new_clusters -= 1;
-                }
-                Op::DropClusterReplica { cluster_id, .. } => {
-                    *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
-                }
-                Op::DropItem(id) => {
-                    let entry = self.catalog.get_entry(id);
-                    *new_objects_per_schema
-                        .entry((
-                            entry.name().qualifiers.database_spec.clone(),
-                            entry.name().qualifiers.schema_spec.clone(),
-                        ))
-                        .or_insert(0) -= 1;
-                    match entry.item() {
-                        CatalogItem::Connection(connection) => match connection.connection {
-                            mz_storage_client::types::connections::Connection::AwsPrivatelink(
-                                _,
-                            ) => {
-                                new_aws_privatelink_connections -= 1;
-                            }
-                            _ => (),
-                        },
-                        CatalogItem::Table(_) => {
-                            new_tables -= 1;
-                        }
-                        CatalogItem::Source(source) => {
-                            if source.is_external() {
-                                // Only sources that ingest data from an external system count
-                                // towards resource limits.
-                                new_sources -= 1;
-                            }
-                        }
-                        CatalogItem::Sink(_) => new_sinks -= 1,
-                        CatalogItem::MaterializedView(_) => {
-                            new_materialized_views -= 1;
-                        }
-                        CatalogItem::Secret(_) => {
-                            new_secrets -= 1;
-                        }
-                        CatalogItem::Log(_)
-                        | CatalogItem::View(_)
-                        | CatalogItem::Index(_)
-                        | CatalogItem::Type(_)
-                        | CatalogItem::Func(_) => {}
+                Op::DropObject(id) => match id {
+                    ObjectId::Cluster(_) => {
+                        new_clusters -= 1;
                     }
-                }
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                        *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
+                        let cluster = self.catalog().get_cluster_replica(*cluster_id, *replica_id);
+                        if let ReplicaLocation::Managed(location) = &cluster.config.location {
+                            let replica_allocation = self
+                                .catalog()
+                                .cluster_replica_sizes()
+                                .0
+                                .get(location.size_for_billing())
+                                .expect(
+                                    "location size is validated against the cluster replica sizes",
+                                );
+                            new_credit_consumption_rate -= replica_allocation.credits_per_hour
+                        }
+                    }
+                    ObjectId::Database(_) => {
+                        new_databases -= 1;
+                    }
+                    ObjectId::Schema((database_spec, _)) => {
+                        if let ResolvedDatabaseSpecifier::Id(database_id) = database_spec {
+                            *new_schemas_per_database.entry(database_id).or_insert(0) -= 1;
+                        }
+                    }
+                    ObjectId::Role(_) => {
+                        new_roles -= 1;
+                    }
+                    ObjectId::Item(id) => {
+                        let entry = self.catalog().get_entry(id);
+                        *new_objects_per_schema
+                            .entry((
+                                entry.name().qualifiers.database_spec.clone(),
+                                entry.name().qualifiers.schema_spec.clone(),
+                            ))
+                            .or_insert(0) -= 1;
+                        match entry.item() {
+                            CatalogItem::Connection(connection) => match connection.connection {
+                                mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
+                                    new_aws_privatelink_connections -= 1;
+                                }
+                                _ => (),
+                            },
+                            CatalogItem::Table(_) => {
+                                new_tables -= 1;
+                            }
+                            CatalogItem::Source(source) => {
+                                new_sources -= source.user_controllable_persist_shard_count()
+                            }
+                            CatalogItem::Sink(_) => new_sinks -= 1,
+                            CatalogItem::MaterializedView(_) => {
+                                new_materialized_views -= 1;
+                            }
+                            CatalogItem::Secret(_) => {
+                                new_secrets -= 1;
+                            }
+                            CatalogItem::Log(_)
+                            | CatalogItem::View(_)
+                            | CatalogItem::Index(_)
+                            | CatalogItem::Type(_)
+                            | CatalogItem::Func(_) => {}
+                        }
+                    }
+                },
+                Op::UpdateItem {
+                    name: _,
+                    id,
+                    to_item,
+                } => match to_item {
+                    CatalogItem::Source(source) => {
+                        let current_source = self
+                            .catalog()
+                            .get_entry(id)
+                            .source()
+                            .expect("source update is for source item");
+
+                        new_sources += source.user_controllable_persist_shard_count()
+                            - current_source.user_controllable_persist_shard_count();
+                    }
+                    CatalogItem::Connection(_)
+                    | CatalogItem::Table(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::MaterializedView(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Log(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_) => {}
+                },
                 Op::AlterRole { .. }
-                | Op::AlterSink { .. }
-                | Op::AlterSource { .. }
-                | Op::DropTimeline(_)
+                | Op::AlterSetCluster { .. }
+                | Op::UpdatePrivilege { .. }
+                | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
+                | Op::RenameCluster { .. }
+                | Op::RenameClusterReplica { .. }
                 | Op::RenameItem { .. }
+                | Op::RenameSchema { .. }
+                | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
+                | Op::UpdateClusterConfig { .. }
                 | Op::UpdateClusterReplicaStatus { .. }
                 | Op::UpdateStorageUsage { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
-                | Op::UpdateItem { .. }
-                | Op::UpdateRotatedKeys { .. } => {}
+                | Op::UpdateRotatedKeys { .. }
+                | Op::Comment { .. } => {}
             }
         }
 
+        let mut current_aws_privatelink_connections = 0;
+        let mut current_postgres_connections = 0;
+        let mut current_kafka_connections = 0;
+        for c in self.catalog().user_connections() {
+            let connection = c
+                .connection()
+                .expect("`user_connections()` only returns connection objects");
+
+            use mz_storage_types::connections::Connection;
+            match connection.connection {
+                Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
+                Connection::Postgres(_) => current_postgres_connections += 1,
+                Connection::Kafka(_) => current_kafka_connections += 1,
+                // TODO(roshan): Implement limits for MySQL
+                Connection::Csr(_)
+                | Connection::Ssh(_)
+                | Connection::Aws(_)
+                | Connection::MySql(_) => {}
+            }
+        }
         self.validate_resource_limit(
-            self.catalog
-                .user_connections()
-                .filter(|c| {
-                    matches!(
-                        c.connection()
-                            .expect("`user_connections()` only returns connection objects")
-                            .connection,
-                        mz_storage_client::types::connections::Connection::AwsPrivatelink(_),
-                    )
-                })
-                .count(),
+            current_kafka_connections,
+            new_kafka_connections,
+            SystemVars::max_kafka_connections,
+            "Kafka Connection",
+            MAX_KAFKA_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_postgres_connections,
+            new_postgres_connections,
+            SystemVars::max_postgres_connections,
+            "PostgreSQL Connection",
+            MAX_POSTGRES_CONNECTIONS.name(),
+        )?;
+        self.validate_resource_limit(
+            current_aws_privatelink_connections,
             new_aws_privatelink_connections,
             SystemVars::max_aws_privatelink_connections,
             "AWS PrivateLink Connection",
+            MAX_AWS_PRIVATELINK_CONNECTIONS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog.user_tables().count(),
+            self.catalog().user_tables().count(),
             new_tables,
             SystemVars::max_tables,
-            "Table",
+            "table",
+            MAX_TABLES.name(),
         )?;
-        // Only sources that ingest data from an external system count
-        // towards resource limits.
-        let current_sources = self
-            .catalog
+
+        let current_sources: usize = self
+            .catalog()
             .user_sources()
             .filter_map(|source| source.source())
-            .filter(|source| source.is_external())
-            .count();
+            .map(|source| source.user_controllable_persist_shard_count())
+            .sum::<i64>()
+            .try_into()
+            .expect("non-negative sum of sources");
+
         self.validate_resource_limit(
             current_sources,
             new_sources,
             SystemVars::max_sources,
-            "Source",
+            "source",
+            MAX_SOURCES.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog.user_sinks().count(),
+            self.catalog().user_sinks().count(),
             new_sinks,
             SystemVars::max_sinks,
-            "Sink",
+            "sink",
+            MAX_SINKS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog.user_materialized_views().count(),
+            self.catalog().user_materialized_views().count(),
             new_materialized_views,
             SystemVars::max_materialized_views,
-            "Materialized view",
+            "materialized view",
+            MAX_MATERIALIZED_VIEWS.name(),
         )?;
         self.validate_resource_limit(
             // Linked compute clusters don't count against the limit, since
@@ -1018,100 +1366,171 @@ impl Coordinator {
             //
             // TODO(benesch): remove the `max_sources` and `max_sinks` limit,
             // and set a higher max cluster limit?
-            self.catalog
-                .user_clusters()
-                .filter(|c| c.linked_object_id.is_none())
-                .count(),
+            self.catalog().user_clusters().count(),
             new_clusters,
             SystemVars::max_clusters,
-            "Cluster",
+            "cluster",
+            MAX_CLUSTERS.name(),
         )?;
         for (cluster_id, new_replicas) in new_replicas_per_cluster {
             // It's possible that the cluster hasn't been created yet.
             let current_amount = self
-                .catalog
+                .catalog()
                 .try_get_cluster(cluster_id)
-                .map(|instance| instance.replicas_by_id.len())
+                .map(|instance| instance.replicas().count())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_amount,
                 new_replicas,
                 SystemVars::max_replicas_per_cluster,
-                "Replicas per cluster",
+                "cluster replica",
+                MAX_REPLICAS_PER_CLUSTER.name(),
             )?;
         }
+        let current_credit_consumption_rate = self
+            .catalog()
+            .user_cluster_replicas()
+            .filter_map(|replica| match &replica.config.location {
+                ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
+                ReplicaLocation::Unmanaged(_) => None,
+            })
+            .map(|size| {
+                self.catalog()
+                    .cluster_replica_sizes()
+                    .0
+                    .get(size)
+                    .expect("location size is validated against the cluster replica sizes")
+                    .credits_per_hour
+            })
+            .sum();
+        self.validate_resource_limit_numeric(
+            current_credit_consumption_rate,
+            new_credit_consumption_rate,
+            SystemVars::max_credit_consumption_rate,
+            "cluster replica",
+            MAX_CREDIT_CONSUMPTION_RATE.name(),
+        )?;
         self.validate_resource_limit(
-            self.catalog.databases().count(),
+            self.catalog().databases().count(),
             new_databases,
             SystemVars::max_databases,
-            "Database",
+            "database",
+            MAX_DATABASES.name(),
         )?;
         for (database_id, new_schemas) in new_schemas_per_database {
             self.validate_resource_limit(
-                self.catalog.get_database(database_id).schemas_by_id.len(),
+                self.catalog().get_database(database_id).schemas_by_id.len(),
                 new_schemas,
                 SystemVars::max_schemas_per_database,
-                "Schemas per database",
+                "schema",
+                MAX_SCHEMAS_PER_DATABASE.name(),
             )?;
         }
         for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
             self.validate_resource_limit(
-                self.catalog
+                self.catalog()
                     .get_schema(&database_spec, &schema_spec, conn_id)
                     .items
                     .len(),
                 new_objects,
                 SystemVars::max_objects_per_schema,
-                "Objects per schema",
+                "object",
+                MAX_OBJECTS_PER_SCHEMA.name(),
             )?;
         }
         self.validate_resource_limit(
-            self.catalog.user_secrets().count(),
+            self.catalog().user_secrets().count(),
             new_secrets,
             SystemVars::max_secrets,
-            "Secret",
+            "secret",
+            MAX_SECRETS.name(),
         )?;
         self.validate_resource_limit(
-            self.catalog.user_roles().count(),
+            self.catalog().user_roles().count(),
             new_roles,
             SystemVars::max_roles,
-            "Role",
+            "role",
+            MAX_ROLES.name(),
         )?;
         Ok(())
     }
 
     /// Validate a specific type of resource limit and return an error if that limit is exceeded.
-    fn validate_resource_limit<F>(
+    pub(crate) fn validate_resource_limit<F>(
         &self,
         current_amount: usize,
-        new_instances: i32,
+        new_instances: i64,
         resource_limit: F,
         resource_type: &str,
+        limit_name: &str,
     ) -> Result<(), AdapterError>
     where
         F: Fn(&SystemVars) -> u32,
     {
-        let limit = resource_limit(self.catalog.system_config());
-        let exceeds_limit = match (u32::try_from(current_amount), u32::try_from(new_instances)) {
-            // 0 new instances are always ok.
-            (_, Ok(new_instances)) if new_instances == 0 => false,
-            // negative instances are always ok.
-            (_, Err(_)) => false,
-            // more than u32 for the current amount is too much.
-            (Err(_), _) => true,
-            (Ok(current_amount), Ok(new_instances)) => {
-                match current_amount.checked_add(new_instances) {
-                    Some(new_amount) => new_amount > limit,
-                    None => true,
-                }
-            }
+        if new_instances <= 0 {
+            return Ok(());
+        }
+
+        let limit: i64 = resource_limit(self.catalog().system_config()).into();
+        let current_amount: Option<i64> = current_amount.try_into().ok();
+        let desired =
+            current_amount.and_then(|current_amount| current_amount.checked_add(new_instances));
+
+        let exceeds_limit = if let Some(desired) = desired {
+            desired > limit
+        } else {
+            true
         };
+
+        let desired = desired
+            .map(|desired| desired.to_string())
+            .unwrap_or_else(|| format!("more than {}", i64::MAX));
+        let current = current_amount
+            .map(|current| current.to_string())
+            .unwrap_or_else(|| format!("more than {}", i64::MAX));
         if exceeds_limit {
             Err(AdapterError::ResourceExhaustion {
                 resource_type: resource_type.to_string(),
-                limit,
-                current_amount,
-                new_instances,
+                limit_name: limit_name.to_string(),
+                desired,
+                limit: limit.to_string(),
+                current,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Validate a specific type of float resource limit and return an error if that limit is exceeded.
+    ///
+    /// This is very similar to [`Self::validate_resource_limit`] but for numerics.
+    fn validate_resource_limit_numeric<F>(
+        &self,
+        current_amount: Numeric,
+        new_amount: Numeric,
+        resource_limit: F,
+        resource_type: &str,
+        limit_name: &str,
+    ) -> Result<(), AdapterError>
+    where
+        F: Fn(&SystemVars) -> Numeric,
+    {
+        if new_amount <= Numeric::zero() {
+            return Ok(());
+        }
+
+        let limit = resource_limit(self.catalog().system_config());
+        // Floats will overflow to infinity instead of panicking, which has the correct comparison
+        // semantics.
+        // NaN should be impossible here since both values are positive.
+        let desired = current_amount + new_amount;
+        if desired > limit {
+            Err(AdapterError::ResourceExhaustion {
+                resource_type: resource_type.to_string(),
+                limit_name: limit_name.to_string(),
+                desired: desired.to_string(),
+                limit: limit.to_string(),
+                current: current_amount.to_string(),
             })
         } else {
             Ok(())

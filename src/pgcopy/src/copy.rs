@@ -11,9 +11,7 @@ use std::borrow::Cow;
 use std::io;
 
 use bytes::BytesMut;
-use csv::ByteRecord;
-use csv::ReaderBuilder;
-
+use csv::{ByteRecord, ReaderBuilder};
 use mz_repr::{Datum, RelationType, Row, RowArena};
 
 static END_OF_COPY_MARKER: &[u8] = b"\\.";
@@ -315,11 +313,23 @@ impl<'a> CopyTextFormatParser<'a> {
         }
     }
 
+    /// Error if more than `num_columns` values in `parser`.
     pub fn iter_raw(self, num_columns: usize) -> RawIterator<'a> {
         RawIterator {
             parser: self,
             current_column: 0,
             num_columns,
+            truncate: false,
+        }
+    }
+
+    /// Return no more than `num_columns` values from `parser`.
+    pub fn iter_raw_truncating(self, num_columns: usize) -> RawIterator<'a> {
+        RawIterator {
+            parser: self,
+            current_column: 0,
+            num_columns,
+            truncate: true,
         }
     }
 }
@@ -328,6 +338,7 @@ pub struct RawIterator<'a> {
     parser: CopyTextFormatParser<'a>,
     current_column: usize,
     num_columns: usize,
+    truncate: bool,
 }
 
 impl<'a> RawIterator<'a> {
@@ -337,11 +348,13 @@ impl<'a> RawIterator<'a> {
         }
 
         if self.current_column == self.num_columns {
-            if let Some(err) = self.parser.expect_end_of_line().err() {
-                return Some(Err(err));
-            } else {
-                return None;
+            if !self.truncate {
+                if let Some(err) = self.parser.expect_end_of_line().err() {
+                    return Some(Err(err));
+                }
             }
+
+            return None;
         }
 
         if self.current_column > 0 {
@@ -355,7 +368,7 @@ impl<'a> RawIterator<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CopyFormatParams<'a> {
     Text(CopyTextFormatParams<'a>),
     Csv(CopyCsvFormatParams<'a>),
@@ -372,7 +385,7 @@ pub fn decode_copy_format<'a>(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CopyTextFormatParams<'a> {
     pub null: Cow<'a, str>,
     pub delimiter: Cow<'a, str>,
@@ -414,13 +427,54 @@ pub fn decode_copy_format_text(
     Ok(rows)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct CopyCsvFormatParams<'a> {
     pub delimiter: u8,
     pub quote: u8,
     pub escape: u8,
     pub header: bool,
     pub null: Cow<'a, str>,
+}
+
+impl<'a> CopyCsvFormatParams<'a> {
+    pub fn try_new(
+        delimiter: Option<u8>,
+        quote: Option<u8>,
+        escape: Option<u8>,
+        header: Option<bool>,
+        null: Option<String>,
+    ) -> Result<CopyCsvFormatParams<'a>, String> {
+        let mut params = CopyCsvFormatParams {
+            delimiter: b',',
+            quote: b'"',
+            escape: b'"',
+            header: false,
+            null: Cow::from(""),
+        };
+
+        if let Some(delimiter) = delimiter {
+            params.delimiter = delimiter;
+        }
+        if let Some(quote) = quote {
+            params.quote = quote;
+            // escape defaults to the value provided for quote
+            params.escape = quote;
+        }
+        if let Some(escape) = escape {
+            params.escape = escape;
+        }
+        if let Some(header) = header {
+            params.header = header;
+        }
+        if let Some(null) = null {
+            params.null = Cow::from(null);
+        }
+
+        if params.quote == params.delimiter {
+            return Err("COPY delimiter and quote must be different".to_string());
+        }
+        Ok(params)
+    }
 }
 
 pub fn decode_copy_format_csv(
@@ -500,7 +554,7 @@ pub fn decode_copy_format_csv(
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_copy_format_text_parser() {
         let text = "\t\\nt e\t\\N\t\n\\x60\\xA\\x7D\\x4a\n\\44\\044\\123".as_bytes();
         let mut parser = CopyTextFormatParser::new(text, "\t", "\\N");
@@ -548,7 +602,7 @@ mod tests {
         assert!(parser.is_eof());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_copy_format_text_empty_null_string() {
         let text = "\t\n10\t20\n30\t\n40\t".as_bytes();
         let expect = vec![
@@ -585,7 +639,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_copy_format_text_parser_escapes() {
         struct TestCase {
             input: &'static str,
@@ -660,5 +714,47 @@ mod tests {
             );
             assert!(parser.is_eof());
         }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_csv_format_params() {
+        assert_eq!(
+            CopyCsvFormatParams::try_new(Some(b't'), Some(b'q'), None, None, None),
+            Ok(CopyCsvFormatParams {
+                delimiter: b't',
+                quote: b'q',
+                escape: b'q',
+                header: false,
+                null: Cow::from(""),
+            })
+        );
+
+        assert_eq!(
+            CopyCsvFormatParams::try_new(
+                Some(b't'),
+                Some(b'q'),
+                Some(b'e'),
+                Some(true),
+                Some("null".to_string())
+            ),
+            Ok(CopyCsvFormatParams {
+                delimiter: b't',
+                quote: b'q',
+                escape: b'e',
+                header: true,
+                null: Cow::from("null"),
+            })
+        );
+
+        assert_eq!(
+            CopyCsvFormatParams::try_new(
+                None,
+                Some(b','),
+                Some(b'e'),
+                Some(true),
+                Some("null".to_string())
+            ),
+            Err("COPY delimiter and quote must be different".to_string())
+        );
     }
 }

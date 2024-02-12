@@ -25,90 +25,30 @@ dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_
 conn = psycopg2.connect(dsn)
 ```
 
-## Stream
-
-To take full advantage of incrementally updated materialized views from a Python application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
-
-To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
-
-```python
-#!/usr/bin/env python3
-
-import psycopg2
-import sys
-
-dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
-conn = psycopg2.connect(dsn)
-
-with conn.cursor() as cur:
-    cur.execute("DECLARE c CURSOR FOR SUBSCRIBE my_view")
-    while True:
-        cur.execute("FETCH ALL c")
-        for row in cur:
-            print(row)
-```
-
-The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
-
-```python
-    ...
-(Decimal('1648737001490'), 1, 'my_value_1')
-(Decimal('1648737001490'), 1, 'my_value_2')
-(Decimal('1648737001490'), 1, 'my_value_3')
-(Decimal('1648737065479'), -1, 'my_value_3')
-(Decimal('1648737065479'), 1, 'my_value_4')
-    ...
-```
-
-A `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
-
-### Streaming with `psycopg3`
-
-Although `psycopg3` can function identically as the `psycopg2` example above,
-it provides a `stream` feature where rows are not buffered, which allows you to use `SUBSCRIBE` directly:
-
-```python
-#!/usr/bin/env python3
-
-import psycopg
-import sys
-
-dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
-conn = psycopg.connect(dsn)
-
-with conn.cursor() as cur:
-    for row in cur.stream("SUBSCRIBE t"):
-        print(row)
-```
-
-## Query
-
-Querying Materialize is identical to querying a PostgreSQL database: Python executes the query, and Materialize returns the state of the view, source, or table at that point in time.
-
-Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
-
-To query a view `my_view` with a `SELECT` statement:
-
-```python
-#!/usr/bin/env python3
-
-import psycopg2
-import sys
-
-dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
-conn = psycopg2.connect(dsn)
-
-with conn.cursor() as cur:
-    cur.execute("SELECT * FROM my_view;")
-    for row in cur:
-        print(row)
-```
-
-For more details, see the [Psycopg](https://www.psycopg.org/docs/usage.html) documentation.
-
-## Insert data into tables
+## Create tables
 
 Most data in Materialize will stream in via an external system, but a [table](/sql/create-table/) can be helpful for supplementary data. For example, use a table to join slower-moving reference or lookup data with a stream.
+
+To create a table named `countries` in Materialize:
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg2.connect(dsn)
+
+with conn.cursor() as cur:
+    cur.execute("CREATE TABLE IF NOT EXISTS countries (code CHAR(2), name TEXT);")
+
+with conn.cursor() as cur:
+    cur.execute("SHOW TABLES")
+    print(cur.fetchone())
+```
+
+## Insert data into tables
 
 **Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize.
 
@@ -135,6 +75,31 @@ with conn.cursor() as cur:
 
 conn.close()
 ```
+
+## Query
+
+Querying Materialize is identical to querying a PostgreSQL database: Python executes the query, and Materialize returns the state of the view, source, or table at that point in time.
+
+Because Materialize keeps results incrementally updated, response times are much faster than traditional database queries, and polling (repeatedly querying) a view doesn't impact performance.
+
+To query the `countries` table using a `SELECT` statement:
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg2.connect(dsn)
+
+with conn.cursor() as cur:
+    cur.execute("SELECT * FROM countries;")
+    for row in cur:
+        print(row)
+```
+
+For more details, see the [Psycopg](https://www.psycopg.org/docs/usage.html) documentation.
 
 ## Manage sources, views, and indexes
 
@@ -175,18 +140,82 @@ conn = psycopg2.connect(dsn)
 conn.autocommit = True
 
 with conn.cursor() as cur:
-    cur.execute("CREATE VIEW market_orders_2 AS " \
-            "SELECT " \
-                "val->>'symbol' AS symbol, " \
-                "(val->'bid_price')::float AS bid_price " \
-            "FROM (SELECT text::jsonb AS val FROM market_orders_raw_2)")
+    cur.execute("CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS " \
+            "SELECT sum(counter)" \
+            "FROM counter;")
 
 with conn.cursor() as cur:
     cur.execute("SHOW VIEWS")
     print(cur.fetchone())
 ```
 
-For more information, see [`CREATE VIEW`](/sql/create-view/).
+For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
+
+## Stream
+
+To take full advantage of incrementally updated materialized views from a Python application, instead of [querying](#query) Materialize for the state of a view at a point in time, use a [`SUBSCRIBE` statement](/sql/subscribe/) to request a stream of updates as the view changes.
+
+To read a stream of updates from an existing materialized view, open a long-lived transaction with `BEGIN` and use [`SUBSCRIBE` with `FETCH`](/sql/subscribe/#subscribing-with-fetch) to repeatedly fetch all changes to the view since the last query:
+
+```python
+#!/usr/bin/env python3
+
+import psycopg2
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg2.connect(dsn)
+
+with conn.cursor() as cur:
+    cur.execute("DECLARE c CURSOR FOR SUBSCRIBE counter_sum")
+    while True:
+        cur.execute("FETCH ALL c")
+        for row in cur:
+            print(row)
+```
+
+The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
+
+```python
+    ...
+(Decimal('1648737001490'), 1, 'my_value_1')
+(Decimal('1648737001490'), 1, 'my_value_2')
+(Decimal('1648737001490'), 1, 'my_value_3')
+(Decimal('1648737065479'), -1, 'my_value_3')
+(Decimal('1648737065479'), 1, 'my_value_4')
+    ...
+```
+
+A `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
+
+### Streaming with `psycopg3`
+
+Although `psycopg3` can function identically as the `psycopg2` example above,
+it provides a `stream` feature where rows are not buffered, which allows you to use `SUBSCRIBE` directly:
+
+```python
+#!/usr/bin/env python3
+
+import psycopg
+import sys
+
+dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
+conn = psycopg.connect(dsn)
+
+with conn.cursor() as cur:
+    for row in cur.stream("SUBSCRIBE counter_sum"):
+        print(row)
+```
+
+## Clean up
+
+To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
+
+```sql
+DROP MATERIALIZED VIEW IF EXISTS counter_sum;
+DROP SOURCE IF EXISTS counter;
+DROP TABLE IF EXISTS countries;
+```
 
 ## Python ORMs
 

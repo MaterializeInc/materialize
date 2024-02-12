@@ -1,0 +1,49 @@
+[package]
+name = "mz-prof-http"
+description = "Route HTTP requests to various profiling functions"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
+axum = { version = "0.6.20", features = ["headers"] }
+bytesize = "1.1.0"
+cfg-if = "1.0.0"
+headers = "0.3.8"
+http = "0.2.8"
+include_dir = "0.7.3"
+once_cell = "1.16.0"
+mime = "0.3.16"
+mz-build-info = { path = "../build-info", default-features = false }
+mz-http-util = { path = "../http-util", default-features = false }
+mz-ore = { path = "../ore", default-features = false }
+mz-prof = { path = "../prof", default-features = false }
+serde = { version = "1.0.152", features = ["derive"] }
+tokio = { version = "1.32.0", features = ["time"] }
+tracing = { version = "0.1.37", optional = true }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[build-dependencies]
+anyhow = "1.0.66"
+mz-npm = { path = "../npm", default-features = false }
+
+[features]
+default = ["workspace-hack"]
+# When enabled, static assets for the web UI are loaded from disk on every HTTP
+# request rather than compiled into the binary. This vastly speeds up the
+# iteration cycle when developing the web UI.
+#
+# WARNING: For development use only! When enabled, may allow unrestricted read
+# access to the file system.
+dev-web = ["tracing"]
+# Whether to enable profiling features that depend on jemalloc.
+jemalloc = ["mz-prof/jemalloc"]
+
+[package.metadata.cargo-udeps.ignore]
+# "bytesize" not used on linux
+normal = ["bytesize", "workspace-hack"]

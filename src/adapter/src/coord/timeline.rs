@@ -9,37 +9,44 @@
 
 //! A mechanism to ensure that a sequence of writes and reads proceed correctly through timestamps.
 
-use std::cmp;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
-use std::thread;
-use std::time::Duration;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::error;
-
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::{CatalogItem, MaterializedView, View};
+use mz_compute_types::ComputeInstanceId;
+use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
-use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
-use mz_storage_client::types::sources::Timeline;
+use mz_sql::session::vars::TimestampOracleImpl;
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
+use mz_timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
+use mz_timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle, WriteTimestamp};
+use timely::progress::Timestamp as TimelyTimestamp;
+use tracing::{debug, error, info, instrument, Instrument};
 
-use crate::catalog::CatalogItem;
-use crate::client::ConnectionId;
+use crate::coord::catalog_oracle::{
+    self, CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
+    TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
+};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
-use crate::coord::{timeline, Coordinator};
-use crate::util::ResultExt;
+use crate::coord::timestamp_selection::TimestampProvider;
+use crate::coord::Coordinator;
 use crate::AdapterError;
 
-/// An enum describing the timeline context of a query.
+/// An enum describing whether or not a query belongs to a timeline and whether the query can be
+/// affected by the timestamp at which it executes.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum TimelineContext {
     /// Can only ever belong to a single specific timeline. The answer will depend on a timestamp
@@ -67,22 +74,13 @@ impl TimelineContext {
     }
 }
 
-/// Timestamps used by writes in an Append command.
-#[derive(Debug)]
-pub struct WriteTimestamp<T = mz_repr::Timestamp> {
-    /// Timestamp that the write will take place on.
-    pub(crate) timestamp: T,
-    /// Timestamp to advance the appended table to.
-    pub(crate) advance_to: T,
-}
-
 /// Global state for a single timeline.
 ///
 /// For each timeline we maintain a timestamp oracle, which is responsible for
 /// providing read (and sometimes write) timestamps, and a set of read holds which
 /// guarantee that those read timestamps are valid.
 pub(crate) struct TimelineState<T> {
-    pub(crate) oracle: DurableTimestampOracle<T>,
+    pub(crate) oracle: Box<dyn TimestampOracle<T>>,
     pub(crate) read_holds: ReadHolds<T>,
 }
 
@@ -94,329 +92,83 @@ impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
     }
 }
 
-/// A timeline can perform reads and writes. Reads happen at the read timestamp
-/// and writes happen at the write timestamp. After the write has completed, but before a response
-/// is sent, the read timestamp must be updated to a value greater than or equal to `self.write_ts`.
-struct TimestampOracleState<T> {
-    read_ts: T,
-    write_ts: T,
-}
-
-/// A type that provides write and read timestamps, reads observe exactly their preceding writes..
-///
-/// Specifically, all read timestamps will be greater or equal to all previously reported completed
-/// write timestamps, and strictly less than all subsequently emitted write timestamps.
-struct TimestampOracle<T> {
-    state: TimestampOracleState<T>,
-    next: Box<dyn Fn() -> T>,
-}
-
-impl<T: TimestampManipulation> TimestampOracle<T> {
-    /// Create a new timeline, starting at the indicated time. `next` generates
-    /// new timestamps when invoked. The timestamps have no requirements, and can
-    /// retreat from previous invocations.
-    pub fn new<F>(initially: T, next: F) -> Self
-    where
-        F: Fn() -> T + 'static,
-    {
-        Self {
-            state: TimestampOracleState {
-                read_ts: initially.clone(),
-                write_ts: initially,
-            },
-            next: Box::new(next),
-        }
-    }
-
-    /// Acquire a new timestamp for writing.
-    ///
-    /// This timestamp will be strictly greater than all prior values of
-    /// `self.read_ts()` and `self.write_ts()`.
-    fn write_ts(&mut self) -> WriteTimestamp<T> {
-        let mut next = (self.next)();
-        if next.less_equal(&self.state.write_ts) {
-            next = self.state.write_ts.step_forward();
-        }
-        assert!(self.state.read_ts.less_than(&next));
-        assert!(self.state.write_ts.less_than(&next));
-        self.state.write_ts = next.clone();
-        assert!(self.state.read_ts.less_equal(&self.state.write_ts));
-        let advance_to = next.step_forward();
-        WriteTimestamp {
-            timestamp: next,
-            advance_to,
-        }
-    }
-
-    /// Peek the current write timestamp.
-    fn peek_write_ts(&self) -> T {
-        self.state.write_ts.clone()
-    }
-
-    /// Acquire a new timestamp for reading.
-    ///
-    /// This timestamp will be greater or equal to all prior values of `self.apply_write(write_ts)`,
-    /// and strictly less than all subsequent values of `self.write_ts()`.
-    fn read_ts(&self) -> T {
-        self.state.read_ts.clone()
-    }
-
-    /// Mark a write at `write_ts` completed.
-    ///
-    /// All subsequent values of `self.read_ts()` will be greater or equal to `write_ts`.
-    fn apply_write(&mut self, write_ts: T) {
-        if self.state.read_ts.less_than(&write_ts) {
-            self.state.read_ts = write_ts;
-
-            if self.state.write_ts.less_than(&self.state.read_ts) {
-                self.state.write_ts = self.state.read_ts.clone();
-            }
-        }
-        assert!(self.state.read_ts.less_equal(&self.state.write_ts));
-    }
-}
-
-/// Interval used to persist durable timestamps. See [`DurableTimestampOracle`] for more
-/// details.
-pub static TIMESTAMP_PERSIST_INTERVAL: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
-    Duration::from_secs(5)
-        .as_millis()
-        .try_into()
-        .expect("5 seconds can fit into `Timestamp`")
-});
-
-/// The Coordinator tries to prevent the persisted timestamp from exceeding
-/// a value [`TIMESTAMP_INTERVAL_UPPER_BOUND`] times [`TIMESTAMP_PERSIST_INTERVAL`]
-/// larger than the current system time.
-pub const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
-
-/// Convenience function for calculating the current upper bound that we want to
-/// prevent the global timestamp from exceeding.
-fn upper_bound(now: &Timestamp) -> Timestamp {
-    now.saturating_add(
-        TIMESTAMP_PERSIST_INTERVAL.saturating_mul(Timestamp::from(TIMESTAMP_INTERVAL_UPPER_BOUND)),
-    )
-}
-
-/// Returns the current system time while protecting against backwards time
-/// jumps.
-///
-/// The caller is responsible for providing the previously recorded system time
-/// via the `previous_now` parameter.
-///
-/// If `previous_now` is more than `TIMESTAMP_INTERVAL_UPPER_BOUND *
-/// TIMESTAMP_PERSIST_INTERVAL` milliseconds ahead of the current system time
-/// (i.e., due to a backwards time jump), this function will block until the
-/// system time advances.
-///
-/// The returned time is guaranteed to be greater than or equal to
-/// `previous_now`.
-pub fn monotonic_now(now: NowFn, previous_now: Timestamp) -> Timestamp {
-    let mut now_ts = now();
-    let monotonic_now = cmp::max(previous_now, now_ts.into());
-    let mut upper_bound = timeline::upper_bound(&mz_repr::Timestamp::from(now_ts));
-    while monotonic_now > upper_bound {
-        // Cap retry time to 1s. In cases where the system clock has retreated
-        // by some large amount of time, this prevents against then waiting for
-        // that large amount of time in case the system clock then advances back
-        // to near what it was.
-        let remaining_ms = cmp::min(monotonic_now.saturating_sub(upper_bound), 1_000.into());
-        error!(
-            "Coordinator tried to start with initial timestamp of \
-            {monotonic_now}, which is more than \
-            {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than \
-            now, {now_ts}. Sleeping for {remaining_ms} ms.",
-            *TIMESTAMP_PERSIST_INTERVAL
-        );
-        thread::sleep(Duration::from_millis(remaining_ms.into()));
-        now_ts = now();
-        upper_bound = timeline::upper_bound(&mz_repr::Timestamp::from(now_ts));
-    }
-    monotonic_now
-}
-
-/// A type that wraps a [`TimestampOracle`] and provides durable timestamps. This allows us to
-/// recover a timestamp that is larger than all previous timestamps on restart. The protocol
-/// is based on timestamp recovery from Percolator <https://research.google/pubs/pub36726/>. We
-/// "pre-allocate" a group of timestamps at once, and only durably store the largest of those
-/// timestamps. All timestamps within that interval can be served directly from memory, without
-/// going to disk. On restart, we re-initialize the current timestamp to a value one larger
-/// than the persisted timestamp.
-///
-/// See [`TimestampOracle`] for more details on the properties of the timestamps.
-pub struct DurableTimestampOracle<T> {
-    timestamp_oracle: TimestampOracle<T>,
-    durable_timestamp: T,
-    persist_interval: T,
-}
-
-impl<T: TimestampManipulation> DurableTimestampOracle<T> {
-    /// Create a new durable timeline, starting at the indicated time. Timestamps will be
-    /// allocated in groups of size `persist_interval`. Also returns the new timestamp that
-    /// needs to be persisted to disk.
-    ///
-    /// See [`TimestampOracle::new`] for more details.
-    pub(crate) async fn new<F, Fut>(
-        initially: T,
-        next: F,
-        persist_interval: T,
-        persist_fn: impl FnOnce(T) -> Fut,
-    ) -> Self
-    where
-        F: Fn() -> T + 'static,
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
-    {
-        let mut oracle = Self {
-            timestamp_oracle: TimestampOracle::new(initially.clone(), next),
-            durable_timestamp: initially.clone(),
-            persist_interval,
-        };
-        oracle
-            .maybe_allocate_new_timestamps(&initially, persist_fn)
-            .await;
-        oracle
-    }
-
-    /// Acquire a new timestamp for writing. Optionally returns a timestamp that needs to be
-    /// persisted to disk.
-    ///
-    /// See [`TimestampOracle::write_ts`] for more details.
-    async fn write_ts<Fut>(&mut self, persist_fn: impl FnOnce(T) -> Fut) -> WriteTimestamp<T>
-    where
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
-    {
-        let ts = self.timestamp_oracle.write_ts();
-        self.maybe_allocate_new_timestamps(&ts.timestamp, persist_fn)
-            .await;
-        ts
-    }
-
-    /// Peek current write timestamp.
-    fn peek_write_ts(&self) -> T {
-        self.timestamp_oracle.peek_write_ts()
-    }
-
-    /// Acquire a new timestamp for reading. Optionally returns a timestamp that needs to be
-    /// persisted to disk.
-    ///
-    /// See [`TimestampOracle::read_ts`] for more details.
-    pub fn read_ts(&self) -> T {
-        let ts = self.timestamp_oracle.read_ts();
-        assert!(
-            ts.less_than(&self.durable_timestamp),
-            "read_ts should not advance the global timestamp"
-        );
-        ts
-    }
-
-    /// Mark a write at `write_ts` completed.
-    ///
-    /// See [`TimestampOracle::apply_write`] for more details.
-    pub async fn apply_write<Fut>(&mut self, lower_bound: T, persist_fn: impl FnOnce(T) -> Fut)
-    where
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
-    {
-        self.timestamp_oracle.apply_write(lower_bound.clone());
-        self.maybe_allocate_new_timestamps(&lower_bound, persist_fn)
-            .await;
-    }
-
-    /// Checks to see if we can serve the timestamp from memory, or if we need to durably store
-    /// a new timestamp.
-    ///
-    /// If `ts` is less than the persisted timestamp then we can serve `ts` from memory,
-    /// otherwise we need to durably store some timestamp greater than `ts`.
-    async fn maybe_allocate_new_timestamps<Fut>(
-        &mut self,
-        ts: &T,
-        persist_fn: impl FnOnce(T) -> Fut,
-    ) where
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
-    {
-        if self.durable_timestamp.less_equal(ts)
-            // Since the timestamp is at its max value, we know that no other Coord can
-            // allocate a higher value.
-            && self.durable_timestamp.less_than(&T::maximum())
-        {
-            self.durable_timestamp = ts.step_forward_by(&self.persist_interval);
-            persist_fn(self.durable_timestamp.clone())
-                .await
-                .unwrap_or_terminate("can't persist timestamp");
-        }
-    }
-}
-
 impl Coordinator {
     pub(crate) fn now(&self) -> EpochMillis {
-        (self.catalog.config().now)()
+        (self.catalog().config().now)()
     }
 
     pub(crate) fn now_datetime(&self) -> DateTime<Utc> {
         to_datetime(self.now())
     }
 
-    pub(crate) fn get_timestamp_oracle_mut(
-        &mut self,
-        timeline: &Timeline,
-    ) -> &mut DurableTimestampOracle<Timestamp> {
-        &mut self
-            .global_timelines
-            .get_mut(timeline)
-            .expect("all timelines have a timestamp oracle")
-            .oracle
-    }
-
     pub(crate) fn get_timestamp_oracle(
         &self,
         timeline: &Timeline,
-    ) -> &DurableTimestampOracle<Timestamp> {
-        &self
-            .global_timelines
+    ) -> &dyn TimestampOracle<Timestamp> {
+        self.global_timelines
             .get(timeline)
             .expect("all timelines have a timestamp oracle")
             .oracle
+            .as_ref()
+    }
+
+    pub(crate) fn get_shared_timestamp_oracle(
+        &self,
+        timeline: &Timeline,
+    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        self.global_timelines
+            .get(timeline)
+            .expect("all timelines have a timestamp oracle")
+            .oracle
+            .get_shared()
     }
 
     /// Returns a reference to the timestamp oracle used for reads and writes
     /// from/to a local input.
-    fn get_local_timestamp_oracle(&self) -> &DurableTimestampOracle<Timestamp> {
+    fn get_local_timestamp_oracle(&self) -> &dyn TimestampOracle<Timestamp> {
         self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
+    }
+
+    /// Returns a [`ShareableTimestampOracle`] used for reads and writes from/to a local input.
+    fn get_local_shared_timestamp_oracle(
+        &self,
+    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
+        self.get_shared_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
-    pub(crate) fn get_local_read_ts(&self) -> Timestamp {
-        self.get_local_timestamp_oracle().read_ts()
+    pub(crate) async fn get_local_read_ts(&self) -> Timestamp {
+        self.get_local_timestamp_oracle().read_ts().await
     }
 
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::get_local_write_ts", skip_all)]
     pub(crate) async fn get_local_write_ts(&mut self) -> WriteTimestamp {
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
             .oracle
-            .write_ts(|ts| {
-                self.catalog
-                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
-            })
+            .write_ts()
             .await
     }
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
-    pub(crate) fn peek_local_write_ts(&self) -> Timestamp {
-        self.get_local_timestamp_oracle().peek_write_ts()
+    pub(crate) async fn peek_local_write_ts(&self) -> Timestamp {
+        self.get_local_timestamp_oracle().peek_write_ts().await
     }
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
+    #[instrument(name = "coord::apply_local_write", skip(self))]
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
         let now = self.now().into();
-        if timestamp > timeline::upper_bound(&now) {
+
+        if timestamp > catalog_oracle::upper_bound(&now) {
             error!(
                 "Setting local read timestamp to {timestamp}, which is more than \
                 {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
@@ -427,11 +179,36 @@ impl Coordinator {
             .get_mut(&Timeline::EpochMilliseconds)
             .expect("no realtime timeline")
             .oracle
-            .apply_write(timestamp, |ts| {
-                self.catalog
-                    .persist_timestamp(&Timeline::EpochMilliseconds, ts)
-            })
+            .apply_write(timestamp)
             .await;
+    }
+
+    /// Marks a write at `timestamp` as completed, using a [`ShareableTimestampOracle`].
+    ///
+    /// TODO(parkmycar): [`ShareableTimestampOracle`] is a new concept and not always available.
+    /// When we move entirely to the shareable model, this method and
+    /// [`Coordinator::apply_local_write`] should get merged.
+    pub(crate) fn apply_local_write_shareable(
+        &mut self,
+        timestamp: Timestamp,
+    ) -> Option<impl Future<Output = ()> + Send + 'static> {
+        let now = self.now().into();
+
+        if timestamp > catalog_oracle::upper_bound(&now) {
+            error!(
+                "Setting local read timestamp to {timestamp}, which is more than \
+                {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
+                *TIMESTAMP_PERSIST_INTERVAL
+            );
+        }
+
+        self.get_local_shared_timestamp_oracle()
+            .map(|oracle| async move {
+                oracle
+                    .apply_write(timestamp)
+                    .instrument(tracing::debug_span!("apply_local_write_static", ?timestamp))
+                    .await
+            })
     }
 
     /// Ensures that a global timeline state exists for `timeline`.
@@ -439,11 +216,16 @@ impl Coordinator {
         &'a mut self,
         timeline: &'a Timeline,
     ) -> &mut TimelineState<Timestamp> {
+        let catalog = Arc::clone(&self.catalog);
+        let timestamp_persistence = CatalogTimestampPersistence::new(timeline.clone(), catalog);
+
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
-            self.catalog.config().now.clone(),
-            |ts| self.catalog.persist_timestamp(timeline, ts),
+            self.catalog().config().now.clone(),
+            self.timestamp_oracle_impl,
+            timestamp_persistence,
+            self.pg_timestamp_oracle_config.clone(),
             &mut self.global_timelines,
         )
         .await
@@ -451,34 +233,83 @@ impl Coordinator {
 
     /// Ensures that a global timeline state exists for `timeline`, with an initial time
     /// of `initially`.
-    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, Fut>(
+    #[instrument(skip_all)]
+    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, P>(
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
-        persist_fn: impl FnOnce(Timestamp) -> Fut,
+        timestamp_oracle_impl: TimestampOracleImpl,
+        timestamp_persistence: P,
+        pg_oracle_config: Option<PostgresTimestampOracleConfig>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
     ) -> &'a mut TimelineState<Timestamp>
     where
-        Fut: Future<Output = Result<(), crate::catalog::Error>>,
+        P: TimestampPersistence<mz_repr::Timestamp> + 'static,
     {
         if !global_timelines.contains_key(timeline) {
-            let oracle = if timeline == &Timeline::EpochMilliseconds {
-                DurableTimestampOracle::new(
-                    initially,
-                    move || (now)().into(),
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    persist_fn,
-                )
-                .await
+            info!(
+                "opening a new {:?} TimestampOracle for timeline {:?}",
+                timestamp_oracle_impl, timeline,
+            );
+
+            let now_fn = if timeline == &Timeline::EpochMilliseconds {
+                now
             } else {
-                DurableTimestampOracle::new(
-                    initially,
-                    Timestamp::minimum,
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    persist_fn,
-                )
-                .await
+                // Timelines that are not `EpochMilliseconds` don't have an
+                // "external" clock that wants to drive forward timestamps in
+                // addition to the rule that write timestamps must be strictly
+                // monotonically increasing.
+                //
+                // Passing in a clock that always yields the minimum takes the
+                // clock out of the equation and makes timestamps advance only
+                // by the rule about strict monotonicity mentioned above.
+                NowFn::from(|| Timestamp::minimum().into())
             };
+
+            let oracle = match timestamp_oracle_impl {
+                TimestampOracleImpl::Postgres => {
+                    let pg_oracle_config = pg_oracle_config.expect(
+                        "missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
+
+                    let batching_metrics = Arc::clone(&pg_oracle_config.metrics);
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        PostgresTimestampOracle::open(
+                            pg_oracle_config,
+                            timeline.to_string(),
+                            initially,
+                            now_fn,
+                        )
+                        .await,
+                    );
+
+                    let shared_oracle = oracle
+                        .get_shared()
+                        .expect("postgres timestamp oracle is shareable");
+
+                    let batching_oracle =
+                        BatchingTimestampOracle::new(batching_metrics, shared_oracle);
+
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> =
+                        Box::new(batching_oracle);
+
+                    oracle
+                }
+                TimestampOracleImpl::Catalog => {
+                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
+                        CatalogTimestampOracle::new(
+                            initially,
+                            now_fn,
+                            *TIMESTAMP_PERSIST_INTERVAL,
+                            timestamp_persistence,
+                        )
+                        .await,
+                    );
+
+                    oracle
+                }
+            };
+
             global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
@@ -545,11 +376,6 @@ impl Coordinator {
         }
         let became_empty = read_holds.is_empty();
 
-        // Finally, remove the Timeline if it's empty.
-        if became_empty {
-            self.global_timelines.remove(&timeline);
-        }
-
         became_empty
     }
 
@@ -571,7 +397,7 @@ impl Coordinator {
 
     pub(crate) fn ids_in_timeline(&self, timeline: &Timeline) -> CollectionIdBundle {
         let mut id_bundle = CollectionIdBundle::default();
-        for entry in self.catalog.entries() {
+        for entry in self.catalog().entries() {
             if let TimelineContext::TimelineDependent(entry_timeline) =
                 self.get_timeline_context(entry.id())
             {
@@ -603,7 +429,7 @@ impl Coordinator {
         id_bundle
     }
 
-    /// Return an error if the ids are from incompatible timeline contexts. This should
+    /// Return an error if the ids are from incompatible [`TimelineContext`]s. This should
     /// be used to prevent users from doing things that are either meaningless
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
@@ -654,88 +480,65 @@ impl Coordinator {
         }
     }
 
-    /// Return the timeline context belonging to a GlobalId, if one exists.
+    /// Return the [`TimelineContext`] belonging to a GlobalId, if one exists.
     pub(crate) fn get_timeline_context(&self, id: GlobalId) -> TimelineContext {
         self.validate_timeline_context(vec![id])
             .expect("impossible for a single object to belong to incompatible timeline contexts")
     }
 
-    /// Return the timeline contexts belonging to a list of GlobalIds, if any exist.
+    /// Return the [`TimelineContext`]s belonging to a list of GlobalIds, if any exist.
     fn get_timeline_contexts<I>(&self, ids: I) -> BTreeSet<TimelineContext>
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let mut timelines: BTreeMap<GlobalId, TimelineContext> = BTreeMap::new();
-        let mut contains_temporal = false;
+        let mut seen: BTreeSet<GlobalId> = BTreeSet::new();
+        let mut timelines: BTreeSet<TimelineContext> = BTreeSet::new();
 
         // Recurse through IDs to find all sources and tables, adding new ones to
         // the set until we reach the bottom.
         let mut ids: Vec<_> = ids.into_iter().collect();
-        // Helper function for both materialized views and views.
-        fn visit_view_expr(
-            id: GlobalId,
-            optimized_expr: &OptimizedMirRelationExpr,
-            ids: &mut Vec<GlobalId>,
-            timelines: &mut BTreeMap<GlobalId, TimelineContext>,
-            contains_temporal: &mut bool,
-        ) {
-            if !*contains_temporal && optimized_expr.contains_temporal() {
-                *contains_temporal = true;
-            }
-            let depends_on = optimized_expr.depends_on();
-            if depends_on.is_empty() {
-                if *contains_temporal {
-                    timelines.insert(id, TimelineContext::TimestampDependent);
-                } else {
-                    timelines.insert(id, TimelineContext::TimestampIndependent);
-                }
-            } else {
-                ids.extend(depends_on);
-            }
-        }
         while let Some(id) = ids.pop() {
             // Protect against possible infinite recursion. Not sure if it's possible, but
             // a cheap prevention for the future.
-            if timelines.contains_key(&id) {
+            if !seen.insert(id) {
                 continue;
             }
-            if let Some(entry) = self.catalog.try_get_entry(&id) {
+            if let Some(entry) = self.catalog().try_get_entry(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
-                        timelines.insert(
-                            id,
-                            TimelineContext::TimelineDependent(source.timeline.clone()),
-                        );
+                        timelines
+                            .insert(TimelineContext::TimelineDependent(source.timeline.clone()));
                     }
                     CatalogItem::Index(index) => {
                         ids.push(index.on);
                     }
-                    CatalogItem::View(view) => {
-                        visit_view_expr(
-                            id,
-                            &view.optimized_expr,
-                            &mut ids,
-                            &mut timelines,
-                            &mut contains_temporal,
-                        );
+                    CatalogItem::View(View { optimized_expr, .. }) => {
+                        // If the definition contains a temporal function, the timeline must
+                        // be timestamp dependent.
+                        if optimized_expr.contains_temporal() {
+                            timelines.insert(TimelineContext::TimestampDependent);
+                        } else {
+                            timelines.insert(TimelineContext::TimestampIndependent);
+                        }
+                        ids.extend(optimized_expr.depends_on());
                     }
-                    CatalogItem::MaterializedView(mview) => {
-                        visit_view_expr(
-                            id,
-                            &mview.optimized_expr,
-                            &mut ids,
-                            &mut timelines,
-                            &mut contains_temporal,
-                        );
+                    CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                        // In some cases the timestamp selected may not affect the answer to a
+                        // query, but it may affect our ability to query the materialized view.
+                        // Materialized views must durably materialize the result of a query, even
+                        // for constant queries. If we choose a timestamp larger than the upper,
+                        // which represents the current progress of the view, then the query will
+                        // need to block and wait for the materialized view to advance.
+                        timelines.insert(TimelineContext::TimestampDependent);
+                        ids.extend(optimized_expr.depends_on());
                     }
                     CatalogItem::Table(table) => {
-                        timelines.insert(id, TimelineContext::TimelineDependent(table.timeline()));
+                        timelines.insert(TimelineContext::TimelineDependent(table.timeline()));
                     }
                     CatalogItem::Log(_) => {
-                        timelines.insert(
-                            id,
-                            TimelineContext::TimelineDependent(Timeline::EpochMilliseconds),
-                        );
+                        timelines.insert(TimelineContext::TimelineDependent(
+                            Timeline::EpochMilliseconds,
+                        ));
                     }
                     CatalogItem::Sink(_)
                     | CatalogItem::Type(_)
@@ -747,12 +550,10 @@ impl Coordinator {
         }
 
         timelines
-            .into_iter()
-            .map(|(_, timeline)| timeline)
-            .collect()
     }
 
-    /// Returns an iterator that partitions an id bundle by the timeline context that each id belongs to.
+    /// Returns an iterator that partitions an id bundle by the [`TimelineContext`] that each id
+    /// belongs to.
     pub fn partition_ids_by_timeline_context(
         &self,
         id_bundle: &CollectionIdBundle,
@@ -791,7 +592,7 @@ impl Coordinator {
         &self,
         uses_ids: I,
         timeline_context: &TimelineContext,
-        conn_id: ConnectionId,
+        conn_id: &ConnectionId,
         compute_instance: ComputeInstanceId,
     ) -> Result<CollectionIdBundle, AdapterError>
     where
@@ -800,39 +601,49 @@ impl Coordinator {
         // Gather all the used schemas.
         let mut schemas = BTreeSet::new();
         for id in uses_ids {
-            let entry = self.catalog.get_entry(id);
+            let entry = self.catalog().get_entry(id);
             let name = entry.name();
             schemas.insert((&name.qualifiers.database_spec, &name.qualifiers.schema_spec));
         }
 
-        // If any of the system schemas is specified, add the rest of the
-        // system schemas.
+        let pg_catalog_schema = (
+            &ResolvedDatabaseSpecifier::Ambient,
+            &SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id().clone()),
+        );
         let system_schemas = [
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_mz_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_catalog_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_internal_schema_id().clone()),
+            ),
+            pg_catalog_schema.clone(),
+            (
+                &ResolvedDatabaseSpecifier::Ambient,
+                &SchemaSpecifier::Id(self.catalog().get_information_schema_id().clone()),
             ),
             (
                 &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_information_schema_id().clone()),
-            ),
-            (
-                &ResolvedDatabaseSpecifier::Ambient,
-                &SchemaSpecifier::Id(self.catalog.get_mz_internal_schema_id().clone()),
+                &SchemaSpecifier::Id(self.catalog().get_mz_unsafe_schema_id().clone()),
             ),
         ];
+
         if system_schemas.iter().any(|s| schemas.contains(s)) {
+            // If any of the system schemas is specified, add the rest of the
+            // system schemas.
             schemas.extend(system_schemas);
+        } else if !schemas.is_empty() {
+            // Always include the pg_catalog schema, if schemas is non-empty. The pg_catalog schemas is
+            // sometimes used by applications in followup queries.
+            schemas.insert(pg_catalog_schema);
         }
 
         // Gather the IDs of all items in all used schemas.
         let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
-            let schema = self.catalog.get_schema(db, schema, conn_id);
+            let schema = self.catalog().get_schema(db, schema, conn_id);
             item_ids.extend(schema.items.values());
         }
 
@@ -875,7 +686,7 @@ impl Coordinator {
         Ok(id_bundle)
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub(crate) async fn advance_timelines(&mut self) {
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (
@@ -886,19 +697,31 @@ impl Coordinator {
             },
         ) in global_timelines
         {
-            let now = if timeline == Timeline::EpochMilliseconds {
-                oracle.read_ts()
-            } else {
+            // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
+            // manually advanced here.
+            if timeline != Timeline::EpochMilliseconds {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
                 let id_bundle = self.ids_in_timeline(&timeline);
-                self.largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle))
+
+                // Advance the timeline if-and-only-if there are objects in it.
+                // Otherwise we'd advance to the empty frontier, meaning we
+                // close it off for ever.
+                if !id_bundle.is_empty() {
+                    let least_valid_write = self.least_valid_write(&id_bundle);
+                    let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
+                    oracle.apply_write(now).await;
+                    debug!(
+                        least_valid_write = ?least_valid_write,
+                        oracle_read_ts = ?oracle.read_ts().await,
+                        "advanced {:?} to {}",
+                        timeline,
+                        now,
+                    );
+                }
             };
-            oracle
-                .apply_write(now, |ts| self.catalog.persist_timestamp(&timeline, ts))
-                .await;
-            let read_ts = oracle.read_ts();
+            let read_ts = oracle.read_ts().await;
             if read_holds.times().any(|time| time.less_than(&read_ts)) {
                 read_holds = self.update_read_hold(read_holds, read_ts);
             }

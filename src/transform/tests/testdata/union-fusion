@@ -21,7 +21,7 @@ Union
   Get x
   Get x
 
-build apply=UnionFusion
+build apply=UnionNegateFusion
 (union [(get x) (union [(get x) (negate (union [(get x) (get x)]))])])
 ----
 Union

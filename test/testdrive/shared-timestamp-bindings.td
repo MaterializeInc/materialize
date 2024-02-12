@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET min_timestamp_interval = '90ms'
+
 #
 # Make sure that all materialized views dealing with the same source
 # see the same records at the same timestamp.
@@ -49,14 +55,16 @@ $ kafka-ingest format=avro topic=data partition=3 schema=${schema}
 {"a": 6}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE direct_source1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   WITH (TIMESTAMP INTERVAL '90ms');
 
 > CREATE SOURCE direct_source2
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   WITH (TIMESTAMP INTERVAL '100ms');
@@ -83,14 +91,14 @@ $ kafka-ingest format=avro topic=data partition=7 schema=${schema}
 
 # Sleep so that the views are not all created at the same time
 
-> SELECT mz_internal.mz_sleep(2);
+> SELECT mz_unsafe.mz_sleep(2);
 <null>
 
 > CREATE MATERIALIZED VIEW direct_view1b AS SELECT a + 0 AS a FROM direct_source1;
 
 > CREATE MATERIALIZED VIEW derived_view1a AS SELECT a + 0 AS a FROM direct_view1a;
 
-> SELECT mz_internal.mz_sleep(2);
+> SELECT mz_unsafe.mz_sleep(2);
 <null>
 
 > CREATE MATERIALIZED VIEW derived_view1b AS SELECT a + 0 AS a FROM direct_view1b;
@@ -156,5 +164,5 @@ $ kafka-ingest format=avro topic=data partition=15 schema=${schema}
 # In case the environment has other replicas
 > SET cluster_replica = r1
 
-> SELECT COUNT(*) FROM mz_internal.mz_records_per_dataflow_global WHERE name LIKE '%check_v%' AND records > 0;
+> SELECT COUNT(*) FROM mz_internal.mz_records_per_dataflow WHERE name LIKE '%check_v%' AND records > 0;
 0

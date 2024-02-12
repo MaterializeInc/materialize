@@ -9,6 +9,9 @@
 
 # Test Avro UPSERT sinks.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true
+ALTER SYSTEM SET max_clusters = 20
 
 
 # sinking directly from an UPSERT source with multi-part key
@@ -38,18 +41,23 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
 {"key1": "fisch", "key2": 42} {"f1": "fish", "f2": 1000}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
   );
 
+> CREATE CLUSTER upsert_input_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE upsert_input
+  IN CLUSTER upsert_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-avro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-> CREATE SINK upsert_input_sink FROM upsert_input
+> CREATE CLUSTER upsert_input_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK upsert_input_sink
+  IN CLUSTER upsert_input_sink_cluster
+  FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink-${testdrive.seed}')
   KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
@@ -141,20 +149,28 @@ $ set schema=[
 $ kafka-create-topic topic=input
 
 # (PRIMARY KEY (id) NOT ENFORCED)
+> CREATE CLUSTER input_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input
+  IN CLUSTER input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED VIEW input_keyed AS SELECT a, max(b) as b FROM input GROUP BY a
 
-> CREATE SINK input_sink FROM input_keyed
+> CREATE CLUSTER input_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK input_sink
+  IN CLUSTER input_sink_cluster
+  FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
 # requesting to key by (a, b) is fine when (a) is a unique key
 
-> CREATE SINK input_sink_multiple_keys FROM input_keyed
+> CREATE CLUSTER input_sink_multiple_keys_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK input_sink_multiple_keys
+  IN CLUSTER input_sink_multiple_keys_cluster
+  FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-multikey-${testdrive.seed}') KEY (b, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
@@ -211,13 +227,18 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 
 $ kafka-create-topic topic=input-with-deletions
 
+> CREATE CLUSTER input_with_deletions_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input_with_deletions
+  IN CLUSTER input_with_deletions_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-with-deletions-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
 
-> CREATE SINK input_with_deletions_sink FROM input_with_deletions_keyed
+> CREATE CLUSTER input_with_deletions_sink_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK input_with_deletions_sink
+  IN CLUSTER input_with_deletions_sink_cluster
+  FROM input_with_deletions_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-with-deletions-${testdrive.seed}') KEY (a)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
@@ -271,11 +292,16 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 
 $ kafka-create-topic topic=non-keyed-input
 
+> CREATE CLUSTER non_keyed_input_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_keyed_input
+  IN CLUSTER non_keyed_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-keyed-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE SINK not_enforced_key FROM non_keyed_input
+> CREATE CLUSTER not_enforced_key_cluster SIZE '${arg.default-storage-size}';
+> CREATE SINK not_enforced_key
+  IN CLUSTER not_enforced_key_cluster
+  FROM non_keyed_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'not-enforced-sink-${testdrive.seed}') KEY (a) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 
@@ -306,40 +332,93 @@ $ kafka-verify-data headers=materialize-timestamp format=avro topic=not-enforced
 
 # Bad upsert keys
 
-! CREATE SINK invalid_key FROM input
+! CREATE SINK invalid_key
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (a), there are no valid keys
+contains:upsert key could not be validated as unique
 
-! CREATE SINK another_invalid_key FROM input_keyed
+! CREATE SINK another_invalid_key
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (b)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (b), valid keys are: (a)
+contains:upsert key could not be validated as unique
 
 > CREATE MATERIALIZED VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
 
-! CREATE SINK invalid_sub_key FROM input_keyed_ab
+! CREATE SINK invalid_sub_key
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input_keyed_ab
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (a), valid keys are: (a, b)
+contains:upsert key could not be validated as unique
 
-! CREATE SINK another_invalid_sub_key FROM input_keyed_ab
+! CREATE SINK another_invalid_sub_key
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input_keyed_ab
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (b)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (b), valid keys are: (a, b)
+contains:upsert key could not be validated as unique
 
-! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
+! CREATE SINK invalid_key_from_upsert_input
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink-${testdrive.seed}')
   KEY (key1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (key1), valid keys are: (key1, key2)
+contains:upsert key could not be validated as unique
 
-! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
+! CREATE SINK invalid_key_from_upsert_input
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'data-sink-${testdrive.seed}')
   KEY (key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
-contains:Invalid upsert key: (key2), valid keys are: (key1, key2)
+contains:upsert key could not be validated as unique
+
+# Check arrangements, seeing new arrangements can mean a significant increase
+# in memory consumptions and should be understood before adapting the values.
+> SET cluster_replica = r1
+
+> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+"Arrange ReduceMinsMaxes"
+"Arrange ReduceMinsMaxes"
+"Arranged DistinctBy [val: empty]"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"Arranged MinsMaxesHierarchical input"
+"DistinctBy [val: empty]"
+DistinctByErrorCheck
+ReduceMinsMaxes
+ReduceMinsMaxes
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"
+"Reduced Fallibly MinsMaxesHierarchical"

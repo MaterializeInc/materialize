@@ -7,26 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-use std::iter;
-use std::vec;
+use std::{fmt, iter, vec};
 
 use anyhow::bail;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-
-use crate::{Datum, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
 pub use crate::relation_and_scalar::{
     ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
 };
+use crate::{Datum, ScalarType};
 
-/// The type of a [`Datum`](crate::Datum).
+/// The type of a [`Datum`].
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
 /// Int32 or String) with its nullability.
@@ -140,6 +136,13 @@ impl RustType<ProtoColumnType> for ColumnType {
     }
 }
 
+impl fmt::Display for ColumnType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let nullable = if self.nullable { "Null" } else { "NotNull" };
+        f.write_fmt(format_args!("{:?}:{}", self.scalar_type, nullable))
+    }
+}
+
 /// The type of a relation.
 #[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
@@ -211,34 +214,9 @@ impl RelationType {
         }
     }
 
-    /// True if any collection described by `self` could safely be described by `other`.
-    ///
-    /// In practice this means checking that the scalar types match exactly, and that the
-    /// nullability of `self` is at least as strict as `other`, and that all keys of `other`
-    /// contain some key of `self` (as a set of key columns is less strict than any subset).
-    pub fn subtypes(&self, other: &RelationType) -> bool {
-        let all_keys = other.keys.iter().all(|key1| {
-            self.keys
-                .iter()
-                .any(|key2| key1.iter().all(|k| key2.contains(k)))
-        });
-        if !all_keys {
-            return false;
-        }
-
-        if self.column_types.len() != other.column_types.len() {
-            return false;
-        }
-
-        for (col1, col2) in self.column_types.iter().zip(other.column_types.iter()) {
-            if col1.nullable && !col2.nullable {
-                return false;
-            }
-            if col1.scalar_type != col2.scalar_type {
-                return false;
-            }
-        }
-        true
+    /// Returns all the [`ColumnType`]s, in order, for this relation.
+    pub fn columns(&self) -> &[ColumnType] {
+        &self.column_types
     }
 }
 
@@ -286,6 +264,16 @@ impl ColumnName {
     pub fn as_mut_str(&mut self) -> &mut String {
         &mut self.0
     }
+
+    /// Returns if this [`ColumnName`] is similar to the provided one.
+    pub fn is_similar(&self, other: &ColumnName) -> bool {
+        const SIMILARITY_THRESHOLD: f64 = 0.6;
+
+        let a_lowercase = self.0.to_lowercase();
+        let b_lowercase = other.as_str().to_lowercase();
+
+        strsim::normalized_levenshtein(&a_lowercase, &b_lowercase) >= SIMILARITY_THRESHOLD
+    }
 }
 
 impl fmt::Display for ColumnName {
@@ -323,6 +311,13 @@ impl RustType<ProtoColumnName> for ColumnName {
         Ok(ColumnName(proto.value.ok_or_else(|| {
             TryFromProtoError::missing_field("ProtoColumnName::value")
         })?))
+    }
+}
+
+impl From<ColumnName> for mz_sql_parser::ast::Ident {
+    fn from(value: ColumnName) -> Self {
+        // Note: ColumnNames are known to be less than the max length of an Ident (I think?).
+        mz_sql_parser::ast::Ident::new_unchecked(value.0)
     }
 }
 
@@ -491,6 +486,15 @@ impl RelationDesc {
     /// Returns an iterator over the names of the columns in this relation.
     pub fn iter_names(&self) -> impl Iterator<Item = &ColumnName> {
         self.names.iter()
+    }
+
+    /// Returns an iterator over the names of the columns in this relation that are "similar" to
+    /// the provided `name`.
+    pub fn iter_similar_names<'a>(
+        &'a self,
+        name: &'a ColumnName,
+    ) -> impl Iterator<Item = &'a ColumnName> {
+        self.iter_names().filter(|n| n.is_similar(name))
     }
 
     /// Finds a column by name.

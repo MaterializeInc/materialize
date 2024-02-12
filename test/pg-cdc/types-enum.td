@@ -31,6 +31,7 @@ CREATE SCHEMA public;
 CREATE TYPE enum1 AS ENUM ('val1', 'val2');
 CREATE TABLE enum_type ( f1 enum1);
 INSERT INTO enum_type VALUES ('val1'), ('val2');
+ALTER TABLE enum_type REPLICA IDENTITY FULL;
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 

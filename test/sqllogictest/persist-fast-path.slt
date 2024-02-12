@@ -1,0 +1,218 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_fast_path_limit = 100
+----
+COMPLETE 0
+
+# Verify that the persist fast path only kicks in when it's expected to do so.
+
+# Generate a table, with multiple batches of data and some partial overlaps
+statement ok
+CREATE TABLE numbers (
+    value int
+);
+
+# Applies when the limit is below some threshold. Mapping and
+# projecting is fine.
+
+query T multiline
+EXPLAIN SELECT * from numbers limit 10;
+----
+Explained Query (fast path):
+  Finish limit=10 output=[#0]
+    PeekPersist materialize.public.numbers
+
+EOF
+
+query T multiline
+EXPLAIN SELECT value + 1000 from numbers LIMIT 10;
+----
+Explained Query (fast path):
+  Finish limit=10 output=[#0]
+    Project (#1)
+      Map ((#0 + 1000))
+        PeekPersist materialize.public.numbers
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * from numbers LIMIT 10 OFFSET 10;
+----
+Explained Query (fast path):
+  Finish limit=10 offset=10 output=[#0]
+    PeekPersist materialize.public.numbers
+
+EOF
+
+# Check that some fast-path queries succeed.
+
+statement ok
+INSERT INTO numbers SELECT generate_series(1, 3);
+
+statement ok
+INSERT INTO numbers SELECT generate_series(1, 10);
+
+# The ordering here is technically nondeterministic, but in practice unlikely to change.
+# Feel free to rewrite or remove if this causes trouble.
+
+query T
+SELECT value from numbers LIMIT 20;
+----
+1
+1
+2
+2
+3
+3
+4
+5
+6
+7
+8
+9
+10
+
+query T
+SELECT value from numbers LIMIT 10 OFFSET 6;
+----
+4
+5
+6
+7
+8
+9
+10
+
+statement ok
+INSERT INTO numbers SELECT generate_series(5, 100);
+
+statement ok
+INSERT INTO numbers SELECT generate_series(50, 1000);
+
+statement ok
+INSERT INTO numbers SELECT generate_series(500, 10000);
+
+# Since we don't guarantee which of the rows are returned, transform the results
+# in a way that doesn't depend on the specific values.
+
+query T
+SELECT value < 999999 from numbers LIMIT 5;
+----
+true
+true
+true
+true
+true
+
+# Errors should always be returned even when the limit is small
+statement ok
+CREATE MATERIALIZED VIEW erroring AS SELECT 10.0 / (value - 1) FROM numbers;
+
+query error db error: ERROR: Evaluation error: division by zero
+SELECT * FROM erroring LIMIT 10;
+
+# Does not apply when the limit is high, or when mixed with features
+# that might require a full scan.
+
+query T multiline
+EXPLAIN SELECT * from numbers LIMIT 1000;
+----
+Explained Query:
+  Finish limit=1000 output=[#0]
+    ReadStorage materialize.public.numbers
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * from numbers ORDER BY value LIMIT 10;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
+    ReadStorage materialize.public.numbers
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * from numbers WHERE value > mz_now() LIMIT 10;
+----
+Explained Query:
+  Finish limit=10 output=[#0]
+    Filter (integer_to_mz_timestamp(#0) > mz_now())
+      ReadStorage materialize.public.numbers
+
+Source materialize.public.numbers
+  filter=((integer_to_mz_timestamp(#0) > mz_now()))
+
+EOF
+
+# Check that we bound result set size correctly
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_result_size TO 100;
+----
+COMPLETE 0
+
+query T
+SELECT * FROM numbers LIMIT 1;
+----
+1
+
+query error db error: ERROR: result exceeds max size of 100 B
+SELECT * FROM numbers LIMIT 99;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET max_result_size
+----
+COMPLETE 0
+
+# Does not apply when an index exists.
+
+statement ok
+CREATE DEFAULT INDEX ON numbers;
+
+query T multiline
+EXPLAIN SELECT * from numbers LIMIT 10;
+----
+Explained Query (fast path):
+  Finish limit=10 output=[#0]
+    ReadIndex on=materialize.public.numbers numbers_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.numbers_primary_idx (fast path limit)
+
+EOF
+
+# Issue 22577
+statement ok
+CREATE TABLE t1 (f1 INTEGER);
+
+statement ok
+INSERT INTO t1 VALUES (2), (2);
+
+statement ok
+INSERT INTO t1 VALUES (1);
+
+query T
+SELECT * FROM t1 LIMIT 1 OFFSET 0;
+----
+1
+
+query T
+SELECT * FROM t1 LIMIT 1 OFFSET 1;
+----
+2
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET persist_fast_path_limit
+----
+COMPLETE 0

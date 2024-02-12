@@ -18,5 +18,26 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 try bin/pyactivate -m black . "$@"
-try bin/pyactivate -m isort . "$@"
-try_finish
+
+arg="--fix"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --check)
+      # ruff only supports --fix, not --check
+      arg=""
+      shift
+      ;;
+    *)
+      # Ignore all unknown arguments
+      shift
+      ;;
+  esac
+done
+
+# We want empty arg to not do anything
+# shellcheck disable=SC2086
+try bin/pyactivate -m ruff $arg --extend-exclude=misc/dbt-materialize .
+# shellcheck disable=SC2086
+try bin/pyactivate -m ruff --target-version=py38 $arg misc/dbt-materialize
+try_status_report

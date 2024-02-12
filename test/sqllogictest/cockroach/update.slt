@@ -19,6 +19,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE kv (
   k INT PRIMARY KEY,
@@ -286,7 +291,7 @@ statement count 1
 INSERT INTO xyz VALUES (111, 222, 333)
 
 
-# TODO(jordan): re-enable post #28716
+# TODO(jordan): re-enable post cockroach#28716
 # statement count 1
 # UPDATE xyz SET (z, y) = (SELECT 666, 777), x = (SELECT 2)
 #

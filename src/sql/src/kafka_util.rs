@@ -9,239 +9,78 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use anyhow::bail;
-use rdkafka::client::ClientContext;
+use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
+use mz_ore::task;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{
+    KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
+    KafkaSourceConfigOptionName,
+};
+use mz_storage_types::sinks::KafkaSinkCompressionType;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
 
-use mz_kafka_util::client::{BrokerRewritingClientContext, MzClientContext};
-use mz_ore::task;
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{AstInfo, KafkaConfigOption, KafkaConfigOptionName};
-use mz_storage_client::types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
-
+use crate::ast::Value;
 use crate::names::Aug;
 use crate::normalize::generate_extracted_config;
-use crate::plan::with_options::TryFromValue;
+use crate::plan::with_options::{ImpliedValue, TryFromValue};
 use crate::plan::PlanError;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum KafkaOptionCheckContext {
-    Source,
-    Sink,
-}
-
-/// Verifies that [`KafkaConfigOption`]s are only used in the appropriate contexts
-pub fn validate_options_for_context<T: AstInfo>(
-    options: &[KafkaConfigOption<T>],
-    context: KafkaOptionCheckContext,
-) -> Result<(), anyhow::Error> {
-    use KafkaConfigOptionName::*;
-    use KafkaOptionCheckContext::*;
-
-    for KafkaConfigOption { name, .. } in options {
-        let limited_to_context = match name {
-            Acks => None,
-            ClientId => None,
-            EnableIdempotence => None,
-            FetchMessageMaxBytes => None,
-            GroupIdPrefix => None,
-            IsolationLevel => None,
-            Topic => None,
-            TopicMetadataRefreshIntervalMs => None,
-            TransactionTimeoutMs => None,
-            StartTimestamp => Some(Source),
-            StartOffset => Some(Source),
-            PartitionCount => Some(Sink),
-            ReplicationFactor => Some(Sink),
-            RetentionBytes => Some(Sink),
-            RetentionMs => Some(Sink),
-        };
-        if limited_to_context.is_some() && limited_to_context != Some(context) {
-            bail!(
-                "cannot set {} for {}",
-                name.to_ast_string(),
-                match context {
-                    Source => "SOURCE",
-                    Sink => "SINK",
-                }
-            );
-        }
-    }
-
-    Ok(())
-}
-
 generate_extracted_config!(
-    KafkaConfigOption,
-    (Acks, String),
-    (ClientId, String),
-    (EnableIdempotence, bool),
-    (FetchMessageMaxBytes, i32),
+    KafkaSourceConfigOption,
     (GroupIdPrefix, String),
-    (
-        IsolationLevel,
-        String,
-        Default(String::from("read_committed"))
-    ),
     (Topic, String),
-    (TopicMetadataRefreshIntervalMs, i32),
-    (TransactionTimeoutMs, i32),
+    (
+        TopicMetadataRefreshInterval,
+        Duration,
+        Default(DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL)
+    ),
     (StartTimestamp, i64),
-    (StartOffset, Vec<i64>),
-    (PartitionCount, i32, Default(-1)),
-    (ReplicationFactor, i32, Default(-1)),
-    (RetentionBytes, i64),
-    (RetentionMs, i64)
+    (StartOffset, Vec<i64>)
 );
 
-/// The config options we expect to pass along when connecting to librdkafka
-#[derive(Debug)]
-pub struct LibRdKafkaConfig(pub BTreeMap<String, StringOrSecret>);
+generate_extracted_config!(
+    KafkaSinkConfigOption,
+    (
+        CompressionType,
+        KafkaSinkCompressionType,
+        Default(KafkaSinkCompressionType::None)
+    ),
+    (ProgressGroupIdPrefix, String),
+    (Topic, String),
+    (TransactionalIdPrefix, String),
+    (LegacyIds, bool)
+);
 
-impl TryFrom<&KafkaConfigOptionExtracted> for LibRdKafkaConfig {
-    type Error = PlanError;
-    fn try_from(
-        KafkaConfigOptionExtracted {
-            acks,
-            client_id,
-            enable_idempotence,
-            fetch_message_max_bytes,
-            isolation_level,
-            topic_metadata_refresh_interval_ms,
-            transaction_timeout_ms,
-            ..
-        }: &KafkaConfigOptionExtracted,
-    ) -> Result<LibRdKafkaConfig, Self::Error> {
-        let mut o = BTreeMap::new();
-
-        macro_rules! fill_options {
-            // Values that are not option can just be wrapped in some before being passed to the macro
-            ($v:expr, $s:expr) => {
-                if let Some(v) = $v {
-                    o.insert($s.to_string(), StringOrSecret::String(v.to_string()));
-                }
-            };
-            ($v:expr, $s:expr, $check:expr, $err:expr) => {
-                if let Some(v) = $v {
-                    if !$check(v) {
-                        sql_bail!($err);
-                    }
-                    o.insert($s.to_string(), StringOrSecret::String(v.to_string()));
-                }
-            };
+impl TryFromValue<Value> for KafkaSinkCompressionType {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::String(v) => match v.to_lowercase().as_str() {
+                "none" => Ok(KafkaSinkCompressionType::None),
+                "gzip" => Ok(KafkaSinkCompressionType::Gzip),
+                "snappy" => Ok(KafkaSinkCompressionType::Snappy),
+                "lz4" => Ok(KafkaSinkCompressionType::Lz4),
+                "zstd" => Ok(KafkaSinkCompressionType::Zstd),
+                // The caller will add context, resulting in an error like
+                // "invalid COMPRESSION TYPE: <bad-compression-type>".
+                _ => sql_bail!("{}", v),
+            },
+            _ => sql_bail!("compression type must be a string"),
         }
+    }
 
-        fill_options!(acks, "acks");
-        fill_options!(client_id, "client.id");
-        fill_options!(
-            topic_metadata_refresh_interval_ms,
-            "topic.metadata.refresh.interval.ms",
-            |i: &i32| { 0 <= *i && *i <= 3_600_000 },
-            "TOPIC METADATA REFRESH INTERVAL MS must be within [0, 3,600,000]"
-        );
-        fill_options!(Some(isolation_level), "isolation.level");
-        fill_options!(
-            transaction_timeout_ms,
-            "transaction.timeout.ms",
-            |i: &i32| 0 <= *i,
-            "TRANSACTION TIMEOUT MS must be greater than or equval to 0"
-        );
-        fill_options!(enable_idempotence, "enable.idempotence");
-        fill_options!(
-            fetch_message_max_bytes,
-            "fetch.message.max_bytes",
-            // The range of values comes from `fetch.message.max.bytes` in
-            // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
-            |i: &i32| { 0 <= *i && *i <= 1_000_000_000 },
-            "FETCH MESSAGE MAX BYTES must be within [0, 1,000,000,000]"
-        );
-
-        Ok(LibRdKafkaConfig(o))
+    fn name() -> String {
+        "Kafka sink compression type".to_string()
     }
 }
 
-/// An enum that represents start offsets for a kafka consumer.
-#[derive(Debug)]
-pub enum KafkaStartOffsetType {
-    /// Fully specified, either by the user or generated.
-    StartOffset(Vec<i64>),
-    /// Specified by the user.
-    StartTimestamp(i64),
-}
-
-impl TryFrom<&KafkaConfigOptionExtracted> for Option<KafkaStartOffsetType> {
-    type Error = PlanError;
-    fn try_from(
-        KafkaConfigOptionExtracted {
-            start_offset,
-            start_timestamp,
-            ..
-        }: &KafkaConfigOptionExtracted,
-    ) -> Result<Option<KafkaStartOffsetType>, Self::Error> {
-        Ok(match (start_offset, start_timestamp) {
-            (Some(_), Some(_)) => {
-                sql_bail!("cannot specify START TIMESTAMP and START OFFSET at same time")
-            }
-            (Some(so), _) => Some(KafkaStartOffsetType::StartOffset(so.clone())),
-            (_, Some(sto)) => Some(KafkaStartOffsetType::StartTimestamp(*sto)),
-            _ => None,
-        })
+impl ImpliedValue for KafkaSinkCompressionType {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a compression type value")
     }
-}
-
-/// Create a new `rdkafka::ClientConfig` with the provided
-/// [`options`](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md),
-/// and test its ability to create an `rdkafka::consumer::BaseConsumer`.
-///
-/// Expected to test the output of `extract_security_config`.
-///
-/// # Panics
-///
-/// - `options` does not contain `bootstrap.servers` as a key
-///
-/// # Errors
-///
-/// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
-pub async fn create_consumer(
-    connection_context: &ConnectionContext,
-    kafka_connection: &KafkaConnection,
-    topic: &str,
-) -> Result<Arc<BaseConsumer<BrokerRewritingClientContext<KafkaErrCheckContext>>>, PlanError> {
-    let consumer: BaseConsumer<_> = kafka_connection
-        .create_with_context(
-            connection_context,
-            KafkaErrCheckContext::default(),
-            &BTreeMap::new(),
-        )
-        .await
-        .map_err(|e| sql_err!("{}", e))?;
-    let consumer = Arc::new(consumer);
-
-    let context = Arc::clone(consumer.context());
-    let owned_topic = String::from(topic);
-    // Wait for a metadata request for up to one second. This greatly
-    // increases the probability that we'll see a connection error if
-    // e.g. the hostname was mistyped. librdkafka doesn't expose a
-    // better API for asking whether a connection succeeded or failed,
-    // unfortunately.
-    task::spawn_blocking(move || format!("kafka_get_metadata:{topic}"), {
-        let consumer = Arc::clone(&consumer);
-        move || {
-            let _ = consumer.fetch_metadata(Some(&owned_topic), Duration::from_secs(1));
-        }
-    })
-    .await
-    .map_err(|e| sql_err!("{}", e))?;
-    let error = context.inner().error.lock().expect("lock poisoned");
-    if let Some(error) = &*error {
-        sql_bail!("librdkafka: {}", error)
-    }
-    Ok(consumer)
 }
 
 /// Returns start offsets for the partitions of `topic` and the provided
@@ -253,26 +92,19 @@ pub async fn create_consumer(
 /// 0.10.0), the current end offset is returned for the partition.
 ///
 /// The provided `START TIMESTAMP` option must be a non-zero number:
-/// * Non-Negative numbers will used as is (e.g. `1622659034343`)
+/// * Non-negative numbers will used as is (e.g. `1622659034343`)
 /// * Negative numbers will be translated to a timestamp in millis
 ///   before now (e.g. `-10` means 10 millis ago)
-///
-/// If `START TIMESTAMP` has not been configured, an empty Option is
-/// returned.
 pub async fn lookup_start_offsets<C>(
     consumer: Arc<BaseConsumer<C>>,
     topic: &str,
-    offsets: KafkaStartOffsetType,
+    time_offset: i64,
     now: u64,
-) -> Result<Option<Vec<i64>>, PlanError>
+    fetch_metadata_timeout: Duration,
+) -> Result<Vec<i64>, PlanError>
 where
     C: ConsumerContext + 'static,
 {
-    let time_offset = match offsets {
-        KafkaStartOffsetType::StartTimestamp(time) => time,
-        _ => return Ok(None),
-    };
-
     let time_offset = if time_offset < 0 {
         let now: i64 = now.try_into()?;
         let ts = now - time_offset.abs();
@@ -294,7 +126,7 @@ where
             let num_partitions = mz_kafka_util::client::get_partitions(
                 consumer.as_ref().client(),
                 &topic,
-                Duration::from_secs(10),
+                fetch_metadata_timeout,
             )
             .map_err(|e| sql_err!("{}", e))?
             .len();
@@ -334,7 +166,7 @@ where
                 );
             }
 
-            Ok(Some(start_offsets))
+            Ok(start_offsets)
         }
     })
     .await
@@ -355,37 +187,65 @@ where
     Ok(high)
 }
 
-/// Gets error strings from `rdkafka` when creating test consumers.
-#[derive(Default, Debug)]
-pub struct KafkaErrCheckContext {
-    pub error: Mutex<Option<String>>,
+/// Validates that the provided start offsets are valid for the specified topic.
+/// At present, the validation is merely that there are not more start offsets
+/// than parts in the topic.
+pub async fn validate_start_offsets<C>(
+    consumer: Arc<BaseConsumer<C>>,
+    topic: &str,
+    start_offsets: Vec<i64>,
+    fetch_metadata_timeout: Duration,
+) -> Result<(), PlanError>
+where
+    C: ConsumerContext + 'static,
+{
+    // TODO(guswynn): see if we can add broker to this name
+    task::spawn_blocking(|| format!("kafka_validate_start_offsets:{topic}"), {
+        let topic = topic.to_string();
+        move || {
+            let num_partitions = mz_kafka_util::client::get_partitions(
+                consumer.as_ref().client(),
+                &topic,
+                fetch_metadata_timeout,
+            )
+            .map_err(|e| sql_err!("{}", e))?
+            .len();
+            if start_offsets.len() > num_partitions {
+                sql_bail!(
+                    "START OFFSET specified more partitions ({}) than topic ({}) contains ({})",
+                    start_offsets.len(),
+                    topic,
+                    num_partitions
+                )
+            }
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| sql_err!("{}", e))?
 }
 
-impl ConsumerContext for KafkaErrCheckContext {}
-
-impl ClientContext for KafkaErrCheckContext {
-    // `librdkafka` doesn't seem to propagate all errors up the stack, but does
-    // log them, so we are currently relying on the `log` callback for error
-    // handling in some situations.
-    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        use rdkafka::config::RDKafkaLogLevel::*;
-        // `INFO` messages with a `fac` of `FAIL` occur when e.g. connecting to
-        // an SSL-authed broker without credentials.
-        if fac == "FAIL" || matches!(level, Emerg | Alert | Critical | Error) {
-            let mut error = self.error.lock().expect("lock poisoned");
-            // Do not allow logging to overwrite other values if
-            // present.
-            if error.is_none() {
-                *error = Some(log_message.to_string());
-            }
+/// Validates that we can connect to the broker and obtain metadata about the topic.
+pub async fn ensure_topic_exists<C>(
+    consumer: Arc<BaseConsumer<C>>,
+    topic: &str,
+    fetch_metadata_timeout: Duration,
+) -> Result<(), PlanError>
+where
+    C: ConsumerContext + 'static,
+{
+    task::spawn_blocking(|| format!("kafka_ensure_topic_exists:{topic}"), {
+        let topic = topic.to_string();
+        move || {
+            mz_kafka_util::client::get_partitions(
+                consumer.as_ref().client(),
+                &topic,
+                fetch_metadata_timeout,
+            )
+            .map_err(|e| sql_err!("{}", e))?;
+            Ok(())
         }
-        MzClientContext.log(level, fac, log_message)
-    }
-    // Refer to the comment on the `log` callback.
-    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        // Allow error to overwrite value irrespective of other conditions
-        // (i.e. logging).
-        *self.error.lock().expect("lock poisoned") = Some(reason.to_string());
-        MzClientContext.error(error, reason)
-    }
+    })
+    .await
+    .map_err(|e| sql_err!("{}", e))?
 }

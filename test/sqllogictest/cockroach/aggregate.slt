@@ -21,6 +21,11 @@ mode cockroach
 
 subtest other
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE kv (
   k INT PRIMARY KEY,
@@ -47,7 +52,7 @@ SELECT array_agg(1) FROM kv
 ----
 NULL
 
-statement error db error: ERROR: function json_agg\(integer\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(1) FROM kv
 ----
 NULL
@@ -77,7 +82,7 @@ SELECT array_agg(v) FROM kv
 ----
 NULL
 
-statement error db error: ERROR: function json_agg\(integer\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(v) FROM kv
 ----
 NULL
@@ -99,7 +104,7 @@ SELECT array_agg(1)
 ----
 {1}
 
-statement error db error: ERROR: function json_agg\(integer\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(1)
 
 query T
@@ -114,7 +119,7 @@ SELECT count(NULL)
 ----
 0
 
-statement error db error: ERROR: function json_agg\(unknown\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(NULL)
 
 query T
@@ -186,7 +191,7 @@ SELECT array_agg(1) FROM kv
 ----
 {1,1,1,1,1,1}
 
-statement error db error: ERROR: function json_agg\(integer\) does not exist
+statement error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(1) FROM kv
 
 query T
@@ -242,10 +247,10 @@ SELECT * FROM kv GROUP BY v, count(DISTINCT w)
 query error aggregate functions are not allowed in GROUP BY
 SELECT count(DISTINCT w) FROM kv GROUP BY 1
 
-query error Expected end of statement, found identifier
+query error aggregate functions are not allowed in RETURNING clause \(function pg_catalog.sum\)
 INSERT INTO kv (k, v) VALUES (99, 100) RETURNING sum(v)
 
-query error LIMIT must be an integer constant
+query error aggregate functions are not allowed in LIMIT \(function pg_catalog.sum\)
 SELECT sum(v) FROM kv GROUP BY k LIMIT sum(v)
 
 query error OFFSET must be an integer constant
@@ -596,7 +601,7 @@ SELECT array_agg(s) FROM kv WHERE s IS NULL
 ----
 {NULL}
 
-query error db error: ERROR: function json_agg\(text\) does not exist
+query error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(s) FROM kv WHERE s IS NULL
 
 query T
@@ -693,13 +698,13 @@ SELECT avg(b), sum(b) FROM abc
 # ----
 # 3 years 5 mons 7 days 00:00:19
 
-query error db error: ERROR: function pg_catalog\.sum\(character varying\) does not exist
+query error db error: ERROR: function sum\(character varying\) does not exist
 SELECT avg(a) FROM abc
 
-query error db error: ERROR: function pg_catalog\.sum\(boolean\) does not exist
+query error db error: ERROR: function sum\(boolean\) does not exist
 SELECT avg(c) FROM abc
 
-query error db error: ERROR: function pg_catalog\.sum\(record\(f1: character varying,f2: boolean\?\)\) does not exist
+query error db error: ERROR: function sum\(record\(f1: character varying,f2: boolean\?\)\) does not exist
 SELECT avg((a,c)) FROM abc
 
 query error db error: ERROR: function sum\(character varying\) does not exist
@@ -903,7 +908,7 @@ false false
 query error concat_agg not yet supported
 SELECT concat_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
-query error db error: ERROR: function json_agg\(text\) does not exist
+query error db error: ERROR: function "json_agg" does not exist
 SELECT json_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
 # This is arguably wrong--we don't respect the inner ORDER BY--because we don't
@@ -1168,7 +1173,7 @@ ORDER BY company_id;
 3  C
 4  D
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT company_id, string_agg(employee::BYTEA, b',')
 FROM string_agg_test
 GROUP BY company_id
@@ -1185,7 +1190,7 @@ ORDER BY company_id;
 3  CCC
 4  DDDD
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT company_id, string_agg(employee::BYTEA, b'')
 FROM string_agg_test
 GROUP BY company_id
@@ -1255,103 +1260,202 @@ ORDER BY company_id;
 
 # Now test the window function version of string_agg.
 
-query error supported
+query IT
 SELECT company_id, string_agg(employee, ',')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  A
+2  B
+2  B,B
+3  C
+3  C,C
+3  C,C,C
+4  D
+4  D,D
+4  D,D,D
+4  D,D,D,D
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT company_id, string_agg(employee::BYTEA, b',')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(employee, '')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  A
+2  B
+2  BB
+3  C
+3  CC
+3  CCC
+4  D
+4  DD
+4  DDD
+4  DDDD
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT company_id, string_agg(employee::BYTEA, b'')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(employee, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  A
+2  B
+2  BB
+3  C
+3  CC
+3  CCC
+4  D
+4  DD
+4  DDD
+4  DDDD
 
-query error supported
+query error string_agg on BYTEA not yet supported
 SELECT company_id, string_agg(employee::BYTEA, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(NULL::TEXT, employee)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  NULL
+2  NULL
+2  NULL
+3  NULL
+3  NULL
+3  NULL
+4  NULL
+4  NULL
+4  NULL
+4  NULL
 
-query error supported
+query error string_agg on BYTEA not yet supported
 SELECT company_id, string_agg(NULL::BYTEA, employee::BYTEA)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(NULL::TEXT, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  NULL
+2  NULL
+2  NULL
+3  NULL
+3  NULL
+3  NULL
+4  NULL
+4  NULL
+4  NULL
+4  NULL
 
-query error supported
+query error string_agg on BYTEA not yet supported
 SELECT company_id, string_agg(NULL::BYTEA, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(NULL, NULL::TEXT)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  NULL
+2  NULL
+2  NULL
+3  NULL
+3  NULL
+3  NULL
+4  NULL
+4  NULL
+4  NULL
+4  NULL
 
-query error supported
+query error string_agg on BYTEA not yet supported
 SELECT company_id, string_agg(NULL, NULL::BYTEA)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query IT
 SELECT company_id, string_agg(NULL, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  NULL
+2  NULL
+2  NULL
+3  NULL
+3  NULL
+3  NULL
+4  NULL
+4  NULL
+4  NULL
+4  NULL
 
-query error supported
+query IT
 SELECT company_id, string_agg(employee, lower(employee))
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  A
+2  BbB
+2  BbB
+3  CcCcC
+3  CcCcC
+3  CcCcC
+4  DdDdDdD
+4  DdDdDdD
+4  DdDdDdD
+4  DdDdDdD
 
-query error supported
+query IT
 SELECT company_id, string_agg(lower(employee), employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
+----
+1  a
+2  bBb
+2  bBb
+3  cCcCc
+3  cCcCc
+3  cCcCc
+4  dDdDdDd
+4  dDdDdDd
+4  dDdDdDd
+4  dDdDdDd
 
-query error supported
+query error db error: ERROR: function string_agg\(text, text, text\) does not exist
 SELECT company_id, string_agg(employee, employee, employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query error db error: ERROR: function string_agg\(text\) does not exist
 SELECT company_id, string_agg(employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
@@ -1383,7 +1487,7 @@ ORDER BY e.company_id;
 ----
 1  A,␠B,␠C,␠D
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTEA, company_id
@@ -1406,7 +1510,7 @@ ORDER BY e.company_id;
 ----
 1  A,␠B,␠C,␠D
 
-query error unknown catalog item 'b'
+query error type "b" does not exist
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTEA, company_id

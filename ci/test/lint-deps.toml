@@ -1,0 +1,73 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Configuration file for cargo-deplint
+#
+# If you find yourself here because CI failed on a PR, please don't blindly edit
+# out lints :D. Danhhz is always happy to discuss crate structure if you need
+# help fitting a change into these rules.
+
+# Keep various large crates from depending on frequently changing ones, so that
+# development iteration doesn't invalidate them.
+[[deny]]
+name = "mz-transform"
+dependencies = [
+    "mz-compute-client",
+    "mz-storage-client",
+    "mz-stash",
+]
+
+[[deny]]
+name = "mz-sql"
+dependencies = [
+    "mz-compute-client",
+    "mz-storage-client",
+    "mz-stash",
+]
+
+[[deny]]
+name = "mz-compute"
+dependencies = [
+    "mz-storage-controller",
+    "mz-storage",
+    "mz-stash",
+]
+
+[[deny]]
+name = "mz-storage"
+dependencies = [
+    "mz-storage-controller",
+    "mz-compute",
+    "mz-stash",
+]
+
+# Keep various crates in only one of environmentd or clusterd.
+[[deny]]
+name = "mz-environmentd"
+dependencies = [
+    "mz-compute",
+    "mz-rocksdb",
+    "mz-storage",
+    "mz-storage-operators",
+]
+
+[[deny]]
+name = "mz-clusterd"
+dependencies = [
+    "mz-storage-controller",
+    "mz-stash",
+]
+
+# Persist is meant to be a strong enough abstraction that it doesn't depend on
+# mz internals like Row.
+[[deny]]
+name = "mz-persist-client"
+dependencies = [
+    "mz-repr",
+]
