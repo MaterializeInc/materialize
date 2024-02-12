@@ -962,7 +962,10 @@ where
             }
         };
 
-        self.log_operator_hydration(&mut bundle, lir_id);
+        if self.enable_operator_hydration_status_logging {
+            self.log_operator_hydration(&mut bundle, lir_id);
+        }
+
         bundle
     }
 

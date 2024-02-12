@@ -108,6 +108,8 @@ pub struct ComputeState {
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
+    /// Enable operator hydration status logging
+    pub enable_operator_hydration_status_logging: bool,
     /// Other configuration for compute
     pub context: ComputeInstanceContext,
 
@@ -147,6 +149,7 @@ impl ComputeState {
             linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
+            enable_operator_hydration_status_logging: true,
             context,
             hydration_rx,
             hydration_tx,
@@ -232,6 +235,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             enable_mz_join_core,
             enable_jemalloc_profiling,
             enable_columnation_lgalloc,
+            enable_operator_hydration_status_logging,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -289,6 +293,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
             }
             None => {}
+        }
+        if let Some(v) = enable_operator_hydration_status_logging {
+            self.compute_state.enable_operator_hydration_status_logging = v;
         }
 
         persist.apply(self.compute_state.persist_clients.cfg());

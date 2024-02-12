@@ -88,6 +88,8 @@ where
     pub(super) hydration_logger: Option<HydrationLogger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
+    /// Whether to log operator hydration status.
+    pub(super) enable_operator_hydration_status_logging: bool,
 }
 
 impl<S: Scope> Context<S>
@@ -129,6 +131,8 @@ where
             shutdown_token: Default::default(),
             hydration_logger,
             linear_join_spec: compute_state.linear_join_spec,
+            enable_operator_hydration_status_logging: compute_state
+                .enable_operator_hydration_status_logging,
         }
     }
 }
