@@ -20,9 +20,94 @@ use serde::{Deserialize, Serialize};
 
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use once_cell::sync::Lazy;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.statistics.rs"));
+
+pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        // Id of the source (or subsource).
+        .with_column("id", ScalarType::String.nullable(false))
+        //
+        // Counters
+        //
+        // A counter of the messages we have read from upstream for this source.
+        // Never resets.
+        .with_column("messages_received", ScalarType::UInt64.nullable(false))
+        // A counter of the bytes we have read from upstream for this source.
+        // Never resets.
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+        // A counter of the updates we have staged to commit for this source.
+        // Never resets.
+        .with_column("updates_staged", ScalarType::UInt64.nullable(false))
+        // A counter of the updates we have committed for this source.
+        // Never resets.
+        .with_column("updates_committed", ScalarType::UInt64.nullable(false))
+        //
+        // Resetting gauges
+        //
+        // A gauge of the number of records in the envelope state. 0 for sources
+        // Resetted when the source is restarted, for any reason.
+        .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
+        // A gauge of the number of bytes in the envelope state. 0 for sources
+        // Resetted when the source is restarted, for any reason.
+        .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
+        // A gauge that shows the duration of rehydration. `NULL` before rehydration
+        // is done.
+        // Resetted when the source is restarted, for any reason.
+        .with_column("rehydration_latency", ScalarType::Interval.nullable(true))
+        // A gauge of the number of _values_ (source defined unit) the _snapshot_ of this source
+        // contains.
+        // Sometimes resetted when the source can snapshot new pieces of upstream (like Postgres and
+        // MySql).
+        // (like pg and mysql) may repopulate this column when tables are added.
+        //
+        // `NULL` while we discover the snapshot size.
+        .with_column("snapshot_total", ScalarType::UInt64.nullable(true))
+        // A gauge of the number of _values_ (source defined unit) we have read of the _snapshot_
+        // of this source.
+        // Sometimes resetted when the source can snapshot new pieces of upstream (like Postgres and
+        // MySql).
+        //
+        // `NULL` while we discover the snapshot size.
+        .with_column("snapshot_read", ScalarType::UInt64.nullable(true))
+        //
+        // Non-resetting gauges
+        //
+        // Whether or not the snapshot for the source has been committed. Never resets.
+        .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
+        // The following are not yet reported by sources and have 0 or `NULL` values.
+        // They have been added here to reduce churn changing the schema of this collection.
+        //
+        // A gauge of the number of _values_ (source defined unit) available to be read from upstream.
+        // Never resets. Not to be confused with any of the counters above.
+        .with_column("upstream_values", ScalarType::UInt64.nullable(false))
+        // A gauge of the number of _values_ (source defined unit) we have committed.
+        // Never resets. Not to be confused with any of the counters above.
+        .with_column("committed_values", ScalarType::UInt64.nullable(false))
+});
+
+pub static MZ_SINK_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        // Id of the sink.
+        .with_column("id", ScalarType::String.nullable(false))
+        //
+        // Counters
+        //
+        // A counter of the messages we have staged to upstream.
+        // Never resets.
+        .with_column("messages_staged", ScalarType::UInt64.nullable(false))
+        // A counter of the messages we have committed.
+        // Never resets.
+        .with_column("messages_committed", ScalarType::UInt64.nullable(false))
+        // A counter of the bytes we have staged to upstream.
+        // Never resets.
+        .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
+        // A counter of the bytes we have committed.
+        // Never resets.
+        .with_column("bytes_committed", ScalarType::UInt64.nullable(false))
+});
 
 /// A trait that abstracts over user-facing statistics objects, used
 /// by `spawn_statistics_scraper`.
