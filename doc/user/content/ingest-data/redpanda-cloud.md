@@ -120,3 +120,142 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
     formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
     You can find more details about the various different supported formats and
     possible configurations in the [reference documentation](/sql/create-source/kafka/).
+
+6. #### Connecting via AWS Privatelink
+    It is also possible to connect Redpanda and Materialize via AWS Privatelink.
+    This requires that you are using Redpanda Cloud, have deployed Redpanda in an region
+    supported by Materialize, and have the AWS Privatelink feature enabled on your
+    Redpanda cloud account.
+
+    The following is an example of this setup in AWS us-east-1:
+
+    a. Alter your Redpanda cluster to enable privatelink with an empty `allowed_principals` field
+     using the following script template. Be sure to record the privatelink service name.
+    **Note:** This creation can take about 15 minutes. You can re-run this script, or just the GET request, periodically until it resolves.
+
+    Example script:
+    ```bash
+    PUBLIC_API_ENDPOINT="https://api.cloud.redpanda.com"
+    REGION=US-EAST-1
+    CLOUD_CLIENT_ID="<your-redpanda-client-id>"
+    CLOUD_CLIENT_SECRET="<your-redpanda-client-secret>"
+    CLUSTER_ID="<your-redpanda-cluster-id>"
+    NAMESPACE_ID="<your-redpanda-namespace-id>"
+
+    AUTH_TOKEN=$(
+      curl -s -X POST 'https://auth.prd.cloud.redpanda.com/oauth/token' \
+             -H 'content-type: application/x-www-form-urlencoded' \
+             -d grant_type=client_credentials \
+             -d client_id=$CLOUD_CLIENT_ID \
+             -d client_secret=$CLOUD_CLIENT_SECRET \
+             -d audience=cloudv2-production.redpanda.cloud | jq .access_token | sed 's/"//g'
+    )
+
+    CLUSTER_PATCH_BODY="$(cat <<EOF
+     {
+       "private_link": {
+         "enabled": true,
+         "aws": {
+           "allowed_principals": [ ]
+         }
+       }
+     }
+    EOF
+    )"
+
+    curl -X PATCH \
+       -H "Content-Type: application/json" \
+       -H "Authorization: Bearer $AUTH_TOKEN" \
+       -d "$CLUSTER_PATCH_BODY" \
+        $PUBLIC_API_ENDPOINT/v1beta1/clusters/$CLUSTER_ID
+
+    curl -X GET \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $AUTH_TOKEN" \
+        $PUBLIC_API_ENDPOINT/v1beta1/clusters/$CLUSTER_ID | jq \
+        '.private_link'
+    ```
+
+    b. Create a Privatelink connection in Materialize using the service name
+    recorded above. Be sure to specify all availability zones of your
+    Redpanda Cloud cluster.
+    ```sql
+    CREATE CONNECTION rp_privatelink TO AWS PRIVATELINK (
+      SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-abcdefghijk',
+      AVAILABILITY ZONES ('use1-az4','use1-az1','use1-az2')
+    );
+    ```
+
+    c. Find the connection ARN created by Materialize for the privatelink connection.
+    ```
+    SELECT principal
+    FROM mz_aws_privatelink_connections plc
+    JOIN mz_connections c ON plc.id = c.id
+    WHERE c.name = 'rp_privatelink';
+    ```
+
+    d. Patch your Redpanda cluster to allow the Materialize connection ARN.
+    ```bash
+    PUBLIC_API_ENDPOINT="https://api.cloud.redpanda.com"
+    REGION=US-EAST-1
+    CLOUD_CLIENT_ID="<your-redpanda-client-id>"
+    CLOUD_CLIENT_SECRET="<your-redpanda-client-secret>"
+    CLUSTER_ID="<your-redpanda-cluster-id>"
+    NAMESPACE_ID="<your-redpanda-namespace-id>"
+
+    MATERIALIZE_CONNECTION_ARN="<arn-created-for-materialize-aws-privatelink-connection>"
+
+    AUTH_TOKEN=$(
+    curl -s -X POST 'https://auth.prd.cloud.redpanda.com/oauth/token' \
+           -H 'content-type: application/x-www-form-urlencoded' \
+           -d grant_type=client_credentials \
+           -d client_id=$CLOUD_CLIENT_ID \
+           -d client_secret=$CLOUD_CLIENT_SECRET \
+           -d audience=cloudv2-production.redpanda.cloud | jq .access_token | sed 's/"//g'
+    )
+
+    CLUSTER_PATCH_BODY="$(cat <<EOF
+     {
+       "private_link": {
+         "enabled": true,
+         "aws": { "allowed_principals": ["$MATERIALIZE_CONNECTION_ARN"] }
+       }
+     }
+    EOF
+    )"
+
+    curl -X PATCH \
+       -H "Content-Type: application/json" \
+       -H "Authorization: Bearer $AUTH_TOKEN" \
+       -d "$CLUSTER_PATCH_BODY" \
+       $PUBLIC_API_ENDPOINT/v1beta1/clusters/$CLUSTER_ID
+    ```
+    e. Wait for the Materialize AWS Privatelink connection to become valid.
+    **Note:** This could take several minutes and may report errors like:
+    `Error: Endpoint cannot be discovered` while the policies are being updated
+    and the endpoint resources are being re-evaluated. If the validation errors persist
+    for longer than 10 minutes, double check the ARNs and service names and reach out
+    to Materialize Support.
+    ```sql
+    VALIDATE CONNECTION rp_privatelink;
+    ```
+    f. Finally, using the Materialize AWS Privatelink connectiopn you created above,
+    create a kafka connection to Redpanda and a source for your topics.
+
+    ```sql
+    CREATE SECRET redpanda_username AS '<your-username>';
+    CREATE SECRET redpanda_password AS '<your-password>';
+    CREATE SECRET redpanda_ca_cert AS  decode('<redpanda-broker-ca-cert>', 'base64'); -- The base64 encoded certificate
+
+    CREATE CONNECTION <redpanda_cloud> TO KAFKA (
+        AWS PRIVATELINK rp_privatleink (PORT 30292)
+        SASL MECHANISMS = 'SCRAM-SHA-256',
+        SASL USERNAME = SECRET redpanda_username,
+        SASL PASSWORD = SECRET redpanda_password,
+        SSL CERTIFICATE AUTHORITY = SECRET redpanda_ca_cert
+    );
+
+    CREATE SOURCE <topic-name>
+      FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
+      FORMAT JSON;
+    ```
