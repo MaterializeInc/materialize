@@ -315,6 +315,7 @@ impl Coordinator {
         let internal_view_id = self.allocate_transient_id()?;
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
 
         // Build an optimizer for this MATERIALIZED VIEW.

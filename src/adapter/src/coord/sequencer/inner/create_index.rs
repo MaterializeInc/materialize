@@ -228,6 +228,7 @@ impl Coordinator {
             self.allocate_transient_id()?
         };
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
 
         // Build an optimizer for this INDEX.

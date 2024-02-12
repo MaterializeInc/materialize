@@ -67,6 +67,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
+use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
@@ -151,7 +152,34 @@ where
 // Optimizer configuration
 // -----------------------
 
-// Feature flags for the optimizer.
+/// Feature flags for the optimizer.
+///
+/// To add a new feature flag, do the following steps:
+///
+/// 1. To make the flag available to all stages in our [`Optimize`] pipelines:
+///    1. Add the flag as an [`OptimizerConfig`] field.
+///
+/// 2. To allow users to set a system-wide override for this feature flag:
+///    1. Add the flag to the `feature_flags!(...)` macro call.
+///    2. Extend the `From<&SystemVars>` implementation for [`OptimizerConfig`].
+///
+/// 3. To enable `EXPLAIN ... WITH(...)` overrides:
+///    1. Add the flag as a [`mz_repr::explain::ExplainConfig`] field.
+///    2. Add the flag to the `impl_simple_options!(ExplainPlanOption {...})`
+///       macro call.
+///    3. Extend the `TryFrom<ExplainPlanOptionExtracted>` implementation for
+///       [`mz_repr::explain::ExplainConfig`].
+///    4. Extend the `OverrideFrom<ExplainContext>` implementation for
+///       [`OptimizerConfig`].
+///
+/// 4. To enable `CLUSTER ... FEATURES(...)` overrides:
+///    1. Add the flag to the `optimizer_feature_flags!(...)` macro call.
+///    2. Add the flag to the `impl_simple_options!(ClusterFeature {...})` macro
+///       call.
+///    2. Extend the `let optimizer_feature_overrides = ...` call in
+///       `plan_create_cluster`.
+///    4. Extend the `OverrideFrom<OptimizerFeatureOverrides>` implementation
+///       for [`OptimizerConfig`].
 #[derive(Clone, Debug)]
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.
@@ -209,6 +237,32 @@ pub trait OverrideFrom<T> {
     fn override_from(self, layer: &T) -> Self;
 }
 
+/// [`OptimizerConfig`] overrides coming from an optional `T`.
+impl<T> OverrideFrom<Option<&T>> for OptimizerConfig
+where
+    Self: OverrideFrom<T>,
+{
+    fn override_from(self, layer: &Option<&T>) -> Self {
+        match layer {
+            Some(layer) => self.override_from(layer),
+            None => self,
+        }
+    }
+}
+
+/// [`OptimizerConfig`] overrides coming from a [`OptimizerFeatureOverrides`].
+impl OverrideFrom<OptimizerFeatureOverrides> for OptimizerConfig {
+    fn override_from(mut self, overrides: &OptimizerFeatureOverrides) -> Self {
+        if let Some(feature_value) = overrides.enable_new_outer_join_lowering {
+            self.enable_new_outer_join_lowering = feature_value;
+        }
+        if let Some(feature_value) = overrides.enable_eager_delta_joins {
+            self.enable_eager_delta_joins = feature_value;
+        }
+        self
+    }
+}
+
 /// [`OptimizerConfig`] overrides coming from an [`ExplainContext`].
 impl OverrideFrom<ExplainContext> for OptimizerConfig {
     fn override_from(mut self, ctx: &ExplainContext) -> Self {
@@ -229,7 +283,7 @@ impl OverrideFrom<ExplainContext> for OptimizerConfig {
             self.enable_eager_delta_joins = explain_flag;
         }
 
-        // Return final result.
+        // Return the final result.
         self
     }
 }
