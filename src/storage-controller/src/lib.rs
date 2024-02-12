@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
@@ -1985,6 +1986,14 @@ where
 
         self.txns_init_run = true;
         Ok(())
+    }
+
+    fn real_time_recent_timestamp(
+        &self,
+        _source_ids: BTreeSet<GlobalId>,
+    ) -> BoxFuture<'static, Self::Timestamp> {
+        // Dummy implementation
+        Box::pin(async { Self::Timestamp::minimum() })
     }
 }
 

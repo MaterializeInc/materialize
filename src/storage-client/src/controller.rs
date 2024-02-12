@@ -18,11 +18,12 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 use mz_persist_client::read::{Cursor, ReadHandle};
@@ -529,6 +530,11 @@ pub trait StorageController: Debug {
     /// good and there is no possibility of the old code running concurrently
     /// with the new code.
     async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
+
+    fn real_time_recent_timestamp(
+        &self,
+        source_ids: BTreeSet<GlobalId>,
+    ) -> BoxFuture<'static, Self::Timestamp>;
 }
 
 /// State maintained about individual collections.

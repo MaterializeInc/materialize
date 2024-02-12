@@ -5873,6 +5873,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "differential-dataflow",
+ "futures",
  "http",
  "itertools",
  "maplit",
