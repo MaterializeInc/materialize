@@ -36,6 +36,7 @@ pub mod explain;
 pub mod fixed_length;
 pub mod global_id;
 pub mod namespaces;
+pub mod optimize;
 pub mod role_id;
 pub mod stats;
 pub mod strconv;
