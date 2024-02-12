@@ -22,6 +22,7 @@ $ mysql-connect name=mysql-replica url=mysql://root@mysql-replica password=${arg
 # Create some data on the primary
 #
 $ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 CREATE TABLE t1 (f1 INTEGER);

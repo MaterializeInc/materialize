@@ -81,6 +81,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         *args.filter,
     )
 
+    # run additional workflows
+    for workflow in [
+        workflow_replica_connection,
+        workflow_schema_change_restart,
+    ]:
+        workflow(c, parser)
+
 
 def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized", "mysql", "mysql-replica")
@@ -97,13 +104,13 @@ def workflow_schema_change_restart(
     Validates that a schema change done to a table after the MySQL source is created
     but before the snapshot is completed is detected after a restart.
     """
-    with c.override(Testdrive(no_reset=True)):
-        c.up("materialized", "mysql")
-        c.run_testdrive_files(
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-            "schema-restart/before-restart.td",
-        )
+    c.up("materialized", "mysql")
+    c.run_testdrive_files(
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        "schema-restart/before-restart.td",
+    )
 
+    with c.override(Testdrive(no_reset=True)):
         # Restart mz
         c.kill("materialized")
         c.up("materialized")
