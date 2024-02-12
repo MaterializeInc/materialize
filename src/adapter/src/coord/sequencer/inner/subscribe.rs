@@ -25,6 +25,7 @@ use crate::subscribe::ActiveSubscribe;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
+#[async_trait::async_trait(?Send)]
 impl Staged for SubscribeStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {

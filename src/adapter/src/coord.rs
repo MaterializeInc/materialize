@@ -779,6 +779,7 @@ pub(crate) enum StageResult<T> {
 }
 
 /// Common functionality for [Coordinator::sequence_staged].
+#[async_trait::async_trait(?Send)]
 pub(crate) trait Staged: Send {
     fn validity(&mut self) -> &mut PlanValidity;
 

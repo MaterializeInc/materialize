@@ -26,6 +26,7 @@ use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext};
 
+#[async_trait::async_trait(?Send)]
 impl Staged for CreateViewStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {

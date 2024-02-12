@@ -36,6 +36,7 @@ use crate::session::Session;
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
+#[async_trait::async_trait(?Send)]
 impl Staged for CreateMaterializedViewStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
