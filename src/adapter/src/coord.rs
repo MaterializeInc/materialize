@@ -2864,20 +2864,21 @@ pub fn serve(
             .expect("missing EpochMillisseconds timestamp")
             .clone();
 
-        // Choose a time at which to boot. This is the time at which we will run
-        // internal migrations.
+        // Choose a time at which to boot. This is used, for example, to prune
+        // old storage usage data. Crucially, it is _not_ linearizable, we do
+        // not persist this timestamp before using it. Think hard about this
+        // fact if you ever feel the need to use this for something that needs
+        // to be linearizable.
         //
         // This time is usually the current system time, but with protection
         // against backwards time jumps, even across restarts.
-        let boot_ts = {
-            // WIP: @joe we have a chicken-and-egg problem here. Ideally we'd
-            // only use monotonic_now when we know we're using the Catalog
-            // oracle, and when using the Postgres oracle we'd only advance the
-            // timestamp by one. But we can only know that once we opened the
-            // Catalog.
-            //
-            // This is bad because we're potentially advancing the timestamp by
-            // 5 seconds, even though we don't have to.
+        let boot_ts_not_linearizable = {
+            // SUBTLE: This method will block if/when `max(now, previous_ts)` is
+            // larger than some upper bound, depending on how far that maximum
+            // is beyond the upper bound. This gives some measure of protection
+            // about the chosen boot_ts advancing beyond what was previously
+            // known, which could in turn make us delete storage usage records
+            // that we are not meant to delete.
             let boot_ts = catalog_oracle::monotonic_now(now.clone(), previous_ts);
             info!(%previous_ts, %boot_ts, "determining boot_ts");
 
@@ -2891,9 +2892,9 @@ pub fn serve(
         initial_timestamps
             .entry(Timeline::EpochMilliseconds)
             .and_modify(|ts| {
-                *ts = std::cmp::max(*ts, boot_ts);
+                *ts = std::cmp::max(*ts, boot_ts_not_linearizable);
             })
-            .or_insert(boot_ts);
+            .or_insert(boot_ts_not_linearizable);
 
         info!("coordinator init: opening catalog");
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
@@ -2922,7 +2923,7 @@ pub fn serve(
                         http_host_name,
                     },
                 },
-                boot_ts,
+                boot_ts_not_linearizable,
             )
             .await?;
         let session_id = catalog.config().session_id;
