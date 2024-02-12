@@ -97,8 +97,18 @@ class DataflowErrorRetraction(Check):
         return [
             Testdrive(s)
             for s in [
-                "> DELETE FROM dataflow_error_retraction_table WHERE f1 = 'abc'",
-                "> DELETE FROM dataflow_error_retraction_table WHERE f1 = 'klm'",
+                dedent(
+                    """
+                > SET statement_timeout = '60s'
+                > DELETE FROM dataflow_error_retraction_table WHERE f1 = 'abc'
+                """
+                ),
+                dedent(
+                    """
+                > SET statement_timeout = '60s'
+                > DELETE FROM dataflow_error_retraction_table WHERE f1 = 'klm'
+                """
+                ),
             ]
         ]
 
