@@ -25,7 +25,7 @@ use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
-use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
@@ -825,7 +825,7 @@ impl Coordinator {
     async fn message_real_time_recency_timestamp(
         &mut self,
         conn_id: ConnectionId,
-        real_time_recency_ts: mz_repr::Timestamp,
+        real_time_recency_ts: Result<mz_repr::Timestamp, StorageError>,
         mut validity: PlanValidity,
     ) {
         let real_time_recency_context =
@@ -834,6 +834,15 @@ impl Coordinator {
                 // Query was cancelled while waiting.
                 None => return,
             };
+
+        let real_time_recency_ts = match real_time_recency_ts {
+            Ok(rtr) => rtr,
+            Err(e) => {
+                let ctx = real_time_recency_context.take_context();
+                ctx.retire(Err(e.into()));
+                return;
+            }
+        };
 
         if let Err(err) = validity.check(self.catalog()) {
             let ctx = real_time_recency_context.take_context();

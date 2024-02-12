@@ -223,8 +223,15 @@ impl Coordinator {
                     return;
                 }
                 RealTimeRecency(stage) => {
-                    match self.peek_stage_real_time_recency(ctx, root_otel_ctx.clone(), stage) {
+                    match self
+                        .peek_stage_real_time_recency(ctx, root_otel_ctx.clone(), stage)
+                        .await
+                    {
                         Some((ctx, next)) => (ctx, PeekStage::TimestampReadHold(next)),
+                        // This branch includes propagating real-time-recency
+                        // errors and retiring the context. We can't do that
+                        // easily in the return because the caller takes
+                        // ownership of the ctx.
                         None => return,
                     }
                 }
@@ -653,7 +660,7 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_real_time_recency(
+    async fn peek_stage_real_time_recency(
         &mut self,
         ctx: ExecuteContext,
         root_otel_ctx: OpenTelemetryContext,
@@ -668,7 +675,18 @@ impl Coordinator {
             explain_ctx,
         }: PeekStageRealTimeRecency,
     ) -> Option<(ExecuteContext, PeekStageTimestampReadHold)> {
-        match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
+        let fut = match self
+            .recent_timestamp(ctx.session(), source_ids.iter().cloned())
+            .await
+        {
+            Ok(f) => f,
+            Err(e) => {
+                ctx.retire(Err(e.into()));
+                return None;
+            }
+        };
+
+        match fut {
             Some(fut) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = ctx.session().conn_id().clone();

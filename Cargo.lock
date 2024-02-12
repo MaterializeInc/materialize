@@ -5932,6 +5932,7 @@ dependencies = [
  "mz-stash-types",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-timely-util",
  "mz-tls-util",
  "once_cell",
  "proptest",

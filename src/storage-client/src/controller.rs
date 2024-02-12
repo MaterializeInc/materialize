@@ -531,10 +531,10 @@ pub trait StorageController: Debug {
     /// with the new code.
     async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
 
-    fn real_time_recent_timestamp(
+    async fn real_time_recent_timestamp(
         &self,
         source_ids: BTreeSet<GlobalId>,
-    ) -> BoxFuture<'static, Self::Timestamp>;
+    ) -> Result<BoxFuture<'static, Result<Self::Timestamp, StorageError>>, StorageError>;
 }
 
 /// State maintained about individual collections.

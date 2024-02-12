@@ -56,7 +56,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -390,14 +390,13 @@ where
 
     /// Produces a timestamp that reflects all data available in
     /// `source_ids` at the time of the function call.
-    #[allow(unused)]
-    #[allow(clippy::unused_async)]
-    pub fn recent_timestamp(
+    pub async fn recent_timestamp(
         &self,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> BoxFuture<'static, T> {
+    ) -> Result<BoxFuture<'static, Result<T, StorageError>>, StorageError> {
         self.storage
             .real_time_recent_timestamp(source_ids.collect())
+            .await
     }
 }
 
