@@ -34,7 +34,7 @@ when you query the source, the source may still be ingesting its initial
 snapshot. See the next section.
 
 ## Has my source ingested its initial snapshot?
-When you create a source, before it starts consuming the replication stream, Materialize takes an initial snapshot of the relevant tables in your publication. The initial snapshot is committed at one timestamp atomically to ensure correct and consistent results. As such, you will not be able to query data from your source until the initial snapshot is complete. 
+When you create a source, before it starts consuming the replication stream, Materialize takes an initial snapshot of the relevant tables in your publication. The initial snapshot is committed at one timestamp atomically to ensure correct and consistent results. As such, you will not be able to query data from your source until the initial snapshot is complete.
 
 Snapshotting can take between a few minutes to several hours, depending on the size of your dataset and the size of your ingestion cluster.
 

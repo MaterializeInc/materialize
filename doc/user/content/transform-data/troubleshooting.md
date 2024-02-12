@@ -35,7 +35,7 @@ If you find that one of the upstream materialized views or indexes is lagging, t
 #### Address
 To troubleshoot and fix a lagging materialized view or index, follow the steps in the [dataflow troubleshooting](/transform-data/dataflow-troubleshooting) guide.
 
-*Do you have multiple materialized views chained on top of each other? Are you seeing small amounts of lag?*\
+*Do you have multiple materialized views chained on top of each other? Are you seeing small amounts of lag?*<br>
 Tip: avoid intermediary materialized views where not necessary. Each chained materialized view incurs a small amount of processing lag from the previous one.
 <!-- TODO add more guidance on avoiding chained mat views-->
 
