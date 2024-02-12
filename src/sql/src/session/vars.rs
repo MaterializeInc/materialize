@@ -1362,7 +1362,7 @@ static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
 
 pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("default_idle_arrangement_merge_effort"),
-    value: 1000,
+    value: 0,
     description:
         "The default value to use for the `IDLE ARRANGEMENT MERGE EFFORT` cluster/replica option.",
     internal: true,
