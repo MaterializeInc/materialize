@@ -56,7 +56,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{StorageController, StorageMetadata, StorageTxn};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::TxnWalTablesImpl;
+use mz_storage_types::controller::{StorageError, TxnWalTablesImpl};
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -519,16 +519,22 @@ where
             .await;
     }
 
-    /// Produces a timestamp that reflects all data available in
-    /// `source_ids` at the time of the function call.
-    #[allow(unused)]
-    #[allow(clippy::unused_async)]
-    pub fn recent_timestamp(
+    /// Determine the "real-time recency" timestamp for all `ids`.
+    ///
+    /// Real-time recency is defined as the minimum value of `T` that all
+    /// objects can be queried at to return all data visible in the upstream
+    /// system the query was issued. In this case, "the upstream systems" are
+    /// any user sources that connect to objects outside of Materialize, such as
+    /// Kafka sources.
+    ///
+    /// If no items in `ids` connect to external systems, this function will
+    /// return `Ok(T::minimum)`.
+    pub async fn determine_real_time_recent_timestamp(
         &self,
-        source_ids: impl Iterator<Item = GlobalId>,
-    ) -> BoxFuture<'static, T> {
-        // Dummy implementation
-        Box::pin(async { T::minimum() })
+        ids: BTreeSet<GlobalId>,
+        timeout: Duration,
+    ) -> Result<BoxFuture<'static, Result<T, StorageError<T>>>, StorageError<T>> {
+        self.storage.real_time_recent_timestamp(ids, timeout).await
     }
 }
 

@@ -362,6 +362,17 @@ steps:
         agents:
           queue: linux-aarch64-small
 
+      - id: mysql-rtr
+        label: MySQL RTR tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/mysql-rtr]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-rtr
+        agents:
+          queue: linux-aarch64-small
+
   - group: "Postgres tests"
     key: postgres-tests
     steps:
@@ -386,6 +397,17 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
+        agents:
+          queue: linux-aarch64-small
+
+      - id: pg-rtr
+        label: Postgres RTR tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/pg-rtr]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-rtr
         agents:
           queue: linux-aarch64-small
 
@@ -460,6 +482,17 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-exactly-once
+        agents:
+          queue: linux-aarch64-small
+
+      - id: kafka-rtr
+        label: Kafka RTR tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-rtr
         agents:
           queue: linux-aarch64-small
 

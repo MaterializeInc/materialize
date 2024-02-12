@@ -29,7 +29,6 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -84,6 +83,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::watch::{channel, Sender};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::error::Elapsed;
 use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
@@ -93,6 +93,7 @@ mod collection_mgmt;
 mod collection_status;
 mod persist_handles;
 mod rehydration;
+mod rtr;
 mod statistics;
 
 #[derive(Debug)]
@@ -2632,6 +2633,105 @@ where
         );
 
         Ok(())
+    }
+
+    async fn real_time_recent_timestamp(
+        &self,
+        timestamp_objects: BTreeSet<GlobalId>,
+        timeout: Duration,
+    ) -> Result<
+        BoxFuture<'static, Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    > {
+        use mz_storage_types::sources::GenericSourceConnection;
+
+        let mut rtr_futures = BTreeMap::new();
+
+        // Only user sources can be read from w/ RTR.
+        for id in timestamp_objects.into_iter().filter(GlobalId::is_user) {
+            let collection = match self.collection(id) {
+                Ok(c) => c,
+                // Not a storage item, which we accept.
+                Err(_) => continue,
+            };
+
+            let (source_conn, remap_id) = match &collection.description.data_source {
+                DataSource::Ingestion(IngestionDescription {
+                    desc: SourceDesc { connection, .. },
+                    remap_collection_id,
+                    ..
+                }) => match connection {
+                    GenericSourceConnection::Kafka(_)
+                    | GenericSourceConnection::Postgres(_)
+                    | GenericSourceConnection::MySql(_) => {
+                        (connection.clone(), *remap_collection_id)
+                    }
+
+                    // These internal sources do not yet (and might never)
+                    // support RTR. However, erroring if they're selected from
+                    // poses an annoying user experience, so instead just skip
+                    // over them.
+                    GenericSourceConnection::LoadGenerator(_) => continue,
+                },
+                // Skip over all other objects
+                _ => {
+                    continue;
+                }
+            };
+
+            // Prepare for getting the external system's frontier.
+            let config = self.config().clone();
+
+            // Determine the remap collection we plan to read from.
+            //
+            // Note that the process of reading from the remap shard is the same
+            // as other areas in this code that do the same thing, but we inline
+            // it here because we must prove that we have not taken ownership of
+            // `self` to move the stream of data from the remap shard into a
+            // future.
+            let read_handle = self.read_handle_for_snapshot(remap_id).await?;
+
+            let remap_collection = self.collection(remap_id)?;
+            let remap_as_of = remap_collection
+                .implied_capability
+                .clone()
+                .into_option()
+                .ok_or(StorageError::ReadBeforeSince(remap_id))?;
+
+            rtr_futures.insert(
+                id,
+                tokio::time::timeout(timeout, async move {
+                    use mz_storage_types::sources::SourceConnection as _;
+
+                    // Fetch the remap shard's contents; we must do this first so
+                    // that the `as_of` doesn't change.
+                    let as_of = Antichain::from_elem(remap_as_of);
+                    let remap_subscribe = read_handle
+                        .subscribe(as_of.clone())
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(remap_id))?;
+
+                    tracing::debug!(?id, type_ = source_conn.name(), upstream = ?source_conn.upstream_name(), "fetching real time recency");
+
+                    rtr::real_time_recency_ts(source_conn, id, config, as_of, remap_subscribe)
+                        .await.map_err(|e| {
+                            tracing::debug!(?id, "real time recency error: {:?}", e);
+                            e
+                        })
+                }),
+            );
+        }
+
+        Ok(Box::pin(async move {
+            let (ids, futs): (Vec<_>, Vec<_>) = rtr_futures.into_iter().unzip();
+            ids.into_iter()
+                .zip_eq(futures::future::join_all(futs).await)
+                .try_fold(T::minimum(), |curr, (id, per_source_res)| {
+                    let new =
+                        per_source_res.map_err(|_e: Elapsed| StorageError::RtrTimeout(id))??;
+                    Ok::<_, StorageError<Self::Timestamp>>(std::cmp::max(curr, new))
+                })
+        }))
     }
 }
 

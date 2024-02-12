@@ -741,6 +741,11 @@ impl SessionVars {
         *self.expect_value(&REAL_TIME_RECENCY)
     }
 
+    /// Returns the value of the `real_time_recency_timeout` configuration parameter.
+    pub fn real_time_recency_timeout(&self) -> &Duration {
+        self.expect_value(&REAL_TIME_RECENCY_TIMEOUT)
+    }
+
     /// Returns the value of `emit_plan_insights_notice` configuration parameter.
     pub fn emit_plan_insights_notice(&self) -> bool {
         *self.expect_value(&EMIT_PLAN_INSIGHTS_NOTICE)
@@ -1080,6 +1085,7 @@ impl SystemVars {
                 &EXTRA_FLOAT_DIGITS,
                 &INTEGER_DATETIMES,
                 &INTERVAL_STYLE,
+                &REAL_TIME_RECENCY_TIMEOUT,
                 &SEARCH_PATH,
                 &STANDARD_CONFORMING_STRINGS,
                 &STATEMENT_TIMEOUT,

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
-use tokio_postgres::Client;
+use tokio_postgres::{types::PgLsn, Client};
 
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
@@ -162,4 +162,18 @@ pub async fn get_timeline_id(replication_client: &Client) -> Result<u64, Postgre
             "IDENTIFY_SYSTEM did not return a result row"
         )))
     }
+}
+
+pub async fn get_current_wal_lsn(
+    ssh_tunnel_manager: &SshTunnelManager,
+    config: Config,
+) -> Result<PgLsn, PostgresError> {
+    let client = config
+        .connect("postgres_wal_lsn", ssh_tunnel_manager)
+        .await?;
+
+    let row = client.query_one("SELECT pg_current_wal_lsn()", &[]).await?;
+    let lsn: PgLsn = row.get(0);
+
+    Ok(lsn)
 }

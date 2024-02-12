@@ -26,7 +26,7 @@ use crate::connections::inline::{
     ReferencedConnection,
 };
 use crate::controller::AlterError;
-use crate::sources::SourceConnection;
+use crate::sources::{MzOffset, SourceConnection};
 use crate::AlterCompatible;
 
 include!(concat!(
@@ -72,6 +72,33 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
 
 pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
     Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
+
+impl PostgresSourceConnection {
+    pub async fn fetch_write_frontier(
+        self,
+        storage_configuration: &crate::configuration::StorageConfiguration,
+    ) -> Result<timely::progress::Antichain<MzOffset>, anyhow::Error> {
+        use timely::progress::Antichain;
+
+        let config = self
+            .connection
+            .config(
+                &storage_configuration.connection_context.secrets_reader,
+                storage_configuration,
+                mz_ore::future::InTask::No,
+            )
+            .await?;
+
+        let lsn = mz_postgres_util::get_current_wal_lsn(
+            &storage_configuration.connection_context.ssh_tunnel_manager,
+            config,
+        )
+        .await?;
+
+        let current_upper = Antichain::from_elem(MzOffset::from(u64::from(lsn)));
+        Ok(current_upper)
+    }
+}
 
 impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     fn name(&self) -> &'static str {

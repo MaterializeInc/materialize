@@ -24,6 +24,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
@@ -747,6 +748,15 @@ pub trait StorageController: Debug {
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    async fn real_time_recent_timestamp(
+        &self,
+        source_ids: BTreeSet<GlobalId>,
+        timeout: Duration,
+    ) -> Result<
+        BoxFuture<Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    >;
 }
 
 /// State maintained about individual exports.

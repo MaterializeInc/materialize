@@ -1994,23 +1994,61 @@ impl Coordinator {
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
-    pub(super) fn recent_timestamp(
+    pub(super) async fn determine_real_time_recent_timestamp(
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Option<BoxFuture<'static, Timestamp>> {
+    ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
+    {
+        let vars = session.vars();
+
         // Ideally this logic belongs inside of
         // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
         // logic in there would make it extremely difficult and inconvenient to pull the waiting off
         // of the main coord thread.
-        if session.vars().real_time_recency()
-            && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
+        let r = if vars.real_time_recency()
+            && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
             && !session.contains_read_timestamp()
         {
-            Some(self.controller.recent_timestamp(source_ids))
+            // Find all dependencies transitively because we need to ensure that
+            // RTR queries determine the timestamp from the sources' (i.e.
+            // storage objects that ingest data from external systems) remap
+            // data. We "cheat" a little bit and filter out any IDs that aren't
+            // user objects because we know they are not a RTR source.
+            let mut to_visit = VecDeque::from_iter(source_ids.filter(GlobalId::is_user));
+            // If none of the sources are user objects, we don't need to provide
+            // a RTR timestamp.
+            if to_visit.is_empty() {
+                return Ok(None);
+            }
+
+            let mut timestamp_objects = BTreeSet::new();
+
+            while let Some(id) = to_visit.pop_front() {
+                timestamp_objects.insert(id);
+                to_visit.extend(
+                    self.catalog()
+                        .get_entry(&id)
+                        .uses()
+                        .into_iter()
+                        .filter(|id| !timestamp_objects.contains(id) && id.is_user()),
+                );
+            }
+
+            let r = self
+                .controller
+                .determine_real_time_recent_timestamp(
+                    timestamp_objects,
+                    *vars.real_time_recency_timeout(),
+                )
+                .await?;
+
+            Some(r)
         } else {
             None
-        }
+        };
+
+        Ok(r)
     }
 
     #[instrument]
@@ -2103,7 +2141,19 @@ impl Coordinator {
             self.sequence_explain_timestamp_begin_inner(ctx.session(), plan, target_cluster),
             ctx
         );
-        match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
+
+        let fut = match self
+            .determine_real_time_recent_timestamp(ctx.session(), source_ids.iter().cloned())
+            .await
+        {
+            Ok(f) => f,
+            Err(e) => {
+                ctx.retire(Err(e.into()));
+                return;
+            }
+        };
+
+        match fut {
             Some(fut) => {
                 let validity = PlanValidity {
                     transient_revision: self.catalog().transient_revision(),
