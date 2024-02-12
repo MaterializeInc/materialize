@@ -1730,6 +1730,15 @@ pub struct ClusterConfig {
     pub variant: ClusterVariant,
 }
 
+impl ClusterConfig {
+    pub fn features(&self) -> Option<&OptimizerFeatureOverrides> {
+        match &self.variant {
+            ClusterVariant::Managed(managed) => Some(&managed.optimizer_feature_overrides),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+}
+
 impl From<ClusterConfig> for durable::ClusterConfig {
     fn from(config: ClusterConfig) -> Self {
         Self {
