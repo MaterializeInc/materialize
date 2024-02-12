@@ -61,7 +61,7 @@ pub trait Collection: Debug {
 ///
 /// The names of each variant are used to determine the labels of each [`CollectionTrace`] when
 /// dumping a [`Trace`].
-#[derive(Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollectionType {
     AuditLog,

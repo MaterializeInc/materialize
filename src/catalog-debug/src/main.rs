@@ -37,6 +37,7 @@ use mz_catalog::durable::{
     OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::cli::{self, CliConfig};
+use mz_ore::collections::HashSet;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -93,6 +94,13 @@ enum Action {
     /// Includes JSON for each key and value that can be hand edited and
     /// then passed to the `edit` or `delete` commands.
     Dump {
+        /// Ignores the `audit_log` and `storage_usage` usage collections, which are often
+        /// extremely large and not that useful for debugging.
+        #[clap(long)]
+        ignore_large_collections: bool,
+        /// A list of collections to ignore.
+        #[clap(long, short = 'i', action = clap::ArgAction::Append)]
+        ignore: Vec<CollectionType>,
         /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
@@ -200,13 +208,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     match args.action {
-        Action::Dump { target } => {
+        Action::Dump {
+            ignore_large_collections,
+            ignore,
+            target,
+        } => {
+            let ignore: HashSet<_> = ignore.into_iter().collect();
             let target: Box<dyn Write> = if let Some(path) = target {
                 Box::new(File::create(path)?)
             } else {
                 Box::new(io::stdout().lock())
             };
-            dump(openable_state, target).await
+            dump(openable_state, ignore_large_collections, ignore, target).await
         }
         Action::Epoch { target } => {
             let target: Box<dyn Write> = if let Some(path) = target {
@@ -315,13 +328,22 @@ async fn delete(
 
 async fn dump(
     mut openable_state: Box<dyn OpenableDurableCatalogState>,
+    ignore_large_collections: bool,
+    ignore: HashSet<CollectionType>,
     mut target: impl Write,
 ) -> Result<(), anyhow::Error> {
-    fn dump_col<T: Collection>(data: &mut BTreeMap<String, Vec<Dumped>>, trace: CollectionTrace<T>)
-    where
+    fn dump_col<T: Collection>(
+        data: &mut BTreeMap<String, Vec<Dumped>>,
+        trace: CollectionTrace<T>,
+        ignore: &HashSet<CollectionType>,
+    ) where
         T::Key: Serialize + Debug + 'static,
         T::Value: Serialize + Debug + 'static,
     {
+        if ignore.contains(&T::collection_type()) {
+            return;
+        }
+
         let dumped = trace
             .values
             .into_iter()
@@ -363,24 +385,28 @@ async fn dump(
         timestamps,
     } = openable_state.trace().await?;
 
-    dump_col(&mut data, audit_log);
-    dump_col(&mut data, clusters);
-    dump_col(&mut data, introspection_sources);
-    dump_col(&mut data, cluster_replicas);
-    dump_col(&mut data, comments);
-    dump_col(&mut data, configs);
-    dump_col(&mut data, databases);
-    dump_col(&mut data, default_privileges);
-    dump_col(&mut data, id_allocator);
-    dump_col(&mut data, items);
-    dump_col(&mut data, roles);
-    dump_col(&mut data, schemas);
-    dump_col(&mut data, settings);
-    dump_col(&mut data, storage_usage);
-    dump_col(&mut data, system_configurations);
-    dump_col(&mut data, system_object_mappings);
-    dump_col(&mut data, system_privileges);
-    dump_col(&mut data, timestamps);
+    if !ignore_large_collections {
+        dump_col(&mut data, audit_log, &ignore);
+    }
+    dump_col(&mut data, clusters, &ignore);
+    dump_col(&mut data, introspection_sources, &ignore);
+    dump_col(&mut data, cluster_replicas, &ignore);
+    dump_col(&mut data, comments, &ignore);
+    dump_col(&mut data, configs, &ignore);
+    dump_col(&mut data, databases, &ignore);
+    dump_col(&mut data, default_privileges, &ignore);
+    dump_col(&mut data, id_allocator, &ignore);
+    dump_col(&mut data, items, &ignore);
+    dump_col(&mut data, roles, &ignore);
+    dump_col(&mut data, schemas, &ignore);
+    dump_col(&mut data, settings, &ignore);
+    if !ignore_large_collections {
+        dump_col(&mut data, storage_usage, &ignore);
+    }
+    dump_col(&mut data, system_configurations, &ignore);
+    dump_col(&mut data, system_object_mappings, &ignore);
+    dump_col(&mut data, system_privileges, &ignore);
+    dump_col(&mut data, timestamps, &ignore);
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())
