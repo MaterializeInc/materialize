@@ -158,36 +158,31 @@ impl Coordinator {
                 }
                 Message::CreateIndexStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.execute_create_index_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::CreateViewStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_create_view_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::CreateMaterializedViewStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.execute_create_materialized_view_stage(ctx, stage, otel_ctx)
-                        .await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::SubscribeStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_subscribe_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;

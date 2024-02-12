@@ -11,18 +11,17 @@ use std::collections::BTreeSet;
 
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
-use tracing::instrument;
+use tracing::{instrument, Span};
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateIndexExplain, CreateIndexFinish, CreateIndexOptimize, CreateIndexStage,
-    CreateIndexValidate, ExplainContext, ExplainPlanContext, Message, PlanValidity,
+    ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -30,6 +29,39 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
+
+#[async_trait::async_trait(?Send)]
+impl Staged for CreateIndexStage {
+    fn validity(&mut self) -> &mut PlanValidity {
+        match self {
+            Self::Optimize(stage) => &mut stage.validity,
+            Self::Finish(stage) => &mut stage.validity,
+            Self::Explain(stage) => &mut stage.validity,
+        }
+    }
+
+    async fn stage(
+        self,
+        coord: &mut Coordinator,
+        ctx: &mut ExecuteContext,
+    ) -> Result<StageResult<Box<Self>>, AdapterError> {
+        match self {
+            CreateIndexStage::Optimize(stage) => coord.create_index_optimize(stage).await,
+            CreateIndexStage::Finish(stage) => {
+                coord.create_index_finish(ctx.session_mut(), stage).await
+            }
+            CreateIndexStage::Explain(stage) => coord.create_index_explain(ctx.session(), stage),
+        }
+    }
+
+    fn message(self, ctx: ExecuteContext, span: Span) -> Message {
+        Message::CreateIndexStageReady {
+            ctx,
+            span,
+            stage: self,
+        }
+    }
+}
 
 impl Coordinator {
     #[instrument(skip_all)]
@@ -39,16 +71,11 @@ impl Coordinator {
         plan: plan::CreateIndexPlan,
         resolved_ids: ResolvedIds,
     ) {
-        self.execute_create_index_stage(
-            ctx,
-            CreateIndexStage::Validate(CreateIndexValidate {
-                plan,
-                resolved_ids,
-                explain_ctx: ExplainContext::None,
-            }),
-            OpenTelemetryContext::obtain(),
-        )
-        .await;
+        let stage = return_if_err!(
+            self.create_index_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
+            ctx
+        );
+        self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
     #[instrument(skip_all)]
@@ -80,27 +107,23 @@ impl Coordinator {
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
         let resolved_ids = ResolvedIds(Default::default());
 
-        self.execute_create_index_stage(
-            ctx,
-            CreateIndexStage::Validate(CreateIndexValidate {
-                plan,
-                resolved_ids,
-                explain_ctx: ExplainContext::Plan(ExplainPlanContext {
-                    broken,
-                    config,
-                    format,
-                    stage,
-                    replan: None,
-                    desc: None,
-                    optimizer_trace,
-                }),
-            }),
-            OpenTelemetryContext::obtain(),
-        )
-        .await;
+        let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
+            broken,
+            config,
+            format,
+            stage,
+            replan: None,
+            desc: None,
+            optimizer_trace,
+        });
+        let stage = return_if_err!(
+            self.create_index_validate(ctx.session(), plan, resolved_ids, explain_ctx),
+            ctx
+        );
+        self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn explain_replan_index(
         &mut self,
         ctx: ExecuteContext,
@@ -134,78 +157,32 @@ impl Coordinator {
         // executing the optimizer pipeline.
         let optimizer_trace = OptimizerTrace::new(broken, stage.path());
 
-        self.execute_create_index_stage(
-            ctx,
-            CreateIndexStage::Validate(CreateIndexValidate {
-                plan,
-                resolved_ids,
-                explain_ctx: ExplainContext::Plan(ExplainPlanContext {
-                    broken,
-                    config,
-                    format,
-                    stage,
-                    replan: Some(id),
-                    desc: None,
-                    optimizer_trace,
-                }),
-            }),
-            OpenTelemetryContext::obtain(),
-        )
-        .await;
+        let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
+            broken,
+            config,
+            format,
+            stage,
+            replan: Some(id),
+            desc: None,
+            optimizer_trace,
+        });
+        let stage = return_if_err!(
+            self.create_index_validate(ctx.session(), plan, resolved_ids, explain_ctx),
+            ctx
+        );
+        self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    /// Processes as many `create index` stages as possible.
-    #[instrument(skip_all)]
-    pub(crate) async fn execute_create_index_stage(
-        &mut self,
-        mut ctx: ExecuteContext,
-        mut stage: CreateIndexStage,
-        otel_ctx: OpenTelemetryContext,
-    ) {
-        use CreateIndexStage::*;
-
-        // Process the current stage and allow for processing the next.
-        loop {
-            // Always verify plan validity. This is cheap, and prevents programming errors
-            // if we move any stages off thread.
-            if let Some(validity) = stage.validity() {
-                return_if_err!(validity.check(self.catalog()), ctx);
-            }
-
-            (ctx, stage) = match stage {
-                Validate(stage) => {
-                    let next =
-                        return_if_err!(self.create_index_validate(ctx.session(), stage), ctx);
-                    (ctx, CreateIndexStage::Optimize(next))
-                }
-                Optimize(stage) => {
-                    self.create_index_optimize(ctx, stage, otel_ctx).await;
-                    return;
-                }
-                Finish(stage) => {
-                    let result = self.create_index_finish(&mut ctx, stage).await;
-                    ctx.retire(result);
-                    return;
-                }
-                Explain(stage) => {
-                    let result = self.create_index_explain(&mut ctx, stage);
-                    ctx.retire(result);
-                    return;
-                }
-            }
-        }
-    }
-
+    // `explain_ctx` is an optional context set iff the state machine is initiated from
+    // sequencing an EXPALIN for this statement.
     #[instrument(skip_all)]
     fn create_index_validate(
         &mut self,
         session: &Session,
-        CreateIndexValidate {
-            plan,
-            resolved_ids,
-            explain_ctx,
-        }: CreateIndexValidate,
-    ) -> Result<CreateIndexOptimize, AdapterError> {
+        plan: plan::CreateIndexPlan,
+        resolved_ids: ResolvedIds,
+        explain_ctx: ExplainContext,
+    ) -> Result<CreateIndexStage, AdapterError> {
         let plan::CreateIndexPlan {
             index: plan::Index { on, cluster_id, .. },
             ..
@@ -219,43 +196,37 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        Ok(CreateIndexOptimize {
+        Ok(CreateIndexStage::Optimize(CreateIndexOptimize {
             validity,
             plan,
             resolved_ids,
             explain_ctx,
-        })
+        }))
     }
 
     #[instrument(skip_all)]
     async fn create_index_optimize(
         &mut self,
-        ctx: ExecuteContext,
         CreateIndexOptimize {
             validity,
             plan,
             resolved_ids,
             explain_ctx,
         }: CreateIndexOptimize,
-        otel_ctx: OpenTelemetryContext,
-    ) {
+    ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let plan::CreateIndexPlan {
             index: plan::Index { cluster_id, .. },
             ..
         } = &plan;
-
-        // Generate data structures that can be moved to another task where we will perform possibly
-        // expensive optimizations.
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
 
         // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let exported_index_id = if let ExplainContext::None = explain_ctx {
-            return_if_err!(self.catalog_mut().allocate_user_id().await, ctx)
+            self.catalog_mut().allocate_user_id().await?
         } else {
-            return_if_err!(self.allocate_transient_id(), ctx)
+            self.allocate_transient_id()?
         };
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&explain_ctx);
@@ -267,11 +238,12 @@ impl Coordinator {
             exported_index_id,
             optimizer_config,
         );
-
-        mz_ore::task::spawn_blocking(
+        let span = Span::current();
+        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create index",
             move || {
-                let mut pipeline = || -> Result<(
+                span.in_scope(|| {
+                    let mut pipeline = || -> Result<(
                     optimize::index::GlobalMirPlan,
                     optimize::index::GlobalLirPlan,
                 ), AdapterError> {
@@ -288,70 +260,64 @@ impl Coordinator {
                     Ok((global_mir_plan, global_lir_plan))
                 };
 
-                let stage = match pipeline() {
-                    Ok((global_mir_plan, global_lir_plan)) => {
-                        if let ExplainContext::Plan(explain_ctx) = explain_ctx {
-                            let (_, df_meta) = global_lir_plan.unapply();
-                            CreateIndexStage::Explain(CreateIndexExplain {
-                                validity,
-                                exported_index_id,
-                                plan,
-                                df_meta,
-                                explain_ctx,
-                            })
-                        } else {
-                            CreateIndexStage::Finish(CreateIndexFinish {
-                                validity,
-                                exported_index_id,
-                                plan,
-                                resolved_ids,
-                                global_mir_plan,
-                                global_lir_plan,
-                            })
+                    let stage = match pipeline() {
+                        Ok((global_mir_plan, global_lir_plan)) => {
+                            if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                                let (_, df_meta) = global_lir_plan.unapply();
+                                CreateIndexStage::Explain(CreateIndexExplain {
+                                    validity,
+                                    exported_index_id,
+                                    plan,
+                                    df_meta,
+                                    explain_ctx,
+                                })
+                            } else {
+                                CreateIndexStage::Finish(CreateIndexFinish {
+                                    validity,
+                                    exported_index_id,
+                                    plan,
+                                    resolved_ids,
+                                    global_mir_plan,
+                                    global_lir_plan,
+                                })
+                            }
                         }
-                    }
-                    // Internal optimizer errors are handled differently
-                    // depending on the caller.
-                    Err(err) => {
-                        let ExplainContext::Plan(explain_ctx) = explain_ctx else {
-                            // In `sequence_~` contexts, immediately retire the
-                            // execution with the error.
-                            return ctx.retire(Err(err.into()));
-                        };
+                        // Internal optimizer errors are handled differently
+                        // depending on the caller.
+                        Err(err) => {
+                            let ExplainContext::Plan(explain_ctx) = explain_ctx else {
+                                // In `sequence_~` contexts, immediately error.
+                                return Err(err.into());
+                            };
 
-                        if explain_ctx.broken {
-                            // In `EXPLAIN BROKEN` contexts, just log the error
-                            // and move to the next stage with default
-                            // parameters.
-                            tracing::error!("error while handling EXPLAIN statement: {}", err);
-                            CreateIndexStage::Explain(CreateIndexExplain {
-                                validity,
-                                exported_index_id,
-                                plan,
-                                df_meta: Default::default(),
-                                explain_ctx,
-                            })
-                        } else {
-                            // In regular `EXPLAIN` contexts, immediately retire
-                            // the execution with the error.
-                            return ctx.retire(Err(err.into()));
+                            if explain_ctx.broken {
+                                // In `EXPLAIN BROKEN` contexts, just log the error
+                                // and move to the next stage with default
+                                // parameters.
+                                tracing::error!("error while handling EXPLAIN statement: {}", err);
+                                CreateIndexStage::Explain(CreateIndexExplain {
+                                    validity,
+                                    exported_index_id,
+                                    plan,
+                                    df_meta: Default::default(),
+                                    explain_ctx,
+                                })
+                            } else {
+                                // In regular `EXPLAIN` contexts, immediately error.
+                                return Err(err.into());
+                            }
                         }
-                    }
-                };
-
-                let _ = internal_cmd_tx.send(Message::CreateIndexStageReady {
-                    ctx,
-                    otel_ctx,
-                    stage,
-                });
+                    };
+                    Ok(Box::new(stage))
+                })
             },
-        );
+        )))
     }
 
     #[instrument(skip_all)]
     async fn create_index_finish(
         &mut self,
-        ctx: &mut ExecuteContext,
+        session: &mut Session,
         CreateIndexFinish {
             exported_index_id,
             plan:
@@ -372,7 +338,7 @@ impl Coordinator {
             global_lir_plan,
             ..
         }: CreateIndexFinish,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let ops = vec![catalog::Op::CreateItem {
             id: exported_index_id,
             oid: self.catalog_mut().allocate_oid()?,
@@ -396,7 +362,7 @@ impl Coordinator {
             .collect::<Result<Vec<_>, _>>()?;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
+            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 // Save plan structures.
                 coord
                     .catalog_mut()
@@ -413,7 +379,7 @@ impl Coordinator {
                 df_desc.set_as_of(since);
 
                 // Emit notices.
-                coord.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
 
                 // Return a metainfo with rendered notices.
                 let df_meta =
@@ -457,17 +423,16 @@ impl Coordinator {
             .await;
 
         match transact_result {
-            Ok(_) => Ok(ExecuteResponse::CreatedIndex),
+            Ok(_) => Ok(StageResult::Response(ExecuteResponse::CreatedIndex)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
-                ctx.session()
-                    .add_notice(AdapterNotice::ObjectAlreadyExists {
-                        name: name.item,
-                        ty: "index",
-                    });
-                Ok(ExecuteResponse::CreatedIndex)
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: name.item,
+                    ty: "index",
+                });
+                Ok(StageResult::Response(ExecuteResponse::CreatedIndex))
             }
             Err(err) => Err(err),
         }
@@ -476,7 +441,7 @@ impl Coordinator {
     #[instrument(skip_all)]
     fn create_index_explain(
         &mut self,
-        ctx: &mut ExecuteContext,
+        session: &Session,
         CreateIndexExplain {
             exported_index_id,
             plan: plan::CreateIndexPlan { name, index, .. },
@@ -492,8 +457,8 @@ impl Coordinator {
                 },
             ..
         }: CreateIndexExplain,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let session_catalog = self.catalog().for_session(ctx.session());
+    ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
+        let session_catalog = self.catalog().for_session(session);
         let expr_humanizer = {
             let on_entry = self.catalog.get_entry(&index.on);
             let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
@@ -525,6 +490,6 @@ impl Coordinator {
             tracing_core::callsite::rebuild_interest_cache();
         }
 
-        Ok(Self::send_immediate_rows(rows))
+        Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }
 }

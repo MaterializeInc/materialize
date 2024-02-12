@@ -101,7 +101,7 @@ use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::task::spawn;
+use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
@@ -246,22 +246,22 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     CreateIndexStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateIndexStage,
     },
     CreateViewStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateViewStage,
     },
     CreateMaterializedViewStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateMaterializedViewStage,
     },
     SubscribeStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: SubscribeStage,
     },
     DrainStatementLog,
@@ -516,30 +516,9 @@ pub struct PeekStageExplainPlan {
 
 #[derive(Debug)]
 pub enum CreateIndexStage {
-    Validate(CreateIndexValidate),
     Optimize(CreateIndexOptimize),
     Finish(CreateIndexFinish),
     Explain(CreateIndexExplain),
-}
-
-impl CreateIndexStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-            Self::Explain(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateIndexValidate {
-    plan: plan::CreateIndexPlan,
-    resolved_ids: ResolvedIds,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -573,25 +552,8 @@ pub struct CreateIndexExplain {
 
 #[derive(Debug)]
 pub enum CreateViewStage {
-    Validate(CreateViewValidate),
     Optimize(CreateViewOptimize),
     Finish(CreateViewFinish),
-}
-
-impl CreateViewStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateViewValidate {
-    plan: plan::CreateViewPlan,
-    resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug)]
@@ -646,30 +608,9 @@ pub struct ExplainPlanContext {
 
 #[derive(Debug)]
 pub enum CreateMaterializedViewStage {
-    Validate(CreateMaterializedViewValidate),
     Optimize(CreateMaterializedViewOptimize),
     Finish(CreateMaterializedViewFinish),
     Explain(CreateMaterializedViewExplain),
-}
-
-impl CreateMaterializedViewStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-            Self::Explain(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateMaterializedViewValidate {
-    plan: plan::CreateMaterializedViewPlan,
-    resolved_ids: ResolvedIds,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -704,29 +645,9 @@ pub struct CreateMaterializedViewExplain {
 
 #[derive(Debug)]
 pub enum SubscribeStage {
-    Validate(SubscribeValidate),
     OptimizeMir(SubscribeOptimizeMir),
-    Timestamp(SubscribeTimestamp),
-    OptimizeLir(SubscribeOptimizeLir),
+    TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
     Finish(SubscribeFinish),
-}
-
-impl SubscribeStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::OptimizeMir(stage) => Some(&mut stage.validity),
-            Self::Timestamp(stage) => Some(&mut stage.validity),
-            Self::OptimizeLir(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct SubscribeValidate {
-    plan: plan::SubscribePlan,
-    target_cluster: TargetCluster,
 }
 
 #[derive(Debug)]
@@ -737,20 +658,12 @@ pub struct SubscribeOptimizeMir {
 }
 
 #[derive(Debug)]
-pub struct SubscribeTimestamp {
+pub struct SubscribeTimestampOptimizeLir {
     validity: PlanValidity,
     plan: plan::SubscribePlan,
     timeline: TimelineContext,
     optimizer: optimize::subscribe::Optimizer,
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
-}
-
-#[derive(Debug)]
-pub struct SubscribeOptimizeLir {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    optimizer: optimize::subscribe::Optimizer,
-    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Resolved>,
 }
 
 #[derive(Debug)]
@@ -855,6 +768,30 @@ impl PlanValidity {
         self.transient_revision = catalog.transient_revision();
         Ok(())
     }
+}
+
+/// Result types for each stage of a sequence.
+pub(crate) enum StageResult<T> {
+    /// A task was spawned that will return the next stage.
+    Handle(JoinHandle<Result<T, AdapterError>>),
+    /// The finaly stage was executed and is ready to respond to the client.
+    Response(ExecuteResponse),
+}
+
+/// Common functionality for [Coordinator::sequence_staged].
+#[async_trait::async_trait(?Send)]
+pub(crate) trait Staged: Send {
+    fn validity(&mut self) -> &mut PlanValidity;
+
+    /// Returns the next stage or final result.
+    async fn stage(
+        self,
+        coord: &mut Coordinator,
+        ctx: &mut ExecuteContext,
+    ) -> Result<StageResult<Box<Self>>, AdapterError>;
+
+    /// Prepares a message for the Coordinator.
+    fn message(self, ctx: ExecuteContext, span: Span) -> Message;
 }
 
 /// Configures a coordinator.

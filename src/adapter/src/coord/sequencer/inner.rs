@@ -23,6 +23,7 @@ use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::task::spawn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_or_log, task};
@@ -72,7 +73,7 @@ use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizer
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, OwnedMutexGuard};
-use tracing::{instrument, warn, Span};
+use tracing::{instrument, warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
@@ -82,7 +83,7 @@ use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource}
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, ExecuteContext,
     Message, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    RealTimeRecencyContext, TargetCluster,
+    RealTimeRecencyContext, StageResult, Staged, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -129,6 +130,45 @@ struct CreateSourceInner {
 }
 
 impl Coordinator {
+    /// Sequences the next staged of a [Staged] plan. This is designed for use with plans that
+    /// execute both on and off of the coordinator thread. Stages can either produce another stage
+    /// to execute or a final response. An explicit [Span] is passed to allow for convenient
+    /// tracing.
+    pub(crate) async fn sequence_staged<S: Staged + 'static>(
+        &mut self,
+        mut ctx: ExecuteContext,
+        parent_span: Span,
+        mut stage: S,
+    ) {
+        return_if_err!(stage.validity().check(self.catalog()), ctx);
+        let next = stage
+            .stage(self, &mut ctx)
+            .instrument(parent_span.clone())
+            .await;
+        let stage = return_if_err!(next, ctx);
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        match stage {
+            StageResult::Handle(handle) => {
+                spawn(|| "sequence_staged", async move {
+                    let next = match handle.await {
+                        Ok(next) => return_if_err!(next, ctx),
+                        Err(err) => {
+                            tracing::error!("sequence_staged join error {err}");
+                            ctx.retire(Err(AdapterError::Internal(
+                                "sequence_staged join error".into(),
+                            )));
+                            return;
+                        }
+                    };
+                    let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
+                });
+            }
+            StageResult::Response(resp) => {
+                ctx.retire(Ok(resp));
+            }
+        }
+    }
+
     async fn create_source_inner(
         &mut self,
         session: &Session,
