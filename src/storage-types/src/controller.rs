@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
 
@@ -212,6 +213,10 @@ pub enum StorageError<T> {
         ingestion_id: GlobalId,
         reference: UnresolvedItemName,
     },
+    /// Cannot perform RTR query over source
+    RtrUnavailable(BTreeSet<GlobalId>),
+    /// We failed to determine the real-time-recency timestamp.
+    RtrTimeout(GlobalId),
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -238,6 +243,8 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::PersistShardAlreadyInUse(_) => None,
             Self::PersistTxnShardAlreadyExists => None,
             Self::MissingSubsourceReference { .. } => None,
+            Self::RtrUnavailable(_) => None,
+            Self::RtrTimeout(_) => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -317,6 +324,12 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
                 "ingestion {ingestion_id} unexpectedly missing reference to {}",
                 reference
             ),
+            Self::RtrUnavailable(_) => {
+                write!(f, "real-time recency unavailable for some sources in query")
+            }
+            Self::RtrTimeout(_) => {
+                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+            }
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }

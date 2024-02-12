@@ -702,10 +702,13 @@ pub trait StorageController: Debug {
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    fn real_time_recent_timestamp(
+    async fn real_time_recent_timestamp(
         &self,
         source_ids: BTreeSet<GlobalId>,
-    ) -> BoxFuture<'static, Self::Timestamp>;
+    ) -> Result<
+        BoxFuture<'static, Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    >;
 }
 
 /// State maintained about individual exports.

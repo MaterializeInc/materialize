@@ -1986,23 +1986,28 @@ impl Coordinator {
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
-    pub(super) fn recent_timestamp(
+    pub(super) async fn recent_timestamp(
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Option<BoxFuture<'static, Timestamp>> {
+    ) -> Result<
+        Option<BoxFuture<'static, Result<Timestamp, StorageError<mz_repr::Timestamp>>>>,
+        StorageError<mz_repr::Timestamp>,
+    > {
         // Ideally this logic belongs inside of
         // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
         // logic in there would make it extremely difficult and inconvenient to pull the waiting off
         // of the main coord thread.
-        if session.vars().real_time_recency()
+        let r = if session.vars().real_time_recency()
             && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
             && !session.contains_read_timestamp()
         {
-            Some(self.controller.recent_timestamp(source_ids))
+            Some(self.controller.recent_timestamp(source_ids).await?)
         } else {
             None
-        }
+        };
+
+        Ok(r)
     }
 
     #[instrument]
@@ -2095,7 +2100,19 @@ impl Coordinator {
             self.sequence_explain_timestamp_begin_inner(ctx.session(), plan, target_cluster),
             ctx
         );
-        match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
+
+        let fut = match self
+            .recent_timestamp(ctx.session(), source_ids.iter().cloned())
+            .await
+        {
+            Ok(f) => f,
+            Err(e) => {
+                ctx.retire(Err(e.into()));
+                return;
+            }
+        };
+
+        match fut {
             Some(fut) => {
                 let validity = PlanValidity {
                     transient_revision: self.catalog().transient_revision(),

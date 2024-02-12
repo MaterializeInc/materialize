@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use dec::OrderedDecimal;
 use mz_dyncfg::ConfigSet;
+use mz_ore::future::InTask;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
@@ -117,6 +118,72 @@ impl<C: ConnectionAccess> KafkaSourceConnection<C> {
             self.group_id_prefix.as_deref().unwrap_or(""),
             KafkaConnection::id_base(connection_context, self.connection_id, source_id),
         )
+    }
+}
+
+impl KafkaSourceConnection {
+    pub async fn fetch_write_frontier(
+        self,
+        storage_configuration: crate::configuration::StorageConfiguration,
+    ) -> Result<
+        timely::progress::Antichain<mz_timely_util::order::Partitioned<RangeBound<i32>, MzOffset>>,
+        anyhow::Error,
+    > {
+        use mz_kafka_util::client::MzClientContext;
+        use mz_ore::collections::CollectionExt;
+        use mz_timely_util::antichain::AntichainExt;
+        use rdkafka::admin::AdminClient;
+        use timely::progress::Antichain;
+
+        // TODO: Boxfuture owned versions of this fn?
+
+        let (context, _error_rx) = MzClientContext::with_errors();
+        let client: AdminClient<_> = self
+            .connection
+            .create_with_context(storage_configuration, context, &BTreeMap::new(), InTask::No)
+            .await?;
+
+        let metadata_timeout = storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout;
+
+        let meta = client
+            .inner()
+            .fetch_metadata(Some(&self.topic), metadata_timeout)?;
+
+        let pids = meta
+            .topics()
+            .into_element()
+            .partitions()
+            .iter()
+            .map(|p| p.id());
+
+        let mut current_upper = Antichain::new();
+        let mut max_pid = 0;
+        for pid in pids {
+            let (_, high) = client
+                .inner()
+                .fetch_watermarks(&self.topic, pid, metadata_timeout)?;
+            max_pid = std::cmp::max(pid, max_pid);
+            current_upper.insert(Partitioned::new_singleton(
+                RangeBound::Elem(pid, BoundKind::At),
+                MzOffset::from(u64::try_from(high).unwrap()),
+            ));
+        }
+        current_upper.insert(Partitioned::new_range(
+            RangeBound::Elem(max_pid, BoundKind::After),
+            RangeBound::PosInfinity,
+            MzOffset::from(0),
+        ));
+
+        tracing::trace!(
+            "Awaiting ingestion of Kafka topic {} until {}...",
+            self.topic,
+            current_upper.pretty(),
+        );
+
+        Ok(current_upper)
     }
 }
 

@@ -29,7 +29,6 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -2602,12 +2601,108 @@ where
         Ok(())
     }
 
-    fn real_time_recent_timestamp(
+    async fn real_time_recent_timestamp(
         &self,
-        _source_ids: BTreeSet<GlobalId>,
-    ) -> BoxFuture<'static, Self::Timestamp> {
-        // Dummy implementation
-        Box::pin(async { Self::Timestamp::minimum() })
+        source_ids: BTreeSet<GlobalId>,
+    ) -> Result<
+        BoxFuture<'static, Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
+        StorageError<Self::Timestamp>,
+    > {
+        use mz_storage_types::sources::GenericSourceConnection;
+        use mz_storage_types::sources::SourceTimestamp;
+
+        let mut rtr_futures = Vec::with_capacity(source_ids.len());
+        let config = self.config().clone();
+
+        // Only user sources can be read from w/ RTR.
+        for id in source_ids.into_iter().filter(GlobalId::is_user) {
+            let collection = self.collection(id)?;
+
+            // Currently only Kafka sources can support real-time recency. PG
+            // sources/subsources cannot because of the way we've handled
+            // subsource dependencies––they cannot easily "find" the remap
+            // shard/progress collection to which they're associated.
+            //
+            // Once we support that this implementation can be generalized.
+            let (kafka_conn, remap_id) = match &collection.description.data_source {
+                DataSource::Ingestion(IngestionDescription {
+                    desc:
+                        SourceDesc {
+                            connection: GenericSourceConnection::Kafka(kafka),
+                            ..
+                        },
+                    remap_collection_id,
+                    ..
+                }) => (kafka.clone(), *remap_collection_id),
+                _ => {
+                    continue;
+                }
+            };
+
+            // Prepare for getting the external system's frontier.
+            let config = config.clone();
+            let external_upper = kafka_conn.fetch_write_frontier(config);
+
+            // Determine the remap collection we plan to read from.
+            //
+            // Note that the process of reading from the remap shard is the same
+            // as other areas in this code that do the same thing, but we inline
+            // it here because we must prove that we have not taken ownership of
+            // `self` to move the stream of data from the remap shard into a
+            // future.
+            let mut read_handle = self.read_handle_for_snapshot(remap_id).await?;
+
+            let remap_collection = self.collection(remap_id)?;
+            let remap_as_of = remap_collection
+                .implied_capability
+                .clone()
+                .into_option()
+                .ok_or(StorageError::ReadBeforeSince(remap_id))?;
+
+            rtr_futures.push(async move {
+                // Fetch the remap shard's contents; we must do this first so
+                // that the `as_of` doesn't change.
+                let as_of = Antichain::from_elem(remap_as_of);
+                let contents = read_handle.snapshot_and_stream(as_of).await;
+                let mut remap_updates = match contents {
+                    Ok(contents) => Box::pin(contents),
+                    Err(_) => return Err(StorageError::ReadBeforeSince(id)),
+                };
+
+                // Fetch the external upper
+                let external_frontier = external_upper.await.map_err(StorageError::Generic)?;
+
+                use futures::stream::StreamExt;
+                while let Some(((k, _), ts, diff)) = remap_updates.next().await {
+                    // We are only looking at inserts
+                    if diff != 1 {
+                        continue;
+                    }
+
+                    // This is the LHS of remap collection.
+                    let native_upper =
+                        SourceTimestamp::decode_row(&k.expect("invalid key data").0?);
+
+                    // At this TS, the source contained all of the data visible
+                    // in the external system.
+                    if external_frontier.less_equal(&native_upper) {
+                        return Ok(ts);
+                    }
+                }
+
+                Err(StorageError::RtrTimeout(id))
+            });
+        }
+
+        Ok(Box::pin(async move {
+            futures::future::join_all(rtr_futures)
+                .await
+                .into_iter()
+                .try_fold(T::minimum(), |curr, per_source_res| {
+                    let new = per_source_res?;
+                    Ok::<_, StorageError<Self::Timestamp>>(std::cmp::max(curr, new))
+                })
+        }))
     }
 }
 
