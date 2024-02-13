@@ -38,6 +38,10 @@ include!(concat!(
     "/mz_storage_types.sources.kafka.rs"
 ));
 
+/// The frontier that Kafka presents––for each partition, the greatest visible
+/// offset.
+pub type NativeFrontier = Partitioned<RangeBound<i32>, MzOffset>;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::Kafka,
@@ -124,18 +128,13 @@ impl<C: ConnectionAccess> KafkaSourceConnection<C> {
 impl KafkaSourceConnection {
     pub async fn fetch_write_frontier(
         self,
-        storage_configuration: crate::configuration::StorageConfiguration,
-    ) -> Result<
-        timely::progress::Antichain<mz_timely_util::order::Partitioned<RangeBound<i32>, MzOffset>>,
-        anyhow::Error,
-    > {
+        storage_configuration: &crate::configuration::StorageConfiguration,
+    ) -> Result<timely::progress::Antichain<NativeFrontier>, anyhow::Error> {
         use mz_kafka_util::client::MzClientContext;
         use mz_ore::collections::CollectionExt;
         use mz_timely_util::antichain::AntichainExt;
         use rdkafka::admin::AdminClient;
         use timely::progress::Antichain;
-
-        // TODO: Boxfuture owned versions of this fn?
 
         let (context, _error_rx) = MzClientContext::with_errors();
         let client: AdminClient<_> = self
@@ -176,12 +175,6 @@ impl KafkaSourceConnection {
             RangeBound::PosInfinity,
             MzOffset::from(0),
         ));
-
-        tracing::trace!(
-            "Awaiting ingestion of Kafka topic {} until {}...",
-            self.topic,
-            current_upper.pretty(),
-        );
 
         Ok(current_upper)
     }
@@ -434,7 +427,7 @@ impl<P> Extrema for RangeBound<P> {
     }
 }
 
-impl SourceTimestamp for Partitioned<RangeBound<i32>, MzOffset> {
+impl SourceTimestamp for NativeFrontier {
     fn encode_row(&self) -> Row {
         use mz_repr::adt::range;
         let mut row = Row::with_capacity(2);

@@ -28,7 +28,9 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::errors::ContextCreationError;
-use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection, RangeBound};
+use mz_storage_types::sources::kafka::{
+    KafkaMetadataKind, KafkaSourceConnection, NativeFrontier, RangeBound,
+};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -113,9 +115,9 @@ struct PartialProgressStatistics {
 
 struct PartitionCapability {
     /// The capability of the data produced
-    data: Capability<Partitioned<RangeBound<PartitionId>, MzOffset>>,
+    data: Capability<NativeFrontier>,
     /// The capability of the progress stream
-    progress: Capability<Partitioned<RangeBound<PartitionId>, MzOffset>>,
+    progress: Capability<NativeFrontier>,
 }
 
 /// Represents the low and high watermark offsets of a Kafka partition.
@@ -144,16 +146,15 @@ impl SourceRender for KafkaSourceConnection {
     // be so complicated and we could instead use `Partitioned<PartitionId, Option<u64>>` where all
     // ranges are inclusive and a time of `None` signifies that a particular partition is not
     // present. This requires an shard migration of the remap shard.
-    type Time = Partitioned<RangeBound<PartitionId>, MzOffset>;
+    type Time = NativeFrontier;
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Kafka;
 
-    fn render<G: Scope<Timestamp = Partitioned<RangeBound<PartitionId>, MzOffset>>>(
+    fn render<G: Scope<Timestamp = NativeFrontier>>(
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>>
-            + 'static,
+        resume_uppers: impl futures::Stream<Item = Antichain<NativeFrontier>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
@@ -841,7 +842,7 @@ impl SourceRender for KafkaSourceConnection {
 impl KafkaResumeUpperProcessor {
     async fn process_frontier(
         &self,
-        frontier: Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>,
+        frontier: Antichain<NativeFrontier>,
     ) -> Result<(), anyhow::Error> {
         use rdkafka::consumer::CommitMode;
 
@@ -1060,7 +1061,7 @@ impl KafkaSourceReader {
         (partition, offset): (PartitionId, MzOffset),
     ) -> Option<(
         Result<SourceMessage, KafkaHeaderParseError>,
-        Partitioned<RangeBound<PartitionId>, MzOffset>,
+        NativeFrontier,
         Diff,
     )> {
         // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
