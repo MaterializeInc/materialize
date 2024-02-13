@@ -718,6 +718,7 @@ where
                                 // These do a shallow copy.
                                 self.collection_manager.clone(),
                                 Arc::clone(&self.source_statistics),
+                                self.config.parameters.statistics_interval,
                             );
 
                             // Make sure this is dropped when the controller is
@@ -733,6 +734,7 @@ where
                                 // These do a shallow copy.
                                 self.collection_manager.clone(),
                                 Arc::clone(&self.sink_statistics),
+                                self.config.parameters.statistics_interval,
                             );
 
                             // Make sure this is dropped when the controller is
