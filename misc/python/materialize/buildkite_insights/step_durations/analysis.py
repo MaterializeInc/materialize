@@ -71,6 +71,8 @@ class StepData:
     created_at: datetime
     duration_in_min: float | None
     passed: bool
+    exit_status: int | None
+    retry_count: int
 
 
 def get_data(
@@ -132,13 +134,21 @@ def get_step_infos_from_build(build: Any, build_step_keys: list[str]) -> list[St
             duration_in_min = None
 
         job_passed = job["state"] == "passed"
+        exit_status = job["exit_status"]
+        retry_count = job["retries_count"] or 0
 
         assert (
             not job_passed or duration_in_min is not None
         ), "Duration must be available for passed step"
 
         step_data = StepData(
-            build_step_key, build_number, created_at, duration_in_min, job_passed
+            build_step_key,
+            build_number,
+            created_at,
+            duration_in_min,
+            job_passed,
+            exit_status=exit_status,
+            retry_count=retry_count,
         )
         collected_steps.append(step_data)
 
@@ -164,7 +174,9 @@ def print_data(
     output_type: str,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
-        print("step_key,build_number,created_at,duration_in_min,passed")
+        print(
+            "step_key,build_number,created_at,duration_in_min,passed,exit_status,retry_count"
+        )
 
     for entry in step_infos:
         if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
@@ -179,11 +191,11 @@ def print_data(
                 else f"https://buildkite.com/materialize/{pipeline_slug}/builds/{entry.build_number}, "
             )
             print(
-                f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}"
+                f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
             )
         elif output_type == OUTPUT_TYPE_CSV:
             print(
-                f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min}, {1 if entry.passed else 0}"
+                f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min},{1 if entry.passed else 0},{entry.exit_status},{entry.retry_count}"
             )
 
     if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
