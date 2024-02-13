@@ -29,7 +29,7 @@ from materialize.version_list import (
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
 from scenarios import *  # noqa: F401 F403
-from scenarios import MySqlStreaming, Scenario
+from scenarios import Scenario
 from scenarios_concurrency import *  # noqa: F401 F403
 from scenarios_customer import *  # noqa: F401 F403
 from scenarios_optbench import *  # noqa: F401 F403
@@ -373,9 +373,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             [s for s in all_subclasses(root_scenario) if not s.__subclasses__()],
             key=repr,
         )
-
-        # TODO: #25124 (correctness issue with streaming)
-        selected_scenarios.remove(MySqlStreaming)
     else:
         selected_scenarios = [root_scenario]
 
