@@ -5924,6 +5924,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "derivative",
  "differential-dataflow",
  "futures",
  "itertools",

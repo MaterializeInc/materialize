@@ -70,7 +70,7 @@ pub(crate) enum SnapshotStatsAsOf<T: Timestamp + Lattice + Codec64> {
 enum PersistReadWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
     Update(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
-    Downgrade(BTreeMap<GlobalId, Antichain<T>>),
+    Downgrade(BTreeMap<GlobalId, (Antichain<T>, oneshot::Sender<bool>)>),
     SnapshotStats(
         GlobalId,
         SnapshotStatsAsOf<T>,
@@ -116,8 +116,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
                             since_handles.insert(id, since_handle).expect("PersistReadWorkerCmd::Update only valid for updating extant since handles");
                         }
                         PersistReadWorkerCmd::Downgrade(since_frontiers) => {
-                            for (id, frontier) in since_frontiers {
-                                downgrades.insert(id, (span.clone(), frontier));
+                            for (id, frontier_and_notif) in since_frontiers {
+                                downgrades.insert(id, (span.clone(), frontier_and_notif));
                             }
                         }
                         PersistReadWorkerCmd::SnapshotStats(id, as_of, tx) => {
@@ -158,7 +158,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
 
                 let mut futs = FuturesUnordered::new();
 
-                for (id, (span, since)) in downgrades {
+                for (id, (span, (since, tx))) in downgrades {
                     let Some(mut since_handle) = since_handles.remove(&id) else {
                         panic!("downgrade command for absent collection {id}");
                     };
@@ -182,6 +182,9 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
                                 .instrument(span)
                                 .await
                         };
+                        // Notify listeners of the result of the downgrade.
+                        let was_success = result.as_ref().map(|res| res.is_ok()).unwrap_or(true);
+                        let _ = tx.send(was_success);
 
                         if let Some(Err(other_epoch)) = result {
                             mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
@@ -230,8 +233,11 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
         self.send(PersistReadWorkerCmd::Update(id, since_handle))
     }
 
-    pub(crate) fn downgrade(&self, frontiers: BTreeMap<GlobalId, Antichain<T>>) {
-        self.send(PersistReadWorkerCmd::Downgrade(frontiers))
+    pub(crate) fn downgrade(
+        &self,
+        frontiers: BTreeMap<GlobalId, (Antichain<T>, oneshot::Sender<bool>)>,
+    ) {
+        self.send(PersistReadWorkerCmd::Downgrade(frontiers));
     }
 
     pub(crate) async fn snapshot_stats(
@@ -268,7 +274,12 @@ pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampM
 enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(T, Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
-    DropHandle(GlobalId),
+    DropHandle {
+        /// Table that we want to drop our handle for.
+        id: GlobalId,
+        /// Notifies us when all resources have been cleaned up.
+        tx: oneshot::Sender<()>,
+    },
     Append {
         write_ts: T,
         advance_to: T,
@@ -399,8 +410,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
     /// the handle's shard.
-    pub(crate) fn drop_handle(&self, id: GlobalId) {
-        self.send(PersistTableWriteCmd::DropHandle(id))
+    pub(crate) fn drop_handle(&self, id: GlobalId) -> BoxFuture<'static, ()> {
+        let (tx, rx) = oneshot::channel();
+        self.send(PersistTableWriteCmd::DropHandle { id, tx });
+        Box::pin(rx.map(|_| ()))
     }
 
     fn send(&self, cmd: PersistTableWriteCmd<T>) {
@@ -431,7 +444,11 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 PersistTableWriteCmd::Update(_id, _write_handle) => {
                     unimplemented!("TODO: Support migrations on persist-txn backed collections")
                 }
-                PersistTableWriteCmd::DropHandle(id) => self.drop_handle(id).instrument(span).await,
+                PersistTableWriteCmd::DropHandle { id, tx } => {
+                    self.drop_handle(id).instrument(span).await;
+                    // We don't care if our waiter has gone away.
+                    let _ = tx.send(());
+                }
                 PersistTableWriteCmd::Append {
                     write_ts,
                     advance_to,
@@ -513,7 +530,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
     }
 
     async fn drop_handle(&mut self, id: GlobalId) {
-        debug!("tables drop {}", id);
+        tracing::info!(?id, "drop tables");
         // n.b. this should only remove the handle from the persist
         // worker and not take any additional action such as closing
         // the shard it's connected to because dataflows might still
@@ -691,7 +708,12 @@ pub struct PersistMonotonicWriteWorker<T: Timestamp + Lattice + Codec64 + Timest
 enum PersistMonotonicWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
-    DropHandle(GlobalId),
+    DropHandle {
+        /// Object that we want to drop our handle for.
+        id: GlobalId,
+        /// Notifies us when all resources have been cleaned up.
+        tx: oneshot::Sender<()>,
+    },
     Append(
         Vec<(GlobalId, Vec<Update<T>>, T)>,
         tokio::sync::oneshot::Sender<Result<(), StorageError>>,
@@ -742,7 +764,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                         PersistMonotonicWriteCmd::Update(id, write_handle) => {
                             write_handles.insert(id, write_handle).expect("PersistMonotonicWriteCmd::Update only valid for updating extant write handles");
                         }
-                        PersistMonotonicWriteCmd::DropHandle(id) => {
+                        PersistMonotonicWriteCmd::DropHandle { id, tx } => {
                             // n.b. this should only remove the
                             // handle from the persist worker and
                             // not take any additional action such
@@ -750,6 +772,8 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                             // to because dataflows might still be
                             // using it.
                             write_handles.remove(&id);
+                            // We don't care if our listener went away.
+                            let _ = tx.send(());
                         }
                         PersistMonotonicWriteCmd::Append(updates, response) => {
                             let mut ids = BTreeSet::new();
@@ -914,8 +938,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
     /// the handle's shard.
-    pub(crate) fn drop_handle(&self, id: GlobalId) {
-        self.send(PersistMonotonicWriteCmd::DropHandle(id))
+    pub(crate) fn drop_handle(&self, id: GlobalId) -> BoxFuture<'static, ()> {
+        let (tx, rx) = oneshot::channel();
+        self.send(PersistMonotonicWriteCmd::DropHandle { id, tx });
+        Box::pin(rx.map(|_| ()))
     }
 
     fn send(&self, cmd: PersistMonotonicWriteCmd<T>) {
