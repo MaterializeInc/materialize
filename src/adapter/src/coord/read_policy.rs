@@ -452,10 +452,10 @@ impl crate::coord::Coordinator {
     /// If we are unable to update a read hold at the provided `time` for a specific id, then we
     /// leave it unchanged.
     ///
-    /// This method relies on a previous call to `acquire_read_holds` with the same
-    /// `read_holds` argument or a previous call to `update_read_hold` that returned
+    /// This method relies on a previous call to
+    /// `initialize_read_holds`, `acquire_read_holds`, or `update_read_hold` that returned
     /// `read_holds`, and its behavior will be erratic if called on anything else.
-    pub(super) fn update_read_hold(
+    pub(super) fn update_read_holds(
         &mut self,
         read_holds: ReadHolds<mz_repr::Timestamp>,
         new_time: mz_repr::Timestamp,
@@ -553,13 +553,14 @@ impl crate::coord::Coordinator {
 
         new_read_holds
     }
-    /// Release read holds on the indicated collections at the indicated times.
+
+    /// Release the given read holds.
     ///
-    /// This method relies on a previous call to `acquire_read_holds` with the same
-    /// argument, or a previous call to `update_read_hold` that returned
+    /// This method relies on a previous call to
+    /// `initialize_read_holds`, `acquire_read_holds`, or `update_read_hold` that returned
     /// `read_holds`, and its behavior will be erratic if called on anything else,
     /// or if called more than once on the same bundle of read holds.
-    pub(super) fn release_read_hold(&mut self, read_holds: &ReadHolds<mz_repr::Timestamp>) {
+    pub(super) fn release_read_holds(&mut self, read_holds: ReadHolds<Timestamp>) {
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
