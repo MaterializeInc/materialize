@@ -131,7 +131,7 @@ impl KafkaSourceConnection {
         let (context, _error_rx) = MzClientContext::with_errors();
         let client: AdminClient<_> = self
             .connection
-            .create_with_context(storage_configuration, context, &BTreeMap::new())
+            .create_with_context(&storage_configuration, context, &BTreeMap::new())
             .await?;
 
         let metadata_timeout = storage_configuration
