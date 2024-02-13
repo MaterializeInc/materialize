@@ -109,8 +109,6 @@ class Range(Check):
                     (SELECT partition FROM range_source_progress LIMIT 1) AS progress_range
                   FROM range_table;
 
-                > SET statement_timeout = '120s';
-
                 > INSERT INTO range_table SELECT * FROM range_table WHERE index = 1;
             """
 

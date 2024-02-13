@@ -99,13 +99,11 @@ class DataflowErrorRetraction(Check):
             for s in [
                 dedent(
                     """
-                > SET statement_timeout = '60s'
                 > DELETE FROM dataflow_error_retraction_table WHERE f1 = 'abc'
                 """
                 ),
                 dedent(
                     """
-                > SET statement_timeout = '60s'
                 > DELETE FROM dataflow_error_retraction_table WHERE f1 = 'klm'
                 """
                 ),
