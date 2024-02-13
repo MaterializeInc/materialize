@@ -240,6 +240,11 @@ who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
 
+[[audits.tracing-fluent-assertions]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.0"
+
 [[audits.tracing-log]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"

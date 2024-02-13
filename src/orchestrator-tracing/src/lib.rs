@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use clap::{FromArgMatches, IntoApp};
+use derivative::Derivative;
 use futures_core::stream::BoxStream;
 use http::header::{HeaderName, HeaderValue};
 use mz_build_info::BuildInfo;
@@ -50,7 +51,8 @@ use opentelemetry_sdk::resource::Resource;
 /// This logic is separated from `mz_ore::tracing` because the details of how
 /// these command-line arguments are parsed and unparsed is specific to
 /// orchestrators and does not belong in a foundational crate like `mz_ore`.
-#[derive(Debug, Clone, clap::Parser)]
+#[derive(Derivative, Clone, clap::Parser)]
+#[derivative(Debug)]
 pub struct TracingCliArgs {
     /// Which tracing events to log to stderr.
     ///
@@ -192,6 +194,11 @@ pub struct TracingCliArgs {
         use_value_delimiter = true
     )]
     pub sentry_tag: Vec<KeyValueArg<String, String>>,
+    /// Test-only feature to enable tracing assertions.
+    #[cfg(feature = "fluent-assertions")]
+    #[derivative(Debug = "ignore")]
+    #[clap(skip)]
+    pub fluent_assertions: Option<tracing_fluent_assertions::AssertionRegistry>,
 }
 
 impl Default for TracingCliArgs {
@@ -263,6 +270,8 @@ impl TracingCliArgs {
             build_sha: build_info.sha,
             build_time: build_info.time,
             registry,
+            #[cfg(feature = "fluent-assertions")]
+            fluent_assertions: self.fluent_assertions.clone(),
         })
         .await
     }
@@ -352,6 +361,8 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_dsn,
                 sentry_environment,
                 sentry_tag,
+                #[cfg(feature = "fluent-assertions")]
+                    fluent_assertions: _,
             } = &self.tracing_args;
             args.push(format!("--startup-log-filter={startup_log_filter}"));
             args.push(format!("--log-format={log_format}"));

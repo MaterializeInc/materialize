@@ -69,6 +69,7 @@ use tokio_postgres::{AsyncMessage, Client};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::Level;
+use tracing_fluent_assertions::AssertionRegistry;
 use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
@@ -104,6 +105,7 @@ pub struct TestHarness {
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
+    fluent_assertions: Option<AssertionRegistry>,
     pub environment_id: EnvironmentId,
 }
 
@@ -139,6 +141,7 @@ impl Default for TestHarness {
             },
             code_version: crate::BUILD_INFO.semver_version(),
             environment_id: EnvironmentId::for_tests(),
+            fluent_assertions: None,
         }
     }
 }
@@ -273,6 +276,11 @@ impl TestHarness {
         self.code_version = version;
         self
     }
+
+    pub fn with_fluent_assertions(mut self, registry: AssertionRegistry) -> Self {
+        self.fluent_assertions = Some(registry);
+        self
+    }
 }
 
 pub struct Listeners {
@@ -402,6 +410,7 @@ impl Listeners {
                 build_sha: crate::BUILD_INFO.sha,
                 build_time: crate::BUILD_INFO.time,
                 registry: metrics_registry.clone(),
+                fluent_assertions: config.fluent_assertions,
             };
             let (tracing_handle, tracing_guard) = mz_ore::tracing::configure(config).await?;
             (tracing_handle, Some(tracing_guard))
