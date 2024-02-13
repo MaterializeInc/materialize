@@ -543,17 +543,40 @@ SELECT INTERVAL '1.23456789' SECOND(5);
 ----
 00:00:01.23457
 
+query T
+SELECT INTERVAL '-1.23456789' SECOND(5);
+----
+-00:00:01.23457
+
 # Ensure doesn't round when rounded digit is < 5.
 query T
 SELECT INTERVAL '1.23456789' SECOND(2);
 ----
 00:00:01.23
 
+query T
+SELECT INTERVAL '-1.23456789' SECOND(2);
+----
+-00:00:01.23
+
 # Postgres rounds micros to 6 digits every time a value is added before applying given precision
 query T
 SELECT INTERVAL '1.2345649' SECOND(5);
 ----
 00:00:01.23457
+
+query T
+SELECT INTERVAL '-1.2345649' SECOND(5);
+----
+-00:00:01.23457
+
+# Ensure overflow from rounding is handled properly
+query error interval field value out of range
+SELECT INTERVAL '2562047788:00:54.775807' SECOND(2);
+
+query error interval field value out of range
+SELECT INTERVAL '-2562047788:00:54.775808' SECOND(2);
+
 
 # 0.00000001 min is     0.0000006 seconds
 # 0.0006 millisecond is 0.0000006 seconds

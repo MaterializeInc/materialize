@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::adt::interval::Interval;
+use mz_repr::adt::interval::{Interval, RoundBehavior};
 use mz_repr::strconv;
 use mz_sql_parser::ast::IntervalValue;
 
@@ -28,6 +28,7 @@ pub fn plan_interval(iv: &IntervalValue) -> Result<Interval, PlanError> {
     i.truncate_low_fields(
         parser_datetimefield_to_adt(iv.precision_low),
         iv.fsec_max_precision,
+        RoundBehavior::Nearest,
     )?;
     Ok(i)
 }
