@@ -409,12 +409,6 @@ impl DataSourceDesc {
         ingestion: PlanIngestion,
         instance_id: ClusterId,
     ) -> DataSourceDesc {
-        let source_imports = ingestion
-            .source_imports
-            .iter()
-            .map(|id| (*id, ()))
-            .collect();
-
         let source_exports = ingestion
             .subsource_exports
             .iter()
@@ -432,7 +426,6 @@ impl DataSourceDesc {
         DataSourceDesc::Ingestion(IngestionDescription {
             desc: ingestion.desc.clone(),
             ingestion_metadata: (),
-            source_imports,
             source_exports,
             instance_id,
             remap_collection_id: ingestion.progress_subsource,

@@ -3087,16 +3087,6 @@ where
         id: GlobalId,
         ingestion: IngestionDescription,
     ) -> Result<IngestionDescription<CollectionMetadata>, StorageError> {
-        // Each ingestion is augmented with the collection metadata.
-        let mut source_imports = BTreeMap::new();
-        for (id, _) in ingestion.source_imports {
-            // This _requires_ that the sub-source collection (with
-            // `DataSource::Other`) was registered BEFORE we process this, the
-            // top-level collection.
-            let metadata = self.collection(id)?.collection_metadata.clone();
-            source_imports.insert(id, metadata);
-        }
-
         // The ingestion metadata is simply the collection metadata of the collection with
         // the associated ingestion
         let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
@@ -3116,7 +3106,6 @@ where
         }
 
         Ok(IngestionDescription {
-            source_imports,
             source_exports,
             ingestion_metadata,
             // The rest of the fields are identical
