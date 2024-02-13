@@ -20,9 +20,12 @@ use mz_ore::metrics::{
     MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_client::statistics::{
+    Gauge, SinkStatisticsUpdate, SkippableGauge, SourceStatisticsUpdate,
+};
 use mz_storage_types::sources::SourceEnvelope;
 use prometheus::core::{AtomicI64, AtomicU64};
+use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
@@ -328,7 +331,7 @@ impl<Stats, Metrics, Meta: Clone> Clone for StorageStatistics<Stats, Metrics, Me
 }
 
 /// Statistics maintained for sources. Gauges can be uninitialized.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SourceStatisticsRecord {
     id: GlobalId,
     worker_id: usize,
@@ -337,11 +340,22 @@ pub struct SourceStatisticsRecord {
     bytes_received: u64,
     updates_staged: u64,
     updates_committed: u64,
-    // Gauges
-    snapshot_committed: Option<bool>,
-    envelope_state_bytes: Option<u64>,
+
+    // Gauges are always wrapped in an `Option` that represents if that gauge has been
+    // initialized by that worker.
     envelope_state_records: Option<u64>,
+    envelope_state_bytes: Option<u64>,
+
+    // This field is nullable, so its value is an `Option`.
     rehydration_latency_ms: Option<Option<i64>>,
+
+    // The following fields are able to be unset when shipped to the controller, so their
+    // values are `Option`'s
+    snapshot_total: Option<Option<u64>>,
+    snapshot_read: Option<Option<u64>>,
+    snapshot_committed: Option<bool>,
+    upstream_values: Option<Option<u64>>,
+    committed_values: Option<Option<u64>>,
 }
 
 impl SourceStatisticsRecord {
@@ -350,17 +364,71 @@ impl SourceStatisticsRecord {
         self.bytes_received = 0;
         self.updates_staged = 0;
         self.updates_committed = 0;
+
+        // These gauges MUST be initialized across all workers before we aggregate and
+        // report statistics.
+        self.rehydration_latency_ms = None;
         self.snapshot_committed = None;
-        // These 2 are gauges but we WANT them to be reset, so we
-        // consider them instantly initialized.
+
+        // We consider these gauges always initialized
         self.envelope_state_bytes = Some(0);
         self.envelope_state_records = Some(0);
-        self.rehydration_latency_ms = None;
+
+        // We don't yet populate these, so we consider the initialized (with an empty value).
+        self.snapshot_total = Some(None);
+        self.snapshot_read = Some(None);
+        self.upstream_values = Some(None);
+        self.committed_values = Some(None);
+    }
+
+    /// Reset counters so that we continue to ship diffs to the controller.
+    fn reset_counters(&mut self) {
+        self.messages_received = 0;
+        self.bytes_received = 0;
+        self.updates_staged = 0;
+        self.updates_committed = 0;
+    }
+
+    /// Convert this record into an `SourceStatisticsUpdate` to be merged
+    /// across workers. Gauges must be initialized.
+    fn as_update(&self) -> SourceStatisticsUpdate {
+        let SourceStatisticsRecord {
+            id,
+            worker_id: _,
+            messages_received,
+            bytes_received,
+            updates_staged,
+            updates_committed,
+            envelope_state_records,
+            envelope_state_bytes,
+            rehydration_latency_ms,
+            snapshot_total,
+            snapshot_read,
+            snapshot_committed,
+            upstream_values,
+            committed_values,
+        } = self.clone();
+
+        SourceStatisticsUpdate {
+            id,
+            messages_received: messages_received.into(),
+            bytes_received: bytes_received.into(),
+            updates_staged: updates_staged.into(),
+            updates_committed: updates_committed.into(),
+            envelope_state_records: Gauge::gauge(envelope_state_records.unwrap()),
+            envelope_state_bytes: Gauge::gauge(envelope_state_bytes.unwrap()),
+            rehydration_latency_ms: Gauge::gauge(rehydration_latency_ms.unwrap()),
+            snapshot_total: Gauge::gauge(snapshot_total.unwrap()),
+            snapshot_read: Gauge::gauge(snapshot_read.unwrap()),
+            snapshot_committed: Gauge::gauge(snapshot_committed.unwrap()),
+            upstream_values: SkippableGauge::gauge(upstream_values.unwrap()),
+            committed_values: SkippableGauge::gauge(committed_values.unwrap()),
+        }
     }
 }
 
 /// Statistics maintained for sinks. Gauges can be uninitialized.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SinkStatisticsRecord {
     id: GlobalId,
     worker_id: usize,
@@ -377,6 +445,35 @@ impl SinkStatisticsRecord {
         self.messages_committed = 0;
         self.bytes_staged = 0;
         self.bytes_committed = 0;
+    }
+
+    /// Reset counters so that we continue to ship diffs to the controller.
+    fn reset_counters(&mut self) {
+        self.messages_staged = 0;
+        self.messages_committed = 0;
+        self.bytes_staged = 0;
+        self.bytes_committed = 0;
+    }
+
+    /// Convert this record into an `SinkStatisticsUpdate` to be merged
+    /// across workers. Gauges must be initialized.
+    fn as_update(&self) -> SinkStatisticsUpdate {
+        let SinkStatisticsRecord {
+            id,
+            worker_id: _,
+            messages_staged,
+            messages_committed,
+            bytes_staged,
+            bytes_committed,
+        } = self.clone();
+
+        SinkStatisticsUpdate {
+            id,
+            messages_staged: messages_staged.into(),
+            messages_committed: messages_committed.into(),
+            bytes_staged: bytes_staged.into(),
+            bytes_committed: bytes_committed.into(),
+        }
     }
 }
 
@@ -406,12 +503,14 @@ impl SourceStatistics {
                     updates_staged: 0,
                     updates_committed: 0,
                     bytes_received: 0,
-                    snapshot_committed: None,
-                    // These 2 are gauges but we WANT them to be reset, so we
-                    // consider them instantly initialized.
-                    envelope_state_bytes: Some(0),
                     envelope_state_records: Some(0),
+                    envelope_state_bytes: Some(0),
                     rehydration_latency_ms: None,
+                    snapshot_read: Some(None),
+                    snapshot_total: Some(None),
+                    snapshot_committed: None,
+                    upstream_values: Some(None),
+                    committed_values: Some(None),
                 },
                 prom: SourceStatisticsMetrics::new(
                     metrics,
@@ -434,21 +533,29 @@ impl SourceStatistics {
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
-    pub fn snapshot(&self) -> Option<SourceStatisticsUpdate> {
-        let cur = self.stats.borrow_mut();
+    ///
+    /// This also resets counters, so that we continue to move diffs around.
+    pub fn snapshot(&mut self) -> Option<SourceStatisticsRecord> {
+        let mut cur = self.stats.borrow_mut();
 
-        Some(SourceStatisticsUpdate {
-            id: cur.stats.id,
-            worker_id: cur.stats.worker_id,
-            messages_received: cur.stats.messages_received,
-            bytes_received: cur.stats.bytes_received,
-            updates_staged: cur.stats.updates_staged,
-            updates_committed: cur.stats.updates_committed,
-            snapshot_committed: cur.stats.snapshot_committed?,
-            envelope_state_bytes: cur.stats.envelope_state_bytes?,
-            envelope_state_records: cur.stats.envelope_state_records?,
-            rehydration_latency_ms: cur.stats.rehydration_latency_ms?,
-        })
+        match &cur.stats {
+            SourceStatisticsRecord {
+                envelope_state_records: Some(_),
+                envelope_state_bytes: Some(_),
+                rehydration_latency_ms: Some(_),
+                snapshot_total: Some(_),
+                snapshot_read: Some(_),
+                snapshot_committed: Some(_),
+                upstream_values: Some(_),
+                committed_values: Some(_),
+                ..
+            } => {
+                let ret = Some(cur.stats.clone());
+                cur.stats.reset_counters();
+                ret
+            }
+            _ => None,
+        }
     }
 
     /// Set the `snapshot_committed` stat based on the reported upper, and
@@ -646,17 +753,18 @@ impl SinkStatistics {
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
-    pub fn snapshot(&self) -> Option<SinkStatisticsUpdate> {
-        let cur = self.stats.borrow_mut();
+    ///
+    /// This also resets counters, so that we continue to move diffs around.
+    pub fn snapshot(&mut self) -> Option<SinkStatisticsRecord> {
+        let mut cur = self.stats.borrow_mut();
 
-        Some(SinkStatisticsUpdate {
-            id: cur.stats.id,
-            worker_id: cur.stats.worker_id,
-            messages_staged: cur.stats.messages_staged,
-            messages_committed: cur.stats.messages_committed,
-            bytes_staged: cur.stats.bytes_staged,
-            bytes_committed: cur.stats.bytes_committed,
-        })
+        match &cur.stats {
+            SinkStatisticsRecord { .. } => {
+                let ret = Some(cur.stats.clone());
+                cur.stats.reset_counters();
+                ret
+            }
+        }
     }
 
     /// Increment the `messages_staged` stat.
@@ -718,8 +826,8 @@ pub struct AggregatedStatistics {
     local_source_statistics: BTreeMap<GlobalId, (usize, SourceStatistics)>,
     local_sink_statistics: BTreeMap<GlobalId, (usize, SinkStatistics)>,
 
-    global_source_statistics: BTreeMap<GlobalId, (usize, BTreeMap<usize, SourceStatisticsUpdate>)>,
-    global_sink_statistics: BTreeMap<GlobalId, (usize, BTreeMap<usize, SinkStatisticsUpdate>)>,
+    global_source_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SourceStatisticsUpdate>>)>,
+    global_sink_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SinkStatisticsUpdate>>)>,
 }
 
 impl AggregatedStatistics {
@@ -762,13 +870,13 @@ impl AggregatedStatistics {
                 .entry(id)
                 .and_modify(|(ref mut epoch, ref mut stats)| {
                     *epoch += 1;
-                    stats.clear()
+                    *stats = vec![None; self.worker_count];
                 });
             self.global_sink_statistics
                 .entry(id)
                 .and_modify(|(ref mut epoch, ref mut stats)| {
                     *epoch += 1;
-                    stats.clear()
+                    *stats = vec![None; self.worker_count];
                 });
         }
     }
@@ -786,7 +894,7 @@ impl AggregatedStatistics {
         if self.worker_id == 0 {
             self.global_source_statistics
                 .entry(id)
-                .or_insert_with(|| (0, Default::default()));
+                .or_insert_with(|| (0, vec![None; self.worker_count]));
         }
     }
 
@@ -802,15 +910,15 @@ impl AggregatedStatistics {
         if self.worker_id == 0 {
             self.global_sink_statistics
                 .entry(id)
-                .or_insert_with(|| (0, Default::default()));
+                .or_insert_with(|| (0, vec![None; self.worker_count]));
         }
     }
 
     /// Ingest data from other workers.
     pub fn ingest(
         &mut self,
-        source_statistics: Vec<(usize, SourceStatisticsUpdate)>,
-        sink_statistics: Vec<(usize, SinkStatisticsUpdate)>,
+        source_statistics: Vec<(usize, SourceStatisticsRecord)>,
+        sink_statistics: Vec<(usize, SinkStatisticsRecord)>,
     ) {
         // Currently, only worker 0 ingest data from other workers.
         if self.worker_id == 0 {
@@ -818,7 +926,12 @@ impl AggregatedStatistics {
                 self.global_source_statistics.entry(stat.id).and_modify(
                     |(global_epoch, ref mut stats)| {
                         if epoch >= *global_epoch {
-                            stats.insert(stat.worker_id, stat);
+                            match &mut stats[stat.worker_id] {
+                                None => {
+                                    stats[stat.worker_id] = Some(stat.as_update());
+                                }
+                                Some(occupied) => occupied.incorporate(stat.as_update()),
+                            }
                         }
                     },
                 );
@@ -828,7 +941,12 @@ impl AggregatedStatistics {
                 self.global_sink_statistics.entry(stat.id).and_modify(
                     |(global_epoch, ref mut stats)| {
                         if epoch >= *global_epoch {
-                            stats.insert(stat.worker_id, stat);
+                            match &mut stats[stat.worker_id] {
+                                None => {
+                                    stats[stat.worker_id] = Some(stat.as_update());
+                                }
+                                Some(occupied) => occupied.incorporate(stat.as_update()),
+                            }
                         }
                     },
                 );
@@ -837,20 +955,20 @@ impl AggregatedStatistics {
     }
 
     fn _emit_local(
-        &self,
+        &mut self,
     ) -> (
-        Vec<(usize, SourceStatisticsUpdate)>,
-        Vec<(usize, SinkStatisticsUpdate)>,
+        Vec<(usize, SourceStatisticsRecord)>,
+        Vec<(usize, SinkStatisticsRecord)>,
     ) {
         let sources = self
             .local_source_statistics
-            .values()
+            .values_mut()
             .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
             .collect();
 
         let sinks = self
             .local_sink_statistics
-            .values()
+            .values_mut()
             .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
             .collect();
 
@@ -859,10 +977,10 @@ impl AggregatedStatistics {
 
     /// Emit a snapshot of this workers local data.
     pub fn emit_local(
-        &self,
+        &mut self,
     ) -> (
-        Vec<(usize, SourceStatisticsUpdate)>,
-        Vec<(usize, SinkStatisticsUpdate)>,
+        Vec<(usize, SourceStatisticsRecord)>,
+        Vec<(usize, SinkStatisticsRecord)>,
     ) {
         // As an optimization, worker 0 does not broadcast it data. It ingests
         // it in `snapshot`.
@@ -870,19 +988,7 @@ impl AggregatedStatistics {
             return (Vec::new(), Vec::new());
         }
 
-        let sources = self
-            .local_source_statistics
-            .values()
-            .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
-            .collect();
-
-        let sinks = self
-            .local_sink_statistics
-            .values()
-            .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
-            .collect();
-
-        (sources, sinks)
+        self._emit_local()
     }
 
     /// Emit a _global_ snapshot of data. This does not include objects whose workers have not
@@ -897,28 +1003,46 @@ impl AggregatedStatistics {
 
         let sources = self
             .global_source_statistics
-            .values()
-            .filter_map(|(_, s)| {
-                if s.len() >= self.worker_count {
-                    Some(s.values().cloned())
+            .iter_mut()
+            .filter_map(|(_, (_, s))| {
+                if s.iter().all(|s| s.is_some()) {
+                    let ret = Some(SourceStatisticsUpdate::summarize(|| {
+                        s.iter().filter_map(Option::as_ref)
+                    }));
+
+                    // Reset the counters so we only report diffs.
+                    s.iter_mut().for_each(|s| {
+                        if let Some(s) = s {
+                            s.reset_counters();
+                        }
+                    });
+                    ret
                 } else {
                     None
                 }
             })
-            .flatten()
             .collect();
 
         let sinks = self
             .global_sink_statistics
-            .values()
-            .filter_map(|(_, s)| {
-                if s.len() >= self.worker_count {
-                    Some(s.values().cloned())
+            .iter_mut()
+            .filter_map(|(_, (_, s))| {
+                if s.iter().all(|s| s.is_some()) {
+                    let ret = Some(SinkStatisticsUpdate::summarize(|| {
+                        s.iter().filter_map(Option::as_ref)
+                    }));
+
+                    // Reset the counters so we only report diffs.
+                    s.iter_mut().for_each(|s| {
+                        if let Some(s) = s {
+                            s.reset_counters();
+                        }
+                    });
+                    ret
                 } else {
                     None
                 }
             })
-            .flatten()
             .collect();
 
         (sources, sinks)

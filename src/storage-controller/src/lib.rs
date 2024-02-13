@@ -192,12 +192,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    source_statistics:
-        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SourceStatisticsUpdate>>>>,
+    source_statistics: Arc<Mutex<BTreeMap<GlobalId, Option<SourceStatisticsUpdate>>>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    sink_statistics:
-        Arc<Mutex<BTreeMap<GlobalId, statistics::StatsInitState<SinkStatisticsUpdate>>>>,
+    sink_statistics: Arc<Mutex<BTreeMap<GlobalId, Option<SinkStatisticsUpdate>>>>,
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
@@ -246,6 +244,7 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
+        self.reconcile_dangling_statistics();
         self.initialized = true;
         for client in self.clients.values_mut() {
             client.send(StorageCommand::InitializationComplete);
@@ -601,10 +600,10 @@ where
                 self.persist_read_handles.register(id, since_handle);
 
                 if let DataSource::Ingestion(i) = &description.data_source {
-                    source_statistics.insert(id, statistics::StatsInitState(BTreeMap::new()));
+                    source_statistics.insert(id, None);
                     // Note that `source_exports` contains the subsources as well.
                     for (id, _) in i.source_exports.iter() {
-                        source_statistics.insert(*id, statistics::StatsInitState(BTreeMap::new()));
+                        source_statistics.insert(*id, None);
                     }
                 }
 
@@ -728,14 +727,14 @@ where
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
                         IntrospectionType::StorageSourceStatistics => {
-                            // Set the collection to empty.
-                            self.reconcile_managed_collection(id, vec![]).await;
+                            let prev = self.snapshot_statistics(id).await;
 
                             let scraper_token = statistics::spawn_statistics_scraper(
                                 id.clone(),
                                 // These do a shallow copy.
                                 self.collection_manager.clone(),
                                 Arc::clone(&self.source_statistics),
+                                prev,
                                 self.config.parameters.statistics_interval,
                             );
 
@@ -744,14 +743,14 @@ where
                             self.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::StorageSinkStatistics => {
-                            // Set the collection to empty.
-                            self.reconcile_managed_collection(id, vec![]).await;
+                            let prev = self.snapshot_statistics(id).await;
 
                             let scraper_token = statistics::spawn_statistics_scraper(
                                 id.clone(),
                                 // These do a shallow copy.
                                 self.collection_manager.clone(),
                                 Arc::clone(&self.sink_statistics),
+                                prev,
                                 self.config.parameters.statistics_interval,
                             );
 
@@ -1020,7 +1019,7 @@ where
             self.sink_statistics
                 .lock()
                 .expect("poisoned")
-                .insert(id, statistics::StatsInitState(BTreeMap::new()));
+                .insert(id, None);
 
             client.send(StorageCommand::RunSinks(vec![cmd]));
         }
@@ -1088,7 +1087,7 @@ where
             self.sink_statistics
                 .lock()
                 .expect("poisoned")
-                .insert(id, statistics::StatsInitState(BTreeMap::new()));
+                .insert(id, None);
         }
 
         for (instance_id, updates) in updates_by_instance {
@@ -1620,22 +1619,26 @@ where
                 {
                     let mut shared_stats = self.source_statistics.lock().expect("poisoned");
                     for stat in source_stats {
-                        statistics::StatsInitState::set_if_not_removed(
-                            shared_stats.get_mut(&stat.id),
-                            stat.worker_id,
-                            stat,
-                        )
+                        // Don't override it if its been removed.
+                        shared_stats
+                            .entry(stat.id)
+                            .and_modify(|current| match current {
+                                Some(ref mut current) => current.incorporate(stat),
+                                None => *current = Some(stat),
+                            });
                     }
                 }
 
                 {
                     let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
                     for stat in sink_stats {
-                        statistics::StatsInitState::set_if_not_removed(
-                            shared_stats.get_mut(&stat.id),
-                            stat.worker_id,
-                            stat,
-                        )
+                        // Don't override it if its been removed.
+                        shared_stats
+                            .entry(stat.id)
+                            .and_modify(|current| match current {
+                                Some(ref mut current) => current.incorporate(stat),
+                                None => *current = Some(stat),
+                            });
                     }
                 }
             }
@@ -2450,6 +2453,45 @@ where
         write.fetch_recent_upper().await;
 
         (write, since_handle)
+    }
+
+    /// Get the current rows in the given statistics table. This is used to bootstrap
+    /// the statistics tasks.
+    ///
+    // TODO(guswynn): we need to be more careful about the update time we get here:
+    // <https://github.com/MaterializeInc/materialize/issues/25349>
+    async fn snapshot_statistics(&mut self, id: GlobalId) -> Vec<Row> {
+        match self.collections[&id].write_frontier.as_option() {
+            Some(f) if f > &T::minimum() => {
+                let as_of = f.step_back().unwrap();
+
+                let snapshot = self.snapshot(id, as_of).await.unwrap();
+                snapshot
+                    .into_iter()
+                    .map(|(row, diff)| {
+                        assert!(diff == 1);
+                        row
+                    })
+                    .collect()
+            }
+            // If collection is closed or the frontier is the minimum, we cannot
+            // or don't need to truncate (respectively).
+            _ => Vec::new(),
+        }
+    }
+
+    /// Remove statistics for sources/sinks that were dropped but still have statistics rows
+    /// hanging around.
+    fn reconcile_dangling_statistics(&mut self) {
+        self.source_statistics
+            .lock()
+            .expect("poisoned")
+            // collections should also contain subsources.
+            .retain(|k, _| self.collections.contains_key(k));
+        self.sink_statistics
+            .lock()
+            .expect("poisoned")
+            .retain(|k, _| self.exports.contains_key(k));
     }
 
     /// Effectively truncates the `data_shard` associated with `global_id`

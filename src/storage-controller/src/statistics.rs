@@ -28,37 +28,13 @@ use tokio::sync::oneshot;
 
 use crate::collection_mgmt::CollectionManager;
 
-/// An enum that tracks the lifecycle of statistics objects
-/// in the controller.
-///
-/// When sources/sinks are dropped, some state (including statistics) are
-/// cleaned up later, as part of processing the storage controller. This
-/// means that a new statistics update could happen between `DROP SOURCE`
-/// and cleanup, which is we need to distinguished `Uninitialized` from
-/// "explicitly removed" so that we no longer consolidate stats for an
-/// item into the `shared_stats` shared map.
-#[derive(Debug)]
-pub(super) struct StatsInitState<T>(pub BTreeMap<usize, T>);
-
-impl<T> StatsInitState<T> {
-    /// Set the value for the given id, overriding it if it already exists,
-    /// and doing nothing if its been removed.
-    pub(super) fn set_if_not_removed(this: Option<&mut Self>, worker_id: usize, val: T) {
-        match this {
-            Some(StatsInitState(map)) => {
-                map.insert(worker_id, val);
-            }
-            None => {}
-        }
-    }
-}
-
 /// Spawns a task that continually (at an interval) writes statistics from storaged's
 /// that are consolidated in shared memory in the controller.
 pub(super) fn spawn_statistics_scraper<Stats, T>(
     statistics_collection_id: GlobalId,
     collection_mgmt: CollectionManager<T>,
-    shared_stats: Arc<Mutex<BTreeMap<GlobalId, StatsInitState<Stats>>>>,
+    shared_stats: Arc<Mutex<BTreeMap<GlobalId, Option<Stats>>>>,
+    previous_values: Vec<Row>,
     // TODO(guswynn): make this dynamic?
     interval: Duration,
 ) -> Box<dyn Any + Send + Sync>
@@ -73,8 +49,18 @@ where
         // collection, so that we can emit the required retractions/updates
         // when we learn about new metrics.
         //
-        // We assume that `shared_stats` is kept up-to-date by the controller.
+        // We assume that `shared_stats` is kept up-to-date (and initialized)
+        // by the controller.
         let mut current_metrics = ChangeBatch::new();
+
+        {
+            let mut shared_stats = shared_stats.lock().expect("poisoned");
+            for row in previous_values {
+                current_metrics.update(row.clone(), 1);
+                let current = Stats::unpack(row);
+                shared_stats.insert(current.0, Some(current.1));
+            }
+        }
 
         let mut interval = tokio::time::interval(interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -99,8 +85,8 @@ where
                     {
                         let shared_stats = shared_stats.lock().expect("poisoned");
                         for (_, stats) in shared_stats.iter() {
-                            for stat in stats.0.values() {
-                                stat.pack(row_buf.packer());
+                            if let Some(stats) = stats {
+                                stats.pack(row_buf.packer());
                                 correction.push((row_buf.clone(), 1));
                             }
                         }
