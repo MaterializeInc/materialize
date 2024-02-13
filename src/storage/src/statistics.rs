@@ -291,6 +291,12 @@ impl SourceStatisticsMetadata {
     }
 }
 
+#[derive(Debug)]
+struct StatsInner<Stats, Metrics> {
+    stats: Stats,
+    prom: Metrics,
+}
+
 /// A helper struct designed to make it easy for operators to update user-facing metrics.
 /// This struct also ensures that each stack is also incremented in prometheus.
 ///
@@ -307,7 +313,7 @@ pub struct StorageStatistics<Stats, Metrics, Meta> {
     // Note also that the `DeleteOnDropCounter`'s in the `SourceStatisticsMetrics`
     // already are in an `Arc`, so this is a bit of extra wrapping, but the cost
     // shouldn't cost too much.
-    stats: Rc<RefCell<(Stats, Metrics)>>,
+    stats: Rc<RefCell<StatsInner<Stats, Metrics>>>,
     /// Meta data needed to maintain statistics.
     meta: Meta,
 }
@@ -392,8 +398,8 @@ impl SourceStatistics {
         resume_upper: Antichain<Timestamp>,
     ) -> Self {
         Self {
-            stats: Rc::new(RefCell::new((
-                SourceStatisticsRecord {
+            stats: Rc::new(RefCell::new(StatsInner {
+                stats: SourceStatisticsRecord {
                     id,
                     worker_id,
                     messages_received: 0,
@@ -407,7 +413,7 @@ impl SourceStatistics {
                     envelope_state_records: Some(0),
                     rehydration_latency_ms: None,
                 },
-                SourceStatisticsMetrics::new(
+                prom: SourceStatisticsMetrics::new(
                     metrics,
                     id,
                     worker_id,
@@ -415,7 +421,7 @@ impl SourceStatistics {
                     shard_id,
                     envelope,
                 ),
-            ))),
+            })),
             meta: SourceStatisticsMetadata::new(resume_upper),
         }
     }
@@ -424,7 +430,7 @@ impl SourceStatistics {
     /// This does not reset prometheus gauges, which will be overwritten with new values.
     pub fn clear(&self) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.clear();
+        cur.stats.clear();
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
@@ -432,16 +438,16 @@ impl SourceStatistics {
         let cur = self.stats.borrow_mut();
 
         Some(SourceStatisticsUpdate {
-            id: cur.0.id,
-            worker_id: cur.0.worker_id,
-            messages_received: cur.0.messages_received,
-            bytes_received: cur.0.bytes_received,
-            updates_staged: cur.0.updates_staged,
-            updates_committed: cur.0.updates_committed,
-            snapshot_committed: cur.0.snapshot_committed?,
-            envelope_state_bytes: cur.0.envelope_state_bytes?,
-            envelope_state_records: cur.0.envelope_state_records?,
-            rehydration_latency_ms: cur.0.rehydration_latency_ms?,
+            id: cur.stats.id,
+            worker_id: cur.stats.worker_id,
+            messages_received: cur.stats.messages_received,
+            bytes_received: cur.stats.bytes_received,
+            updates_staged: cur.stats.updates_staged,
+            updates_committed: cur.stats.updates_committed,
+            snapshot_committed: cur.stats.snapshot_committed?,
+            envelope_state_bytes: cur.stats.envelope_state_bytes?,
+            envelope_state_records: cur.stats.envelope_state_records?,
+            rehydration_latency_ms: cur.stats.rehydration_latency_ms?,
         })
     }
 
@@ -459,36 +465,36 @@ impl SourceStatistics {
     pub fn update_snapshot_committed(&self, upper: &Antichain<Timestamp>) {
         let value = *upper != Antichain::from_elem(Timestamp::MIN);
         let mut cur = self.stats.borrow_mut();
-        cur.0.snapshot_committed = Some(value);
-        cur.1.snapshot_committed.set(if value { 1 } else { 0 });
+        cur.stats.snapshot_committed = Some(value);
+        cur.prom.snapshot_committed.set(if value { 1 } else { 0 });
     }
 
     /// Increment the `messages_received` stat.
     pub fn inc_messages_received_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.messages_received = cur.0.messages_received + value;
-        cur.1.messages_received.inc_by(value);
+        cur.stats.messages_received = cur.stats.messages_received + value;
+        cur.prom.messages_received.inc_by(value);
     }
 
     /// Increment the `updates` stat.
     pub fn inc_updates_staged_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.updates_staged = cur.0.updates_staged + value;
-        cur.1.updates_staged.inc_by(value);
+        cur.stats.updates_staged = cur.stats.updates_staged + value;
+        cur.prom.updates_staged.inc_by(value);
     }
 
     /// Increment the `messages_committed` stat.
     pub fn inc_updates_committed_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.updates_committed = cur.0.updates_committed + value;
-        cur.1.updates_committed.inc_by(value);
+        cur.stats.updates_committed = cur.stats.updates_committed + value;
+        cur.prom.updates_committed.inc_by(value);
     }
 
     /// Increment the `bytes_received` stat.
     pub fn inc_bytes_received_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.bytes_received = cur.0.bytes_received + value;
-        cur.1.bytes_received.inc_by(value);
+        cur.stats.bytes_received = cur.stats.bytes_received + value;
+        cur.prom.bytes_received.inc_by(value);
     }
 
     /// Update the `envelope_state_bytes` stat.
@@ -496,22 +502,22 @@ impl SourceStatistics {
     pub fn update_envelope_state_bytes_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         if let Some(updated) = cur
-            .0
+            .stats
             .envelope_state_bytes
             .unwrap_or(0)
             .checked_add_signed(value)
         {
-            cur.0.envelope_state_bytes = Some(updated);
-            cur.1.envelope_state_bytes.set(updated);
+            cur.stats.envelope_state_bytes = Some(updated);
+            cur.prom.envelope_state_bytes.set(updated);
         } else {
-            let envelope_state_bytes = cur.0.envelope_state_bytes.unwrap_or(0);
+            let envelope_state_bytes = cur.stats.envelope_state_bytes.unwrap_or(0);
             tracing::warn!(
                 "Unexpected u64 overflow while updating envelope_state_bytes value {} with {}",
                 envelope_state_bytes,
                 value
             );
-            cur.0.envelope_state_bytes = Some(0);
-            cur.1.envelope_state_bytes.set(0);
+            cur.stats.envelope_state_bytes = Some(0);
+            cur.prom.envelope_state_bytes.set(0);
         }
     }
 
@@ -527,8 +533,8 @@ impl SourceStatistics {
         } else {
             value.unsigned_abs()
         };
-        cur.0.envelope_state_bytes = Some(value);
-        cur.1.envelope_state_bytes.set(value);
+        cur.stats.envelope_state_bytes = Some(value);
+        cur.prom.envelope_state_bytes.set(value);
     }
 
     /// Update the `envelope_state_records` stat.
@@ -536,22 +542,22 @@ impl SourceStatistics {
     pub fn update_envelope_state_records_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         if let Some(updated) = cur
-            .0
+            .stats
             .envelope_state_records
             .unwrap_or(0)
             .checked_add_signed(value)
         {
-            cur.0.envelope_state_records = Some(updated);
-            cur.1.envelope_state_records.set(updated);
+            cur.stats.envelope_state_records = Some(updated);
+            cur.prom.envelope_state_records.set(updated);
         } else {
-            let envelope_state_records = cur.0.envelope_state_records.unwrap_or(0);
+            let envelope_state_records = cur.stats.envelope_state_records.unwrap_or(0);
             tracing::warn!(
                 "Unexpected u64 overflow while updating envelope_state_records value {} with {}",
                 envelope_state_records,
                 value
             );
-            cur.0.envelope_state_records = Some(0);
-            cur.1.envelope_state_records.set(0);
+            cur.stats.envelope_state_records = Some(0);
+            cur.prom.envelope_state_records.set(0);
         }
     }
 
@@ -567,21 +573,21 @@ impl SourceStatistics {
         } else {
             value.unsigned_abs()
         };
-        cur.0.envelope_state_records = Some(value);
-        cur.1.envelope_state_records.set(value);
+        cur.stats.envelope_state_records = Some(value);
+        cur.prom.envelope_state_records.set(value);
     }
 
     /// Initialize the `rehydration_latency_ms` stat as `NULL`.
     pub fn initialize_rehydration_latency_ms(&self) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.rehydration_latency_ms = Some(None);
+        cur.stats.rehydration_latency_ms = Some(None);
     }
 
     /// Set the `rehydration_latency_ms` stat based on the reported upper.
     pub fn update_rehydration_latency_ms(&self, upper: &Antichain<Timestamp>) {
         let mut cur = self.stats.borrow_mut();
 
-        if matches!(cur.0.rehydration_latency_ms, Some(Some(_))) {
+        if matches!(cur.stats.rehydration_latency_ms, Some(Some(_))) {
             return; // source was already hydrated before
         }
         if !PartialOrder::less_than(&self.meta.resume_upper, upper) {
@@ -593,33 +599,32 @@ impl SourceStatistics {
             .as_millis()
             .try_into()
             .expect("Rehydration took more than ~584 million years!");
-        cur.0.rehydration_latency_ms = Some(Some(value));
-        cur.1.rehydration_latency_ms.set(value);
+        cur.stats.rehydration_latency_ms = Some(Some(value));
+        cur.prom.rehydration_latency_ms.set(value);
     }
 
     /// Set the `upstream_values` stat to the given value.
     pub fn set_upstream_values(&self, value: u64) {
         let cur = self.stats.borrow_mut();
         // Not yet exposed to users.
-        // cur.1.upstream_values = value;
-        cur.1.upstream_values.set(value);
+        // cur.prom.upstream_values = value;
+        cur.prom.upstream_values.set(value);
     }
 
     /// Set the `committed_values` stat to the given value.
     pub fn set_committed_values(&self, value: u64) {
         let cur = self.stats.borrow_mut();
         // Not yet exposed to users.
-        // cur.1.committed_values = value;
-        cur.1.committed_values.set(value);
+        // cur.prom.committed_values = value;
+        cur.prom.committed_values.set(value);
     }
 }
 
 impl SinkStatistics {
     pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkStatisticsMetricDefs) -> Self {
         Self {
-            stats: Rc::new(RefCell::new((
-                // We have no snapshot metrics for sinks as of now.
-                SinkStatisticsRecord {
+            stats: Rc::new(RefCell::new(StatsInner {
+                stats: SinkStatisticsRecord {
                     id,
                     worker_id,
                     messages_staged: 0,
@@ -627,8 +632,8 @@ impl SinkStatistics {
                     bytes_staged: 0,
                     bytes_committed: 0,
                 },
-                SinkStatisticsMetrics::new(metrics, id, worker_id),
-            ))),
+                prom: SinkStatisticsMetrics::new(metrics, id, worker_id),
+            })),
             meta: (),
         }
     }
@@ -637,7 +642,7 @@ impl SinkStatistics {
     /// This does not reset prometheus gauges, which will be overwritten with new values.
     pub fn clear(&self) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.clear()
+        cur.stats.clear()
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
@@ -645,41 +650,41 @@ impl SinkStatistics {
         let cur = self.stats.borrow_mut();
 
         Some(SinkStatisticsUpdate {
-            id: cur.0.id,
-            worker_id: cur.0.worker_id,
-            messages_staged: cur.0.messages_staged,
-            messages_committed: cur.0.messages_committed,
-            bytes_staged: cur.0.bytes_staged,
-            bytes_committed: cur.0.bytes_committed,
+            id: cur.stats.id,
+            worker_id: cur.stats.worker_id,
+            messages_staged: cur.stats.messages_staged,
+            messages_committed: cur.stats.messages_committed,
+            bytes_staged: cur.stats.bytes_staged,
+            bytes_committed: cur.stats.bytes_committed,
         })
     }
 
     /// Increment the `messages_staged` stat.
     pub fn inc_messages_staged_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.messages_staged = cur.0.messages_staged + value;
-        cur.1.messages_staged.inc_by(value);
+        cur.stats.messages_staged = cur.stats.messages_staged + value;
+        cur.prom.messages_staged.inc_by(value);
     }
 
     /// Increment the `bytes_received` stat.
     pub fn inc_bytes_staged_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.bytes_staged = cur.0.bytes_staged + value;
-        cur.1.bytes_staged.inc_by(value);
+        cur.stats.bytes_staged = cur.stats.bytes_staged + value;
+        cur.prom.bytes_staged.inc_by(value);
     }
 
     /// Increment the `messages_committed` stat.
     pub fn inc_messages_committed_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.messages_committed = cur.0.messages_committed + value;
-        cur.1.messages_committed.inc_by(value);
+        cur.stats.messages_committed = cur.stats.messages_committed + value;
+        cur.prom.messages_committed.inc_by(value);
     }
 
     /// Increment the `bytes_committed` stat.
     pub fn inc_bytes_committed_by(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
-        cur.0.bytes_committed = cur.0.bytes_committed + value;
-        cur.1.bytes_committed.inc_by(value);
+        cur.stats.bytes_committed = cur.stats.bytes_committed + value;
+        cur.prom.bytes_committed.inc_by(value);
     }
 }
 
