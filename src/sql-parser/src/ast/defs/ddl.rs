@@ -376,20 +376,15 @@ impl_display!(CsrSeedProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceFormat<T: AstInfo> {
-    None,
     /// `CREATE SOURCE .. FORMAT`
     Bare(Format<T>),
     /// `CREATE SOURCE .. KEY FORMAT .. VALUE FORMAT`
-    KeyValue {
-        key: Format<T>,
-        value: Format<T>,
-    },
+    KeyValue { key: Format<T>, value: Format<T> },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceFormat<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceFormat::None => {}
             CreateSourceFormat::Bare(format) => {
                 f.write_str(" FORMAT ");
                 f.write_node(format)

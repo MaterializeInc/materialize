@@ -27,9 +27,7 @@ use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::CsrConnection;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
-use mz_storage_types::sources::encoding::{
-    AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
-};
+use mz_storage_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -301,8 +299,8 @@ async fn get_decoder(
     metrics: DecodeMetricDefs,
     storage_configuration: &StorageConfiguration,
 ) -> Result<DataDecoder, CsrConnectError> {
-    let decoder = match encoding.inner {
-        DataEncodingInner::Avro(AvroEncoding {
+    let decoder = match encoding {
+        DataEncoding::Avro(AvroEncoding {
             schema,
             csr_connection,
             confluent_wire_format,
@@ -323,24 +321,24 @@ async fn get_decoder(
                 metrics,
             }
         }
-        DataEncodingInner::Text
-        | DataEncodingInner::Bytes
-        | DataEncodingInner::Json
-        | DataEncodingInner::Protobuf(_)
-        | DataEncodingInner::Regex(_) => {
-            let after_delimiting = match encoding.inner {
-                DataEncodingInner::Regex(RegexEncoding { regex }) => {
+        DataEncoding::Text
+        | DataEncoding::Bytes
+        | DataEncoding::Json
+        | DataEncoding::Protobuf(_)
+        | DataEncoding::Regex(_) => {
+            let after_delimiting = match encoding {
+                DataEncoding::Regex(RegexEncoding { regex }) => {
                     PreDelimitedFormat::Regex(regex.regex, Default::default())
                 }
-                DataEncodingInner::Protobuf(encoding) => {
+                DataEncoding::Protobuf(encoding) => {
                     PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding).expect(
                         "Failed to create protobuf decoder, even though we validated ccsr \
                                     client creation in purification.",
                     ))
                 }
-                DataEncodingInner::Bytes => PreDelimitedFormat::Bytes,
-                DataEncodingInner::Json => PreDelimitedFormat::Json,
-                DataEncodingInner::Text => PreDelimitedFormat::Text,
+                DataEncoding::Bytes => PreDelimitedFormat::Bytes,
+                DataEncoding::Json => PreDelimitedFormat::Json,
+                DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };
             let inner = if is_connection_delimited {
@@ -353,15 +351,12 @@ async fn get_decoder(
             };
             DataDecoder { inner, metrics }
         }
-        DataEncodingInner::Csv(enc) => {
+        DataEncoding::Csv(enc) => {
             let state = CsvDecoderState::new(enc);
             DataDecoder {
                 inner: DataDecoderInner::Csv(state),
                 metrics,
             }
-        }
-        DataEncodingInner::RowCodec(_) => {
-            unreachable!("RowCodec sources should not go through the general decoding path.")
         }
     };
     Ok(decoder)

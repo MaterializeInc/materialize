@@ -14,10 +14,7 @@ register-source name=s1
     {"command": "emit", "value": "gus2", "offset": 1}
   ],
   "encoding": {
-    "Single": {
-      "force_nullable_columns": false,
-      "inner": "Bytes"
-    }
+    "value": "Bytes"
   },
   "envelope": {
     "None": {

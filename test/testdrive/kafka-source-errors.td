@@ -16,11 +16,6 @@ ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 
 > CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-! CREATE SOURCE s
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-thetopic-${testdrive.seed}')
-contains:Source format must be specified
-
 ! CREATE CONNECTION no_broker TO KAFKA (BROKER '');
 contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
 

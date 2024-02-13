@@ -82,6 +82,16 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
         None
     }
 
+    fn key_desc(&self) -> RelationDesc {
+        RelationDesc::empty()
+    }
+
+    fn value_desc(&self) -> RelationDesc {
+        // The postgres source only outputs data to its subsources. The catalog object
+        // representing the source itself is just an empty relation with no columns
+        RelationDesc::empty()
+    }
+
     fn timestamp_desc(&self) -> RelationDesc {
         PG_PROGRESS_DESC.clone()
     }

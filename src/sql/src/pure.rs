@@ -1514,12 +1514,12 @@ async fn purify_alter_source(
 
 async fn purify_source_format(
     catalog: &dyn SessionCatalog,
-    format: &mut CreateSourceFormat<Aug>,
+    format: &mut Option<CreateSourceFormat<Aug>>,
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    if matches!(format, CreateSourceFormat::KeyValue { .. })
+    if matches!(format, Some(CreateSourceFormat::KeyValue { .. }))
         && !matches!(
             connection,
             CreateSourceConnection::Kafka { .. } | CreateSourceConnection::TestScript { .. }
@@ -1529,9 +1529,9 @@ async fn purify_source_format(
         sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 
-    match format {
-        CreateSourceFormat::None => {}
-        CreateSourceFormat::Bare(format) => {
+    match format.as_mut() {
+        None => {}
+        Some(CreateSourceFormat::Bare(format)) => {
             purify_source_format_single(
                 catalog,
                 format,
@@ -1542,7 +1542,7 @@ async fn purify_source_format(
             .await?;
         }
 
-        CreateSourceFormat::KeyValue { key, value: val } => {
+        Some(CreateSourceFormat::KeyValue { key, value: val }) => {
             purify_source_format_single(catalog, key, connection, envelope, storage_configuration)
                 .await?;
             purify_source_format_single(catalog, val, connection, envelope, storage_configuration)

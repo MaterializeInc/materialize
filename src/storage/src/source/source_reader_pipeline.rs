@@ -51,7 +51,6 @@ use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::SourceError;
-use mz_storage_types::sources::encoding::SourceDataEncoding;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -93,8 +92,6 @@ pub struct RawSourceCreationConfig {
     /// Granularity with which timestamps should be closed (and capabilities
     /// downgraded).
     pub timestamp_interval: Duration,
-    /// Data encoding
-    pub encoding: SourceDataEncoding,
     /// The function to return a now time.
     pub now: NowFn,
     /// The metrics & registry that each source instantiates.
@@ -428,7 +425,6 @@ where
         worker_id,
         worker_count,
         timestamp_interval,
-        encoding: _,
         storage_metadata,
         as_of,
         resume_uppers: _,
@@ -587,7 +583,6 @@ where
         worker_id,
         worker_count: _,
         timestamp_interval: _,
-        encoding: _,
         storage_metadata: _,
         as_of: _,
         resume_uppers,

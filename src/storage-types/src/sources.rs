@@ -581,6 +581,18 @@ pub trait SourceConnection: Debug + Clone + PartialEq + crate::AlterCompatible {
     /// The name of the resource in the external system (e.g kafka topic) if any
     fn upstream_name(&self) -> Option<&str>;
 
+    /// The schema of this connection's key rows.
+    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
+    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
+    // pipeline.
+    fn key_desc(&self) -> RelationDesc;
+
+    /// The schema of this connection's value rows.
+    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
+    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
+    // pipeline.
+    fn value_desc(&self) -> RelationDesc;
+
     /// The schema of this connection's timestamp type. This will also be the schema of the
     /// progress relation.
     fn timestamp_desc(&self) -> RelationDesc;
@@ -629,7 +641,7 @@ impl RustType<ProtoCompression> for Compression {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
-    pub encoding: encoding::SourceDataEncoding<C>,
+    pub encoding: Option<encoding::SourceDataEncoding<C>>,
     pub envelope: SourceEnvelope,
     pub timestamp_interval: Duration,
 }
@@ -647,7 +659,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            encoding: encoding.into_inline_connection(r),
+            encoding: encoding.map(|e| e.into_inline_connection(r)),
             envelope,
             timestamp_interval,
         }
@@ -658,7 +670,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
-            encoding: Some(self.encoding.into_proto()),
+            encoding: self.encoding.into_proto(),
             envelope: Some(self.envelope.into_proto()),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
@@ -669,9 +681,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
-            encoding: proto
-                .encoding
-                .into_rust_if_some("ProtoSourceDesc::encoding")?,
+            encoding: proto.encoding.into_rust()?,
             envelope: proto
                 .envelope
                 .into_rust_if_some("ProtoSourceDesc::envelope")?,
@@ -849,6 +859,26 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.upstream_name(),
             Self::LoadGenerator(conn) => conn.upstream_name(),
             Self::TestScript(conn) => conn.upstream_name(),
+        }
+    }
+
+    fn key_desc(&self) -> RelationDesc {
+        match self {
+            Self::Kafka(conn) => conn.key_desc(),
+            Self::Postgres(conn) => conn.key_desc(),
+            Self::MySql(conn) => conn.key_desc(),
+            Self::LoadGenerator(conn) => conn.key_desc(),
+            Self::TestScript(conn) => conn.key_desc(),
+        }
+    }
+
+    fn value_desc(&self) -> RelationDesc {
+        match self {
+            Self::Kafka(conn) => conn.value_desc(),
+            Self::Postgres(conn) => conn.value_desc(),
+            Self::MySql(conn) => conn.value_desc(),
+            Self::LoadGenerator(conn) => conn.value_desc(),
+            Self::TestScript(conn) => conn.value_desc(),
         }
     }
 

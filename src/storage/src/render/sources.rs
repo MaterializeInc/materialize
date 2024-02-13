@@ -100,7 +100,6 @@ where
         timestamp_interval: description.desc.timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
-        encoding: description.desc.encoding.clone(),
         now: storage_state.now.clone(),
         metrics: storage_state.metrics.clone(),
         as_of: as_of.clone(),
@@ -201,10 +200,6 @@ where
         timestamp_interval: _,
     } = description.desc;
     let (stream, errors, health) = {
-        let (key_encoding, value_encoding) = match encoding {
-            SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
-            SourceDataEncoding::Single(value) => (None, value),
-        };
         // CDCv2 can't quite be slotted in to the below code, since it determines
         // its own diffs/timestamps as part of decoding.
         //
@@ -215,8 +210,8 @@ where
                 schema,
                 csr_connection,
                 confluent_wire_format,
-            } = match value_encoding.inner {
-                DataEncodingInner::Avro(enc) => enc,
+            } = match encoding.map(|e| e.value) {
+                Some(DataEncoding::Avro(enc)) => enc,
                 _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
             };
 
@@ -233,17 +228,8 @@ where
             needed_tokens.push(token);
             (oks, None, empty(scope))
         } else {
-            let (decoded_stream, decode_health) = match (key_encoding, value_encoding) {
-                // TODO(petrosagg): encoding should become an optional field in the description
-                // struct that is only `Some(_)` when an encoding step is to be performed. We
-                // shouldn't have `RowCodec` as an option at all
-                (
-                    None,
-                    DataEncoding {
-                        inner: DataEncodingInner::RowCodec(_),
-                        ..
-                    },
-                ) => (
+            let (decoded_stream, decode_health) = match encoding {
+                None => (
                     ok_source.map(|r| DecodeResult {
                         key: None,
                         value: Some(Ok(r.value)),
@@ -252,10 +238,10 @@ where
                     }),
                     empty(scope),
                 ),
-                (key_encoding, value_encoding) => render_decode_delimited(
+                Some(encoding) => render_decode_delimited(
                     &ok_source,
-                    key_encoding,
-                    value_encoding,
+                    encoding.key,
+                    encoding.value,
                     dataflow_debug_name.clone(),
                     storage_state.metrics.decode_defs.clone(),
                     storage_state.storage_configuration.clone(),

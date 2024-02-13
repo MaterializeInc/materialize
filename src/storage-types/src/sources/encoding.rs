@@ -27,132 +27,48 @@ include!(concat!(
     "/mz_storage_types.sources.encoding.rs"
 ));
 
-pub enum SourceDataEncodingInner<C: ConnectionAccess = InlinedConnection> {
-    Single(DataEncodingInner<C>),
-    KeyValue {
-        key: DataEncodingInner<C>,
-        value: DataEncodingInner<C>,
-    },
-}
-
-impl<R: ConnectionResolver> IntoInlineConnection<SourceDataEncodingInner, R>
-    for SourceDataEncodingInner<ReferencedConnection>
-{
-    fn into_inline_connection(self, r: R) -> SourceDataEncodingInner {
-        match self {
-            Self::Single(conn) => SourceDataEncodingInner::Single(conn.into_inline_connection(&r)),
-            Self::KeyValue { key, value } => SourceDataEncodingInner::KeyValue {
-                key: key.into_inline_connection(&r),
-                value: value.into_inline_connection(r),
-            },
-        }
-    }
-}
-
-impl<C: ConnectionAccess> SourceDataEncodingInner<C> {
-    pub fn into_source_data_encoding(self, force_nullable_keys: bool) -> SourceDataEncoding<C> {
-        match self {
-            SourceDataEncodingInner::Single(inner) => SourceDataEncoding::Single(DataEncoding {
-                inner,
-                force_nullable_columns: false,
-            }),
-            SourceDataEncodingInner::KeyValue { key, value } => SourceDataEncoding::KeyValue {
-                key: DataEncoding {
-                    inner: key,
-                    force_nullable_columns: force_nullable_keys,
-                },
-                value: DataEncoding {
-                    inner: value,
-                    force_nullable_columns: false,
-                },
-            },
-        }
-    }
-}
-
 /// A description of how to interpret data from various sources
 ///
 /// Almost all sources only present values as part of their records, but Kafka allows a key to be
 /// associated with each record, which has a possibly independent encoding.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum SourceDataEncoding<C: ConnectionAccess = InlinedConnection> {
-    Single(DataEncoding<C>),
-    KeyValue {
-        key: DataEncoding<C>,
-        value: DataEncoding<C>,
-    },
+pub struct SourceDataEncoding<C: ConnectionAccess = InlinedConnection> {
+    pub key: Option<DataEncoding<C>>,
+    pub value: DataEncoding<C>,
+}
+
+impl<C: ConnectionAccess> SourceDataEncoding<C> {
+    pub fn desc(&self) -> Result<(Option<RelationDesc>, RelationDesc), anyhow::Error> {
+        Ok(match &self.key {
+            None => (None, self.value.desc()?),
+            Some(key) => (Some(key.desc()?), self.value.desc()?),
+        })
+    }
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDataEncoding, R>
     for SourceDataEncoding<ReferencedConnection>
 {
     fn into_inline_connection(self, r: R) -> SourceDataEncoding {
-        match self {
-            Self::Single(conn) => SourceDataEncoding::Single(conn.into_inline_connection(r)),
-            Self::KeyValue { key, value } => SourceDataEncoding::KeyValue {
-                key: key.into_inline_connection(&r),
-                value: value.into_inline_connection(r),
-            },
+        SourceDataEncoding {
+            key: self.key.map(|enc| enc.into_inline_connection(&r)),
+            value: self.value.into_inline_connection(&r),
         }
     }
 }
 
 impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
     fn into_proto(&self) -> ProtoSourceDataEncoding {
-        use proto_source_data_encoding::{Kind, ProtoKeyValue};
         ProtoSourceDataEncoding {
-            kind: Some(match self {
-                SourceDataEncoding::Single(s) => Kind::Single(s.into_proto()),
-                SourceDataEncoding::KeyValue { key, value } => Kind::KeyValue(ProtoKeyValue {
-                    key: Some(key.into_proto()),
-                    value: Some(value.into_proto()),
-                }),
-            }),
+            key: self.key.into_proto(),
+            value: Some(self.value.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoSourceDataEncoding) -> Result<Self, TryFromProtoError> {
-        use proto_source_data_encoding::{Kind, ProtoKeyValue};
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceDataEncoding::kind"))?;
-        Ok(match kind {
-            Kind::Single(s) => SourceDataEncoding::Single(s.into_rust()?),
-            Kind::KeyValue(ProtoKeyValue { key, value }) => SourceDataEncoding::KeyValue {
-                key: key.into_rust_if_some("ProtoKeyValue::key")?,
-                value: value.into_rust_if_some("ProtoKeyValue::value")?,
-            },
-        })
-    }
-}
-
-impl<C: ConnectionAccess> SourceDataEncoding<C> {
-    pub fn key_ref(&self) -> Option<&DataEncoding<C>> {
-        match self {
-            SourceDataEncoding::Single(_) => None,
-            SourceDataEncoding::KeyValue { key, .. } => Some(key),
-        }
-    }
-
-    /// Return either the Single encoding if this was a `SourceDataEncoding::Single`, else return the value encoding
-    pub fn value(self) -> DataEncoding<C> {
-        match self {
-            SourceDataEncoding::Single(encoding) => encoding,
-            SourceDataEncoding::KeyValue { value, .. } => value,
-        }
-    }
-
-    pub fn value_ref(&self) -> &DataEncoding<C> {
-        match self {
-            SourceDataEncoding::Single(encoding) => encoding,
-            SourceDataEncoding::KeyValue { value, .. } => value,
-        }
-    }
-
-    pub fn desc(&self) -> Result<(Option<RelationDesc>, RelationDesc), anyhow::Error> {
-        Ok(match self {
-            SourceDataEncoding::Single(value) => (None, value.desc()?),
-            SourceDataEncoding::KeyValue { key, value } => (Some(key.desc()?), value.desc()?),
+        Ok(SourceDataEncoding {
+            key: proto.key.into_rust()?,
+            value: proto.value.into_rust_if_some("ProtoKeyValue::value")?,
         })
     }
 }
@@ -160,7 +76,7 @@ impl<C: ConnectionAccess> SourceDataEncoding<C> {
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum DataEncodingInner<C: ConnectionAccess = InlinedConnection> {
+pub enum DataEncoding<C: ConnectionAccess = InlinedConnection> {
     Avro(AvroEncoding<C>),
     Protobuf(ProtobufEncoding),
     Csv(CsvEncoding),
@@ -168,96 +84,53 @@ pub enum DataEncodingInner<C: ConnectionAccess = InlinedConnection> {
     Bytes,
     Json,
     Text,
-    RowCodec(RelationDesc),
-}
-
-impl<R: ConnectionResolver> IntoInlineConnection<DataEncodingInner, R>
-    for DataEncodingInner<ReferencedConnection>
-{
-    fn into_inline_connection(self, r: R) -> DataEncodingInner {
-        match self {
-            Self::Avro(conn) => DataEncodingInner::Avro(conn.into_inline_connection(r)),
-            Self::Protobuf(conn) => DataEncodingInner::Protobuf(conn),
-            Self::Csv(conn) => DataEncodingInner::Csv(conn),
-            Self::Regex(conn) => DataEncodingInner::Regex(conn),
-            Self::Bytes => DataEncodingInner::Bytes,
-            Self::Json => DataEncodingInner::Json,
-            Self::Text => DataEncodingInner::Text,
-            Self::RowCodec(conn) => DataEncodingInner::RowCodec(conn),
-        }
-    }
-}
-
-impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
-    fn into_proto(&self) -> ProtoDataEncodingInner {
-        use proto_data_encoding_inner::Kind;
-        ProtoDataEncodingInner {
-            kind: Some(match self {
-                DataEncodingInner::Avro(e) => Kind::Avro(e.into_proto()),
-                DataEncodingInner::Protobuf(e) => Kind::Protobuf(e.into_proto()),
-                DataEncodingInner::Csv(e) => Kind::Csv(e.into_proto()),
-                DataEncodingInner::Regex(e) => Kind::Regex(e.into_proto()),
-                DataEncodingInner::Bytes => Kind::Bytes(()),
-                DataEncodingInner::Text => Kind::Text(()),
-                DataEncodingInner::RowCodec(e) => Kind::RowCodec(e.into_proto()),
-                DataEncodingInner::Json => Kind::Json(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoDataEncodingInner) -> Result<Self, TryFromProtoError> {
-        use proto_data_encoding_inner::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDataEncodingInner::kind"))?;
-        Ok(match kind {
-            Kind::Avro(e) => DataEncodingInner::Avro(e.into_rust()?),
-            Kind::Protobuf(e) => DataEncodingInner::Protobuf(e.into_rust()?),
-            Kind::Csv(e) => DataEncodingInner::Csv(e.into_rust()?),
-            Kind::Regex(e) => DataEncodingInner::Regex(e.into_rust()?),
-            Kind::Bytes(()) => DataEncodingInner::Bytes,
-            Kind::Text(()) => DataEncodingInner::Text,
-            Kind::RowCodec(e) => DataEncodingInner::RowCodec(e.into_rust()?),
-            Kind::Json(()) => DataEncodingInner::Json,
-        })
-    }
-}
-
-/// A description of how each row should be decoded, from a string of bytes to a sequence of
-/// Differential updates.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataEncoding<C: ConnectionAccess = InlinedConnection> {
-    pub force_nullable_columns: bool,
-    pub inner: DataEncodingInner<C>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<DataEncoding, R>
     for DataEncoding<ReferencedConnection>
 {
     fn into_inline_connection(self, r: R) -> DataEncoding {
-        let DataEncoding {
-            force_nullable_columns,
-            inner,
-        } = self;
-        DataEncoding {
-            force_nullable_columns,
-            inner: inner.into_inline_connection(r),
+        match self {
+            Self::Avro(conn) => DataEncoding::Avro(conn.into_inline_connection(r)),
+            Self::Protobuf(conn) => DataEncoding::Protobuf(conn),
+            Self::Csv(conn) => DataEncoding::Csv(conn),
+            Self::Regex(conn) => DataEncoding::Regex(conn),
+            Self::Bytes => DataEncoding::Bytes,
+            Self::Json => DataEncoding::Json,
+            Self::Text => DataEncoding::Text,
         }
     }
 }
 
 impl RustType<ProtoDataEncoding> for DataEncoding {
     fn into_proto(&self) -> ProtoDataEncoding {
+        use proto_data_encoding::Kind;
         ProtoDataEncoding {
-            force_nullable_columns: self.force_nullable_columns,
-            inner: Some(self.inner.into_proto()),
+            kind: Some(match self {
+                DataEncoding::Avro(e) => Kind::Avro(e.into_proto()),
+                DataEncoding::Protobuf(e) => Kind::Protobuf(e.into_proto()),
+                DataEncoding::Csv(e) => Kind::Csv(e.into_proto()),
+                DataEncoding::Regex(e) => Kind::Regex(e.into_proto()),
+                DataEncoding::Bytes => Kind::Bytes(()),
+                DataEncoding::Text => Kind::Text(()),
+                DataEncoding::Json => Kind::Json(()),
+            }),
         }
     }
 
     fn from_proto(proto: ProtoDataEncoding) -> Result<Self, TryFromProtoError> {
-        Ok(DataEncoding {
-            force_nullable_columns: proto.force_nullable_columns.into_rust()?,
-            inner: proto.inner.into_rust_if_some("ProtoDataEncoding::inner")?,
+        use proto_data_encoding::Kind;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDataEncoding::kind"))?;
+        Ok(match kind {
+            Kind::Avro(e) => DataEncoding::Avro(e.into_rust()?),
+            Kind::Protobuf(e) => DataEncoding::Protobuf(e.into_rust()?),
+            Kind::Csv(e) => DataEncoding::Csv(e.into_rust()?),
+            Kind::Regex(e) => DataEncoding::Regex(e.into_rust()?),
+            Kind::Bytes(()) => DataEncoding::Bytes,
+            Kind::Text(()) => DataEncoding::Text,
+            Kind::Json(()) => DataEncoding::Json,
         })
     }
 }
@@ -271,47 +144,35 @@ pub fn included_column_desc(included_columns: Vec<(&str, ColumnType)>) -> Relati
 }
 
 impl<C: ConnectionAccess> DataEncoding<C> {
-    pub fn new(inner: DataEncodingInner<C>) -> DataEncoding<C> {
-        DataEncoding {
-            inner,
-            force_nullable_columns: false,
-        }
-    }
-
     /// A human-readable name for the type of encoding
-    ///
-    /// This may be `None` if we don't actually render a decode operator (like for pg sources).
-    pub fn type_(&self) -> Option<&str> {
-        match &self.inner {
-            DataEncodingInner::Avro(_) => Some("avro"),
-            DataEncodingInner::Protobuf(_) => Some("protobuf"),
-            DataEncodingInner::Csv(_) => Some("csv"),
-            DataEncodingInner::Regex(_) => Some("regex"),
-            DataEncodingInner::Bytes => Some("bytes"),
-            DataEncodingInner::Json => Some("json"),
-            DataEncodingInner::Text => Some("text"),
-            DataEncodingInner::RowCodec(_) => None,
+    pub fn type_(&self) -> &str {
+        match self {
+            Self::Avro(_) => "avro",
+            Self::Protobuf(_) => "protobuf",
+            Self::Csv(_) => "csv",
+            Self::Regex(_) => "regex",
+            Self::Bytes => "bytes",
+            Self::Json => "json",
+            Self::Text => "text",
         }
     }
 
     /// Computes the [`RelationDesc`] for the relation specified by this
-    /// data encoding and envelope.
-    ///
-    /// If a key desc is provided it will be prepended to the returned desc
+    /// data encoding.
     fn desc(&self) -> Result<RelationDesc, anyhow::Error> {
         // Add columns for the data, based on the encoding format.
-        let desc = match &self.inner {
-            DataEncodingInner::Bytes => {
+        Ok(match self {
+            Self::Bytes => {
                 RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
             }
-            DataEncodingInner::Json => {
+            Self::Json => {
                 RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
             }
-            DataEncodingInner::Avro(AvroEncoding { schema, .. }) => {
+            Self::Avro(AvroEncoding { schema, .. }) => {
                 let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
                 avro::schema_to_relationdesc(parsed_schema).context("validating avro schema")?
             }
-            DataEncodingInner::Protobuf(ProtobufEncoding {
+            Self::Protobuf(ProtobufEncoding {
                 descriptors,
                 message_name,
                 confluent_wire_format: _,
@@ -321,7 +182,7 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                 .fold(RelationDesc::empty(), |desc, (name, ty)| {
                     desc.with_column(name, ty.clone())
                 }),
-            DataEncodingInner::Regex(RegexEncoding { regex }) => regex
+            Self::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
                 .enumerate()
                 // The first capture is the entire matched string. This will
@@ -337,7 +198,7 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                     let ty = ScalarType::String.nullable(true);
                     desc.with_column(name, ty)
                 }),
-            DataEncodingInner::Csv(CsvEncoding { columns, .. }) => match columns {
+            Self::Csv(CsvEncoding { columns, .. }) => match columns {
                 ColumnSpec::Count(n) => (1..=*n).fold(RelationDesc::empty(), |desc, i| {
                     desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
                 }),
@@ -348,32 +209,21 @@ impl<C: ConnectionAccess> DataEncoding<C> {
                         desc.with_column(name, ScalarType::String.nullable(false))
                     }),
             },
-            DataEncodingInner::Text => {
+            Self::Text => {
                 RelationDesc::empty().with_column("text", ScalarType::String.nullable(false))
             }
-            DataEncodingInner::RowCodec(desc) => desc.clone(),
-        };
-
-        if self.force_nullable_columns {
-            Ok(RelationDesc::from_names_and_types(
-                desc.into_iter()
-                    .map(|(name, typ)| (name, typ.nullable(true))),
-            ))
-        } else {
-            Ok(desc)
-        }
+        })
     }
 
     pub fn op_name(&self) -> &'static str {
-        match &self.inner {
-            DataEncodingInner::Bytes => "Bytes",
-            DataEncodingInner::Json => "Json",
-            DataEncodingInner::Avro(_) => "Avro",
-            DataEncodingInner::Protobuf(_) => "Protobuf",
-            DataEncodingInner::Regex { .. } => "Regex",
-            DataEncodingInner::Csv(_) => "Csv",
-            DataEncodingInner::Text => "Text",
-            DataEncodingInner::RowCodec(_) => "RowCodec",
+        match self {
+            Self::Bytes => "Bytes",
+            Self::Json => "Json",
+            Self::Avro(_) => "Avro",
+            Self::Protobuf(_) => "Protobuf",
+            Self::Regex { .. } => "Regex",
+            Self::Csv(_) => "Csv",
+            Self::Text => "Text",
         }
     }
 }

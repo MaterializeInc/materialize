@@ -121,6 +121,14 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
         Some(self.topic.as_str())
     }
 
+    fn key_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("key", ScalarType::Bytes.nullable(true))
+    }
+
+    fn value_desc(&self) -> RelationDesc {
+        RelationDesc::empty().with_column("value", ScalarType::Bytes.nullable(true))
+    }
+
     fn timestamp_desc(&self) -> RelationDesc {
         KAFKA_PROGRESS_DESC.clone()
     }

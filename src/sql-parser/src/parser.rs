@@ -2625,11 +2625,11 @@ impl<'a> Parser<'a> {
                 let key = self.parse_format()?;
                 self.expect_keywords(&[VALUE, FORMAT])?;
                 let value = self.parse_format()?;
-                CreateSourceFormat::KeyValue { key, value }
+                Some(CreateSourceFormat::KeyValue { key, value })
             }
-            Some(FORMAT) => CreateSourceFormat::Bare(self.parse_format()?),
+            Some(FORMAT) => Some(CreateSourceFormat::Bare(self.parse_format()?)),
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
-            None => CreateSourceFormat::None,
+            None => None,
         };
         let include_metadata = self.parse_source_include_metadata()?;
 
