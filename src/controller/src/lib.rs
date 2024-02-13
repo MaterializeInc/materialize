@@ -350,6 +350,7 @@ where
     ) -> Option<ControllerResponse<T>> {
         let mut finished = vec![];
         for (id, antichain) in updates {
+            let mut remove = None;
             if let Some(x) = self.watch_sets.get_mut(id) {
                 let mut i = 0;
                 while i < x.len() {
@@ -361,6 +362,12 @@ where
                         i += 1;
                     }
                 }
+                if x.is_empty() {
+                    remove = Some(id);
+                }
+            }
+            if let Some(id) = remove {
+                self.watch_sets.remove(id);
             }
         }
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
