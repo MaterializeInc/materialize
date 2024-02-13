@@ -9,7 +9,7 @@
 
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
@@ -18,8 +18,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::BufMut;
+use differential_dataflow::lattice::Lattice;
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
+use mz_ore::now::EpochMillis;
+use mz_persist_client::read::Subscribe;
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
@@ -28,7 +31,7 @@ use mz_persist_types::dyn_struct::{
     DynStruct, DynStructCfg, DynStructMut, ValidityMut, ValidityRef,
 };
 use mz_persist_types::stats::StatsFn;
-use mz_persist_types::Codec;
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
@@ -43,6 +46,7 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
 
+use crate::configuration::StorageConfiguration;
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
@@ -826,6 +830,107 @@ pub enum GenericSourceConnection<C: ConnectionAccess = InlinedConnection> {
     Postgres(PostgresSourceConnection<C>),
     MySql(MySqlSourceConnection<C>),
     LoadGenerator(LoadGeneratorSourceConnection),
+}
+
+impl GenericSourceConnection {
+    pub async fn real_time_recency_ts<T: Timestamp + Lattice + Codec64 + From<EpochMillis>>(
+        self,
+        id: GlobalId,
+        config: StorageConfiguration,
+        remap_subscribe: Subscribe<SourceData, (), T, mz_repr::Diff>,
+    ) -> Result<T, StorageError> {
+        use mz_timely_util::antichain::AntichainExt;
+
+        // Currently only Kafka sources can support real-time recency. PG
+        // sources/subsources cannot because of the way we've handled
+        // subsource dependencies––they cannot easily "find" the remap
+        // shard/progress collection to which they're associated.
+        match self {
+            GenericSourceConnection::Kafka(kafka) => {
+                let external_frontier = kafka
+                    .fetch_write_frontier(&config)
+                    .await
+                    .map_err(StorageError::Generic)?;
+                tracing::trace!(
+                    "real-time recency external frontier for {id}: {}",
+                    external_frontier.pretty()
+                );
+
+                GenericSourceConnection::decode_remap_data_until_geq_external_frontier(
+                    id,
+                    external_frontier,
+                    remap_subscribe,
+                )
+                .await
+            }
+            _ => Err(StorageError::RtrUnavailable(BTreeSet::from_iter(
+                [id].into_iter(),
+            ))),
+        }
+    }
+
+    async fn decode_remap_data_until_geq_external_frontier<
+        ExternalFrontier: SourceTimestamp,
+        T: Timestamp + Lattice + Codec64 + From<EpochMillis>,
+    >(
+        id: GlobalId,
+        external_frontier: timely::progress::Antichain<ExternalFrontier>,
+        mut remap_subscribe: Subscribe<SourceData, (), T, mz_repr::Diff>,
+    ) -> Result<T, StorageError> {
+        use mz_persist_client::read::ListenEvent;
+        use timely::progress::frontier::MutableAntichain;
+
+        let mut native_upper = MutableAntichain::new();
+        let mut remap_updates = vec![];
+
+        // TODO: this should timeout eventually with Err(StorageError::RtrTimeout(id))
+        loop {
+            for event in remap_subscribe.fetch_next().await {
+                match event {
+                    ListenEvent::Updates(updates) => {
+                        for ((k, v), t, d) in updates {
+                            let row: Row = k.expect("invalid binding").0.expect("invalid binding");
+                            let _v: () = v.expect("invalid binding");
+                            let from_ts: ExternalFrontier = SourceTimestamp::decode_row(&row);
+                            remap_updates.push((from_ts, t, d));
+                        }
+                    }
+                    ListenEvent::Progress(f) => {
+                        let updates = Vec::with_capacity(remap_updates.len());
+                        let (max_ts, updates) = remap_updates.drain(..).fold(
+                            (T::minimum(), updates),
+                            |(ts, mut updates), (from_ts, t, d)| {
+                                updates.push((from_ts, d));
+                                (std::cmp::max(ts, t), updates)
+                            },
+                        );
+
+                        // If there were no updates, then the ts we get is not
+                        // derived from any remap data.
+                        if updates.is_empty() && !f.is_empty() {
+                            continue;
+                        }
+
+                        native_upper.update_iter(updates);
+
+                        // At this TS, the source contained all of the data visible
+                        // in the external system.
+                        if PartialOrder::less_equal(
+                            &external_frontier.borrow(),
+                            &native_upper.frontier(),
+                        ) {
+                            tracing::trace!("real-time recency ts for {id}: {max_ts:?}");
+                            return Ok(max_ts);
+                        } else if f.is_empty() {
+                            panic!(
+                                "source dropped before ingesting enough data to be considered RTR"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl<C: ConnectionAccess> From<KafkaSourceConnection<C>> for GenericSourceConnection<C> {

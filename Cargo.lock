@@ -6403,6 +6403,7 @@ dependencies = [
  "derivative",
  "differential-dataflow",
  "fail",
+ "futures",
  "itertools",
  "mysql_async",
  "mz-aws-util",

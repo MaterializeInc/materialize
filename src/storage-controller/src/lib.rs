@@ -2609,39 +2609,44 @@ where
         StorageError<Self::Timestamp>,
     > {
         use mz_storage_types::sources::GenericSourceConnection;
-        use mz_storage_types::sources::SourceTimestamp;
 
         let mut rtr_futures = Vec::with_capacity(source_ids.len());
-        let config = self.config().clone();
 
         // Only user sources can be read from w/ RTR.
         for id in source_ids.into_iter().filter(GlobalId::is_user) {
             let collection = self.collection(id)?;
 
-            // Currently only Kafka sources can support real-time recency. PG
-            // sources/subsources cannot because of the way we've handled
-            // subsource dependencies––they cannot easily "find" the remap
-            // shard/progress collection to which they're associated.
-            //
-            // Once we support that this implementation can be generalized.
-            let (kafka_conn, remap_id) = match &collection.description.data_source {
+            let (source_conn, remap_id) = match &collection.description.data_source {
                 DataSource::Ingestion(IngestionDescription {
-                    desc:
-                        SourceDesc {
-                            connection: GenericSourceConnection::Kafka(kafka),
-                            ..
-                        },
+                    desc: SourceDesc { connection, .. },
                     remap_collection_id,
                     ..
-                }) => (kafka.clone(), *remap_collection_id),
+                }) => match connection {
+                    // Today only Kafka supports RTR
+                    GenericSourceConnection::Kafka(_) => (connection.clone(), *remap_collection_id),
+                    // Eventually PG and MySQL will support RTR but today we
+                    // must error if they're queried with RTR.
+                    GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => {
+                        unavilable_ids.insert(id);
+                        continue;
+                    }
+                    // These internal sources will never support RTR.
+                    GenericSourceConnection::LoadGenerator(_) => continue,
+                },
+                // Subsources don't currently support RTR until we fix the
+                // dependency inversion.
+                DataSource::Other(DataSourceOther::Source) => {
+                    unavilable_ids.insert(id);
+                    continue;
+                }
+                // Skip over all other objects
                 _ => {
                     continue;
                 }
             };
 
             // Prepare for getting the external system's frontier.
-            let config = config.clone();
-            let external_upper = kafka_conn.fetch_write_frontier(config);
+            let config = self.config().clone();
 
             // Determine the remap collection we plan to read from.
             //
@@ -2663,34 +2668,14 @@ where
                 // Fetch the remap shard's contents; we must do this first so
                 // that the `as_of` doesn't change.
                 let as_of = Antichain::from_elem(remap_as_of);
-                let contents = read_handle.snapshot_and_stream(as_of).await;
-                let mut remap_updates = match contents {
-                    Ok(contents) => Box::pin(contents),
-                    Err(_) => return Err(StorageError::ReadBeforeSince(id)),
-                };
+                let remap_subsrcribe = read_handle
+                    .subscribe(as_of)
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(remap_id))?;
 
-                // Fetch the external upper
-                let external_frontier = external_upper.await.map_err(StorageError::Generic)?;
-
-                use futures::stream::StreamExt;
-                while let Some(((k, _), ts, diff)) = remap_updates.next().await {
-                    // We are only looking at inserts
-                    if diff != 1 {
-                        continue;
-                    }
-
-                    // This is the LHS of remap collection.
-                    let native_upper =
-                        SourceTimestamp::decode_row(&k.expect("invalid key data").0?);
-
-                    // At this TS, the source contained all of the data visible
-                    // in the external system.
-                    if external_frontier.less_equal(&native_upper) {
-                        return Ok(ts);
-                    }
-                }
-
-                Err(StorageError::RtrTimeout(id))
+                source_conn
+                    .real_time_recency_ts(id, config, remap_subsrcribe)
+                    .await
             });
         }
 
