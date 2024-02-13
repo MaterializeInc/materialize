@@ -36,6 +36,7 @@ use mz_catalog::durable::{
     persist_backed_catalog_state, stash_backed_catalog_state, BootstrapArgs,
     OpenableDurableCatalogState, StashConfig,
 };
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::collections::HashSet;
 use mz_ore::error::ErrorExt;
@@ -86,6 +87,9 @@ pub struct Args {
 
     #[clap(subcommand)]
     action: Action,
+
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -138,10 +142,23 @@ enum Action {
 
 #[tokio::main]
 async fn main() {
-    let args = cli::parse_args(CliConfig {
+    let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_CATALOG_DEBUG_"),
         enable_version_flag: true,
     });
+
+    let (_, _tracing_guard) = args
+        .tracing
+        .configure_tracing(
+            StaticTracingConfig {
+                service_name: "catalog-debug",
+                build_info: BUILD_INFO,
+            },
+            MetricsRegistry::new(),
+        )
+        .await
+        .expect("failed to init tracing");
+
     if let Err(err) = run(args).await {
         eprintln!(
             "catalog-debug: fatal: {}\nbacktrace: {}",
