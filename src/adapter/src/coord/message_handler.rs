@@ -24,6 +24,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
+use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
@@ -810,7 +811,19 @@ impl Coordinator {
             Ok(rtr) => rtr,
             Err(e) => {
                 let ctx = real_time_recency_context.take_context();
-                ctx.retire(Err(e.into()));
+                let e = match e {
+                    StorageError::RtrTimeout(id) => {
+                        let session = ctx.session();
+                        let conn_catalog = self.catalog().for_session(session);
+                        let name = conn_catalog
+                            .minimal_qualification(conn_catalog.get_item(&id).name())
+                            .to_string();
+                        crate::AdapterError::RtrTimeout(name)
+                    }
+                    e => e.into(),
+                };
+
+                ctx.retire(Err(e));
                 return;
             }
         };

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
@@ -225,6 +225,10 @@ pub enum AdapterError {
     SubsourceAlreadyReferredTo {
         name: UnresolvedItemName,
     },
+    /// A humanized version of [`StorageError::RtrUnavailable`].
+    RtrUnavailable(BTreeSet<String>),
+    /// A humanized version of [`StorageError::RtrTimeout`].
+    RtrTimeout(String),
 }
 
 impl AdapterError {
@@ -335,6 +339,8 @@ impl AdapterError {
                     }
                 ))
             }
+            AdapterError::RtrUnavailable(names) => Some(format!("the following sources do not support real-time recency: {}", names.into_iter().join(", "))),
+            AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
             _ => None,
         }
     }
@@ -528,6 +534,8 @@ impl AdapterError {
             // Calling this `FEATURE_NOT_SUPPORTED` because we will eventually allow multiple
             // references to the same subsource (albeit with different schemas).
             AdapterError::SubsourceAlreadyReferredTo { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::RtrUnavailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::RtrTimeout(_) => SqlState::QUERY_CANCELED,
         }
     }
 
@@ -755,6 +763,12 @@ impl fmt::Display for AdapterError {
             }
             Self::SubsourceAlreadyReferredTo { name } => {
                 write!(f, "another subsource already refers to {}", name)
+            }
+            AdapterError::RtrUnavailable(_) => {
+                write!(f, "real-time recency unavailable for some sources in query")
+            }
+            AdapterError::RtrTimeout(_) => {
+                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
             }
         }
     }

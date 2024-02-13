@@ -1990,10 +1990,8 @@ impl Coordinator {
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<
-        Option<BoxFuture<'static, Result<Timestamp, StorageError<mz_repr::Timestamp>>>>,
-        StorageError<mz_repr::Timestamp>,
-    > {
+    ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
+    {
         // Ideally this logic belongs inside of
         // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
         // logic in there would make it extremely difficult and inconvenient to pull the waiting off
@@ -2002,7 +2000,26 @@ impl Coordinator {
             && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
             && !session.contains_read_timestamp()
         {
-            Some(self.controller.recent_timestamp(source_ids).await?)
+            let r = self.controller.recent_timestamp(source_ids).await;
+            let r = match r {
+                Ok(r) => r,
+                Err(StorageError::RtrUnavailable(ids)) => {
+                    let conn_catalog = self.catalog().for_session(session);
+                    let names = ids
+                        .into_iter()
+                        .map(|id| {
+                            conn_catalog
+                                .minimal_qualification(conn_catalog.get_item(&id).name())
+                                .to_string()
+                        })
+                        .collect();
+
+                    return Err(AdapterError::RtrUnavailable(names));
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            Some(r)
         } else {
             None
         };
