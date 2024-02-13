@@ -351,7 +351,7 @@ impl Arbitrary for SubscribeResponse<mz_repr::Timestamp> {
 
 /// A batch of updates for the interval `[lower, upper)`.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SubscribeBatch<T> {
+pub struct SubscribeBatch<T = mz_repr::Timestamp> {
     /// The lower frontier of the batch of updates.
     pub lower: Antichain<T>,
     /// The upper frontier of the batch of updates.

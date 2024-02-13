@@ -36,7 +36,7 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse,
 };
-use mz_compute_client::protocol::response::{PeekResponse, SubscribeResponse};
+use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
 use mz_ore::metrics::MetricsRegistry;
@@ -110,7 +110,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// done in compute!
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
-    SubscribeResponse(GlobalId, SubscribeResponse<T>),
+    SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
     WatchSetFinished(Vec<Box<dyn Any>>),
