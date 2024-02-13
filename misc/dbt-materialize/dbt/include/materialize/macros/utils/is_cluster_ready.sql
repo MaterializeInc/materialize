@@ -50,7 +50,7 @@ WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
 
 {%- set check_pending_objects_sql %}
 WITH dataflows AS (
-    SELECT         
+    SELECT
         mz_cluster_replicas.id AS replica_id,
         mz_indexes.id AS object_id,
         mz_indexes.name,
@@ -62,7 +62,7 @@ WITH dataflows AS (
 
     UNION ALL
 
-    SELECT         
+    SELECT
         mz_cluster_replicas.id AS replica_id,
         mz_materialized_views.id AS object_id,
         mz_materialized_views.name,
@@ -72,9 +72,9 @@ WITH dataflows AS (
     JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
     WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
 
-    UNION ALL 
+    UNION ALL
 
-    SELECT 
+    SELECT
         mz_cluster_replicas.id AS replica_id,
         mz_sources.id AS object_id,
         mz_sources.name,
@@ -84,7 +84,7 @@ WITH dataflows AS (
     JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
     WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
 
-    UNION ALL 
+    UNION ALL
 
     SELECT
         mz_cluster_replicas.id AS replica_id,

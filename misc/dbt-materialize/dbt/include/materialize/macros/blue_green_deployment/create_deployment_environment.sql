@@ -61,9 +61,10 @@
 
     {% else %}
         {{ log("Creating deployment schema " ~ schema.prod_deploy, info=True)}}
-        {% call statement('create_schema', fetch_result=True, auto_begin=False) -%}
-            CREATE SCHEMA {{ schema.prod_deploy }};
-        {%- endcall %}
+        {% set create_schema %}
+        CREATE SCHEMA {{ schema.prod_deploy }};
+        {% endset %}
+        {{ run_query(create_schema) }}
     {% endif %}
 {% endfor %}
 
@@ -128,12 +129,13 @@
             {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " is not managed") }}
         {% endif %}
 
-        {% call statement('create_cluster', fetch_result=True, auto_begin=False) -%}
+        {% set create_cluster %}
             CREATE CLUSTER {{ cluster.prod_deploy }} (
                 SIZE = '{{ size }}',
                 REPLICATION FACTOR = {{ replication_factor }}
             );
-        {%- endcall %}
+        {% endset %}
+        {{ run_query(create_cluster) }}
     {% endif %}
 {% endfor %}
 {% endmacro %}

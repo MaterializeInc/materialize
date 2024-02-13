@@ -15,7 +15,7 @@
 
 {% macro wait_until_ready(cluster, poll_interval) %}
 {#
-  Waits for all objects within a specified cluster to be fully hydrated, 
+  Waits for all objects within a specified cluster to be fully hydrated,
   polling the cluster's readiness status at a specified interval.
 
   ## Arguments
@@ -38,6 +38,21 @@
 {% endmacro %}
 
 {% macro deploy(force=false, poll_interval=15) %}
+{#
+  Performs atomic deployment of current dbt targets to production,
+  based on the deployment configuration specified in the dbt_project.yml file.
+  This macro ensures all deployment targets, including schemas and clusters,
+  are fully hydrated and deployed together as a single atomic operation.
+  If any part of the deployment fails, the entire deployment is rolled back
+  to maintain consistency and prevent partial updates.
+
+  ## Arguments
+  - `force` (boolean, optional): Skips the hydration checks for deployment targets if set to true. Defaults to false. It is not recommended to override this argument to skip readiness checks, as it may lead to deploying targets that are not fully prepared for production use.
+  - `poll_interval` (integer): The interval, in seconds, between each readiness check.
+
+  ## Returns
+  None: This macro performs deployment actions but does not return a value.
+#}
 
 {% set current_target_name = target.name %}
 {% set deployment = var('deployment') %}
