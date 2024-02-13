@@ -97,8 +97,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{trace, warn};
 
-use mz_mysql_util::query_sys_var;
 use mz_mysql_util::MySqlTableDesc;
+use mz_mysql_util::{query_sys_var, ER_NO_SUCH_TABLE};
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
@@ -109,9 +109,9 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::metrics::mysql::MySqlSnapshotMetrics;
-use crate::source::mysql::verify_schemas;
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
+use super::schemas::verify_schemas;
 use super::{
     pack_mysql_row, return_definite_error, validate_mysql_repl_settings, DefiniteError,
     ReplicationError, RewindRequest, TransientError,
@@ -224,7 +224,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         code,
                         message,
                         ..
-                    })) if code == 1146 => {
+                    })) if code == ER_NO_SUCH_TABLE => {
                         let err = DefiniteError::TableDropped(message);
                         return Ok(return_definite_error(
                             err,
@@ -310,16 +310,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 trace!(%id, "timely-{worker_id} started transaction");
 
                 // Verify the schemas of the tables we are snapshotting
-                let mut removed_tables = vec![];
-                for (table, err) in verify_schemas(
+                let errored_tables = verify_schemas(
                     &mut conn,
                     &reader_snapshot_table_info
                         .iter()
                         .map(|(table, (_, desc))| (table, desc))
                         .collect::<Vec<_>>(),
                 )
-                .await?
-                {
+                .await?;
+                let mut removed_tables = vec![];
+                for (table, err) in errored_tables {
                     let (output_index, _) = reader_snapshot_table_info.get(table).unwrap();
                     // Publish the error for this table and stop ingesting it
                     raw_handle

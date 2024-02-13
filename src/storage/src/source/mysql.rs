@@ -56,7 +56,7 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
-use itertools::Itertools;
+use itertools::{EitherOrBoth, Itertools};
 use mysql_async::Row as MySqlRow;
 use mysql_common::value::convert::from_value;
 use mysql_common::Value;
@@ -69,11 +69,10 @@ use uuid::Uuid;
 
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    schema_info, MySqlConn, MySqlError, MySqlTableDesc, SchemaRequest,
+    MySqlError, MySqlTableDesc,
 };
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, Diff, Row, ScalarType};
-use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
@@ -86,6 +85,7 @@ use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod replication;
+mod schemas;
 mod snapshot;
 
 impl SourceRender for MySqlSourceConnection {
@@ -205,6 +205,8 @@ pub enum ReplicationError {
 /// A transient error that never ends up in the collection of a specific table.
 #[derive(Debug, thiserror::Error)]
 pub enum TransientError {
+    #[error("issue when decoding")]
+    DecodeError(String),
     #[error("couldn't decode binlog row")]
     BinlogRowDecodeError(#[from] mysql_async::binlog::row::BinlogRowToRowError),
     #[error("stream ended prematurely")]
@@ -281,9 +283,29 @@ pub(crate) fn pack_mysql_row(
     let mut packer = row_container.packer();
     let mut temp_bytes = vec![];
     let mut temp_strs = vec![];
-    let values = row.unwrap();
+    let row_values = row.unwrap();
 
-    for (col_desc, value) in table_desc.columns.iter().zip_eq(values) {
+    for values in table_desc.columns.iter().zip_longest(row_values) {
+        let (col_desc, value) = match values {
+            EitherOrBoth::Both(col_desc, value) => (col_desc, value),
+            EitherOrBoth::Left(col_desc) => {
+                tracing::error!(
+                    "mysql: extra column description {col_desc:?} for table {}",
+                    table_desc.name
+                );
+                Err(TransientError::DecodeError(format!(
+                    "extra column description {col_desc:?} for table {}",
+                    table_desc.name
+                )))?
+            }
+            EitherOrBoth::Right(value) => {
+                tracing::error!("mysql: extra value {value:?} for table {}", table_desc.name);
+                Err(TransientError::DecodeError(format!(
+                    "extra value found: {value:?} for table {}",
+                    table_desc.name
+                )))?
+            }
+        };
         let datum = match value {
             Value::NULL => {
                 if col_desc.column_type.nullable {
@@ -486,68 +508,5 @@ async fn validate_mysql_repl_settings(conn: &mut mysql_async::Conn) -> Result<()
     ensure_full_row_binlog_format(conn).await?;
     ensure_replication_commit_order(conn).await?;
 
-    Ok(())
-}
-
-/// Given a list of tables and their expected schemas, retrieve the current schema for each table
-/// and verify they are compatible with the expected schema.
-///
-/// Returns a vec of tables that have incompatible schema changes.
-async fn verify_schemas<'a>(
-    conn: &mut MySqlConn,
-    expected: &[(&'a UnresolvedItemName, &MySqlTableDesc)],
-) -> Result<Vec<(&'a UnresolvedItemName, DefiniteError)>, MySqlError> {
-    // Get the current schema for each requested table from mysql
-    let cur_schemas: BTreeMap<_, _> = schema_info(
-        conn,
-        &SchemaRequest::Tables(
-            expected
-                .iter()
-                .map(|(f, _)| (f.0[0].as_str(), f.0[1].as_str()))
-                .collect(),
-        ),
-    )
-    .await?
-    .drain(..)
-    .map(|schema| {
-        (
-            table_name(&schema.schema_name, &schema.name).unwrap(),
-            schema,
-        )
-    })
-    .collect();
-
-    Ok(expected
-        .into_iter()
-        .filter_map(|(table, desc)| {
-            if let Err(err) = verify_schema(table, desc, &cur_schemas) {
-                Some((*table, err))
-            } else {
-                None
-            }
-        })
-        .collect())
-}
-
-/// Ensures that the specified table is still compatible with the current upstream schema
-/// and that it has not been dropped.
-///
-/// TODO: Implement real compatibility checks and don't error on backwards-compatible
-/// schema changes
-fn verify_schema(
-    table: &UnresolvedItemName,
-    expected_desc: &MySqlTableDesc,
-    upstream_info: &BTreeMap<UnresolvedItemName, MySqlTableDesc>,
-) -> Result<(), DefiniteError> {
-    let current_desc = upstream_info
-        .get(table)
-        .ok_or_else(|| DefiniteError::TableDropped(table.to_ast_string()))?;
-
-    if current_desc != expected_desc {
-        return Err(DefiniteError::IncompatibleSchema(format!(
-            "expected: {:#?}, actual: {:#?}",
-            expected_desc, current_desc
-        )));
-    }
     Ok(())
 }

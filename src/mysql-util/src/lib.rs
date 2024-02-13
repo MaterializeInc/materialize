@@ -55,3 +55,6 @@ pub enum MySqlError {
 // https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html#error_er_source_fatal_error_reading_binlog
 // https://dev.mysql.com/doc/mysql-errors/5.7/en/server-error-reference.html#error_er_master_fatal_error_reading_binlog
 pub const ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE: u16 = 1236;
+
+// https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html#error_er_no_such_table
+pub const ER_NO_SUCH_TABLE: u16 = 1146;

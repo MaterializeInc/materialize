@@ -35,6 +35,15 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",
         nargs="*",
@@ -81,15 +90,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         *args.filter,
     )
 
-    # run additional workflows
-    for workflow in [
-        workflow_replica_connection,
-        workflow_schema_change_restart,
-    ]:
-        workflow(c, parser)
 
-
-def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_replica_connection(c: Composition) -> None:
     c.up("materialized", "mysql", "mysql-replica")
     c.run_testdrive_files(
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
@@ -97,9 +99,7 @@ def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) 
     )
 
 
-def workflow_schema_change_restart(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
+def workflow_schema_change_restart(c: Composition) -> None:
     """
     Validates that a schema change done to a table after the MySQL source is created
     but before the snapshot is completed is detected after a restart.
