@@ -255,6 +255,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     lgalloc::lgalloc_set_config(
                         lgalloc::LgAlloc::new()
                             .enable()
+                            .eager_return(true)
                             .with_path(path.clone())
                             .with_background_config(lgalloc::BackgroundWorkerConfig {
                                 interval: Duration::from_secs(1),

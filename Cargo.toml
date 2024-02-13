@@ -155,6 +155,8 @@ debug = 2
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+lgalloc = { git = "https://github.com/antiguru/rust-lgalloc", branch = "eager_return" }
+
 # Projects that do not reliably release to crates.io.
 timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
