@@ -65,19 +65,6 @@ class StartMz(MzcomposeAction):
         image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
-        # Before #22790, this parameter needs to be set to False to avoid a panic
-        # Importantly, the environmentd must boot with the flag set to False, so we have to set it here
-        # By the time ConfigureMz() arrives to run ALTER SYSTEM SET, it is already too late
-        # to disable it, as problematic introspection dataflows have been created already
-        if (
-            self.tag
-            and "enable_specialized_arrangements"
-            not in self.additional_system_parameter_defaults
-        ):
-            self.additional_system_parameter_defaults[
-                "enable_specialized_arrangements"
-            ] = "false"
-
         mz = Materialized(
             name=self.mz_service,
             image=image,
@@ -194,14 +181,6 @@ class ConfigureMz(MzcomposeAction):
             <= MzVersion.parse_mz("v0.63.99")
         ):
             system_settings.add("ALTER SYSTEM SET enable_managed_clusters = on;")
-
-        # Before #22790, enable_specialized_arrangements=on would cause a panic on upgrade
-        # This flag must be disabled by default in StartMz() and then conditionally enabled
-        # here for the versions where it is expected to work.
-        if e.current_mz_version >= MzVersion.parse_mz("v0.75.0"):
-            system_settings.add(
-                "ALTER SYSTEM SET enable_specialized_arrangements = on;"
-            )
 
         system_settings = system_settings - e.system_settings
 

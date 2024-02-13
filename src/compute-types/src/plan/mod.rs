@@ -1189,15 +1189,10 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_consolidate_after_union_negate: bool,
-        enable_specialized_arrangements: bool,
         enable_reduce_mfp_fusion: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
-        let mut dataflow = Self::lower_dataflow(
-            desc,
-            enable_specialized_arrangements,
-            enable_reduce_mfp_fusion,
-        )?;
+        let mut dataflow = Self::lower_dataflow(desc, enable_reduce_mfp_fusion)?;
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
@@ -1256,14 +1251,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     )]
     fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-        enable_specialized_arrangements: bool,
         enable_reduce_mfp_fusion: bool,
     ) -> Result<DataflowDescription<Self>, String> {
-        let context = lowering::Context::new(
-            desc.debug_name.clone(),
-            enable_specialized_arrangements,
-            enable_reduce_mfp_fusion,
-        );
+        let context = lowering::Context::new(desc.debug_name.clone(), enable_reduce_mfp_fusion);
         let dataflow = context.lower(desc)?;
 
         mz_repr::explain::trace_plan(&dataflow);

@@ -10,9 +10,6 @@
 # Tests specialized arrangement functionality. Note that this test requires
 # the retry behavior of testdrive as it accesses introspection sources.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_specialized_arrangements = true
-
 > CREATE CLUSTER test SIZE '2', REPLICATION FACTOR 2;
 
 > SET cluster = test;
@@ -373,6 +370,3 @@ Used Indexes:
 > RESET cluster;
 
 > RESET cluster_replica;
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_specialized_arrangements = false

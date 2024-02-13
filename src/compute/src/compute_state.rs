@@ -100,8 +100,6 @@ pub struct ComputeState {
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
-    /// Enable arrangement type specialization.
-    pub enable_specialized_arrangements: bool,
     /// Other configuration for compute
     pub context: ComputeInstanceContext,
 }
@@ -132,7 +130,6 @@ impl ComputeState {
             linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
-            enable_specialized_arrangements: Default::default(),
             context,
         }
     }
@@ -215,7 +212,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             linear_join_yielding,
             enable_mz_join_core,
             enable_jemalloc_profiling,
-            enable_specialized_arrangements,
             enable_columnation_lgalloc,
             persist,
             tracing,
@@ -230,9 +226,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
         if let Some(v) = linear_join_yielding {
             self.compute_state.linear_join_spec.yielding = v;
-        }
-        if let Some(v) = enable_specialized_arrangements {
-            self.compute_state.enable_specialized_arrangements = v;
         }
         if let Some(v) = enable_mz_join_core {
             self.compute_state.linear_join_spec.implementation = match v {
