@@ -58,8 +58,6 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
-    # first commit after 0.77.x / first commit of v0.88.0-dev to account for PR#24918 being reverted in 0.77.1
-    "dd16e12e8c045e1060cef868c17b5b40d031a5fe": MzVersion.parse_mz("v0.88.0"),
     # PR#24918 (persist-txn: switch to a new operator protocol for lazy) increased number of messages against v0.86.1 (but got reverted in 0.87.1)
     "b648576b52b8ba9bb3a4732f7022ab5c06ebed32": MzVersion.parse_mz("v0.87.0"),
     # PR#23659 (persist-txn: enable in CI with "eager uppers") introduces regressions against v0.79.0
