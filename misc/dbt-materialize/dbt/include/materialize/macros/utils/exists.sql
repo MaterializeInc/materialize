@@ -13,13 +13,23 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro schema_exist(schema) %}
+{% macro schema_exists(schema) %}
+{#
+  Checks if a specified schema exists in the current database.
+
+  ## Arguments
+  - `schema` (string): The name of the schema to check for existence.
+
+  ## Returns
+  Boolean: `true` if the schema exists, `false` otherwise.
+#}
+
 {% set query %}
     SELECT *
     FROM mz_schemas
     JOIN mz_databases ON mz_schemas.database_id = mz_databases.id
     WHERE mz_databases.name = current_database()
-    AND mz_schemas.name = lower('{{ schema }}')
+    AND mz_schemas.name = lower(trim('{{ schema }}'))
 {%- endset -%}
 
 {% set results = run_query(query) %}
@@ -32,9 +42,19 @@
 {% endmacro %}
 
 {% macro cluster_exists(cluster) %}
+{#
+  Checks if a specified cluster exists in the Materialize environment.
+
+  ## Arguments
+  - `cluster` (string): The name of the cluster to check for existence.
+
+  ## Returns
+  Boolean: `true` if the cluster exists, `false` otherwise.
+#}
+
 {% set query %}
     SELECT * FROM mz_clusters
-    WHERE name = lower('{{ cluster }}')
+    WHERE name = lower(trim('{{ cluster }}'))
 {%- endset -%}
 
 {% set results = run_query(query) %}

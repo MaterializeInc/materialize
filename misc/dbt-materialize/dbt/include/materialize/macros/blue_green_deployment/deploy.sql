@@ -13,19 +13,31 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro wait_until_ready(cluster) %}
+{% macro wait_until_ready(cluster, poll_interval) %}
+{#
+  Waits for all objects within a specified cluster to be fully hydrated, 
+  polling the cluster's readiness status at a specified interval.
+
+  ## Arguments
+  - `cluster_name` (string): The name of the cluster to check for readiness.
+  - `poll_interval` (integer): The interval, in seconds, between each readiness check.
+
+  ## Returns
+  None: This macro does not return a value but will halt execution until the specified
+  cluster's objects are fully hydrated.
+#}
 {% for i in range(1, 100000) %}
     {% if is_cluster_ready(cluster) %}
         {{ return(true) }}
     {% endif %}
     -- Hydration takes time. Be a good
     -- citizen and don't overwhelm mz_introspection
-    {{ adapter.sleep(5) }}
+    {{ adapter.sleep(poll_interval) }}
 {% endfor %}
-{{ exceptions.CompilationError("Cluster " ~ cluster ~ " failed to hydrate within a reasonable amount of time") }}
+{{ exceptions.raise_compiler_error("Cluster " ~ cluster ~ " failed to hydrate within a reasonable amount of time") }}
 {% endmacro %}
 
-{% macro deploy(force=false) %}
+{% macro deploy(force=false, poll_interval=15) %}
 
 {% set current_target_name = target.name %}
 {% set deployment = var('deployment') %}
@@ -33,7 +45,7 @@
 
 -- Check if the target-specific configuration exists
 {% if not target_config %}
-    {{ log("No deployment configuration found for target " ~ current_target_name, info=True) }}
+    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
 {% endif %}
 
 {{ log("Creating deployment environment for target " ~ current_target_name, info=True) }}
@@ -41,29 +53,29 @@
 {% set clusters = target_config.get('clusters', []) %}
 {% set schemas = target_config.get('schemas', []) %}
 
-        -- Check that all production schemas
-        -- and clusters already exist
+-- Check that all production schemas
+-- and clusters already exist
 {% for schema in schemas %}
-    {% if not schema_exist(schema.prod) %}
-        {{ exceptions.CompilationError("Production schema " ~ schema.prod ~ " does not exist") }}
+    {% if not schema_exists(schema.prod) %}
+        {{ exceptions.raise_compiler_error("Production schema " ~ schema.prod ~ " does not exist") }}
     {% endif %}
-    {% if not schema_exist(schema.prod_deploy) %}
-        {{ exceptions.CompilationError("Deployment schema " ~ schema.prod_deploy ~ " does not exist") }}
+    {% if not schema_exists(schema.prod_deploy) %}
+        {{ exceptions.raise_compiler_error("Deployment schema " ~ schema.prod_deploy ~ " does not exist") }}
     {% endif %}
 {% endfor %}
 
 {% for cluster in clusters %}
     {% if not cluster_exists(cluster.prod) %}
-        {{ exceptions.CompilationError("Production cluster " ~ cluster.prod ~ " does not exist") }}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " does not exist") }}
     {% endif %}
     {% if not cluster_exists(cluster.prod_deploy) %}
-        {{ exceptions.CompilationError("Deployment cluster " ~ cluster.prod_deploy ~ " does not exist") }}
+        {{ exceptions.raise_compiler_error("Deployment cluster " ~ cluster.prod_deploy ~ " does not exist") }}
     {% endif %}
 {% endfor %}
 
 {% if not force %}
     {% for cluster in clusters %}
-        {{ wait_until_ready(cluster.prod_deploy) }}
+        {{ wait_until_ready(cluster.prod_deploy, poll_interval) }}
     {% endfor %}
 {% endif %}
 
@@ -71,12 +83,12 @@
 BEGIN;
 
 {% for schema in schemas %}
-    {{ log("swapping schemas " ~ schema.prod ~ " and " ~ schema.prod_deploy, info=True) }}
+    {{ log("Swapping schemas " ~ schema.prod ~ " and " ~ schema.prod_deploy, info=True) }}
     ALTER SCHEMA {{ schema.prod }} SWAP WITH {{ schema.prod_deploy }};
 {% endfor %}
 
 {% for cluster in clusters %}
-    {{ log("swapping clusters " ~ cluster.prod ~ " and " ~ cluster.prod_deploy, info=True) }}
+    {{ log("Swapping clusters " ~ cluster.prod ~ " and " ~ cluster.prod_deploy, info=True) }}
     ALTER CLUSTER {{ cluster.prod }} SWAP WITH {{ cluster.prod_deploy }};
 {% endfor %}
 

@@ -15,9 +15,8 @@
 
 {% macro is_cluster_ready(cluster=target.cluster|default(none)) %}
 
--- Check if the cluster argument was provided or exists in the target profile
 {% if cluster is none %}
-    {{ exceptions.CompilationError("No cluster specified and no default cluster found in target profile. " ~ current_target_name) }}
+    {{ exceptions.raise_compiler_error("No cluster specified and no default cluster found in target profile. " ~ current_target_name) }}
 {% endif %}
 
 {{ log("Checking pending objects for cluster " ~ cluster, info=True) }}
@@ -32,7 +31,7 @@ WITH total_replicas AS (
 SELECT COALESCE(replicas, 0) AS replicas
 FROM mz_clusters
 LEFT JOIN total_replicas ON mz_clusters.id = cluster_id
-WHERE mz_clusters.name = lower('{{ cluster }}')
+WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
 {%- endset -%}
 
 {%- set result = run_query(cluster_exists) %}
@@ -51,88 +50,104 @@ WHERE mz_clusters.name = lower('{{ cluster }}')
 
 {%- set check_pending_objects_sql %}
 WITH dataflows AS (
-    SELECT mz_indexes.id, mz_indexes.name, 'index' AS type
+    SELECT         
+        mz_cluster_replicas.id AS replica_id,
+        mz_indexes.id AS object_id,
+        mz_indexes.name,
+        'index' AS type
     FROM mz_indexes
     JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-    WHERE mz_clusters.name = lower('{{ cluster }}')
+    JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
+    WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
 
     UNION ALL
 
-    SELECT mz_materialized_views.id, mz_materialized_views.name, 'materialized-view' AS type
+    SELECT         
+        mz_cluster_replicas.id AS replica_id,
+        mz_materialized_views.id AS object_id,
+        mz_materialized_views.name,
+        'materialized-view' AS type
     FROM mz_materialized_views
     JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-    WHERE mz_clusters.name = lower('{{ cluster }}')
+    JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
+    WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+
+    UNION ALL 
+
+    SELECT 
+        mz_cluster_replicas.id AS replica_id,
+        mz_sources.id AS object_id,
+        mz_sources.name,
+        'source' AS type
+    FROM mz_sources
+    JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
+    JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
+    WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+
+    UNION ALL 
+
+    SELECT
+        mz_cluster_replicas.id AS replica_id,
+        mz_sinks.id AS object_id,
+        mz_sinks.name,
+        'sink' AS type
+    FROM mz_sinks
+    JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
+    JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
+    WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+
 ),
 
 ready_dataflows AS (
-    SELECT id, name, type
-    FROM dataflows AS d
-    JOIN mz_internal.mz_compute_hydration_statuses AS h ON (h.object_id = d.id)
-    LEFT JOIN mz_internal.mz_materialization_lag AS l ON (l.object_id = d.id)
+    SELECT replica_id, object_id, name, type
+    FROM dataflows
+    JOIN mz_internal.mz_hydration_statuses AS h USING (object_id, replica_id)
+    LEFT JOIN mz_internal.mz_materialization_lag AS l USING (object_id)
     WHERE h.hydrated AND (l.local_lag <= '1s' OR l.local_lag IS NULL)
 ),
 
 pending_dataflows AS (
-    SELECT id, name, type
+    SELECT replica_id, object_id, name, type
     FROM dataflows d
 
     EXCEPT
 
-    SELECT id, name, type
+    SELECT replica_id, object_id, name, type
     FROM ready_dataflows r
-
 ),
 
-pending_sources AS (
-    SELECT mz_sources.id, mz_sources.name, 'source' AS type
-    FROM mz_sources
-    JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-    JOIN mz_internal.mz_source_statistics s ON mz_sources.id = s.id
-    WHERE mz_clusters.name = lower('{{ cluster }}')
-        AND snapshot_committed IS FALSE
-),
+ready_replicas AS (
+    SELECT mz_cluster_replicas.id AS replica_id
+    FROM mz_cluster_replicas
+    JOIN mz_clusters ON mz_clusters.id = mz_cluster_replicas.cluster_id
+    WHERE mz_clusters.name = '{{ cluster }}'
 
-pending_sinks AS (
-    SELECT mz_sinks.id, mz_sinks.name, 'sink' AS type
-    FROM mz_sinks
-    JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-    JOIN mz_internal.mz_sink_statuses s ON mz_sinks.id = s.id
-    WHERE mz_clusters.name = lower('{{ cluster }}')
-        AND status <> 'running'
-),
+    EXCEPT
 
-pending_objects AS (
-    SELECT *
+    SELECT replica_id
     FROM pending_dataflows
-
-    UNION ALL
-
-    SELECT *
-    FROM pending_sources
-
-    UNION ALL
-
-    SELECT *
-    FROM pending_sinks
 )
 
-SELECT * FROM pending_objects
+SELECT object_id, name, type
+FROM pending_dataflows
+WHERE NOT EXISTS (
+    SELECT * FROM ready_replicas
+)
 {%- endset %}
 
--- Execute the SQL and store the result
 {%- set results = run_query(check_pending_objects_sql) %}
 {%- if execute -%}
     {#- If there are results, the query will return at least one row -#}
     {%- if results and results.column_names and results.rows|length > 0 -%}
         {#- There are pending objects, so print them -#}
-        {{ log("Pending objects found for cluster " ~ cluster ~ ":", info=True) }}
+        {{ log("Some objects still hydrating in cluster " ~ cluster ~ ":", info=True) }}
         {%- for row in results.rows -%}
             {{ log("- [" ~ row[2] ~ "(" ~ row[0] ~ ")]: " ~ row[1], info=True) }}
         {%- endfor -%}
         {{ return(false) }}
     {%- else -%}
         {#- No pending objects found for the specified cluster -#}
-        {{ log("No pending objects found for cluster " ~ cluster ~ ". Cluster is ready.", info=True) }}
+        {{ log("All objects hydrated in cluster " ~ cluster ~ ". The cluster is ready.", info=True) }}
         {{ return(true) }}
     {%- endif -%}
 {%- endif -%}

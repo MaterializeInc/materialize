@@ -20,8 +20,8 @@
 {% set target_config = deployment[current_target_name] %}
 
 -- Check if the target-specific configuration exists
-{% if target_config %}
-    {{ exceptions.CompilationError("No deployment configuration found for target " ~ current_target_name) }}
+{% if not target_config %}
+    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
 {% endif %}
 
 {{ log("Creating deployment environment for target " ~ current_target_name, info=True) }}
@@ -32,26 +32,26 @@
 -- Check that all production schemas
 -- and clusters already exist
 {% for schema in schemas %}
-    {% if not schema_exist(schema.prod) %}
-        {{ exceptions.CompilationError("Production schema " ~ schema.prod ~ " does not exist") }}
+    {% if not schema_exists(schema.prod) %}
+        {{ exceptions.raise_compiler_error("Production schema " ~ schema.prod ~ " does not exist") }}
     {% endif %}
 {% endfor %}
 
 {% for cluster in clusters %}
     {% if not cluster_exists(cluster.prod) %}
-        {{ exceptions.CompilationError("Production cluster " ~ cluster.prod ~ " does not exist") }}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " does not exist") }}
     {% endif %}
 {% endfor %}
 
 {% for schema in schemas %}
-    {% if schema_exist(schema.prod_deploy) %}
+    {% if schema_exists(schema.prod_deploy) %}
         {{ log("Deployment schema " ~ schema.prod_deploy ~ " already exists", info=True)}}
         {% set schema_empty %}
             SELECT *
             FROM mz_objects
-            INNER JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
+           JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
             WHERE mz_schemas.name = lower('{{ schema.prod_deploy }}')
-                AND mz_objects.id ILIKE 'u%'
+                AND mz_objects.id LIKE 'u%'
         {% endset %}
 
         {% if run_query(schema_empty)|length > 0 %}
@@ -61,7 +61,7 @@
 
     {% else %}
         {{ log("Creating deployment schema " ~ schema.prod_deploy, info=True)}}
-        {% call statement('create_cluster', fetch_result=True, auto_begin=False) -%}
+        {% call statement('create_schema', fetch_result=True, auto_begin=False) -%}
             CREATE SCHEMA {{ schema.prod_deploy }};
         {%- endcall %}
     {% endif %}
@@ -75,33 +75,33 @@
                 SELECT mz_indexes.id
                 FROM mz_indexes
                 JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = lower('{{ cluster }}')
+                WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
 
                 UNION ALL
 
                 SELECT mz_materialized_views.id
                 FROM mz_materialized_views
                 JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = lower('{{ cluster }}')
+                WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
 
                 UNION ALL
 
                 SELECT mz_sources.id
                 FROM mz_sources
                 JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-                WHERE mz_clusters.name = lower('{{ cluster }}')
+                WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
 
                 UNION ALL
 
                 SELECT mz_sinks.id
                 FROM mz_sinks
                 JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-                WHERE mz_clusters.name = lower('{{ cluster }}')
+                WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
             )
 
             SELECT *
             FROM dataflows
-            WHERE id ILIKE 'u%'
+            WHERE id LIKE 'u%'
         {% endset %}
 
         {% if run_query(cluster_empty)|length > 0 %}
@@ -125,7 +125,7 @@
         {% set replication_factor = results[2] %}
 
         {% if not managed %}
-            {{ exceptions.CompilationError("Production cluster " ~ cluster.prod ~ " is not managed") }}
+            {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " is not managed") }}
         {% endif %}
 
         {% call statement('create_cluster', fetch_result=True, auto_begin=False) -%}

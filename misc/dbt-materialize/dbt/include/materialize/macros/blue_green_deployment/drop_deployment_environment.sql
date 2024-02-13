@@ -20,8 +20,8 @@
 {% set target_config = deployment[current_target_name] %}
 
 -- Check if the target-specific configuration exists
-{% if target_config %}
-    {{ exceptions.CompilationError("No deployment configuration found for target " ~ current_target_name) }}
+{% if not target_config %}
+    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
 {% endif %}
 
 {{ log("Dropping deployment environment for target " ~ current_target_name, info=True) }}
@@ -31,12 +31,18 @@
 
 {% for schema in schemas %}
     {{ log("Dropping schema " ~ schema.prod_deploy ~ " for target " ~ current_target_name, info=True) }}
+    {% set drop_schema %}
     DROP SCHEMA IF EXISTS {{ schema.prod_deploy }} CASCADE;
+    {% endset %}
+    {{ run_query(drop_schema) }}
 {% endfor %}
 
 {% for cluster in clusters %}
     {{ log("Dropping cluster " ~ cluster.prod_deploy ~ " for target " ~ current_target_name, info=True) }}
+    {% set drop_cluster %}
     DROP CLUSTER IF EXISTS {{ cluster.prod_deploy }} CASCADE;
+    {% endset %}
+    {{ run_query(drop_cluster) }}
 {% endfor %}
 
 {% endmacro %}
