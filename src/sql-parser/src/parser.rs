@@ -6872,10 +6872,7 @@ impl<'a> Parser<'a> {
             Ok(JoinConstraint::On(constraint))
         } else if self.parse_keyword(USING) {
             let columns = self.parse_parenthesized_column_list(Mandatory)?;
-            let alias = self
-                .parse_keyword(AS)
-                .then(|| self.parse_identifier())
-                .transpose()?;
+            let alias = self.parse_optional_alias(Keyword::is_reserved_in_table_alias)?;
 
             Ok(JoinConstraint::Using { columns, alias })
         } else {

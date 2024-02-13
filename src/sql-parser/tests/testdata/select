@@ -935,7 +935,7 @@ Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { 
 parse-statement
 SELECT * FROM t1 JOIN t2 USING (c1) AS
 ----
-error: Expected identifier, found EOF
+error: Expected an identifier after AS, found EOF
 SELECT * FROM t1 JOIN t2 USING (c1) AS
                                       ^
 
@@ -1695,3 +1695,32 @@ select count(distinct s) from y
 SELECT count(DISTINCT s) FROM y
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("count")])), args: Args { args: [Identifier([Ident("s")])], order_by: [] }, filter: None, over: None, distinct: true }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("y")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM t JOIN t USING (a) AS OF 1234
+----
+SELECT * FROM t JOIN t USING (a) AS OF 1234
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, join_operator: Inner(Using { columns: [Ident("a")], alias: None }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Value(Number("1234")))) })
+
+parse-statement
+SELECT * FROM t JOIN t USING (a) AS b AS OF 1234
+----
+SELECT * FROM t JOIN t USING (a) AS b AS OF 1234
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, join_operator: Inner(Using { columns: [Ident("a")], alias: Some(Ident("b")) }) }] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Value(Number("1234")))) })
+
+
+parse-statement
+SELECT * FROM t JOIN t USING (a) AS OF 1234 AS 123
+----
+error: Expected end of statement, found AS
+SELECT * FROM t JOIN t USING (a) AS OF 1234 AS 123
+                                            ^
+
+parse-statement
+SELECT * FROM t JOIN t USING (a) AS OF
+----
+error: Expected a timestamp value after 'AS OF', found EOF
+SELECT * FROM t JOIN t USING (a) AS OF
+                                      ^
