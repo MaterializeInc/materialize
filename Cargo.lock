@@ -4380,6 +4380,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-core",
+ "tracing-fluent-assertions",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "tungstenite",
@@ -4863,6 +4864,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "derivative",
  "futures-core",
  "http",
  "humantime",
@@ -4876,6 +4878,7 @@ dependencies = [
  "opentelemetry_sdk",
  "sentry-tracing",
  "tracing",
+ "tracing-fluent-assertions",
  "tracing-subscriber",
  "workspace-hack",
 ]
@@ -4894,6 +4897,7 @@ dependencies = [
  "console-subscriber",
  "criterion",
  "ctor",
+ "derivative",
  "either",
  "futures",
  "hibitset",
@@ -4928,6 +4932,7 @@ dependencies = [
  "tokio-test",
  "tonic",
  "tracing",
+ "tracing-fluent-assertions",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
@@ -9405,6 +9410,17 @@ checksum = "24eb03ba0eab1fd845050058ce5e616558e8f8d8fca633e6b163fe25c797213a"
 dependencies = [
  "once_cell",
  "valuable",
+]
+
+[[package]]
+name = "tracing-fluent-assertions"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12de1a8c6bcfee614305e836308b596bbac831137a04c61f7e5b0b0bf2cfeaf6"
+dependencies = [
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
 ]
 
 [[package]]

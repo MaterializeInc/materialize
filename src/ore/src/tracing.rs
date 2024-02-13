@@ -34,6 +34,7 @@ use std::time::Duration;
 
 #[cfg(feature = "tokio-console")]
 use console_subscriber::ConsoleLayer;
+use derivative::Derivative;
 use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -48,6 +49,8 @@ use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::{warn, Event, Level, Span, Subscriber};
+#[cfg(feature = "fluent-assertions")]
+use tracing_fluent_assertions::{AssertionRegistry, AssertionsLayer};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
@@ -65,7 +68,8 @@ use crate::netio::SocketAddr;
 /// Application tracing configuration.
 ///
 /// See the [`configure`] function for details.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct TracingConfig<F> {
     /// The name of the service.
     pub service_name: &'static str,
@@ -79,6 +83,10 @@ pub struct TracingConfig<F> {
     #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tokio-console")))]
     #[cfg(feature = "tokio-console")]
     pub tokio_console: Option<TokioConsoleConfig>,
+    /// Optional configuration for capturing spans during tests.
+    #[cfg(feature = "fluent-assertions")]
+    #[derivative(Debug = "ignore")]
+    pub fluent_assertions: Option<AssertionRegistry>,
     /// Optional Sentry configuration.
     pub sentry: Option<SentryConfig<F>>,
     /// The version of this build of the service.
@@ -549,8 +557,15 @@ where
             (None, None, reloader)
         };
 
+    #[cfg(feature = "fluent-assertions")]
+    let fluent_assertions = config
+        .fluent_assertions
+        .map(|registry| AssertionsLayer::new(&registry));
+
     let stack = tracing_subscriber::registry();
     let stack = stack.with(stderr_log_layer);
+    #[cfg(feature = "fluent-assertions")]
+    let stack = stack.with(fluent_assertions);
     let stack = stack.with(otel_layer);
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
