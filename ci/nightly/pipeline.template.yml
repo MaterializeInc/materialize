@@ -1245,6 +1245,7 @@ steps:
 
     - id: rqg-wmr
       label: "RQG WMR workload"
+      skip: "flaky until #24904 is fixed"
       artifact_paths: junit_*.xml
       timeout_in_minutes: 45
       agents:
