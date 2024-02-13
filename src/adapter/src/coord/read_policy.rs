@@ -436,8 +436,8 @@ impl crate::coord::Coordinator {
         let read_holds = self.acquire_read_holds(time, id_bundle);
         self.txn_read_holds
             .entry(session.conn_id().clone())
-            .or_insert_with(ReadHolds::new)
-            .extend(read_holds);
+            .or_insert_with(Vec::new)
+            .push(read_holds);
     }
 
     /// Attempt to update the timestamp of the read holds on the indicated collections from the
