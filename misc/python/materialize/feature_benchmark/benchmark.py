@@ -73,7 +73,9 @@ class Benchmark:
         # Run the shared() section once for both Mzs under measurement
         shared = scenario.shared()
         if self._mz_id == 0 and shared is not None:
-            print(f"Running the shared() section for {name} ...")
+            print(
+                f"Running the shared() section for scenario {name} with {self._mz_version} ..."
+            )
 
             for shared_item in shared if isinstance(shared, list) else [shared]:
                 shared_item.run(executor=self._executor)
@@ -83,7 +85,9 @@ class Benchmark:
         # Run the init() section once for each Mz
         init = scenario.init()
         if init is not None:
-            print(f"Running the init() section for {name} ...")
+            print(
+                f"Running the init() section for scenario {name} with {self._mz_version} ..."
+            )
 
             for init_item in init if isinstance(init, list) else [init]:
                 init_item.run(executor=self._executor)
@@ -92,11 +96,17 @@ class Benchmark:
 
         for i in range(sys.maxsize):
             # Run the before() section once for each measurement
+            print(
+                f"Running the before() section for scenario {name} with {self._mz_version} ..."
+            )
             before = scenario.before()
             if before is not None:
                 for before_item in before if isinstance(before, list) else [before]:
                     before_item.run(executor=self._executor)
 
+            print(
+                f"Running the benchmark for scenario {name} with {self._mz_version} ..."
+            )
             # Collect timestamps from any part of the workload being benchmarked
             timestamps = []
             benchmark = scenario.benchmark()
