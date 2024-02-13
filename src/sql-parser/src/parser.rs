@@ -8305,3 +8305,7 @@ impl ParenthesizedFragment {
         }
     }
 }
+
+// Include the `Parser::parse_~` implementations for simple options derived by
+// the crate's build.rs script.
+include!(concat!(env!("OUT_DIR"), "/parse.simple_options.rs"));

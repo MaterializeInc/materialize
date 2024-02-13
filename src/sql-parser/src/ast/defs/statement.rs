@@ -4428,3 +4428,7 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
 }
 
 impl_display_t!(CommentObjectType);
+
+// Include the `AstDisplay` implementations for simple options derived by the
+// crate's build.rs script.
+include!(concat!(env!("OUT_DIR"), "/display.simple_options.rs"));
