@@ -338,9 +338,9 @@ where
             };
             trace.map_batches(|batch| {
                 batch.storage.keys.heap_size(&mut callback);
-                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.keys_offs.heap_size(&mut callback);
                 batch.storage.vals.heap_size(&mut callback);
-                offset_list_size(&batch.storage.vals_offs, &mut callback);
+                batch.storage.vals_offs.heap_size(&mut callback);
                 batch.storage.updates.heap_size(&mut callback);
             });
             (size, capacity, allocations)
@@ -366,7 +366,7 @@ where
             };
             trace.map_batches(|batch| {
                 batch.storage.keys.heap_size(&mut callback);
-                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.keys_offs.heap_size(&mut callback);
                 batch.storage.updates.heap_size(&mut callback);
             });
             (size, capacity, allocations)

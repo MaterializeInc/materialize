@@ -9,10 +9,12 @@
 
 pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
+pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
+    use std::rc::Rc;
 
     use differential_dataflow::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
@@ -21,12 +23,11 @@ mod spines {
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
-    use std::rc::Rc;
-    use timely::container::columnation::{Columnation, TimelyStack};
-
-    use super::offset_opt::OffsetOptimized;
-    use super::DatumContainer;
     use mz_repr::Row;
+    use timely::container::columnation::Columnation;
+
+    use crate::containers::stack::ChunkedStack;
+    use crate::row_spine::{DatumContainer, OffsetOptimized};
 
     pub type RowRowSpine<T, R> = Spine<
         Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>,
@@ -63,7 +64,7 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -74,8 +75,8 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = TimelyStack<U::Val>;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type ValContainer = ChunkedStack<U::Val>;
+        type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -85,8 +86,8 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = TimelyStack<()>;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type ValContainer = ChunkedStack<()>;
+        type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
 }

@@ -13,13 +13,13 @@
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
-use differential_dataflow::trace::implementations::ord_neu::{ColKeySpine, ColValSpine};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use timely::dataflow::ScopeParent;
-
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
+use timely::dataflow::ScopeParent;
+
+use crate::containers::stack::{ColKeySpine, ColValSpine};
 
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValSpine};
 
