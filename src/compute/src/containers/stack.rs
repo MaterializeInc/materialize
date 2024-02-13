@@ -12,49 +12,11 @@
 
 use std::collections::Bound;
 use std::ops::{Index, RangeBounds};
-use std::rc::Rc;
 
-use differential_dataflow::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
-use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
-use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
-use differential_dataflow::trace::implementations::spine_fueled::Spine;
-use differential_dataflow::trace::implementations::{BatchContainer, Layout, Update};
-use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+use differential_dataflow::trace::implementations::BatchContainer;
 use timely::container::columnation::{Columnation, Region};
 
 use crate::containers::array::Array;
-use crate::row_spine::OffsetOptimized;
-
-pub type ColValSpine<K, V, T, R> = Spine<
-    Rc<OrdValBatch<MzStack<((K, V), T, R)>>>,
-    ColumnatedMergeBatcher<K, V, T, R>,
-    RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>>>,
->;
-
-pub type ColKeySpine<K, T, R> = Spine<
-    Rc<OrdKeyBatch<MzStack<((K, ()), T, R)>>>,
-    ColumnatedMergeBatcher<K, (), T, R>,
-    RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>>>,
->;
-
-/// A layout based on chunked timely stacks
-pub struct MzStack<U: Update> {
-    phantom: std::marker::PhantomData<U>,
-}
-
-impl<U: Update> Layout for MzStack<U>
-where
-    U::Key: Columnation + 'static,
-    U::Val: Columnation + 'static,
-    U::Time: Columnation,
-    U::Diff: Columnation,
-{
-    type Target = U;
-    type KeyContainer = ChunkedStack<U::Key>;
-    type ValContainer = ChunkedStack<U::Val>;
-    type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
-    type OffsetContainer = OffsetOptimized;
-}
 
 /// An append-only vector that store records as columns.
 ///

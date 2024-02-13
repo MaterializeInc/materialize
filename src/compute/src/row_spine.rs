@@ -16,7 +16,6 @@ pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
 mod spines {
     use std::rc::Rc;
 
-    use differential_dataflow::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
@@ -28,20 +27,21 @@ mod spines {
 
     use crate::containers::stack::ChunkedStack;
     use crate::row_spine::{DatumContainer, OffsetOptimized};
+    use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
     pub type RowRowSpine<T, R> = Spine<
         Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>,
-        ColumnatedMergeBatcher<Row, Row, T, R>,
+        KeyValBatcher<Row, Row, T, R>,
         RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>>>,
     >;
     pub type RowValSpine<V, T, R> = Spine<
         Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>,
-        ColumnatedMergeBatcher<Row, V, T, R>,
+        KeyValBatcher<Row, V, T, R>,
         RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>>>,
     >;
     pub type RowSpine<T, R> = Spine<
         Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>,
-        ColumnatedMergeBatcher<Row, (), T, R>,
+        KeyBatcher<Row, T, R>,
         RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>>>,
     >;
 

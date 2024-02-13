@@ -10,6 +10,7 @@
 //! Convience typedefs for differential types.
 
 #![allow(dead_code, missing_docs)]
+
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
@@ -19,9 +20,57 @@ use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
 use timely::dataflow::ScopeParent;
 
-use crate::containers::stack::{ColKeySpine, ColValSpine};
-
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValSpine};
+pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
+
+pub(crate) mod spines {
+    use std::rc::Rc;
+
+    use differential_dataflow::trace::implementations::ord_neu::{
+        OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder,
+    };
+    use differential_dataflow::trace::implementations::spine_fueled::Spine;
+    use differential_dataflow::trace::implementations::{Layout, Update};
+    use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use timely::container::columnation::Columnation;
+
+    use crate::containers::stack::ChunkedStack;
+    use crate::row_spine::OffsetOptimized;
+    use crate::typedefs::{KeyBatcher, KeyValBatcher};
+
+    /// A spine for generic keys and values.
+    pub type ColValSpine<K, V, T, R> = Spine<
+        Rc<OrdValBatch<MzStack<((K, V), T, R)>>>,
+        KeyValBatcher<K, V, T, R>,
+        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>>>,
+    >;
+
+    /// A spine for generic keys
+    pub type ColKeySpine<K, T, R> = Spine<
+        Rc<OrdKeyBatch<MzStack<((K, ()), T, R)>>>,
+        KeyBatcher<K, T, R>,
+        RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>>>,
+    >;
+
+    /// A layout based on chunked timely stacks
+    pub struct MzStack<U: Update> {
+        phantom: std::marker::PhantomData<U>,
+    }
+
+    impl<U: Update> Layout for MzStack<U>
+    where
+        U::Key: Columnation + 'static,
+        U::Val: Columnation + 'static,
+        U::Time: Columnation,
+        U::Diff: Columnation,
+    {
+        type Target = U;
+        type KeyContainer = ChunkedStack<U::Key>;
+        type ValContainer = ChunkedStack<U::Val>;
+        type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
+        type OffsetContainer = OffsetOptimized;
+    }
+}
 
 // Spines are data structures that collect and maintain updates.
 // Agents are wrappers around spines that allow shared read access.
@@ -59,3 +108,4 @@ pub type RowErrSpine<T, R> = RowValSpine<DataflowError, T, R>;
 
 // Batchers for consolidation
 pub type KeyBatcher<K, T, D> = ColumnatedMergeBatcher<K, (), T, D>;
+pub type KeyValBatcher<K, V, T, D> = ColumnatedMergeBatcher<K, V, T, D>;
