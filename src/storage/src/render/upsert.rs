@@ -680,6 +680,12 @@ where
         upsert_metrics
             .legacy_value_errors
             .set(u64::cast_from(legacy_errors_to_correct.len()));
+        if !legacy_errors_to_correct.is_empty() {
+            tracing::error!(
+                "unexpected legacy error representation. Found {} occurences",
+                legacy_errors_to_correct.len()
+            );
+        }
         consolidation::consolidate(&mut legacy_errors_to_correct);
         for (mut error, diff) in legacy_errors_to_correct {
             assert!(
