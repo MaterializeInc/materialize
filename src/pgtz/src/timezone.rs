@@ -160,6 +160,10 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
     // Otherwise we need to parse long sequences of digits as [..hhhhmm]
     let split_nums: bool = !value.contains(':');
 
+    let value = value.trim_matches(|c: char| {
+        (c.is_ascii_whitespace() || c.is_ascii_punctuation()) && (c != '+' && c != '-')
+    });
+
     // Takes a string and tries to parse it as a number token and insert it into
     // the token list
     fn parse_num(
@@ -203,27 +207,35 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
 
         Ok(())
     }
+
+    // Toggles whether or not we should skip whitespace. This would be nicer to
+    // do inline but ownership makes that annoying.
+    let mut space_skip_mode = false;
     for (i, chr) in value.chars().enumerate() {
+        // Stay in space skip mode iff already in it and element is space.
+        if space_skip_mode && chr.is_ascii_whitespace() {
+            continue;
+        } else {
+            space_skip_mode = false;
+        }
+
         match chr {
-            '-' => {
-                parse_num(&mut toks, &num_buf, split_nums, i)?;
-                num_buf.clear();
-                toks.push(TimeStrToken::Dash);
-            }
-            ' ' => {
-                parse_num(&mut toks, &num_buf, split_nums, i)?;
-                num_buf.clear();
-                toks.push(TimeStrToken::Delim);
-            }
             ':' => {
                 parse_num(&mut toks, &num_buf, split_nums, i)?;
                 num_buf.clear();
                 toks.push(TimeStrToken::Colon);
             }
+            '-' => {
+                parse_num(&mut toks, &num_buf, split_nums, i)?;
+                num_buf.clear();
+                toks.push(TimeStrToken::Dash);
+                space_skip_mode = true;
+            }
             '+' => {
                 parse_num(&mut toks, &num_buf, split_nums, i)?;
                 num_buf.clear();
                 toks.push(TimeStrToken::Plus);
+                space_skip_mode = true;
             }
             chr if (chr == 'z' || chr == 'Z') && (i == value.len() - 1) => {
                 parse_num(&mut toks, &num_buf, split_nums, i)?;
@@ -236,6 +248,12 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
                 let substring = &value[i..];
                 toks.push(TimeStrToken::TzName(substring.to_string()));
                 return Ok(toks);
+            }
+            // PG allows arbitrary punctuation marks, which represent delim
+            chr if chr.is_ascii_whitespace() || chr.is_ascii_punctuation() => {
+                parse_num(&mut toks, &num_buf, split_nums, i)?;
+                num_buf.clear();
+                toks.push(TimeStrToken::Delim);
             }
             chr => {
                 return Err(format!(
@@ -469,6 +487,17 @@ mod tests {
             ("pAcIfIc/AUcKlAnD", T(Tz::Pacific__Auckland)),
             ("AMERICA/NEW_YORK", T(Tz::America__New_York)),
             ("america/los_angeles", T(Tz::America__Los_Angeles)),
+            // Formatting test cases
+            ("+5:", F(FixedOffset::east_opt(18000).unwrap())),
+            ("-5:15:", F(FixedOffset::west_opt(18900).unwrap())),
+            ("-   5:15:", F(FixedOffset::west_opt(18900).unwrap())),
+            (
+                " ! ? ! - 5:15 ? ! ? ",
+                F(FixedOffset::west_opt(18900).unwrap()),
+            ),
+            (" UTC", F(FixedOffset::east_opt(0).unwrap())),
+            (" UTC ", F(FixedOffset::east_opt(0).unwrap())),
+            (" ? UTC ! ", F(FixedOffset::east_opt(0).unwrap())),
         ];
 
         for (timezone, expected) in test_cases.iter() {
@@ -483,8 +512,8 @@ mod tests {
 
         let failure_test_cases = [
             "+25:00", "+120:00", "+0:61", "+0:500", " 12:30", "+-12:30", "+2525", "+2561",
-            "+255900", "+25", "+5::30", "+5:30:", "+5:", "++5:00", "--5:00", " UTC", "a", "zzz",
-            "ZZZ", "ZZ Top", " +", " -", " ", "1", "12", "1234", "+16", "-17", "-14:60", "1:30:60",
+            "+255900", "+25", "+5::30", "++5:00", "--5:00", "a", "zzz", "ZZZ", "ZZ Top", " +",
+            " -", " ", "1", "12", "1234", "+16", "-17", "-14:60", "1:30:60",
         ];
 
         for test in failure_test_cases.iter() {
