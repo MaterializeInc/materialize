@@ -146,9 +146,14 @@ where
 /// can't quite recover exactly the information necessary to construct that at
 /// the moment. Seems worth doing, but in the meantime, intentionally make this
 /// look fairly different (`Stream` of `DataRemapEntry` instead of
-/// `Collection<FromTime>`) to hopefully minimize confusion.
+/// `Collection<FromTime>`) to hopefully minimize confusion. As a performance
+/// optimization, we only re-emit this when the _physical_ upper has changed,
+/// which means that the frontier of the `Stream<DataRemapEntry<T>>` indicates
+/// updates to the logical_upper of the most recent `DataRemapEntry` (i.e. the
+/// one with the largest physical_upper).
 ///
-/// [reclocking design doc]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
+/// [reclocking design doc]:
+///     https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct DataRemapEntry<T> {
     physical_upper: T,
@@ -260,9 +265,11 @@ where
                     assert!(remap.logical_upper < new_progress);
 
                     remap.logical_upper = new_progress;
-                    debug!("{} emitting {:?}", name, remap);
-                    remap_output.give(&cap, remap.clone()).await;
-
+                    // As mentioned in the docs on `DataRemapEntry`, we only
+                    // emit updates when the physical upper changes (which
+                    // happens to makes the protocol a tiny bit more
+                    // remap-like).
+                    debug!("{} not emitting {:?}", name, remap);
                     continue;
                 }
                 DataListenNext::CompactedTo(since_ts) => {
@@ -410,12 +417,20 @@ async fn txns_progress_frontiers_read_remap_input<T, C>(
     mut remap: DataRemapEntry<T>,
 ) -> Option<DataRemapEntry<T>>
 where
-    T: Timestamp,
+    T: Timestamp + TotalOrder,
     C: InputConnection<T>,
 {
     while let Some(event) = input.next().await {
         let xs = match event {
-            Event::Progress(_) => continue,
+            Event::Progress(logical_upper) => {
+                if let Some(logical_upper) = logical_upper.into_option() {
+                    if remap.logical_upper < logical_upper {
+                        remap.logical_upper = logical_upper;
+                        return Some(remap);
+                    }
+                }
+                continue;
+            }
             Event::Data(_cap, xs) => xs,
         };
         for x in xs {
