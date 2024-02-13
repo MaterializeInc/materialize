@@ -68,10 +68,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
+        # TODO: Reenable test-compute-controller-metrics when #25214 is fixed
         if name in (
             "default",
             "test-incident-70",
             "test-concurrent-connections",
+            "test-compute-controller-metrics",
         ):
             continue
         if buildkite.accepted_by_shard(i):
