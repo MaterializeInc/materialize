@@ -3860,6 +3860,7 @@ dependencies = [
  "mz-adapter",
  "mz-build-info",
  "mz-catalog",
+ "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
  "mz-secrets",
