@@ -28,6 +28,7 @@ use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
     decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart,
 };
+use crate::metrics::ColumnarMetrics;
 
 const INLINE_METADATA_KEY: &str = "MZ:inline";
 
@@ -48,6 +49,7 @@ pub fn encode_trace_parquet<W: Write, T: Timestamp + Codec64>(
 /// Decodes a BlobTraceBatchPart from the Parquet format.
 pub fn decode_trace_parquet<R: Read + Seek, T: Timestamp + Codec64>(
     r: &mut R,
+    metrics: &ColumnarMetrics,
 ) -> Result<BlobTraceBatchPart<T>, Error> {
     let metadata = read_metadata(r).map_err(|err| err.to_string())?;
     let metadata = metadata
@@ -61,7 +63,7 @@ pub fn decode_trace_parquet<R: Read + Seek, T: Timestamp + Codec64>(
         ProtoBatchFormat::ArrowKvtd => {
             return Err("ArrowKVTD format not supported in parquet".into())
         }
-        ProtoBatchFormat::ParquetKvtd => decode_parquet_file_kvtd(r)?,
+        ProtoBatchFormat::ParquetKvtd => decode_parquet_file_kvtd(r, metrics)?,
     };
 
     let ret = BlobTraceBatchPart {
@@ -120,7 +122,10 @@ fn encode_parquet_kvtd<W: Write>(
     Ok(())
 }
 
-fn decode_parquet_file_kvtd<R: Read + Seek>(r: &mut R) -> Result<Vec<ColumnarRecords>, Error> {
+fn decode_parquet_file_kvtd<R: Read + Seek>(
+    r: &mut R,
+    metrics: &ColumnarMetrics,
+) -> Result<Vec<ColumnarRecords>, Error> {
     let metadata = read_metadata(r)?;
     let schema = infer_schema(&metadata)?;
     let reader = FileReader::new(r, metadata.row_groups, schema, None, None, None);
@@ -137,7 +142,7 @@ fn decode_parquet_file_kvtd<R: Read + Seek>(r: &mut R) -> Result<Vec<ColumnarRec
 
     let mut ret = Vec::new();
     for batch in reader {
-        ret.push(decode_arrow_batch_kvtd(&batch?)?);
+        ret.push(decode_arrow_batch_kvtd(&batch?, metrics)?);
     }
     Ok(ret)
 }

@@ -1209,6 +1209,7 @@ mod tests {
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
+            &write.metrics,
         )
         .await;
         assert_eq!(part.desc, res.output.desc);
@@ -1291,6 +1292,7 @@ mod tests {
         let (part, updates) = expect_fetch_part(
             write.blob.as_ref(),
             &part.key.complete(&write.machine.shard_id()),
+            &write.metrics,
         )
         .await;
         assert_eq!(part.desc, res.output.desc);

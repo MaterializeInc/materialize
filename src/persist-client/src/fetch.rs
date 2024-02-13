@@ -282,7 +282,7 @@ where
         let part = metrics
             .codecs
             .batch
-            .decode(|| BlobTraceBatchPart::decode(value))
+            .decode(|| BlobTraceBatchPart::decode(value, &metrics.columnar))
             .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable

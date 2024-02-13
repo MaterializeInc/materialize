@@ -277,7 +277,7 @@ pub(crate) const MiB: usize = 1024 * 1024;
 /// something like the `ctor` or `inventory` crate. This would involve managing
 /// the footgun of a Config being linked into one binary but not the other.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
-    configs
+    mz_persist::cfg::all_dyn_configs(configs)
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::batch::BLOB_TARGET_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
@@ -306,8 +306,6 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_EQUALS)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_PREFIX)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
-        .add(&mz_persist::s3::ENABLE_S3_LGALLOC_CC_SIZES)
-        .add(&mz_persist::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
 }
 
 impl PersistConfig {

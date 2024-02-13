@@ -15,6 +15,7 @@
 
 //! The [bytes] crate but backed by [lgalloc].
 
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -29,38 +30,53 @@ use crate::metrics::MetricsRegistry;
 use crate::region::Region;
 
 /// [bytes::Bytes] but backed by [lgalloc].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LgBytes {
     offset: usize,
-    region: Arc<MetricsRegion>,
+    region: Arc<MetricsRegion<u8>>,
 }
 
-// A [Region] wrapper that increments metrics when it is dropped.
-struct MetricsRegion {
-    buf: Region<u8>,
+/// A [Region] wrapper that increments metrics when it is dropped.
+///
+/// The `T: Copy` bound ensures that the `Region` doesn't leak resources when
+/// dropped.
+pub struct MetricsRegion<T: Copy> {
+    buf: Region<T>,
     free_count: IntCounter,
     free_capacity_bytes: IntCounter,
 }
 
-impl std::fmt::Debug for LgBytes {
+impl<T: Copy + Debug> Debug for MetricsRegion<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self.as_ref(), f)
+        std::fmt::Debug::fmt(self.buf.as_vec(), f)
     }
 }
 
-impl PartialEq for LgBytes {
+impl<T: Copy> MetricsRegion<T> {
+    fn capacity_bytes(&self) -> usize {
+        self.buf.capacity() * std::mem::size_of::<T>()
+    }
+}
+
+impl<T: Copy + PartialEq> PartialEq for MetricsRegion<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.as_ref() == other.as_ref()
+        self.buf.as_vec() == other.buf.as_vec()
     }
 }
 
-impl Eq for LgBytes {}
+impl<T: Copy + Eq> Eq for MetricsRegion<T> {}
 
-impl Drop for MetricsRegion {
+impl<T: Copy> Drop for MetricsRegion<T> {
     fn drop(&mut self) {
         self.free_count.inc();
         self.free_capacity_bytes
-            .inc_by(u64::cast_from(self.buf.capacity()));
+            .inc_by(u64::cast_from(self.capacity_bytes()));
+    }
+}
+
+impl<T: Copy> AsRef<[T]> for MetricsRegion<T> {
+    fn as_ref(&self) -> &[T] {
+        &self.buf[..]
     }
 }
 
@@ -146,8 +162,18 @@ impl Buf for LgBytes {
 /// Metrics for [LgBytes].
 #[derive(Debug, Clone)]
 pub struct LgBytesMetrics {
+    /// Metrics for the "persist_s3" usage of [LgBytes].
+    pub persist_s3: LgBytesOpMetrics,
+    /// Metrics for the "persist_arrow" usage of [LgBytes].
+    pub persist_arrow: LgBytesOpMetrics,
+}
+
+/// Metrics for an individual usage of [LgBytes].
+#[derive(Clone)]
+pub struct LgBytesOpMetrics {
     heap: LgBytesRegionMetrics,
     mmap: LgBytesRegionMetrics,
+    alloc_seconds: Counter,
     mmap_disabled_count: IntCounter,
     mmap_error_count: IntCounter,
     // NB: Unlike the _bytes per-Region metrics, which are capacity, this is
@@ -155,11 +181,17 @@ pub struct LgBytesMetrics {
     len_sizes: Histogram,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for LgBytesOpMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LgBytesOperationMetrics")
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone)]
 struct LgBytesRegionMetrics {
     alloc_count: IntCounter,
     alloc_capacity_bytes: IntCounter,
-    alloc_seconds: Counter,
     free_count: IntCounter,
     free_capacity_bytes: IntCounter,
 }
@@ -170,71 +202,88 @@ impl LgBytesMetrics {
         let alloc_count: IntCounterVec = registry.register(metric!(
             name: "mz_lgbytes_alloc_count",
             help: "count of LgBytes allocations",
-            var_labels: ["region"],
+            var_labels: ["op", "region"],
         ));
         let alloc_capacity_bytes: IntCounterVec = registry.register(metric!(
             name: "mz_lgbytes_alloc_capacity_bytes",
             help: "total capacity bytes of LgBytes allocations",
-            var_labels: ["region"],
-        ));
-        let alloc_seconds: CounterVec = registry.register(metric!(
-            name: "mz_lgbytes_alloc_seconds",
-            help: "seconds spent getting LgBytes allocations and copying in data",
-            var_labels: ["region"],
+            var_labels: ["op", "region"],
         ));
         let free_count: IntCounterVec = registry.register(metric!(
             name: "mz_lgbytes_free_count",
             help: "count of LgBytes frees",
-            var_labels: ["region"],
+            var_labels: ["op", "region"],
         ));
         let free_capacity_bytes: IntCounterVec = registry.register(metric!(
             name: "mz_lgbytes_free_capacity_bytes",
             help: "total capacity bytes of LgBytes frees",
-            var_labels: ["region"],
+            var_labels: ["op", "region"],
         ));
-        LgBytesMetrics {
+        let alloc_seconds: CounterVec = registry.register(metric!(
+            name: "mz_lgbytes_alloc_seconds",
+            help: "seconds spent getting LgBytes allocations and copying in data",
+            var_labels: ["op"],
+        ));
+        let mmap_disabled_count: IntCounter = registry.register(metric!(
+            name: "mz_bytes_mmap_disabled_count",
+            help: "count alloc attempts with lgalloc disabled",
+        ));
+        let mmap_error_count: IntCounter = registry.register(metric!(
+            name: "mz_bytes_mmap_error_count",
+            help: "count of errors when attempting file-based mapped alloc",
+        ));
+        let len_sizes: Histogram = registry.register(metric!(
+            name: "mz_bytes_alloc_len_sizes",
+            help: "histogram of LgBytes alloc len sizes",
+            buckets: crate::stats::HISTOGRAM_BYTE_BUCKETS.to_vec(),
+        ));
+        let op = |name: &str| LgBytesOpMetrics {
             heap: LgBytesRegionMetrics {
-                alloc_count: alloc_count.with_label_values(&["heap"]),
-                alloc_capacity_bytes: alloc_capacity_bytes.with_label_values(&["heap"]),
-                alloc_seconds: alloc_seconds.with_label_values(&["heap"]),
-                free_count: free_count.with_label_values(&["heap"]),
-                free_capacity_bytes: free_capacity_bytes.with_label_values(&["heap"]),
+                alloc_count: alloc_count.with_label_values(&[name, "heap"]),
+                alloc_capacity_bytes: alloc_capacity_bytes.with_label_values(&[name, "heap"]),
+                free_count: free_count.with_label_values(&[name, "heap"]),
+                free_capacity_bytes: free_capacity_bytes.with_label_values(&[name, "heap"]),
             },
             mmap: LgBytesRegionMetrics {
-                alloc_count: alloc_count.with_label_values(&["mmap"]),
-                alloc_capacity_bytes: alloc_capacity_bytes.with_label_values(&["mmap"]),
-                alloc_seconds: alloc_seconds.with_label_values(&["mmap"]),
-                free_count: free_count.with_label_values(&["mmap"]),
-                free_capacity_bytes: free_capacity_bytes.with_label_values(&["mmap"]),
+                alloc_count: alloc_count.with_label_values(&[name, "mmap"]),
+                alloc_capacity_bytes: alloc_capacity_bytes.with_label_values(&[name, "mmap"]),
+                free_count: free_count.with_label_values(&[name, "mmap"]),
+                free_capacity_bytes: free_capacity_bytes.with_label_values(&[name, "mmap"]),
             },
-            mmap_disabled_count: registry.register(metric!(
-                name: "mz_bytes_mmap_disabled_count",
-                help: "count alloc attempts with lgalloc disabled",
-            )),
-            mmap_error_count: registry.register(metric!(
-                name: "mz_bytes_mmap_error_count",
-                help: "count of errors when attempting file-based mapped alloc",
-            )),
-            len_sizes: registry.register(metric!(
-                name: "mz_bytes_alloc_len_sizes",
-                help: "histogram of LgBytes alloc len sizes",
-                buckets: crate::stats::HISTOGRAM_BYTE_BUCKETS.to_vec(),
-            )),
+            alloc_seconds: alloc_seconds.with_label_values(&[name]),
+            mmap_disabled_count: mmap_disabled_count.clone(),
+            mmap_error_count: mmap_error_count.clone(),
+            len_sizes: len_sizes.clone(),
+        };
+        LgBytesMetrics {
+            persist_s3: op("persist_s3"),
+            persist_arrow: op("persist_arrow"),
+        }
+    }
+}
+
+impl LgBytesOpMetrics {
+    /// Attempts to copy the given buf into an lgalloc managed file-based mapped
+    /// region, falling back to a heap allocation.
+    pub fn try_mmap<T: AsRef<[u8]>>(&self, buf: T) -> LgBytes {
+        let region = self.try_mmap_region(buf);
+        LgBytes {
+            offset: 0,
+            region: Arc::new(region),
         }
     }
 
     /// Attempts to copy the given buf into an lgalloc managed file-based mapped
     /// region, falling back to a heap allocation.
-    pub fn try_mmap<T: AsRef<[u8]>>(&self, buf: T) -> LgBytes {
+    pub fn try_mmap_region<T: Copy>(&self, buf: impl AsRef<[T]>) -> MetricsRegion<T> {
         let start = Instant::now();
         let buf = buf.as_ref();
-        self.len_sizes.observe(f64::cast_lossy(buf.len()));
         // Round the capacity up to the minimum lgalloc mmap size.
         let capacity = std::cmp::max(buf.len(), 1 << lgalloc::VALID_SIZE_CLASS.start);
-        let (metrics, buf) = match Region::new_mmap(capacity) {
+        let buf = match Region::new_mmap(capacity) {
             Ok(mut region) => {
                 region.extend_from_slice(buf);
-                (&self.mmap, region)
+                region
             }
             Err(err) => {
                 match err {
@@ -244,21 +293,38 @@ impl LgBytesMetrics {
                         self.mmap_error_count.inc();
                     }
                 };
-                let region = Region::Heap(buf.as_ref().to_owned());
-                (&self.heap, region)
+                Region::Heap(buf.to_owned())
             }
         };
-        let region = Arc::new(MetricsRegion {
+        let region = self.metrics_region(buf);
+        self.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
+        region
+    }
+
+    /// Wraps the already owned buf into a [Region::Heap] with metrics.
+    ///
+    /// Besides metrics, this is essentially a no-op.
+    pub fn heap_region<T: Copy>(&self, buf: Vec<T>) -> MetricsRegion<T> {
+        // Intentionally don't bother incrementing alloc_seconds here.
+        self.metrics_region(Region::Heap(buf))
+    }
+
+    fn metrics_region<T: Copy>(&self, buf: Region<T>) -> MetricsRegion<T> {
+        let metrics = match buf {
+            Region::MMap(_) => &self.mmap,
+            Region::Heap(_) => &self.heap,
+        };
+        let region = MetricsRegion {
             buf,
             free_count: metrics.free_count.clone(),
             free_capacity_bytes: metrics.free_capacity_bytes.clone(),
-        });
-        let bytes = LgBytes { offset: 0, region };
+        };
         metrics.alloc_count.inc();
         metrics
             .alloc_capacity_bytes
-            .inc_by(u64::cast_from(bytes.region.buf.capacity()));
-        metrics.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
-        bytes
+            .inc_by(u64::cast_from(region.capacity_bytes()));
+        let len_bytes = region.buf.len() * std::mem::size_of::<T>();
+        self.len_sizes.observe(f64::cast_lossy(len_bytes));
+        region
     }
 }

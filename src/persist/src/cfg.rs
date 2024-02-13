@@ -28,6 +28,15 @@ use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
 
+/// Adds the full set of all mz_persist `Config`s.
+pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
+    configs
+        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_CC_SIZES)
+        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
+        .add(&crate::s3::ENABLE_S3_LGALLOC_CC_SIZES)
+        .add(&crate::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
+}
+
 /// Config for an implementation of [Blob].
 #[derive(Debug, Clone)]
 pub enum BlobConfig {
