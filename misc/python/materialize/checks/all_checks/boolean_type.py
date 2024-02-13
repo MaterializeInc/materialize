@@ -28,8 +28,6 @@ class BooleanType(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > SET statement_timeout = '240s';
-
                 > CREATE MATERIALIZED VIEW boolean_type_view1 AS
                   SELECT boolean_col, 'TRUE'::boolean AS true_col, 'FALSE'::boolean AS false_col
                   FROM boolean_type_table
@@ -38,7 +36,6 @@ class BooleanType(Check):
                 > INSERT INTO boolean_type_table SELECT * FROM boolean_type_table;
                 """,
                 """
-                > SET statement_timeout = '240s';
                 > CREATE MATERIALIZED VIEW boolean_type_view2 AS
                   SELECT boolean_col, 'TRUE'::boolean AS true_col, 'FALSE'::boolean AS false_col
                   FROM boolean_type_table

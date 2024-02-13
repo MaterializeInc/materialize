@@ -45,11 +45,9 @@ class BasicTopK(Check):
                 """
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table
                 > CREATE MATERIALIZED VIEW basic_topk_view1 AS SELECT f1, COUNT(f1) FROM basic_topk_table GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
-                > SET statement_timeout = '120s'
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;
                 """,
                 """
-                > SET statement_timeout = '120s'
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;
                 > CREATE MATERIALIZED VIEW basic_topk_view2 AS SELECT f1, COUNT(f1) FROM basic_topk_table GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;

@@ -37,7 +37,6 @@ class DoubleType(Check):
                   OR double_col IN ('+Inf', '-Inf', 'NaN')
                   OR double_col IS NULL;
 
-                > SET statement_timeout = '60s'
                 > INSERT INTO double_type_table SELECT * FROM double_type_table;
                 """,
                 """
@@ -49,7 +48,6 @@ class DoubleType(Check):
                   OR double_col IN ('+Inf', '-Inf', 'NaN')
                   OR double_col IS NULL
 
-                > SET statement_timeout = '60s'
                 > INSERT INTO double_type_table SELECT * FROM double_type_table;
                 """,
             ]
