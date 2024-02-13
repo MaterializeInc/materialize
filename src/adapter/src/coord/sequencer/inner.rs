@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use futures::future::BoxFuture;
+use futures::future::{self, BoxFuture};
 use itertools::Itertools;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::CompactionWindow;
@@ -1759,7 +1759,7 @@ impl Coordinator {
         ),
         AdapterError,
     > {
-        let txn = self.clear_transaction(session);
+        let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
@@ -1801,22 +1801,33 @@ impl Coordinator {
         Ok((None, None))
     }
 
-    pub(super) fn sequence_side_effecting_func(
+    pub(super) async fn sequence_side_effecting_func(
         &mut self,
+        ctx: ExecuteContext,
         plan: SideEffectingFunc,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                if ctx.session().conn_id().unhandled() == connection_id {
+                    // As a special case, if we're canceling ourselves, we send
+                    // back a canceled resposne to the client issuing the query,
+                    // and so we need to do no further processing of the cancel.
+                    ctx.retire(Ok(ExecuteResponse::SendingRows {
+                        future: Box::pin(future::ready(PeekResponseUnary::Canceled)),
+                    }));
+                    return;
+                }
+
                 let res = if let Some((id_handle, _conn_meta)) =
                     self.active_conns.get_key_value(&connection_id)
                 {
                     // check_plan already verified role membership.
-                    self.handle_privileged_cancel(id_handle.clone());
+                    self.handle_privileged_cancel(id_handle.clone()).await;
                     Datum::True
                 } else {
                     Datum::False
                 };
-                Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[res])]))
+                ctx.retire(Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[res])])));
             }
         }
     }
@@ -2533,7 +2544,7 @@ impl Coordinator {
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
                             // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
-                            let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
+                            let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
                                 conn_id: ctx.session().conn_id().clone(),
                             });
                             if let Err(e) = result {

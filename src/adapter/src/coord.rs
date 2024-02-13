@@ -134,14 +134,14 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{debug, info, info_span, instrument, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
-use crate::command::{Canceled, Command, ExecuteResponse};
+use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::catalog_oracle::CatalogTimestampPersistence;
@@ -214,7 +214,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ),
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
-    RemovePendingPeeks {
+    CancelPendingPeeks {
         conn_id: ConnectionId,
     },
     LinearizeReads,
@@ -294,7 +294,7 @@ impl Message {
             Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
-            Message::RemovePendingPeeks { .. } => "remove_pending_peeks",
+            Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
@@ -838,13 +838,6 @@ pub struct ReplicaMetadata {
 /// Metadata about an active connection.
 #[derive(Debug)]
 pub struct ConnMeta {
-    /// A watch channel shared with the client to inform the client of
-    /// cancellation requests. The coordinator sets the contained value to
-    /// `Canceled::Canceled` whenever it receives a cancellation request that
-    /// targets this connection. It is the client's responsibility to check this
-    /// value when appropriate and to reset the value to
-    /// `Canceled::NotCanceled` before starting a new operation.
-    cancel_tx: Arc<watch::Sender<Canceled>>,
     /// Pgwire specifies that every connection have a 32-bit secret associated
     /// with it, that is known to both the client and the server. Cancellation
     /// requests are required to authenticate with the secret of the connection
@@ -859,7 +852,7 @@ pub struct ConnMeta {
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
-    drop_sinks: Vec<ComputeSinkId>,
+    drop_sinks: BTreeSet<ComputeSinkId>,
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,

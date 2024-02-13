@@ -38,7 +38,7 @@ pub struct ActiveSubscribe {
     /// Channel to send responses to the client.
     ///
     /// The responses have the form `PeekResponseUnary` but should perhaps become `TailResponse`.
-    pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
+    pub channel: Option<mpsc::UnboundedSender<PeekResponseUnary>>,
     /// Whether progress information should be emitted.
     pub emit_progress: bool,
     /// As of of subscribe
@@ -51,8 +51,6 @@ pub struct ActiveSubscribe {
     pub depends_on: BTreeSet<GlobalId>,
     /// The time when the subscribe was started.
     pub start_time: EpochMillis,
-    /// Whether we are already in the process of dropping the resources related to this subscribe.
-    pub dropping: bool,
     /// How to modify output
     pub output: SubscribeOutput,
 }
@@ -87,18 +85,14 @@ impl ActiveSubscribe {
                 }
             }
 
-            let result = self.channel.send(PeekResponseUnary::Rows(vec![row_buf]));
-            if result.is_err() {
-                // TODO(benesch): we should actually drop the sink if the
-                // receiver has gone away. E.g. form a DROP SINK command?
-            }
+            self.send(PeekResponseUnary::Rows(vec![row_buf]));
         }
     }
 
-    /// Process a subscribe response
+    /// Process a subscribe response.
     ///
-    /// Returns `true` if the sink should be removed.
-    pub(crate) fn process_response(&mut self, response: SubscribeResponse) -> bool {
+    /// Returns `true` if the subscribe is finished.
+    pub(crate) fn process_response(&mut self, response: SubscribeResponse) {
         let mut row_buf = Row::default();
         match response {
             SubscribeResponse::Batch(SubscribeBatch {
@@ -293,20 +287,10 @@ impl ActiveSubscribe {
                                 row_buf.clone()
                             })
                             .collect();
-                        // TODO(benesch): the lack of backpressure here can result in
-                        // unbounded memory usage.
-                        let result = self.channel.send(PeekResponseUnary::Rows(rows));
-                        if result.is_err() {
-                            // TODO(benesch): we should actually drop the sink if the
-                            // receiver has gone away. E.g. form a DROP SINK command?
-                        }
+                        self.send(PeekResponseUnary::Rows(rows));
                     }
                     Err(text) => {
-                        let result = self.channel.send(PeekResponseUnary::Error(text));
-                        if result.is_err() {
-                            // TODO(benesch): we should actually drop the sink if the
-                            // receiver has gone away. E.g. form a DROP SINK command?
-                        }
+                        self.send(PeekResponseUnary::Error(text));
                     }
                 }
                 // Emit progress message if requested. Don't emit progress for the first batch if the upper
@@ -315,12 +299,39 @@ impl ActiveSubscribe {
                 if !upper.less_equal(&self.as_of) {
                     self.send_progress_message(&upper);
                 }
-                upper.is_empty()
+                if upper.is_empty() {
+                    // The subscribe has completed. Drop the channel so that the
+                    // client knows there are no further responses coming.
+                    self.channel = None;
+                }
             }
-            SubscribeResponse::DroppedAt(_frontier) => {
-                // TODO: Could perhaps do this earlier, in response to DROP SINK.
-                true
+            SubscribeResponse::DroppedAt(_) => {
+                // The subscribe has completed. Drop the channel so that the
+                // client knows there are no further responses coming.
+                self.channel = None;
             }
         }
     }
+
+    /// Sends a message to the client if the subscribe has not already completed
+    /// and if the client has not already gone away.
+    pub fn send(&self, response: PeekResponseUnary) {
+        if let Some(channel) = &self.channel {
+            // TODO(benesch): the lack of backpressure here can result in
+            // unbounded memory usage.
+            let _ = channel.send(response);
+        }
+    }
+}
+
+/// The reason for removing an [`ActiveSubscribe`].
+#[derive(Debug, Clone)]
+pub enum SubscribeRemovalReason {
+    /// The subscribe completed successfully.
+    Finished,
+    /// The subscribe was canceled due to a user request.
+    Canceled,
+    /// The subscribe was forcibly terminated because an object it depended on
+    /// was dropped.
+    DependencyDropped(String),
 }

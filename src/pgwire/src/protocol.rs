@@ -497,7 +497,6 @@ where
 
         self.adapter_client
             .remove_idle_in_transaction_session_timeout();
-        self.adapter_client.reset_canceled();
 
         // NOTE(guswynn): we could consider adding spans to all message types. Currently
         // only a few message types seem useful.
@@ -1359,9 +1358,8 @@ where
     where
         'p: 's,
     {
-        // Do not include self.adapter_client.canceled() here because cancel messages
-        // will propagate through the PeekResponse. select is safe to use because if
-        // close finishes, rows is canceled, which is the intended behavior.
+        // select is safe to use because if close finishes, rows is canceled,
+        // which is the intended behavior.
         let span = tracing::debug_span!(parent: parent, "row_future_to_stream");
         async move {
             loop {
@@ -1794,16 +1792,13 @@ where
 
         // Send rows while the client still wants them and there are still rows to send.
         loop {
-            // Fetch next batch of rows, waiting for a possible requested timeout or
-            // cancellation.
-            let batch = if self.adapter_client.canceled().now_or_never().is_some() {
-                FetchResult::Canceled
-            } else if rows.current.is_some() {
+            // Fetch next batch of rows, waiting for a possible requested
+            // timeout or notice.
+            let batch = if rows.current.is_some() {
                 FetchResult::Rows(rows.current.take())
             } else if want_rows == 0 {
                 FetchResult::Rows(None)
             } else {
-                let cancel_fut = self.adapter_client.canceled();
                 let notice_fut = self.adapter_client.session().recv_notice();
                 tokio::select! {
                     err = self.conn.wait_closed() => return Err(err),
@@ -1811,7 +1806,6 @@ where
                     notice = notice_fut => {
                         FetchResult::Notice(notice)
                     }
-                    _ = cancel_fut => FetchResult::Canceled,
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
@@ -1988,14 +1982,6 @@ where
         loop {
             tokio::select! {
                 e = self.conn.wait_closed() => return Err(e),
-                _ = self.adapter_client.canceled() => {
-                    return self
-                        .error(ErrorResponse::error(
-                            SqlState::QUERY_CANCELED,
-                            "canceling statement due to user request",
-                        ))
-                    .await.map(|state| (state, SendRowsEndedReason::Canceled));
-                },
                 batch = stream.recv() => match batch {
                     None => break,
                     Some(PeekResponseUnary::Error(text)) => {

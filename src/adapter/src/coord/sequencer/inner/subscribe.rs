@@ -22,7 +22,7 @@ use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
 use crate::subscribe::ActiveSubscribe;
-use crate::util::{ComputeSinkId, ResultExt};
+use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
 #[async_trait::async_trait(?Send)]
@@ -293,7 +293,7 @@ impl Coordinator {
         let active_subscribe = ActiveSubscribe {
             user: ctx.session().user().clone(),
             conn_id: ctx.session().conn_id().clone(),
-            channel: tx,
+            channel: Some(tx),
             emit_progress,
             as_of: global_lir_plan
                 .as_of()
@@ -302,7 +302,6 @@ impl Coordinator {
             cluster_id,
             depends_on: validity.dependency_ids,
             start_time: self.now(),
-            dropping: false,
             output,
         };
         active_subscribe.initialize();
@@ -326,15 +325,6 @@ impl Coordinator {
                 .set_subscribe_target_replica(cluster_id, sink_id, target)
                 .unwrap_or_terminate("cannot fail to set subscribe target replica");
         }
-
-        self.active_conns
-            .get_mut(ctx.session().conn_id())
-            .expect("must exist for active sessions")
-            .drop_sinks
-            .push(ComputeSinkId {
-                cluster_id,
-                global_id: sink_id,
-            });
 
         let resp = ExecuteResponse::Subscribing {
             rx,

@@ -22,9 +22,9 @@ use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
-use crate::subscribe::ActiveSubscribe;
-use crate::util::describe;
-use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
+use crate::subscribe::{ActiveSubscribe, SubscribeRemovalReason};
+use crate::util::{describe, ComputeSinkId};
+use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse, PeekResponseUnary};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
@@ -190,22 +190,18 @@ impl Coordinator {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    pub(crate) fn clear_transaction(
+    pub(crate) async fn clear_transaction(
         &mut self,
         session: &mut Session,
     ) -> TransactionStatus<mz_repr::Timestamp> {
-        self.clear_connection(session.conn_id());
+        self.clear_connection(session.conn_id()).await;
         session.clear_transaction()
     }
 
     /// Clears coordinator state for a connection.
-    pub(crate) fn clear_connection(&mut self, conn_id: &ConnectionId) {
-        let conn_meta = self
-            .active_conns
-            .get_mut(conn_id)
-            .expect("must exist for active session");
-        let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
-        self.drop_compute_sinks(drop_sinks);
+    pub(crate) async fn clear_connection(&mut self, conn_id: &ConnectionId) {
+        self.remove_active_subscribes(conn_id, SubscribeRemovalReason::Finished)
+            .await;
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_read_holds.remove(conn_id) {
@@ -232,14 +228,53 @@ impl Coordinator {
             .with_label_values(&[session_type])
             .inc();
 
+        self.active_conns
+            .get_mut(&active_subscribe.conn_id)
+            .expect("must exist for active sessions")
+            .drop_sinks
+            .insert(ComputeSinkId {
+                cluster_id: active_subscribe.cluster_id,
+                global_id: id,
+            });
+
         self.active_subscribes.insert(id, active_subscribe);
 
         builtin_update_notify
     }
 
+    /// Cancel all outstanding subscribes for the identified connection.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn cancel_active_subscribes(&mut self, conn_id: &ConnectionId) {
+        self.remove_active_subscribes(conn_id, SubscribeRemovalReason::Canceled)
+            .await
+    }
+
+    /// Remove all outstanding subscribes for the identified connection with
+    /// the specified reason.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn remove_active_subscribes(
+        &mut self,
+        conn_id: &ConnectionId,
+        reason: SubscribeRemovalReason,
+    ) {
+        let drop_sinks = self
+            .active_conns
+            .get_mut(conn_id)
+            .expect("must exist for active session")
+            .drop_sinks
+            .iter()
+            .map(|sink_id| (*sink_id, reason.clone()))
+            .collect::<Vec<_>>();
+        self.drop_compute_sinks(drop_sinks).await;
+    }
+
     /// Handle removing metadata associated with a SUBSCRIBE query.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_active_subscribe(&mut self, id: GlobalId) {
+    pub(crate) async fn remove_active_subscribe(
+        &mut self,
+        id: GlobalId,
+        reason: SubscribeRemovalReason,
+    ) {
         if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
             let update = self
                 .catalog()
@@ -252,7 +287,24 @@ impl Coordinator {
                 .active_subscribes
                 .with_label_values(&[session_type])
                 .dec();
+
+            self.active_conns
+                .get_mut(&active_subscribe.conn_id)
+                .expect("must exist for active subscribe")
+                .drop_sinks
+                .remove(&ComputeSinkId {
+                    cluster_id: active_subscribe.cluster_id,
+                    global_id: id,
+                });
+
+            let message = match reason {
+                SubscribeRemovalReason::Finished => return,
+                SubscribeRemovalReason::Canceled => PeekResponseUnary::Canceled,
+                SubscribeRemovalReason::DependencyDropped(d) => PeekResponseUnary::Error(format!(
+                    "subscribe has been terminated because underlying {d} was dropped"
+                )),
+            };
+            active_subscribe.send(message);
         }
-        // Note: Drop sinks are removed at commit time.
     }
 }

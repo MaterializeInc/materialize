@@ -19,7 +19,6 @@ use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -47,15 +46,14 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug_span, instrument, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::{
-    Canceled, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
+    CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
-use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -79,7 +77,6 @@ impl Coordinator {
             }
             match cmd {
                 Command::Startup {
-                    cancel_tx,
                     tx,
                     user,
                     conn_id,
@@ -91,7 +88,6 @@ impl Coordinator {
                     // Note: We purposefully do not use a ClientTransmitter here because startup
                     // handles errors and cleanup of sessions itself.
                     self.handle_startup(
-                        cancel_tx,
                         tx,
                         user,
                         conn_id,
@@ -121,11 +117,11 @@ impl Coordinator {
                     conn_id,
                     secret_key,
                 } => {
-                    self.handle_cancel(conn_id, secret_key);
+                    self.handle_cancel(conn_id, secret_key).await;
                 }
 
                 Command::PrivilegedCancelRequest { conn_id } => {
-                    self.handle_privileged_cancel(conn_id);
+                    self.handle_privileged_cancel(conn_id).await;
                 }
 
                 Command::GetWebhook {
@@ -227,10 +223,9 @@ impl Coordinator {
         .boxed_local()
     }
 
-    #[tracing::instrument(level = "debug", skip(self, cancel_tx, tx, secret_key, notice_tx))]
+    #[tracing::instrument(level = "debug", skip(self, tx, secret_key, notice_tx))]
     async fn handle_startup(
         &mut self,
-        cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         user: User,
         conn_id: ConnectionId,
@@ -275,10 +270,9 @@ impl Coordinator {
                     .with_label_values(&[session_type])
                     .inc();
                 let conn = ConnMeta {
-                    cancel_tx,
                     secret_key,
                     notice_tx,
-                    drop_sinks: Vec::new(),
+                    drop_sinks: BTreeSet::new(),
                     connected_at: self.now(),
                     user,
                     application_name,
@@ -856,7 +850,7 @@ impl Coordinator {
     /// `ConnectionId` because this method gets called by external clients when
     /// they request to cancel a request.
     #[tracing::instrument(level = "debug", skip(self, secret_key))]
-    fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
+    async fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         if let Some((id_handle, conn_meta)) = self.active_conns.get_key_value(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -868,84 +862,64 @@ impl Coordinator {
             // Now that we've verified the secret key, this is a privileged
             // cancellation request. We can upgrade the raw connection ID to a
             // proper `IdHandle`.
-            self.handle_privileged_cancel(id_handle.clone())
+            self.handle_privileged_cancel(id_handle.clone()).await;
         }
     }
 
     /// Unconditionally instructs the dataflow layer to cancel any ongoing,
     /// interactive work for the named `conn_id`.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
-        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
-            // Cancel pending writes. There is at most one pending write per session.
-            let mut maybe_ctx = None;
-            if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
-                matches!(pending_write_txn, PendingWriteTxn::User {
-                    pending_txn: PendingTxn { ctx, .. },
-                    ..
-                } if *ctx.session().conn_id() == conn_id)
-            }) {
-                if let PendingWriteTxn::User {
-                    pending_txn: PendingTxn { ctx, .. },
-                    ..
-                } = self.pending_writes.remove(idx)
-                {
-                    maybe_ctx = Some(ctx);
-                }
-            }
-
-            // Cancel deferred writes. There is at most one deferred write per session.
-            if let Some(idx) = self
-                .write_lock_wait_group
-                .iter()
-                .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.ctx.session().conn_id() == conn_id))
+    pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
+        // Cancel pending writes. There is at most one pending write per session.
+        let mut maybe_ctx = None;
+        if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
+            matches!(pending_write_txn, PendingWriteTxn::User {
+                pending_txn: PendingTxn { ctx, .. },
+                ..
+            } if *ctx.session().conn_id() == conn_id)
+        }) {
+            if let PendingWriteTxn::User {
+                pending_txn: PendingTxn { ctx, .. },
+                ..
+            } = self.pending_writes.remove(idx)
             {
-                let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
-                if let Deferred::Plan(ready) = ready {
-                    maybe_ctx = Some(ready.ctx);
-                }
-            }
-
-            // Cancel commands waiting on a real time recency timestamp. There is at most one  per session.
-            if let Some(real_time_recency_context) =
-                self.pending_real_time_recency_timestamp.remove(&conn_id)
-            {
-                let ctx = real_time_recency_context.take_context();
                 maybe_ctx = Some(ctx);
-            }
-
-            // Cancel reads waiting on being linearized. There is at most one linearized read per
-            // session.
-            if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
-                let ctx = pending_read_txn.take_context();
-                maybe_ctx = Some(ctx);
-            }
-
-            if let Some(ctx) = maybe_ctx {
-                ctx.retire(Err(AdapterError::Canceled));
-            }
-
-            // Inform the target session (if it asks) about the cancellation.
-            let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
-
-            for PendingPeek {
-                sender: rows_tx,
-                conn_id: _,
-                cluster_id: _,
-                depends_on: _,
-                // We take responsibility for retiring the
-                // peek in `self.cancel_pending_peeks`,
-                // so we don't need to do anything with `ctx_extra` here.
-                ctx_extra: _,
-                is_fast_path: _,
-            } in self.cancel_pending_peeks(&conn_id)
-            {
-                // Cancel messages can be sent after the connection has hung
-                // up, but before the connection's state has been cleaned up.
-                // So we ignore errors when sending the response.
-                let _ = rows_tx.send(PeekResponse::Canceled);
             }
         }
+
+        // Cancel deferred writes. There is at most one deferred write per session.
+        if let Some(idx) = self
+            .write_lock_wait_group
+            .iter()
+            .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.ctx.session().conn_id() == conn_id))
+        {
+            let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
+            if let Deferred::Plan(ready) = ready {
+                maybe_ctx = Some(ready.ctx);
+            }
+        }
+
+        // Cancel commands waiting on a real time recency timestamp. There is at most one  per session.
+        if let Some(real_time_recency_context) =
+            self.pending_real_time_recency_timestamp.remove(&conn_id)
+        {
+            let ctx = real_time_recency_context.take_context();
+            maybe_ctx = Some(ctx);
+        }
+
+        // Cancel reads waiting on being linearized. There is at most one linearized read per
+        // session.
+        if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
+            let ctx = pending_read_txn.take_context();
+            maybe_ctx = Some(ctx);
+        }
+
+        if let Some(ctx) = maybe_ctx {
+            ctx.retire(Err(AdapterError::Canceled));
+        }
+
+        self.cancel_pending_peeks(&conn_id);
+        self.cancel_active_subscribes(&conn_id).await;
     }
 
     /// Handle termination of a client session.
@@ -963,7 +937,7 @@ impl Coordinator {
 
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
-        self.clear_connection(&conn_id);
+        self.clear_connection(&conn_id).await;
 
         self.drop_temp_items(&conn_id).await;
         self.catalog_mut()

@@ -129,6 +129,7 @@ class FetchAction(Action):
             result.extend(
                 [
                     "does not exist",
+                    "subscribe has been terminated because underlying relation",
                 ]
             )
         return result
