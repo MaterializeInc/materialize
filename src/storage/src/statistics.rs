@@ -37,6 +37,7 @@ pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) bytes_received: IntCounterVec,
     pub(crate) envelope_state_bytes: UIntGaugeVec,
     pub(crate) envelope_state_records: UIntGaugeVec,
+    pub(crate) envelope_state_tombstones: UIntGaugeVec,
     pub(crate) rehydration_latency_ms: IntGaugeVec,
 
     // statistics that are not yet exposed to users.
@@ -82,6 +83,11 @@ impl SourceStatisticsMetricDefs {
                 help: "The number of records in the source envelope state. This will be specific to the envelope in use",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
+            envelope_state_tombstones: registry.register(metric!(
+                name: "mz_source_envelope_state_tombstones",
+                help: "The number of outstanding tombstones in the source envelope state. This will be specific to the envelope in use",
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+            )),
             rehydration_latency_ms: registry.register(metric!(
                 name: "mz_source_rehydration_latency_ms",
                 help: "The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.",
@@ -111,6 +117,7 @@ pub struct SourceStatisticsMetrics {
     pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) envelope_state_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_tombstones: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
 
     // statistics that are not yet exposed to users.
@@ -175,6 +182,14 @@ impl SourceStatisticsMetrics {
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
+            envelope_state_tombstones: defs.envelope_state_tombstones.get_delete_on_drop_gauge(
+                vec![
+                    id.to_string(),
+                    worker_id.to_string(),
+                    parent_source_id.to_string(),
+                    shard.clone(),
+                ],
+            ),
             rehydration_latency_ms: defs.rehydration_latency_ms.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
@@ -357,6 +372,7 @@ impl SourceStatistics {
                     bytes_received: 0,
                     envelope_state_bytes: 0,
                     envelope_state_records: 0,
+                    envelope_state_tombstones: 0,
                     rehydration_latency_ms: None,
                 },
                 SourceStatisticsMetrics::new(
@@ -487,6 +503,26 @@ impl SourceStatistics {
         };
         cur.1.envelope_state_records = value;
         cur.2.envelope_state_records.set(value);
+    }
+
+    /// Update the `envelope_state_tombstones` stat.
+    /// A positive value will add and a negative value will subtract.
+    // TODO(guswynn): consider exposing this to users
+    pub fn update_envelope_state_tombstones_by(&self, value: i64) {
+        let mut cur = self.stats.borrow_mut();
+        if let Some(updated) = cur.1.envelope_state_tombstones.checked_add_signed(value) {
+            cur.1.envelope_state_tombstones = updated;
+            cur.2.envelope_state_tombstones.set(updated);
+        } else {
+            let envelope_state_tombstones = cur.1.envelope_state_tombstones;
+            tracing::warn!(
+                "Unexpected u64 overflow while updating envelope_state_tombstones value {} with {}",
+                envelope_state_tombstones,
+                value
+            );
+            cur.1.envelope_state_tombstones = 0;
+            cur.2.envelope_state_tombstones.set(0);
+        }
     }
 
     /// Set the `rehydration_latency_ms` stat based on the reported upper.

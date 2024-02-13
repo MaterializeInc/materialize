@@ -305,6 +305,8 @@ pub struct SourceStatisticsUpdate {
     pub updates_committed: u64,
     pub envelope_state_bytes: u64,
     pub envelope_state_records: u64,
+    // Currently not exposed to users.
+    pub envelope_state_tombstones: u64,
     pub rehydration_latency_ms: Option<i64>,
 }
 
@@ -641,6 +643,9 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             bytes_received: update.bytes_received,
                             envelope_state_bytes: update.envelope_state_bytes,
                             envelope_state_records: update.envelope_state_records,
+                            // Not currently exposed to users, so no need to communicate it to the
+                            // controller.
+                            envelope_state_tombstones: 0,
                             rehydration_latency_ms: update.rehydration_latency_ms,
                         })
                     })
