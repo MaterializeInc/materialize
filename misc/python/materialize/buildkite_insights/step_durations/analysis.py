@@ -10,16 +10,17 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
-from materialize import MZ_ROOT
 from materialize.buildkite_insights.util import buildkite_api
 from materialize.buildkite_insights.util.data_io import (
+    ensure_temp_dir_exists,
+    exists_file_with_recent_data,
+    get_file_path,
     read_results_from_file,
     write_results_to_file,
 )
@@ -27,6 +28,10 @@ from materialize.buildkite_insights.util.data_io import (
 OUTPUT_TYPE_TXT = "txt"
 OUTPUT_TYPE_TXT_SHORT = "txt-short"
 OUTPUT_TYPE_CSV = "csv"
+
+FETCH_MODE_NO = "no"
+FETCH_MODE_YES = "yes"
+FETCH_MODE_AUTO = "auto"
 
 BUILDKITE_BUILD_STATES = [
     "running",
@@ -58,8 +63,6 @@ MZ_PIPELINES = [
     "www",
 ]
 
-PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
-
 
 @dataclass
 class StepData:
@@ -70,35 +73,28 @@ class StepData:
     passed: bool
 
 
-def get_file_name(pipeline_slug: str) -> str:
-    return f"{PATH_TO_TEMP_DIR}/{pipeline_slug}_builds.json"
-
-
-def ensure_temp_dir_exists() -> None:
-    subprocess.run(
-        [
-            "mkdir",
-            "-p",
-            f"{PATH_TO_TEMP_DIR}",
-        ],
-        check=True,
-    )
-
-
 def get_data(
     pipeline_slug: str,
-    no_fetch: bool,
+    fetch_mode: str,
     max_fetches: int | None,
     branch: str | None,
     build_state: str | None,
+    items_per_page: int = 100,
 ) -> list[Any]:
     ensure_temp_dir_exists()
 
+    file_path = get_file_path(pipeline_slug, branch, build_state)
+    no_fetch = fetch_mode == FETCH_MODE_NO
+
+    if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(file_path):
+        no_fetch = True
+
     if no_fetch:
-        return read_results_from_file(get_file_name(pipeline_slug))
+        print(f"Using existing data: {file_path}")
+        return read_results_from_file(file_path)
 
     request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
-    params = {"include_retried_jobs": "true", "per_page": "100"}
+    params = {"include_retried_jobs": "true", "per_page": str(items_per_page)}
 
     if branch is not None:
         params["branch"] = branch
@@ -107,7 +103,7 @@ def get_data(
         params["state"] = build_state
 
     result = buildkite_api.get(request_path, params, max_fetches=max_fetches)
-    write_results_to_file(result, get_file_name(pipeline_slug))
+    write_results_to_file(result, file_path)
     return result
 
 
@@ -232,13 +228,13 @@ def print_stats(
 def main(
     pipeline_slug: str,
     build_step_keys: list[str],
-    no_fetch: bool,
+    fetch_mode: str,
     max_fetches: int | None,
     branch: str | None,
     build_state: str | None,
     output_type: str,
 ) -> None:
-    data = get_data(pipeline_slug, no_fetch, max_fetches, branch, build_state)
+    data = get_data(pipeline_slug, fetch_mode, max_fetches, branch, build_state)
     step_infos = collect_data(data, build_step_keys)
     print_data(step_infos, pipeline_slug, build_step_keys, output_type)
 
@@ -252,9 +248,11 @@ if __name__ == "__main__":
     parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
     parser.add_argument("--build-step-key", action="append", type=str)
     parser.add_argument(
-        "--no-fetch",
-        action="store_true",
-        help="The data of a previous fetch of the specified pipeline will be used. Note that filters such as 'branch' and 'build-state' are applied at fetch-time.",
+        "--fetch",
+        choices=[FETCH_MODE_AUTO, FETCH_MODE_NO, FETCH_MODE_YES],
+        default=FETCH_MODE_AUTO,
+        type=str,
+        help="Whether to fetch new data from Buildkite or reuse previously fetched, matching data.",
     )
     parser.add_argument("--max-fetches", default=2, type=int)
     parser.add_argument(
@@ -277,7 +275,7 @@ if __name__ == "__main__":
     main(
         args.pipeline,
         args.build_step_key,
-        args.no_fetch,
+        args.fetch,
         args.max_fetches,
         args.branch if args.branch != "*" else None,
         args.build_state,
