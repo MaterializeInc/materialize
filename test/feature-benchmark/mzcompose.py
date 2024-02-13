@@ -227,14 +227,16 @@ def start_overridden_mz_and_cockroach(
     c: Composition, mz: Materialized, instance: str
 ) -> None:
     with c.override(mz):
-        print(f"The version of the '{instance.upper()}' Mz instance is:")
-        c.run(
+        version_request_command = c.run(
             "materialized",
             "-c",
             "environmentd --version | grep environmentd",
             entrypoint="bash",
             rm=True,
+            capture=True,
         )
+        version = version_request_command.stdout.strip()
+        print(f"The version of the '{instance.upper()}' Mz instance is: {version}")
 
         c.up("cockroach", "materialized")
 
