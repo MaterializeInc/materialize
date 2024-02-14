@@ -45,10 +45,12 @@ function escapeIdent(s) {
 }
 
 function isDate(value) {
-    if (Date.parse(value)) {
-        return true;
+    var dateParsed = new Date(Date.parse(value));
+    if (isNaN(dateParsed.getTime())) {
+        return false;
     }
-    return false;
+    var isoString = dateParsed.toISOString();
+    return isoString === value;
 }
 
 /* JSON Parsing and SQL conversion */
@@ -81,28 +83,61 @@ function handleJson(source, sample, columnName) {
 /// of parent fields for later use in naming and desctructuring.
 function expandObject(object, parents, columns) {
     if (Array.isArray(object)) {
-        if (object.length === 0) {
-            // Handle empty arrays specifically
-            const columnName = parents.join("_");
-            // Column name without redundant name appending
-            const columnAlias = parents.slice(1).join("_");
-            columns.push([columnAlias, "", "text", parents, true, "''"]);
-        } else {
-            object.forEach((item, index) => {
-                const newParents = parents.concat(index.toString());
-                expandObject(item, newParents, columns);
-            });
-        }
-    } else if (typeof object === 'object' && object !== null) {
-        Object.entries(object).forEach(([key, value]) => {
-            const newParents = parents.concat(key);
-            expandObject(value, newParents, columns);
-        });
+        handleArray(object, parents, columns);
+    } else if (isObject(object)) {
+        handleObject(object, parents, columns);
     } else {
-        /// Primitive value handling
-        const { cast, wrapping_function, isNull } = determineCast(object);
-        columns.push([parents.slice(-1)[0], wrapping_function, cast, parents, isNull]);
+        handlePrimitive(object, parents, columns);
     }
+}
+
+/// Handles arrays within the JSON structure, including empty arrays.
+function handleArray(array, parents, columns) {
+    if (array.length === 0) {
+        // Specifically handles empty arrays to add placeholder values rather than skipping them.
+        handleEmptyArray(parents, columns);
+    } else {
+        // For non-empty arrays, iterate over each item, expanding it.
+        array.forEach((item, index) => {
+            const newParents = parents.concat(index.toString());
+            expandObject(item, newParents, columns);
+        });
+    }
+}
+
+/// Handles objects by iterating over each property and recursively expanding it.
+function handleObject(obj, parents, columns) {
+    Object.entries(obj).forEach(([key, value]) => {
+        const newParents = parents.concat(key);
+        expandObject(value, newParents, columns);
+    });
+}
+
+// Handles primitive values by determining their SQL data type and adding them to the columns list.
+function handlePrimitive(value, parents, columns) {
+    // Determines the appropriate SQL cast and function wrapper for the value.
+    const { cast, wrapping_function, isNull } = determineCast(value);
+    // Uses the last part of the path as the column name.
+    const columnName = parents.slice(-1)[0];
+    // Generates an alias for the column based on its path, excluding the root.
+    const columnAlias = parents.slice(1).join("_");
+    // Adds the column definition to the list of columns.
+    columns.push([columnName, wrapping_function, cast, parents, isNull, value]);
+}
+
+/// Handles the specific case of an empty array by adding a placeholder column definition.
+function handleEmptyArray(parents, columns) {
+    // Generates a column name and alias based on the path to the empty array.
+    const columnName = parents.join("_");
+    const columnAlias = parents.slice(1).join("_");
+    // Adds a placeholder column for the empty array.
+    columns.push([columnAlias, "", "text", parents, true, "''"]);
+}
+
+/// Utility function to check if a given value is an object.
+function isObject(value) {
+    // Returns true if the value is an object and not null.
+    return typeof value === 'object' && value !== null;
 }
 
 function formSql(selectItems, viewName, sourceName, objectType, columnName) {
