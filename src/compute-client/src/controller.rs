@@ -82,12 +82,18 @@ pub enum ComputeControllerResponse<T> {
     /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// See [`ComputeResponse::FrontierUpper`]
-    FrontierUpper { id: GlobalId, upper: Antichain<T> },
+    FrontierUpper {
+        /// TODO(#25239): Add documentation.
+        id: GlobalId,
+        /// TODO(#25239): Add documentation.
+        upper: Antichain<T>,
+    },
 }
 
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComputeReplicaConfig {
+    /// TODO(#25239): Add documentation.
     pub logging: ComputeReplicaLogging,
     /// The amount of effort to be spent on arrangement compaction during idle times.
     ///
@@ -188,6 +194,7 @@ impl<T: Timestamp> ComputeController<T> {
         }
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
         self.instances.contains_key(&id)
     }
@@ -223,6 +230,7 @@ impl<T: Timestamp> ComputeController<T> {
         Ok(collection)
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn find_collection(
         &self,
         collection_id: GlobalId,
@@ -256,18 +264,22 @@ impl<T: Timestamp> ComputeController<T> {
             .collection_reverse_dependencies(id))
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
         self.default_idle_arrangement_merge_effort = value;
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
         self.default_arrangement_exert_proportionality = value;
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn enable_aggressive_readhold_downgrades(&self) -> bool {
         self.enable_aggressive_readhold_downgrades
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn set_enable_aggressive_readhold_downgrades(&mut self, value: bool) {
         self.enable_aggressive_readhold_downgrades = value;
     }
@@ -443,6 +455,7 @@ pub struct ActiveComputeController<'a, T> {
 }
 
 impl<T: Timestamp> ActiveComputeController<'_, T> {
+    /// TODO(#25239): Add documentation.
     pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
         self.compute.instance_exists(id)
     }
@@ -822,6 +835,7 @@ impl<T: Timestamp> CollectionState<T> {
         }
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn new_log_collection() -> Self {
         let since = Antichain::from_elem(Timestamp::minimum());
         let mut state = Self::new(since, Vec::new(), Vec::new());

@@ -13,7 +13,9 @@ fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
     let mut config = prost_build::Config::new();
-    config.btree_map(["."]);
+    config
+        .btree_map(["."])
+        .type_attribute(".", "#[allow(missing_docs)]");
 
     tonic_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when

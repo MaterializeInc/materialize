@@ -48,14 +48,17 @@ use crate::plan::{AvailableCollections, GetPlan, Plan};
 ///
 /// TODO(#24943): align this with the `Plan` structure
 pub trait Interpreter<T = mz_repr::Timestamp> {
+    /// TODO(#25239): Add documentation.
     type Domain: Debug + Sized;
 
+    /// TODO(#25239): Add documentation.
     fn constant(
         &self,
         ctx: &Context<Self::Domain>,
         rows: &Result<Vec<(Row, T, Diff)>, EvalError>,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn get(
         &self,
         ctx: &Context<Self::Domain>,
@@ -64,6 +67,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         plan: &GetPlan,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn mfp(
         &self,
         ctx: &Context<Self::Domain>,
@@ -72,6 +76,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn flat_map(
         &self,
         ctx: &Context<Self::Domain>,
@@ -82,6 +87,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         input_key: &Option<Vec<MirScalarExpr>>,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn join(
         &self,
         ctx: &Context<Self::Domain>,
@@ -89,6 +95,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         plan: &JoinPlan,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
@@ -99,6 +106,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         mfp_after: &MapFilterProject,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn top_k(
         &self,
         ctx: &Context<Self::Domain>,
@@ -106,8 +114,10 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         top_k_plan: &TopKPlan,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn negate(&self, ctx: &Context<Self::Domain>, input: Self::Domain) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn threshold(
         &self,
         ctx: &Context<Self::Domain>,
@@ -115,6 +125,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         threshold_plan: &ThresholdPlan,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn union(
         &self,
         ctx: &Context<Self::Domain>,
@@ -122,6 +133,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         consolidate_output: bool,
     ) -> Self::Domain;
 
+    /// TODO(#25239): Add documentation.
     fn arrange_by(
         &self,
         ctx: &Context<Self::Domain>,
@@ -140,6 +152,8 @@ pub struct InterpreterContext<Domain> {
     /// Is the context recursive (i.e., is one of our ancestors a `LetRec` binding) or not.
     pub is_rec: bool,
 }
+
+/// TODO(#25239): Add documentation.
 pub type Context<Domain> = InterpreterContext<Domain>;
 
 impl<Domain> Default for InterpreterContext<Domain> {
@@ -211,6 +225,7 @@ where
     I: Interpreter<T>,
     I::Domain: BoundedLattice + Clone,
 {
+    /// TODO(#25239): Add documentation.
     pub fn new(interpreter: I) -> Self {
         Self {
             interpret: interpreter,
@@ -485,6 +500,7 @@ where
     I::Domain: BoundedLattice + Clone,
     A: FnMut(&mut Plan<T>, &I::Domain, &[I::Domain]),
 {
+    /// TODO(#25239): Add documentation.
     pub fn new(interpreter: I, action: A) -> Self {
         Self {
             interpret: interpreter,

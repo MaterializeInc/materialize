@@ -7,9 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// This appears to be defective at the moment, with false positives
-// for each variant of the `Command` enum, each of which are documented.
-// #![warn(missing_docs)]
+#![warn(missing_docs)]
 
 //! The public API for the compute layer.
 
