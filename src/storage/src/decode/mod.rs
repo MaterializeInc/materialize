@@ -67,7 +67,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
         while let Some((_, data)) = input.next() {
             data.swap(&mut vector);
             // The inputs are rows containing two columns that encode an enum, i.e only one of them
-            // is ever set and the other one is set. This is the convention we follow in our Avro
+            // is ever set while the other is unset. This is the convention we follow in our Avro
             // decoder. When the first field of the record is set then we have a data message.
             // Otherwise we have a progress message.
             for (row, _time, _diff) in vector.drain(..) {
