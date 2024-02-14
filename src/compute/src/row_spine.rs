@@ -211,7 +211,7 @@ mod container {
         /// or does not and returns false.
         fn try_push(&mut self, slice: &[u8]) -> bool {
             if self.storage.len() + slice.len() <= self.storage.capacity() {
-                self.storage.extend(slice.iter().cloned());
+                self.storage.extend_from_slice(slice);
                 self.offsets.push(self.storage.len());
                 true
             } else {
