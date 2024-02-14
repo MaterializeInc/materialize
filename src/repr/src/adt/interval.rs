@@ -110,6 +110,12 @@ pub static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
     Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64).unwrap()
 });
 
+#[derive(Debug, Clone)]
+pub enum RoundBehavior {
+    Truncate,
+    Nearest,
+}
+
 impl Interval {
     pub const CENTURY_PER_MILLENNIUM: u16 = 10;
     pub const DECADE_PER_CENTURY: u16 = 10;
@@ -432,6 +438,7 @@ impl Interval {
         &mut self,
         f: DateTimeField,
         fsec_max_precision: Option<u64>,
+        round_behavior: RoundBehavior,
     ) -> Result<(), anyhow::Error> {
         use DateTimeField::*;
         match f {
@@ -474,7 +481,6 @@ impl Interval {
                     )
                 }
 
-                // Check if value should round up to nearest fractional place.
                 let precision = match u32::try_from(precision) {
                     Ok(p) => p,
                     Err(_) => bail!(
@@ -482,13 +488,26 @@ impl Interval {
                         precision
                     ),
                 };
+                // Truncate sub-second part.
                 let remainder = self.micros % 10_i64.pow(6 - precision);
-                if u64::from(precision) != default_precision
-                    && remainder / 10_i64.pow(5 - precision) > 4
-                {
-                    self.micros += 10_i64.pow(6 - precision);
-                }
                 self.micros -= remainder;
+                // Check if value should round up/down to nearest fractional place.
+                if matches!(round_behavior, RoundBehavior::Nearest)
+                    && u64::from(precision) != default_precision
+                {
+                    let rounding_digit = remainder / 10_i64.pow(5 - precision);
+                    let micros = if rounding_digit > 4 {
+                        self.micros.checked_add(10_i64.pow(6 - precision))
+                    } else if rounding_digit < -4 {
+                        self.micros.checked_sub(10_i64.pow(6 - precision))
+                    } else {
+                        Some(self.micros)
+                    };
+                    let Some(micros) = micros else {
+                        bail!("interval field value out of range: \"{self}\"");
+                    };
+                    self.micros = micros;
+                }
             }
             Day => {
                 self.micros = 0;
@@ -1143,7 +1162,8 @@ mod test {
             let mut i = Interval::new((test.2).0, (test.2).1, (test.2).2);
             let j = Interval::new((test.3).0, (test.3).1, (test.3).2);
 
-            i.truncate_low_fields(test.0, test.1).unwrap();
+            i.truncate_low_fields(test.0, test.1, RoundBehavior::Nearest)
+                .unwrap();
 
             if i != j {
                 panic!(
