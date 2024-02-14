@@ -18,3 +18,14 @@
   GROUP BY s.name
 sink_fixed true
 sink_dynamic true
+
+$ kafka-ingest topic=thetopic format=bytes
+one
+
+# Ensure we maintain statistics even if the sink is broken.
+> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
+  FROM mz_sinks s
+  JOIN mz_internal.mz_sink_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('sink_fixed')
+  GROUP BY s.name
+sink_fixed 1 1 true true
