@@ -1003,7 +1003,7 @@ impl Coordinator {
                 });
             }
         } else if let Some((timestamp, bundle)) = potential_read_holds {
-            self.acquire_precise_read_holds_auto_cleanup(session, timestamp, bundle)
+            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle, true)
                 .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
         }
 

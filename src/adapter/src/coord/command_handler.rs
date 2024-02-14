@@ -834,7 +834,8 @@ impl Coordinator {
             }
 
             if acquire_read_holds {
-                self.acquire_read_holds_auto_cleanup(session, timestamp, &ids);
+                self.acquire_read_holds_auto_cleanup(session, timestamp, &ids, false)
+                    .expect("precise==false, so acquiring read holds always succeeds");
             }
 
             Ok(Some(timestamp))

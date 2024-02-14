@@ -388,14 +388,34 @@ impl crate::coord::Coordinator {
 
     /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
     ///
-    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then we
-    /// will acquire a read hold at the lowest possible time for that id.
+    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then
+    /// depending on the `precise` argument, we either fall back to acquiring a read hold at
+    /// the lowest possible time for that id, or return an error. The returned error contains
+    /// those collection sinces that were later than the specified time.
     pub(crate) fn acquire_read_holds(
         &mut self,
         time: Timestamp,
         id_bundle: &CollectionIdBundle,
-    ) -> ReadHolds<Timestamp> {
+        precise: bool,
+    ) -> Result<ReadHolds<Timestamp>, Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
         let read_holds = self.initialize_read_holds(time, id_bundle);
+        if precise {
+            // If we are not able to acquire read holds precisely at the specified time (only later), then error out.
+            let too_late = read_holds
+                .holds
+                .iter()
+                .filter_map(|(antichain, ids)| {
+                    if antichain.iter().all(|hold_time| *hold_time == time) {
+                        None
+                    } else {
+                        Some((antichain.clone(), ids.clone()))
+                    }
+                })
+                .collect_vec();
+            if !too_late.is_empty() {
+                return Err(too_late);
+            }
+        }
         // Update STORAGE read policies.
         let mut policy_changes = Vec::new();
         for (time, id) in read_holds.storage_ids() {
@@ -424,76 +444,25 @@ impl crate::coord::Coordinator {
                 .unwrap_or_terminate("cannot fail to set read policy");
         }
 
-        read_holds
-    }
-
-    /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
-    /// This is similar to [Self::acquire_read_holds], but if it is unable to acquire read holds at precisely
-    /// the specified time, then it errors out rather than acquiring read holds at a later time.
-    ///
-    /// The returned error contains those collection sinces that were later than the specified time.
-    pub(crate) fn acquire_precise_read_holds(
-        &mut self,
-        requested_time: Timestamp,
-        id_bundle: &CollectionIdBundle,
-    ) -> Result<ReadHolds<Timestamp>, Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
-        let read_holds = self.acquire_read_holds(requested_time, id_bundle);
-        let too_late = read_holds
-            .holds
-            .iter()
-            .filter_map(|(antichain, ids)| {
-                if antichain
-                    .iter()
-                    .all(|hold_time| *hold_time == requested_time)
-                {
-                    None
-                } else {
-                    Some((antichain.clone(), ids.clone()))
-                }
-            })
-            .collect_vec();
-        if !too_late.is_empty() {
-            self.release_read_holds(read_holds);
-            Err(too_late)
-        } else {
-            Ok(read_holds)
-        }
+        Ok(read_holds)
     }
 
     /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
     /// This is similar to [Self::acquire_read_holds], but instead of returning the read holds,
     /// it arranges for them to be automatically released at the end of the transaction.
     ///
-    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then we
-    /// will acquire a read hold at the lowest possible time for that id.
+    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then
+    /// depending on the `precise` argument, we either fall back to acquiring a read hold at
+    /// the lowest possible time for that id, or return an error. The returned error contains
+    /// those collection sinces that were later than the specified time.
     pub(crate) fn acquire_read_holds_auto_cleanup(
         &mut self,
         session: &Session,
         time: Timestamp,
         id_bundle: &CollectionIdBundle,
-    ) {
-        let read_holds = self.acquire_read_holds(time, id_bundle);
-        self.txn_read_holds
-            .entry(session.conn_id().clone())
-            .or_insert_with(Vec::new)
-            .push(read_holds);
-    }
-
-    /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
-    /// This is similar to [Self::acquire_precise_read_holds], but instead of returning the acquire
-    /// read holds, it arranges for them to be automatically released at the end of the transaction.
-    ///
-    /// Similarly to [Self::acquire_precise_read_holds], if it is unable to acquire read holds at
-    /// precisely the specified time, then it errors out.
-    ///
-    /// The returned error contains those collection sinces that were later than the specified time.
-    pub(crate) fn acquire_precise_read_holds_auto_cleanup(
-        &mut self,
-        session: &Session,
-        time: Timestamp,
-        id_bundle: &CollectionIdBundle,
+        precise: bool,
     ) -> Result<(), Vec<(Antichain<Timestamp>, CollectionIdBundle)>> {
-        let read_holds = self.acquire_precise_read_holds(time, id_bundle)?;
+        let read_holds = self.acquire_read_holds(time, id_bundle, precise)?;
         self.txn_read_holds
             .entry(session.conn_id().clone())
             .or_insert_with(Vec::new)
