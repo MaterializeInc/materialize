@@ -11,11 +11,13 @@
 //! reads and persistent storage.
 
 use std::mem::size_of;
+use std::sync::Arc;
 use std::{cmp, fmt};
 
-use arrow2::buffer::Buffer;
-use arrow2::offset::OffsetsBuffer;
 use arrow2::types::Index;
+use mz_ore::lgbytes::MetricsRegion;
+
+use crate::metrics::ColumnarMetrics;
 
 pub mod arrow;
 pub mod parquet;
@@ -84,12 +86,12 @@ const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 #[derive(Clone, PartialEq)]
 pub struct ColumnarRecords {
     len: usize,
-    key_data: Buffer<u8>,
-    key_offsets: OffsetsBuffer<i32>,
-    val_data: Buffer<u8>,
-    val_offsets: OffsetsBuffer<i32>,
-    timestamps: Buffer<i64>,
-    diffs: Buffer<i64>,
+    key_data: Arc<MetricsRegion<u8>>,
+    key_offsets: Arc<MetricsRegion<i32>>,
+    val_data: Arc<MetricsRegion<u8>>,
+    val_offsets: Arc<MetricsRegion<i32>>,
+    timestamps: Arc<MetricsRegion<i64>>,
+    diffs: Arc<MetricsRegion<i64>>,
 }
 
 impl fmt::Debug for ColumnarRecords {
@@ -108,7 +110,10 @@ impl ColumnarRecords {
     /// The number of logical bytes in the represented data, excluding offsets
     /// and lengths.
     pub fn goodbytes(&self) -> usize {
-        self.key_data.len() + self.val_data.len() + 8 * self.timestamps.len() + 8 * self.diffs.len()
+        (*self.key_data).as_ref().len()
+            + (*self.val_data).as_ref().len()
+            + 8 * (*self.timestamps).as_ref().len()
+            + 8 * (*self.diffs).as_ref().len()
     }
 
     /// Read the record at `idx`, if there is one.
@@ -127,12 +132,12 @@ impl ColumnarRecords {
         // obvious.
         ColumnarRecordsRef {
             len: self.len,
-            key_data: self.key_data.as_slice(),
-            key_offsets: self.key_offsets.as_slice(),
-            val_data: self.val_data.as_slice(),
-            val_offsets: self.val_offsets.as_slice(),
-            timestamps: self.timestamps.as_slice(),
-            diffs: self.diffs.as_slice(),
+            key_data: (*self.key_data).as_ref(),
+            key_offsets: (*self.key_offsets).as_ref(),
+            val_data: (*self.val_data).as_ref(),
+            val_offsets: (*self.val_offsets).as_ref(),
+            timestamps: (*self.timestamps).as_ref(),
+            diffs: (*self.diffs).as_ref(),
         }
     }
 
@@ -453,17 +458,18 @@ impl ColumnarRecordsBuilder {
     }
 
     /// Finalize constructing a [ColumnarRecords].
-    pub fn finish(self) -> ColumnarRecords {
+    pub fn finish(self, metrics: &ColumnarMetrics) -> ColumnarRecords {
+        // We're almost certainly going to immediately encode this and drop it,
+        // so don't bother actually copying the data into lgalloc, use the
+        // `heap_region` method instead. Revisit if that changes.
         let ret = ColumnarRecords {
             len: self.len,
-            key_data: Buffer::from(self.key_data),
-            key_offsets: OffsetsBuffer::try_from(self.key_offsets)
-                .expect("constructed valid offsets"),
-            val_data: Buffer::from(self.val_data),
-            val_offsets: OffsetsBuffer::try_from(self.val_offsets)
-                .expect("constructed valid offsets"),
-            timestamps: Buffer::from(self.timestamps),
-            diffs: Buffer::from(self.diffs),
+            key_data: Arc::new(metrics.lgbytes_arrow.heap_region(self.key_data)),
+            key_offsets: Arc::new(metrics.lgbytes_arrow.heap_region(self.key_offsets)),
+            val_data: Arc::new(metrics.lgbytes_arrow.heap_region(self.val_data)),
+            val_offsets: Arc::new(metrics.lgbytes_arrow.heap_region(self.val_offsets)),
+            timestamps: Arc::new(metrics.lgbytes_arrow.heap_region(self.timestamps)),
+            diffs: Arc::new(metrics.lgbytes_arrow.heap_region(self.diffs)),
         };
         debug_assert_eq!(ret.borrow().validate(), Ok(()));
         ret
@@ -488,10 +494,11 @@ mod tests {
     /// Most of this functionality is also well-exercised in other unit tests as well.
     #[mz_ore::test]
     fn columnar_records() {
+        let metrics = ColumnarMetrics::disconnected();
         let builder = ColumnarRecordsBuilder::default();
 
         // Empty builder.
-        let records = builder.finish();
+        let records = builder.finish(&metrics);
         let reads: Vec<_> = records.iter().collect();
         assert_eq!(reads, vec![]);
 
@@ -505,7 +512,7 @@ mod tests {
             assert!(builder.push(((key, val), u64::encode(time), i64::encode(diff))));
         }
 
-        let records = builder.finish();
+        let records = builder.finish(&metrics);
         let reads: Vec<_> = records
             .iter()
             .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), u64::decode(t), i64::decode(d)))

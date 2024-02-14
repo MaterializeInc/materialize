@@ -909,6 +909,7 @@ mod tests {
     pub async fn expect_fetch_part<K, V, T, D>(
         blob: &(dyn Blob + Send + Sync),
         key: &BlobKey,
+        metrics: &Metrics,
     ) -> (
         BlobTraceBatchPart<T>,
         Vec<((Result<K, String>, Result<V, String>), T, D)>,
@@ -924,7 +925,8 @@ mod tests {
             .await
             .expect("failed to fetch part")
             .expect("missing part");
-        let part = BlobTraceBatchPart::decode(&value).expect("failed to decode part");
+        let part =
+            BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
         let mut updates = Vec::new();
         for chunk in part.updates.iter() {
             for ((k, v), t, d) in chunk.iter() {

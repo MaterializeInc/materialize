@@ -329,15 +329,13 @@ impl S3Blob {
     }
 }
 
-/// The `persist_enable_s3_lgalloc_cc_sizes` config.
-pub const ENABLE_S3_LGALLOC_CC_SIZES: Config<bool> = Config::new(
+pub(crate) const ENABLE_S3_LGALLOC_CC_SIZES: Config<bool> = Config::new(
     "persist_enable_s3_lgalloc_cc_sizes",
     true,
     "An incident flag to disable copying fetched s3 data into lgalloc on cc sized clusters.",
 );
 
-/// The `persist_enable_s3_lgalloc_noncc_sizes` config.
-pub const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
+pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "persist_enable_s3_lgalloc_noncc_sizes",
     false,
     "A feature flag to enable copying fetched s3 data into lgalloc on non-cc sized clusters.",
@@ -481,7 +479,7 @@ impl Blob for S3Blob {
                         ENABLE_S3_LGALLOC_NONCC_SIZES.get(&self.cfg)
                     };
                     let data = if enable_s3_lgalloc {
-                        MaybeLgBytes::LgBytes(self.metrics.lgbytes.try_mmap(&data))
+                        MaybeLgBytes::LgBytes(self.metrics.lgbytes.persist_s3.try_mmap(&data))
                     } else {
                         // In the CYA fallback case, make sure we skip the
                         // memcpy to preserve the previous behavior as closely

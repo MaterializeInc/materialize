@@ -32,6 +32,7 @@ use crate::gen::persist::{
 use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
 use crate::indexed::columnar::ColumnarRecords;
 use crate::location::Blob;
+use crate::metrics::ColumnarMetrics;
 
 /// The metadata necessary to reconstruct a list of [BlobTraceBatchPart]s.
 ///
@@ -111,14 +112,18 @@ impl TraceBatchMeta {
     }
 
     /// Assert that all of the [BlobTraceBatchPart]'s obey the required invariants.
-    pub async fn validate_data(&self, blob: &(dyn Blob + Send + Sync)) -> Result<(), Error> {
+    pub async fn validate_data(
+        &self,
+        blob: &(dyn Blob + Send + Sync),
+        metrics: &ColumnarMetrics,
+    ) -> Result<(), Error> {
         let mut batches = vec![];
         for (idx, key) in self.keys.iter().enumerate() {
             let value = blob
                 .get(key)
                 .await?
                 .ok_or_else(|| Error::from(format!("no blob for trace batch at key: {}", key)))?;
-            let batch = BlobTraceBatchPart::decode(&value)?;
+            let batch = BlobTraceBatchPart::decode(&value, metrics)?;
             if batch.desc != self.desc {
                 return Err(format!(
                     "invalid trace batch part desc expected {:?} got {:?}",
@@ -223,8 +228,8 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     }
 
     /// Decodes a BlobTraceBatchPart from the Parquet format.
-    pub fn decode(buf: &SegmentedBytes) -> Result<Self, Error> {
-        decode_trace_parquet(&mut buf.clone().reader())
+    pub fn decode(buf: &SegmentedBytes, metrics: &ColumnarMetrics) -> Result<Self, Error> {
+        decode_trace_parquet(&mut buf.clone().reader(), metrics)
     }
 }
 
@@ -345,6 +350,7 @@ mod tests {
     use crate::indexed::columnar::ColumnarRecordsBuilder;
     use crate::location::Atomicity;
     use crate::mem::{MemBlob, MemBlobConfig};
+    use crate::metrics::ColumnarMetrics;
     use crate::workload::DataGenerator;
 
     use super::*;
@@ -384,7 +390,7 @@ mod tests {
         for ((k, v), t, d) in updates {
             assert!(builder.push(((&k, &v), Codec64::encode(&t), Codec64::encode(&d))));
         }
-        vec![builder.finish()]
+        vec![builder.finish(&ColumnarMetrics::disconnected())]
     }
 
     #[mz_ore::test]
@@ -524,6 +530,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn trace_batch_meta_validate_data() -> Result<(), Error> {
+        let metrics = ColumnarMetrics::disconnected();
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let format = ProtoBatchFormat::ParquetKvtd;
 
@@ -557,7 +564,10 @@ mod tests {
         };
 
         // Normal case:
-        assert_eq!(batch_meta.validate_data(blob.as_ref()).await, Ok(()));
+        assert_eq!(
+            batch_meta.validate_data(blob.as_ref(), &metrics).await,
+            Ok(())
+        );
 
         // Incorrect desc
         let batch_meta = TraceBatchMeta {
@@ -567,7 +577,7 @@ mod tests {
             level: 0,
             size_bytes,
         };
-        assert_eq!(batch_meta.validate_data(blob.as_ref()).await, Err(Error::from("invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
+        assert_eq!(batch_meta.validate_data(blob.as_ref(), &metrics).await, Err(Error::from("invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
         // Key with no corresponding batch part
         let batch_meta = TraceBatchMeta {
             keys: vec!["b0".into(), "b1".into(), "b2".into()],
@@ -577,7 +587,7 @@ mod tests {
             size_bytes,
         };
         assert_eq!(
-            batch_meta.validate_data(blob.as_ref()).await,
+            batch_meta.validate_data(blob.as_ref(), &metrics).await,
             Err(Error::from("no blob for trace batch at key: b2"))
         );
         // Batch parts not in index order
@@ -589,7 +599,7 @@ mod tests {
             size_bytes,
         };
         assert_eq!(
-            batch_meta.validate_data(blob.as_ref()).await,
+            batch_meta.validate_data(blob.as_ref(), &metrics).await,
             Err(Error::from(
                 "invalid index for blob trace batch part at key b1 expected 0 got 1"
             ))
