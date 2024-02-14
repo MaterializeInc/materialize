@@ -15,7 +15,7 @@ from typing import Any
 
 import requests
 
-from materialize import ui
+from materialize import buildkite, ui
 
 
 def junit_report_filename(suite: str) -> Path:
@@ -45,7 +45,7 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
         suite: The identifier for the test suite in Buildkite Test Analytics.
         junit_report: The path to the JUnit XML-formatted report file.
     """
-    if "CI" not in os.environ:
+    if not buildkite.is_in_buildkite():
         return
     ui.header(f"Uploading report for suite {suite!r} to Buildkite Test Analytics")
     suite = suite.upper().replace("-", "_")
@@ -78,7 +78,7 @@ def upload_junit_report(suite: str, junit_report: Path) -> None:
 def get_artifacts() -> Any:
     """Get artifact informations from Buildkite. Outside of CI, this function does nothing."""
 
-    if "CI" not in os.environ:
+    if not buildkite.is_in_buildkite():
         return []
 
     ui.header("Getting artifact informations from Buildkite")
