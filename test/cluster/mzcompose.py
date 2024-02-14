@@ -3042,6 +3042,7 @@ def workflow_blue_green_deployment(
         cursor = c.sql_cursor()
         while running:
             try:
+                cursor.execute("ROLLBACK")
                 cursor.execute("BEGIN")
                 cursor.execute(
                     "DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM prod.counter_mv)"
@@ -3049,7 +3050,6 @@ def workflow_blue_green_deployment(
                 cursor.execute("FETCH ALL subscribe WITH (timeout='15s')")
                 assert int(cursor.fetchall()[-1][2]) > 0
                 cursor.execute("CLOSE subscribe")
-                cursor.execute("ROLLBACK")
             except DatabaseError as e:
                 # Expected
                 if "cached plan must not change result type" in str(e):
