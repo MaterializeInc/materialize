@@ -140,8 +140,8 @@ def get_step_infos_from_build(build: Any, build_step_keys: list[str]) -> list[St
             duration_in_min = None
 
         job_passed = job["state"] == "passed"
-        exit_status = job["exit_status"]
-        retry_count = job["retries_count"] or 0
+        exit_status = job.get("exit_status")
+        retry_count = job.get("retries_count") or 0
 
         assert (
             not job_passed or duration_in_min is not None
