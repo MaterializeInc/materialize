@@ -42,6 +42,9 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 from materialize.output_consistency.ignore_filter.param_matchers import (
     index_of_param_by_type,
 )
+from materialize.output_consistency.input_data.operations.generic_operations_provider import (
+    TAG_CASTING,
+)
 from materialize.output_consistency.input_data.operations.jsonb_operations_provider import (
     TAG_JSONB_TO_TEXT,
 )
@@ -111,6 +114,12 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             True,
         ):
             return YesIgnore("Consequence of #23571")
+
+        if operation.is_tagged(TAG_CASTING) and expression.matches(
+            partial(matches_fun_by_name, function_name_in_lower_case="to_char"),
+            True,
+        ):
+            return YesIgnore("#25228: date format that cannot be parsed")
 
         return super()._matches_problematic_operation_or_function_invocation(
             expression, operation, _all_involved_characteristics
