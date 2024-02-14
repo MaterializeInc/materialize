@@ -193,7 +193,7 @@ function determineCast(value) {
             cast = "numeric";
         } else if (typeof value === "string") {
             if (isDate(value)) {
-                // TODO - This is a naive check for date strings. We should consider a more robust solution.
+                // If the string is a valid ISO8601 date, cast it to a timestamp
                 wrapping_function = "try_parse_monotonic_iso8601_timestamp";
             }
         }
