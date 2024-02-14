@@ -998,7 +998,7 @@ and cannot be changed by users), the latter is used instead.
 <!-- RELATION_SPEC mz_internal.mz_statement_lifecycle_history -->
 | Field          | Type                         | Meaning                                                                                                                                                |
 |----------------|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `statement_id` | [`uuid`]                     | The ID of the execution event. Corresponds to [`mz_recent_activity_log.execution_id`](#mz_recent_activity_log)                                         |
+| `statement_id` | [`uuid`]                     | The ID of the execution event. Corresponds to [`mz_recent_activity_log.execution_id`](#mz_activity_log)                                   |
 | `event_type`   | [`text`]                     | The type of lifecycle event, e.g. `'execution-began'`, `'storage-dependencies-finished'`, `'compute-dependencies-finished'`, or `'execution-finished'` |
 | `occurred_at`  | [`timestamp with time zone`] | The time at which the event took place.                                                                                                                |
 
