@@ -1394,8 +1394,6 @@ pub fn plan_create_source(
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
             desc: source_desc,
-            // Currently no source reads from another source
-            source_imports: BTreeSet::new(),
             subsource_exports,
             progress_subsource,
         }),

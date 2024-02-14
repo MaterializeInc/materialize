@@ -70,9 +70,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
     /// The source description
     pub desc: SourceDesc<C>,
-    /// Source collections made available to this ingestion.
-    #[proptest(strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<S>(), 0..4)")]
-    pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
@@ -99,7 +96,6 @@ impl<S> IngestionDescription<S> {
         // increase the likelihood of developers seeing this function.
         let IngestionDescription {
             desc: _,
-            source_imports: _,
             ingestion_metadata: _,
             source_exports,
             instance_id: _,
@@ -126,7 +122,6 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
         }
         let IngestionDescription {
             desc,
-            source_imports,
             ingestion_metadata,
             source_exports,
             instance_id,
@@ -135,7 +130,6 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
 
         let compatibility_checks = [
             (self.desc.alter_compatible(id, desc).is_ok(), "desc"),
-            (source_imports == &other.source_imports, "source_imports"),
             (
                 ingestion_metadata == &other.ingestion_metadata,
                 "ingestion_metadata",
@@ -199,7 +193,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
     fn into_inline_connection(self, r: R) -> IngestionDescription {
         let IngestionDescription {
             desc,
-            source_imports,
             ingestion_metadata,
             source_exports,
             instance_id,
@@ -208,7 +201,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 
         IngestionDescription {
             desc: desc.into_inline_connection(r),
-            source_imports,
             ingestion_metadata,
             source_exports,
             instance_id,
@@ -228,7 +220,6 @@ pub struct SourceExport<S = ()> {
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
     fn into_proto(&self) -> ProtoIngestionDescription {
         ProtoIngestionDescription {
-            source_imports: self.source_imports.into_proto(),
             source_exports: self.source_exports.into_proto(),
             ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
@@ -239,7 +230,6 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
 
     fn from_proto(proto: ProtoIngestionDescription) -> Result<Self, TryFromProtoError> {
         Ok(IngestionDescription {
-            source_imports: proto.source_imports.into_rust()?,
             source_exports: proto.source_exports.into_rust()?,
             desc: proto
                 .desc

@@ -229,8 +229,6 @@ where
                             desc: desc.clone(),
                             ingestion_metadata: collection_metadata,
                             source_exports,
-                            // Only used for Debezium
-                            source_imports: BTreeMap::new(),
                             instance_id: mz_storage_types::instances::StorageInstanceId::User(100),
                             // This id is only used to fill in the
                             // collection metadata, which we're filling in
