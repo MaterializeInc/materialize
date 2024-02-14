@@ -53,9 +53,7 @@ find cores -name 'core.*' | while read -r core; do
     if grep -q "Program terminated with signal SIGABRT, Aborted." "$core".txt; then
         echo "SIGABRT found in \"$core.txt\", ignoring core file"
     else
-        zstd --rm "$core"
         buildkite-agent artifact upload "$core".txt
-        buildkite-agent artifact upload "$core".zst
     fi
 done
 # can be huge, clean up
