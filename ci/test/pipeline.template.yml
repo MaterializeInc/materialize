@@ -195,6 +195,7 @@ steps:
         artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
         inputs:
           - Cargo.lock
+          - ".config/nextest.toml"
           - "**/Cargo.toml"
           - "**/*.rs"
           - "**/*.proto"

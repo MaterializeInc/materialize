@@ -16,6 +16,7 @@ you'll need a working C and C++ toolchain. You'll also need to install:
 * The [CMake] build system
 * libclang
 * PostgreSQL
+* lld (on Linux, or set a custom `RUSTFLAGS`)
 
 On macOS, if you install [Homebrew], you'll be guided through the process of
 installing Apple's developer tools, which includes a C compiler and libclang.
@@ -29,7 +30,7 @@ On Debian-based Linux variants, it's even easier:
 
 ```shell
 sudo apt update
-sudo apt install build-essential cmake postgresql-client libclang-dev
+sudo apt install build-essential cmake postgresql-client libclang-dev lld
 ```
 
 On other platforms, you'll have to figure out how to get these tools yourself.
