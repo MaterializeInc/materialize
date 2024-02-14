@@ -19,7 +19,7 @@
 //! See the [`mz_storage_types::sources::mysql::GtidPartition`] type for more information.
 //!
 //! To maintain a complete frontier of the full UUID GTID range, we use a
-//! [`GtidReplicationPartitions`] struct to store the GTID Set as a set of partitions.
+//! [`partitions::GtidReplicationPartitions`] struct to store the GTID Set as a set of partitions.
 //! This allows us to easily advance the frontier each time we see a new GTID on the replication
 //! stream.
 //!
@@ -54,8 +54,7 @@ use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
@@ -74,7 +73,6 @@ use mz_timely_util::builder_async::{
 };
 
 use crate::metrics::mysql::MySqlSourceMetrics;
-use crate::source::mysql::GtidReplicationPartitions;
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
@@ -84,6 +82,7 @@ use super::{
 };
 
 mod events;
+mod partitions;
 
 /// Used as a partition id to determine if the worker is
 /// responsible for reading from the MySQL replication stream
@@ -287,7 +286,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             // Store all partitions from the resume_upper so we can create a frontier that comprises
             // timestamps for partitions representing the full range of UUIDs to advance our main
             // capabilities.
-            let mut repl_partitions: GtidReplicationPartitions = resume_upper.into();
+            let mut repl_partitions: partitions::GtidReplicationPartitions = resume_upper.into();
 
             // Binlog Table Id -> Table Name (its key in the `table_info` map)
             let mut table_id_map = BTreeMap::<u64, UnresolvedItemName>::new();
