@@ -582,30 +582,41 @@ impl crate::coord::Coordinator {
     ///
     /// This method relies on a previous call to
     /// `initialize_read_holds`, `acquire_read_holds`, or `update_read_hold` that returned
-    /// `read_holds`, and its behavior will be erratic if called on anything else,
+    /// `ReadHolds`, and its behavior will be erratic if called on anything else,
     /// or if called more than once on the same bundle of read holds.
-    pub(super) fn release_read_holds(&mut self, read_holds: ReadHolds<Timestamp>) {
+    pub(super) fn release_read_holds(&mut self, read_holdses: Vec<ReadHolds<Timestamp>>) {
         // Update STORAGE read policies.
-        let mut policy_changes = Vec::new();
-        for (time, id) in read_holds.storage_ids() {
-            // It's possible that a concurrent DDL statement has already dropped this GlobalId
-            if let Some(read_needs) = self.storage_read_capabilities.get_mut(id) {
-                read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
-                policy_changes.push((*id, read_needs.policy()));
-            }
-        }
-        self.controller.storage.set_read_policy(policy_changes);
-        // Update COMPUTE read policies
-        let mut compute = self.controller.active_compute();
-        for (compute_instance, compute_ids) in read_holds.compute_ids() {
-            let mut policy_changes = Vec::new();
-            for (time, id) in compute_ids {
+        let mut storage_policy_changes = Vec::new();
+        for read_holds in read_holdses.iter() {
+            for (time, id) in read_holds.storage_ids() {
                 // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                if let Some(read_needs) = self.compute_read_capabilities.get_mut(id) {
+                if let Some(read_needs) = self.storage_read_capabilities.get_mut(id) {
                     read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
-                    policy_changes.push((*id, read_needs.policy()));
+                    storage_policy_changes.push((*id, read_needs.policy()));
                 }
             }
+        }
+        self.controller
+            .storage
+            .set_read_policy(storage_policy_changes);
+        // Update COMPUTE read policies
+        let mut compute = self.controller.active_compute();
+        let mut policy_changes_per_instance = BTreeMap::new();
+        for read_holds in read_holdses.iter() {
+            for (compute_instance, compute_ids) in read_holds.compute_ids() {
+                let policy_changes = policy_changes_per_instance
+                    .entry(compute_instance)
+                    .or_insert_with(Vec::new);
+                for (time, id) in compute_ids {
+                    // It's possible that a concurrent DDL statement has already dropped this GlobalId
+                    if let Some(read_needs) = self.compute_read_capabilities.get_mut(id) {
+                        read_needs.holds.update_iter(time.iter().map(|t| (*t, -1)));
+                        policy_changes.push((*id, read_needs.policy()));
+                    }
+                }
+            }
+        }
+        for (compute_instance, policy_changes) in policy_changes_per_instance {
             if compute.instance_exists(*compute_instance) {
                 compute
                     .set_read_policy(*compute_instance, policy_changes)

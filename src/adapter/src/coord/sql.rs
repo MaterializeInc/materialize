@@ -205,9 +205,7 @@ impl Coordinator {
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_read_holds.remove(conn_id) {
-            for hold in txn_reads {
-                self.release_read_holds(hold);
-            }
+            self.release_read_holds(txn_reads);
         }
     }
 
