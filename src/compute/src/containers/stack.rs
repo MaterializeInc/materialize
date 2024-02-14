@@ -62,9 +62,9 @@ impl<T: Columnation> ChunkedStack<T> {
         self.inner.reserve_items(items);
     }
 
-    /// Ensures `Self` can absorb `items` without further allocations.
+    /// Ensures `Self` can absorb `regions` without further allocations.
     ///
-    /// The argument `items` may be cloned and iterated multiple times.
+    /// The argument `regions` may be cloned and iterated multiple times.
     /// Please be careful if it contains side effects.
     #[inline(always)]
     pub fn reserve_regions<'a, I>(&mut self, regions: I)
@@ -80,6 +80,7 @@ impl<T: Columnation> ChunkedStack<T> {
     /// The element can be read by indexing
     #[inline(always)]
     pub fn copy(&mut self, item: &T) {
+        // SAFETY: We never drop the `T` returned from `copy`, satisfying its invariant.
         let copy = unsafe { self.inner.copy(item) };
         self.push(copy);
     }
@@ -257,12 +258,15 @@ impl<T: Columnation> Drop for ChunkedStack<T> {
     fn drop(&mut self) {
         for array in &mut self.local {
             // SAFETY: All elements in `array` have their allocations in a region. We drop the
-            // region and forget the immediate values.
+            // region and forget the immediate values. We would try to drop region-allocated
+            // data through the objects in `array`, which is UB.
             unsafe {
                 array.set_len(0);
             }
         }
         // Important: Clear the region before dropping it to avoid double frees.
+        // Regions in columnation do not necessarily have a `Drop` implementation, so we need to
+        // make sure they release their contents before dropping.
         self.inner.clear();
     }
 }

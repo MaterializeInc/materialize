@@ -11,6 +11,7 @@ pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
+use differential_dataflow::trace::implementations::OffsetList;
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
@@ -116,8 +117,7 @@ mod container {
                 self.batches.capacity() * std::mem::size_of::<DatumBatch>(),
             );
             for batch in self.batches.iter() {
-                use crate::extensions::arrange;
-                arrange::offset_list_size(&batch.offsets, &mut callback);
+                crate::row_spine::offset_list_size(&batch.offsets, &mut callback);
                 callback(batch.storage.len(), batch.storage.capacity());
             }
         }
@@ -433,8 +433,7 @@ mod offset_opt {
 
     impl OffsetOptimized {
         pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-            use crate::extensions::arrange::offset_list_size;
-            offset_list_size(&self.spilled, callback);
+            crate::row_spine::offset_list_size(&self.spilled, callback);
         }
     }
 
@@ -469,4 +468,19 @@ mod offset_opt {
             Self(*other)
         }
     }
+}
+
+/// Helper to compute the size of an [`OffsetList`] in memory.
+#[inline]
+pub(crate) fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
+    // Private `vec_size` because we should only use it where data isn't region-allocated.
+    // `T: Copy` makes sure the implementation is correct even if types change!
+    #[inline(always)]
+    fn vec_size<T: Copy>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
+        let size_of_t = std::mem::size_of::<T>();
+        callback(data.len() * size_of_t, data.capacity() * size_of_t);
+    }
+
+    vec_size(&data.smol, &mut callback);
+    vec_size(&data.chonk, callback);
 }

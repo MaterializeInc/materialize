@@ -102,7 +102,17 @@ impl<T> Deref for Array<T> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
-        unsafe { std::mem::transmute(&self.elements[..self.length]) }
+        // TODO: Use `slice_assume_init_ref` once stable.
+        // Context: https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.slice_assume_init_ref
+        // The following safety argument is adapted from the source.
+        // SAFETY: casting `elements` to a `*const [T]` is safe since the caller guarantees that
+        // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
+        // The pointer obtained is valid since it refers to memory owned by `elements` which is a
+        // reference and thus guaranteed to be valid for reads.
+        #[allow(clippy::as_conversions)]
+        unsafe {
+            &*(&self.elements[..self.length] as *const [MaybeUninit<T>] as *const [T])
+        }
     }
 }
 
@@ -114,6 +124,7 @@ impl<T> Drop for Array<T> {
             lgalloc::deallocate(handle);
         } else {
             // Regular allocation
+            // SAFETY: `elements` is a sliced box allocated from the global allocator, drop it.
             unsafe {
                 ManuallyDrop::drop(&mut self.elements);
             }

@@ -12,7 +12,6 @@ use std::rc::Rc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::OffsetList;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
 use timely::container::columnation::Columnation;
@@ -222,21 +221,6 @@ where
 pub trait ArrangementSize {
     /// Install a logger to track the heap size of the target.
     fn log_arrangement_size(self) -> Self;
-}
-
-/// Helper to compute the size of an [`OffsetList`] in memory.
-#[inline]
-pub(crate) fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
-    // Private `vec_size` because we should only use it where data isn't region-allocated.
-    // `T: Copy` makes sure the implementation is correct even if types change!
-    #[inline(always)]
-    fn vec_size<T: Copy>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
-        let size_of_t = std::mem::size_of::<T>();
-        callback(data.len() * size_of_t, data.capacity() * size_of_t);
-    }
-
-    vec_size(&data.smol, &mut callback);
-    vec_size(&data.chonk, callback);
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
