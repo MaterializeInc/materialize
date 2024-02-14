@@ -301,7 +301,7 @@ impl Coordinator {
                     self.sequence_subscribe(ctx, plan, target_cluster).await;
                 }
                 Plan::SideEffectingFunc(plan) => {
-                    ctx.retire(self.sequence_side_effecting_func(plan));
+                    self.sequence_side_effecting_func(ctx, plan).await;
                 }
                 Plan::ShowCreate(plan) => {
                     ctx.retire(Ok(Self::send_immediate_rows(vec![plan.row])));
@@ -442,7 +442,7 @@ impl Coordinator {
                 }
                 Plan::DiscardAll => {
                     let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
-                        self.clear_transaction(ctx.session_mut());
+                        self.clear_transaction(ctx.session_mut()).await;
                         self.drop_temp_items(ctx.session().conn_id()).await;
                         ctx.session_mut().reset();
                         Ok(ExecuteResponse::DiscardedAll)

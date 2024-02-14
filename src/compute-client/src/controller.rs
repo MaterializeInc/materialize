@@ -64,7 +64,7 @@ use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
-use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
+use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod instance;
@@ -80,7 +80,7 @@ pub enum ComputeControllerResponse<T> {
     /// See [`ComputeResponse::PeekResponse`].
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// See [`ComputeResponse::SubscribeResponse`].
-    SubscribeResponse(GlobalId, SubscribeResponse<T>),
+    SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// See [`ComputeResponse::FrontierUpper`]
     FrontierUpper { id: GlobalId, upper: Antichain<T> },
 }

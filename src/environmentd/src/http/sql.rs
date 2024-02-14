@@ -220,7 +220,6 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
         };
 
         client.client.remove_idle_in_transaction_session_timeout();
-        client.client.reset_canceled();
 
         let msg = match msg {
             Some(Ok(msg)) => msg,
@@ -551,37 +550,31 @@ pub struct CommandStarting {
 /// message as they occur.
 #[async_trait]
 trait ResultSender: Send {
-    /// Adds a result to the client. `canceled` is a function that returns a future that resolves if
-    /// a cancellation request was issued for this connection. The first component of the return value is
+    /// Adds a result to the client. The first component of the return value is
     /// Err if sending to the client
     /// produced an error and the server should disconnect. It is Ok(Err) if the statement
     /// produced an error and should error the transaction, but remain connected. It is Ok(Ok(()))
     /// if the statement succeeded.
     /// The second component of the return value is `Some` if execution still
     /// needs to be retired for statement logging purposes.
-    async fn add_result<C, F>(
+    async fn add_result(
         &mut self,
-        canceled: C,
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
         Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
-    )
-    where
-        C: Fn() -> F + Send + Sync,
-        F: Future<Output = ()> + Send;
+    );
+
     /// Returns a future that resolves only when the client connection has gone away.
     fn connection_error(&mut self) -> BoxFuture<Error>;
     /// Reports whether the client supports streaming SUBSCRIBE results.
     fn allow_subscribe(&self) -> bool;
 
-    async fn await_rows<C, F, R>(&mut self, cancelled: C, f: F) -> Result<R, Error>
+    async fn await_rows<F, R>(&mut self, f: F) -> Result<R, Error>
     where
-        C: Future<Output = ()> + Send,
         F: Future<Output = R> + Send,
     {
         tokio::select! {
-            _ = cancelled => Err(AdapterError::Canceled.into()),
             e = self.connection_error() => Err(e),
             r = f => Ok(r),
         }
@@ -597,18 +590,13 @@ impl ResultSender for SqlResponse {
     // if the statement succeeded.
     // The second component of the return value is `Some` if execution still
     // needs to be retired for statement logging purposes.
-    async fn add_result<C, F>(
+    async fn add_result(
         &mut self,
-        _canceled: C,
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
         Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
-    )
-    where
-        C: Fn() -> F + Send + Sync,
-        F: Future<Output = ()> + Send,
-    {
+    ) {
         let (res, stmt_logging) = match res {
             StatementResult::SqlResult(res) => {
                 let is_err = matches!(res, SqlResult::Err { .. });
@@ -654,18 +642,13 @@ impl ResultSender for WebSocket {
     // if the statement succeeded.
     // The second component of the return value is `Some` if execution still
     // needs to be retired for statement logging purposes.
-    async fn add_result<C, F>(
+    async fn add_result(
         &mut self,
-        canceled: C,
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
         Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
-    )
-    where
-        C: Fn() -> F + Send + Sync,
-        F: Future<Output = ()> + Send,
-    {
+    ) {
         async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), Error> {
             let msg = serde_json::to_string(&msg).expect("must serialize");
             Ok(ws.send(Message::Text(msg)).await?)
@@ -739,7 +722,7 @@ impl ResultSender for WebSocket {
                 let mut datum_vec = mz_repr::DatumVec::new();
                 let mut rows_returned = 0;
                 loop {
-                    let res = match self.await_rows(canceled(), rx.recv()).await {
+                    let res = match self.await_rows(rx.recv()).await {
                         Ok(res) => res,
                         Err(e) => {
                             // We consider the remote breaking the connection to be a cancellation,
@@ -853,7 +836,7 @@ async fn send_and_retire<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
 ) -> Result<Result<(), ()>, Error> {
-    let (res, stmt_logging) = sender.add_result(|| client.canceled(), res).await;
+    let (res, stmt_logging) = sender.add_result(res).await;
     if let Some((reason, ctx_extra)) = stmt_logging {
         client.retire_execute(ctx_extra, reason);
     }
@@ -1213,7 +1196,7 @@ async fn execute_stmt<S: ResultSender>(
             .into()
         }
         ExecuteResponse::SendingRows { future: rows } => {
-            let rows = match sender.await_rows(client.canceled(), rows).await? {
+            let rows = match sender.await_rows(rows).await? {
                 PeekResponseUnary::Rows(rows) => {
                     RecordFirstRowStream::record(execute_started, client);
                     rows

@@ -58,9 +58,7 @@ pub mod telemetry;
 pub mod webhook;
 
 pub use crate::client::{Client, Handle, SessionClient};
-pub use crate::command::{
-    Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupResponse,
-};
+pub use crate::command::{ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupResponse};
 pub use crate::coord::id_bundle::CollectionIdBundle;
 pub use crate::coord::peek::PeekResponseUnary;
 pub use crate::coord::timeline::TimelineContext;

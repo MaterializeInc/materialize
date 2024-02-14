@@ -28,7 +28,7 @@ use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, Var};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -54,7 +54,6 @@ pub enum Command {
     },
 
     Startup {
-        cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         user: User,
         conn_id: ConnectionId,
@@ -655,7 +654,7 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => vec![Subscribing, ExecuteResponseKind::CopyTo],
             StartTransaction => vec![StartedTransaction],
-            SideEffectingFunc => vec![SendingRowsImmediate],
+            SideEffectingFunc => vec![SendingRows, SendingRowsImmediate],
             ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
         }
     }
@@ -669,14 +668,4 @@ impl Transmittable for ExecuteResponse {
     fn to_allowed(&self) -> Self::Allowed {
         ExecuteResponseKind::from(self)
     }
-}
-
-/// The state of a cancellation request.
-#[derive(Debug, Clone, Copy)]
-pub enum Canceled {
-    /// A cancellation request has occurred.
-    Canceled,
-    /// No cancellation request has yet occurred, or a previous request has been
-    /// cleared.
-    NotCanceled,
 }

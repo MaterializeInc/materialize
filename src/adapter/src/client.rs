@@ -38,14 +38,13 @@ use mz_sql_parser::ast::StatementKind;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tracing::{error, instrument};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse,
-    Response,
+    CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, Response,
 };
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
@@ -155,14 +154,6 @@ impl Client {
     /// containing various details about the startup.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn startup(&self, session: Session) -> Result<SessionClient, AdapterError> {
-        // Cancellation works by creating a watch channel (which remembers only
-        // the last value sent to it) and sharing it between the coordinator and
-        // connection. The coordinator will send a canceled message on it if a
-        // cancellation request comes. The connection will reset that on every message
-        // it receives and then check for it where we want to add the ability to cancel
-        // an in-progress statement.
-        let (cancel_tx, cancel_rx) = watch::channel(Canceled::NotCanceled);
-        let cancel_tx = Arc::new(cancel_tx);
         let user = session.user().clone();
         let conn_id = session.conn_id().clone();
         let secret_key = session.secret_key();
@@ -172,7 +163,6 @@ impl Client {
 
         let (tx, rx) = oneshot::channel();
         self.send(Command::Startup {
-            cancel_tx: Arc::clone(&cancel_tx),
             tx,
             user,
             conn_id,
@@ -191,8 +181,6 @@ impl Client {
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
-            cancel_tx,
-            cancel_rx,
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
@@ -361,8 +349,6 @@ pub struct SessionClient {
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
-    cancel_tx: Arc<watch::Sender<Canceled>>,
-    cancel_rx: watch::Receiver<Canceled>,
     timeouts: Timeout,
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
@@ -416,27 +402,6 @@ impl SessionClient {
                 "error": &parse_error.error,
             }),
         );
-    }
-
-    pub fn canceled(&self) -> impl Future<Output = ()> + Send {
-        let mut cancel_rx = self.cancel_rx.clone();
-        async move {
-            loop {
-                let _ = cancel_rx.changed().await;
-                if let Canceled::Canceled = *cancel_rx.borrow() {
-                    return;
-                }
-            }
-        }
-    }
-
-    pub fn reset_canceled(&mut self) {
-        // Clear any cancellation message.
-        // TODO(mjibson): This makes the use of .changed annoying since it will
-        // generally always have a NotCanceled message first that needs to be ignored,
-        // and thus run in a loop. Figure out a way to have the future only resolve on
-        // a Canceled message.
-        let _ = self.cancel_tx.send(Canceled::NotCanceled);
     }
 
     // Verify and return the named prepared statement. We need to verify each use

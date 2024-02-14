@@ -2908,7 +2908,8 @@ class PropagatingThread(Thread):
         super().join(timeout)
         if self.exc:
             raise self.exc
-        return self.ret
+        if hasattr(self, "ret"):
+            return self.ret
 
 
 def workflow_blue_green_deployment(
@@ -2964,7 +2965,10 @@ def workflow_blue_green_deployment(
                 cursor.execute("CLOSE subscribe")
             except DatabaseError as e:
                 # Expected
-                if "cached plan must not change result type" in str(e):
+                msg = str(e)
+                if ("cached plan must not change result type" in msg) or (
+                    "subscribe has been terminated because underlying relation" in msg
+                ):
                     continue
                 raise e
 
@@ -3105,3 +3109,58 @@ def workflow_test_compute_aggressive_readhold_downgrades_disabled(
                 """
             )
         )
+
+
+def workflow_cluster_drop_concurrent(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that dropping a cluster will close already running queries against
+    that cluster, both SELECTs and SUBSCRIBEs.
+    """
+    c.down(destroy_volumes=True)
+
+    def select():
+        with c.sql_cursor() as cursor:
+            # This should hang instantly as the timestamp is far in the future,
+            # until the cluster is dropped
+            cursor.execute("SELECT * FROM counter AS OF 18446744073709551615")
+
+    def subscribe():
+        cursor = c.sql_cursor()
+        cursor.execute("BEGIN")
+        cursor.execute("DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM counter)")
+        # This should hang until the cluster is dropped
+        cursor.execute("FETCH ALL subscribe")
+
+    with c.override(
+        Testdrive(
+            no_reset=True,
+        ),
+        Clusterd(name="clusterd1"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.run_testdrive_files("cluster-drop-concurrent/setup.td")
+        threads = [
+            PropagatingThread(target=fn, name=name)
+            for fn, name in ((select, "select"), (subscribe, "subscribe"))
+        ]
+
+        for thread in threads:
+            thread.start()
+        time.sleep(2)  # some time to make sure the queries are in progress
+        try:
+            c.run_testdrive_files("cluster-drop-concurrent/run.td")
+        finally:
+            for thread in threads:
+                try:
+                    thread.join(timeout=10)
+                except ProgrammingError as e:
+                    assert (
+                        e.args[0]["M"]
+                        == 'query could not complete because relation "materialize.public.counter" was dropped'
+                    ), e
+            for thread in threads:
+                assert not thread.is_alive(), f"Thread {thread.name} is still running"

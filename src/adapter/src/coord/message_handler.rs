@@ -40,7 +40,7 @@ use crate::coord::{
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::util::{ComputeSinkId, ResultExt};
+use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, TimestampContext};
 
 impl Coordinator {
@@ -103,10 +103,7 @@ impl Coordinator {
                     self.advance_timelines().await;
                 }
                 Message::ClusterEvent(event) => self.message_cluster_event(event).await,
-                // Processing this message DOES NOT send a response to the client;
-                // in any situation where you use it, you must also have a code
-                // path that responds to the client (e.g. reporting an error).
-                Message::RemovePendingPeeks { conn_id } => {
+                Message::CancelPendingPeeks { conn_id } => {
                     self.cancel_pending_peeks(&conn_id);
                 }
                 Message::LinearizeReads => {
@@ -346,19 +343,12 @@ impl Coordinator {
                 self.send_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
-                // We use an `if let` here because the peek could have been canceled already.
-                // We can also potentially receive multiple `Complete` responses, followed by
-                // a `Dropped` response.
+                // It's not an error if the subscribe does not exist. When
+                // aborting a subscribe, we eagerly remove it from
+                // `active_subscribes`, but we might receive a few responses
+                // from the controller about the zombie subscribe.
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
-                    let remove = active_subscribe.process_response(response);
-                    if remove {
-                        let csid = ComputeSinkId {
-                            cluster_id: active_subscribe.cluster_id,
-                            global_id: sink_id,
-                        };
-                        self.drop_compute_sinks([csid]);
-                        self.remove_active_subscribe(sink_id).await;
-                    }
+                    active_subscribe.process_response(response);
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {

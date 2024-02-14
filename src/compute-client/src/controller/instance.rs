@@ -771,11 +771,11 @@ where
             let subscribe = self.compute.subscribes.remove(&subscribe_id).unwrap();
             let response = ComputeControllerResponse::SubscribeResponse(
                 subscribe_id,
-                SubscribeResponse::Batch(SubscribeBatch {
+                SubscribeBatch {
                     lower: subscribe.frontier.clone(),
                     upper: subscribe.frontier,
                     updates: Err("target replica failed or was dropped".into()),
-                }),
+                },
             );
             self.compute.deliver_response(response);
         }
@@ -1042,6 +1042,10 @@ where
             update.extend(implied_capability.iter().map(|t| (t.clone(), -1)));
             update.extend(warmup_capability.iter().map(|t| (t.clone(), -1)));
             read_capability_updates.insert(*id, update);
+
+            // If the collection is a subscribe, stop tracking it. This ensures that the controller
+            // ceases to produce `SubscribeResponse`s for this subscribe.
+            self.compute.subscribes.remove(id);
         }
 
         if !read_capability_updates.is_empty() {
@@ -1598,24 +1602,29 @@ where
                     }
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
-                        SubscribeResponse::Batch(SubscribeBatch {
+                        SubscribeBatch {
                             lower,
                             upper,
                             updates,
-                        }),
+                        },
                     ))
                 } else {
                     None
                 }
             }
-            SubscribeResponse::DroppedAt(_) => {
-                // This subscribe cannot produce more data. Stop tracking it.
+            SubscribeResponse::DroppedAt(frontier) => {
+                // We should never get here: Replicas only drop subscribe collections in response
+                // to the controller allowing them to do so, and when the controller drops a
+                // subscribe it also removes it from the list of tracked subscribes (see
+                // [`Instance::drop_collections`]).
+                tracing::error!(
+                    %subscribe_id,
+                    %replica_id,
+                    frontier = ?frontier.elements(),
+                    "received `DroppedAt` response for a tracked subscribe",
+                );
                 self.compute.subscribes.remove(&subscribe_id);
-
-                Some(ComputeControllerResponse::SubscribeResponse(
-                    subscribe_id,
-                    SubscribeResponse::DroppedAt(subscribe.frontier),
-                ))
+                None
             }
         }
     }
