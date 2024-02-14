@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# environmentd-debug-zip — gather local environment's state into a zip file.
+
+set -euo pipefail
+
+postgres=${MZDEV_POSTGRES:-postgres://root@localhost:26257/materialize}
+
+echo "Shutting down running environmentd and clusterd (if any)"
+killall -q environmentd clusterd || true
+
+mkdir -p mzdata/pgdump
+for i in consensus.consensus storage.collections storage.data storage.fence storage.sinces storage.uppers tsoracle.timestamp_oracle adapter.collections adapter.data adapter.fence adapter.sinces adapter.uppers; do
+  echo "Exporting ${i} from CockroachDB"
+  psql "${postgres}" -q --csv -c "select * from ${i}" > mzdata/pgdump/"${i}.csv"
+done
+
+zip -qr mzdata/debug.zip mzdata --exclude debug.zip
+
+echo "Bundled environmentd debug data into ./mzdata/debug.zip"
