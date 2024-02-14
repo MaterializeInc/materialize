@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use mz_dyncfg::ConfigSet;
 use tracing::warn;
 use url::Url;
 
@@ -49,6 +50,8 @@ pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
     fn connect_timeout(&self) -> Duration;
     /// Maximum time to wait to read the first byte of a response, including connection time.
     fn read_timeout(&self) -> Duration;
+    /// Whether this is running in a "cc" sized cluster.
+    fn is_cc_active(&self) -> bool;
 }
 
 impl BlobConfig {
@@ -68,6 +71,7 @@ impl BlobConfig {
         value: &str,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
+        cfg: ConfigSet,
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value)
             .map_err(|err| anyhow!("failed to parse blob location {} as a url: {}", &value, err))?;
@@ -109,6 +113,7 @@ impl BlobConfig {
                     credentials,
                     knobs,
                     metrics,
+                    cfg,
                 )
                 .await?;
 

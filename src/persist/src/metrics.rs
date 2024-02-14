@@ -9,6 +9,7 @@
 
 //! Implementation-specific metrics for persist blobs and consensus
 
+use mz_ore::lgbytes::LgBytesMetrics;
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use prometheus::IntCounterVec;
@@ -28,6 +29,7 @@ pub struct S3BlobMetrics {
     pub(crate) delete_head: IntCounter,
     pub(crate) delete_object: IntCounter,
     pub(crate) list_objects: IntCounter,
+    pub(crate) lgbytes: LgBytesMetrics,
 }
 
 impl S3BlobMetrics {
@@ -63,6 +65,7 @@ impl S3BlobMetrics {
             delete_head: operations.with_label_values(&["delete_head"]),
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
+            lgbytes: LgBytesMetrics::new(registry),
         }
     }
 }

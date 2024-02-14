@@ -4902,6 +4902,7 @@ dependencies = [
  "futures-util",
  "md-5",
  "mz-aws-util",
+ "mz-dyncfg",
  "mz-ore",
  "mz-persist-types",
  "mz-postgres-client",
