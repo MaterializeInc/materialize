@@ -39,59 +39,7 @@ DEFAULT_MZ_VOLUMES = [
 ]
 
 DEFAULT_SYSTEM_PARAMETERS = {
-    # -----
-    # Unsafe functions
     "enable_unsafe_functions": "true",
-    "enable_dangerous_functions": "true",  # former name of 'enable_unsafe_functions'
-    # -----
-    # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
-    "persist_next_listen_batch_retryer_clamp": "16s",
-    "persist_next_listen_batch_retryer_initial_backoff": "100ms",
-    "persist_next_listen_batch_retryer_fixed_sleep": "1200ms",
-    # -----
-    # Persist internals changes: advance coverage
-    "persist_enable_s3_lgalloc_noncc_sizes": "true",
-    "persist_streaming_compaction_enabled": "true",
-    "persist_streaming_snapshot_and_fetch_enabled": "true",
-    # -----
-    # Others (ordered by name)
-    "cluster_always_use_disk": "true",
-    "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
-    "default_arrangement_exert_proportionality": "16",
-    "default_idle_arrangement_merge_effort": "0",
-    "disk_cluster_replicas_default": "true",
-    "enable_alter_swap": "true",
-    "enable_assert_not_null": "true",
-    "enable_columnation_lgalloc": "true",
-    "enable_comment": "true",
-    "enable_disk_cluster_replicas": "true",
-    "enable_eager_delta_joins": "true",
-    "enable_expressions_in_limit_syntax": "true",
-    "enable_jemalloc_profiling": "true",
-    "enable_logical_compaction_window": "true",
-    "enable_multi_worker_storage_persist_sink": "true",
-    "enable_mysql_source": "true",
-    "enable_rbac_checks": "true",
-    "enable_reduce_mfp_fusion": "true",
-    "enable_refresh_every_mvs": "true",
-    "enable_sink_doc_on_option": "true",
-    "enable_statement_lifecycle_logging": "true",
-    "enable_table_keys": "true",
-    "enable_try_parse_monotonic_iso8601_timestamp": "true",
-    "enable_worker_core_affinity": "true",
-    "persist_batch_delete_enabled": "true",
-    "persist_fast_path_limit": "1000",
-    "persist_pubsub_client_enabled": "true",
-    "persist_pubsub_push_diff_enabled": "true",
-    "persist_sink_minimum_batch_updates": "128",
-    "persist_stats_audit_percent": "100",
-    "persist_txn_tables": "lazy",
-    "statement_logging_default_sample_rate": "0.01",
-    "statement_logging_max_sample_rate": "0.01",
-    "storage_persist_sink_minimum_batch_updates": "100",
-    "storage_source_decode_fuel": "100000",
-    "timestamp_oracle": "postgres",
-    "wait_catalog_consolidation_on_startup": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
