@@ -31,6 +31,7 @@ use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
 type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
 type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
+/// TODO(#25239): Add documentation.
 pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
 type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
 
@@ -64,6 +65,7 @@ pub struct ComputeControllerMetrics {
 }
 
 impl ComputeControllerMetrics {
+    /// TODO(#25239): Add documentation.
     pub fn new(metrics_registry: MetricsRegistry) -> Self {
         ComputeControllerMetrics {
             commands_total: metrics_registry.register(metric!(
@@ -145,6 +147,7 @@ impl ComputeControllerMetrics {
         }
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn for_instance(&self, instance_id: ComputeInstanceId) -> InstanceMetrics {
         let labels = vec![instance_id.to_string()];
         let replica_count = self.replica_count.get_delete_on_drop_gauge(labels.clone());
@@ -193,17 +196,26 @@ pub struct InstanceMetrics {
     instance_id: ComputeInstanceId,
     metrics: ComputeControllerMetrics,
 
+    /// TODO(#25239): Add documentation.
     pub replica_count: UIntGauge,
+    /// TODO(#25239): Add documentation.
     pub collection_count: UIntGauge,
+    /// TODO(#25239): Add documentation.
     pub peek_count: UIntGauge,
+    /// TODO(#25239): Add documentation.
     pub subscribe_count: UIntGauge,
+    /// TODO(#25239): Add documentation.
     pub history_command_count: CommandMetrics<UIntGauge>,
+    /// TODO(#25239): Add documentation.
     pub history_dataflow_count: UIntGauge,
+    /// TODO(#25239): Add documentation.
     pub peeks_total: PeekMetrics<IntCounter>,
+    /// TODO(#25239): Add documentation.
     pub peek_duration_seconds: PeekMetrics<Histogram>,
 }
 
 impl InstanceMetrics {
+    /// TODO(#25239): Add documentation.
     pub fn for_replica(&self, replica_id: ReplicaId) -> ReplicaMetrics {
         let labels = vec![self.instance_id.to_string(), replica_id.to_string()];
         let extended_labels = |extra: &str| {
@@ -263,6 +275,7 @@ impl InstanceMetrics {
         }
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
         let labels = vec![self.instance_id.to_string()];
         let command_counts = CommandMetrics::build(|typ| {
@@ -298,9 +311,11 @@ pub struct ReplicaMetrics {
     replica_id: ReplicaId,
     metrics: ComputeControllerMetrics,
 
+    /// TODO(#25239): Add documentation.
     pub inner: Arc<ReplicaMetricsInner>,
 }
 
+/// TODO(#25239): Add documentation.
 #[derive(Debug)]
 pub struct ReplicaMetricsInner {
     commands_total: CommandMetrics<IntCounter>,
@@ -308,7 +323,9 @@ pub struct ReplicaMetricsInner {
     responses_total: ResponseMetrics<IntCounter>,
     response_message_bytes_total: ResponseMetrics<IntCounter>,
 
+    /// TODO(#25239): Add documentation.
     pub command_queue_size: UIntGauge,
+    /// TODO(#25239): Add documentation.
     pub response_queue_size: UIntGauge,
 }
 
@@ -363,23 +380,33 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 /// Per-replica-and-collection metrics.
 #[derive(Debug)]
 pub(crate) struct ReplicaCollectionMetrics {
+    /// TODO(#25239): Add documentation.
     pub initial_output_duration_seconds: Gauge,
 }
 
 /// Metrics keyed by `ComputeCommand` type.
 #[derive(Debug)]
 pub struct CommandMetrics<M> {
+    /// TODO(#25239): Add documentation.
     pub create_timely: M,
+    /// TODO(#25239): Add documentation.
     pub create_instance: M,
+    /// TODO(#25239): Add documentation.
     pub create_dataflow: M,
+    /// TODO(#25239): Add documentation.
     pub allow_compaction: M,
+    /// TODO(#25239): Add documentation.
     pub peek: M,
+    /// TODO(#25239): Add documentation.
     pub cancel_peek: M,
+    /// TODO(#25239): Add documentation.
     pub initialization_complete: M,
+    /// TODO(#25239): Add documentation.
     pub update_configuration: M,
 }
 
 impl<M> CommandMetrics<M> {
+    /// TODO(#25239): Add documentation.
     pub fn build<F>(build_metric: F) -> Self
     where
         F: Fn(&str) -> M,
@@ -410,6 +437,7 @@ impl<M> CommandMetrics<M> {
         f(&self.cancel_peek);
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
         use ComputeCommand::*;
 

@@ -74,7 +74,12 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
-    FrontierUpper { id: GlobalId, upper: Antichain<T> },
+    FrontierUpper {
+        /// TODO(#25239): Add documentation.
+        id: GlobalId,
+        /// TODO(#25239): Add documentation.
+        upper: Antichain<T>,
+    },
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
     /// a `Uuid` that matches the command's [`Peek::uuid`].
@@ -217,6 +222,7 @@ pub enum PeekResponse {
 }
 
 impl PeekResponse {
+    /// TODO(#25239): Add documentation.
     pub fn unwrap_rows(self) -> Vec<(Row, NonZeroUsize)> {
         match self {
             PeekResponse::Rows(rows) => rows,
