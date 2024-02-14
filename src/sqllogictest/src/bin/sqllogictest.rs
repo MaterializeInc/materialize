@@ -209,6 +209,9 @@ async fn main() -> ExitCode {
                                     )
                                 };
                                 test_case.set_classname("sqllogictest");
+                                if o.any_failed() {
+                                    test_case.set_system_out(&*util::indent(&o.display(config.no_fail).to_string(), 4))
+                                }
                                 junit_suite.add_testcase(test_case);
                             }
                             outcomes += o;
