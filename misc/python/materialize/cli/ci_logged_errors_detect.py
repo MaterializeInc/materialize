@@ -19,7 +19,8 @@ from typing import Any
 
 import requests
 
-from materialize import ci_util, spawn, ui
+from materialize import ci_util, ui
+from materialize.buildkite import add_annotation
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
@@ -157,29 +158,7 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
     suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
 
     error_str = "\n".join(f"* {error}" for error in errors)
-    # 400 Bad Request: The annotation body must be less than 1 MB
-    if len(error_str) > 900_000:
-        error_str = error_str[:900_000] + "..."
-
-    if style == "info":
-        markdown = f"""<details><summary>{suite_name}: {title}</summary>
-
-{error_str}
-</details>"""
-    else:
-        markdown = f"""{suite_name}: {title}
-
-{error_str}"""
-
-    spawn.runv(
-        [
-            "buildkite-agent",
-            "annotate",
-            f"--style={style}",
-            f"--context={os.environ['BUILDKITE_JOB_ID']}-{style}",
-        ],
-        stdin=markdown.encode(),
-    )
+    add_annotation(style=style, title=f"{suite_name}: {title}", content=error_str)
 
 
 def group_identical_errors(errors: list[str]) -> list[str]:

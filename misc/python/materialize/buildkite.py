@@ -148,3 +148,29 @@ def _validate_parallelism_configuration() -> None:
     assert (job_index is None) == (
         job_count is None
     ), f"$BUILDKITE_PARALLEL_JOB (= '{job_index}') and $BUILDKITE_PARALLEL_JOB_COUNT (= '{job_count}') need to be either both specified or not specified"
+
+
+def add_annotation(style: str, title: str, content: str) -> None:
+    # 400 Bad Request: The annotation body must be less than 1 MB
+    if len(content) > 900_000:
+        content = content[:900_000] + "..."
+
+    if style == "info":
+        markdown = f"""<details><summary>{title}</summary>
+
+{content}
+</details>"""
+    else:
+        markdown = f"""{title}
+
+{content}"""
+
+    spawn.runv(
+        [
+            "buildkite-agent",
+            "annotate",
+            f"--style={style}",
+            f"--context={os.environ['BUILDKITE_JOB_ID']}-{style}",
+        ],
+        stdin=markdown.encode(),
+    )
