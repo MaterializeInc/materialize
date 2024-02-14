@@ -62,6 +62,9 @@ def run_sqlsmith(c: Composition, cmd: str, aggregate: dict[str, Any]) -> None:
     )
 
     if result.returncode not in (0, 1):
+        if result.returncode == 137:
+            raise Exception("[SQLsmith] OOMed (return code 137)")
+
         raise Exception(
             f"[SQLsmith] Unexpected return code in SQLsmith: {result.returncode}\n{result.stdout}"
         )
