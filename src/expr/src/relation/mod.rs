@@ -2974,11 +2974,11 @@ impl JoinInputCharacteristics {
 /// multisets. But as it turns out, the same idea can be used to optimize
 /// trivial peeks.
 #[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RowSetFinishing {
+pub struct RowSetFinishing<L = NonNeg<i64>> {
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
     /// Include only as many rows (after offset).
-    pub limit: Option<NonNeg<i64>>,
+    pub limit: Option<L>,
     /// Omit as many rows.
     pub offset: usize,
     /// Include only given columns.
@@ -3005,9 +3005,9 @@ impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
     }
 }
 
-impl RowSetFinishing {
+impl<L> RowSetFinishing<L> {
     /// Returns a trivial finishing, i.e., that does nothing to the result set.
-    pub fn trivial(arity: usize) -> RowSetFinishing {
+    pub fn trivial(arity: usize) -> RowSetFinishing<L> {
         RowSetFinishing {
             order_by: Vec::new(),
             limit: None,
@@ -3022,6 +3022,9 @@ impl RowSetFinishing {
             && self.offset == 0
             && self.project.iter().copied().eq(0..arity)
     }
+}
+
+impl RowSetFinishing {
     /// Determines the index of the (Row, count) pair, and the
     /// index into the count within that pair, corresponding to a particular offset.
     ///

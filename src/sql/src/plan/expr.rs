@@ -1852,7 +1852,7 @@ impl HirRelationExpr {
     /// finishing into a trivial finishing.
     pub fn finish_maintained(
         &mut self,
-        finishing: &mut RowSetFinishing,
+        finishing: &mut RowSetFinishing<HirScalarExpr>,
         group_size_hints: GroupSizeHints,
     ) {
         if !finishing.is_trivial(self.arity()) {
@@ -1868,9 +1868,7 @@ impl HirRelationExpr {
                 ),
                 vec![],
                 old_finishing.order_by,
-                old_finishing
-                    .limit
-                    .map(|l| HirScalarExpr::literal(Datum::Int64(*l), ScalarType::Int64)),
+                old_finishing.limit,
                 old_finishing.offset,
                 group_size_hints.limit_input_group_size,
             )
