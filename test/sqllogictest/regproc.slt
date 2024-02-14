@@ -191,3 +191,13 @@ true
 true
 true
 true
+
+# ensure that catalog functions can be resolved if the active database is invalid
+
+statement OK
+SET database TO ''
+
+query T
+SELECT 'array_in'::regproc
+----
+750
