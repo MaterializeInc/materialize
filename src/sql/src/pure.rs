@@ -72,7 +72,6 @@ use crate::{kafka_util, normalize};
 use self::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
-    TestScriptSourcePurificationError,
 };
 
 pub(crate) mod error;
@@ -531,9 +530,6 @@ async fn purify_create_source(
         CreateSourceConnection::LoadGenerator { .. } => {
             &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
         }
-        CreateSourceConnection::TestScript { .. } => {
-            &mz_storage_types::sources::testscript::TEST_SCRIPT_PROGRESS_DESC
-        }
     };
 
     match connection {
@@ -646,14 +642,6 @@ async fn purify_create_source(
                     });
                 }
             }
-        }
-        CreateSourceConnection::TestScript { desc_json: _ } => {
-            if let Some(referenced_subsources) = referenced_subsources {
-                Err(TestScriptSourcePurificationError::ReferencedSubsources(
-                    referenced_subsources.clone(),
-                ))?;
-            }
-            // TODO: verify valid json and valid schema
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -1520,12 +1508,8 @@ async fn purify_source_format(
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     if matches!(format, Some(CreateSourceFormat::KeyValue { .. }))
-        && !matches!(
-            connection,
-            CreateSourceConnection::Kafka { .. } | CreateSourceConnection::TestScript { .. }
-        )
+        && !matches!(connection, CreateSourceConnection::Kafka { .. })
     {
-        // We don't mention `TestScript` to users here
         sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 

@@ -298,18 +298,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     &feedback,
                     storage_state,
                 ),
-                GenericSourceConnection::TestScript(c) => crate::render::sources::render_source(
-                    mz_scope,
-                    &debug_name,
-                    primary_source_id,
-                    c,
-                    description.clone(),
-                    as_of.clone(),
-                    resume_uppers.clone(),
-                    source_resume_uppers,
-                    &feedback,
-                    storage_state,
-                ),
             };
             tokens.extend(source_tokens);
 

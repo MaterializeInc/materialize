@@ -66,7 +66,6 @@ fn main() {
                 "storage-types/src/sources/mysql.proto",
                 "storage-types/src/sources/postgres.proto",
                 "storage-types/src/sources/load_generator.proto",
-                "storage-types/src/sources/testscript.proto",
             ],
             &[".."],
         )

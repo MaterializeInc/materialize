@@ -3001,7 +3001,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD, TEST])? {
+        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -3076,12 +3076,6 @@ impl<'a> Parser<'a> {
                     vec![]
                 };
                 Ok(CreateSourceConnection::LoadGenerator { generator, options })
-            }
-            TEST => {
-                self.expect_keyword(SCRIPT)?;
-                Ok(CreateSourceConnection::TestScript {
-                    desc_json: self.parse_literal_string()?,
-                })
             }
             _ => unreachable!(),
         }

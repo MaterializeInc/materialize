@@ -23,7 +23,6 @@ import "storage-types/src/sources/kafka.proto";
 import "storage-types/src/sources/load_generator.proto";
 import "storage-types/src/sources/mysql.proto";
 import "storage-types/src/sources/postgres.proto";
-import "storage-types/src/sources/testscript.proto";
 
 package mz_storage_types.sources;
 
@@ -48,12 +47,11 @@ message ProtoSourceDesc {
 }
 
 message ProtoSourceConnection {
-    reserved 2, 3, 5;
+    reserved 2, 3, 5, 7;
     oneof kind {
         mz_storage_types.sources.kafka.ProtoKafkaSourceConnection kafka = 1;
         mz_storage_types.sources.postgres.ProtoPostgresSourceConnection postgres = 4;
         mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceConnection loadgen = 6;
-        mz_storage_types.sources.testscript.ProtoTestScriptSourceConnection testscript = 7;
         mz_storage_types.sources.mysql.ProtoMySqlSourceConnection mysql = 8;
     }
 }

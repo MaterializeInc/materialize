@@ -40,7 +40,6 @@ use crate::plan::scope::ScopeItem;
 use crate::pure::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
-    TestScriptSourcePurificationError,
 };
 use crate::session::vars::VarError;
 
@@ -236,7 +235,6 @@ pub enum PlanError {
     PgSourcePurification(PgSourcePurificationError),
     KafkaSourcePurification(KafkaSourcePurificationError),
     KafkaSinkPurification(KafkaSinkPurificationError),
-    TestScriptSourcePurification(TestScriptSourcePurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
     MySqlSourcePurification(MySqlSourcePurificationError),
@@ -300,7 +298,6 @@ impl PlanError {
             Self::InternalFunctionCall => Some("This function is for the internal use of the database system and cannot be called directly.".into()),
             Self::PgSourcePurification(e) => e.detail(),
             Self::KafkaSourcePurification(e) => e.detail(),
-            Self::TestScriptSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
             Self::CsrPurification(e) => e.detail(),
             Self::KafkaSinkPurification(e) => e.detail(),
@@ -404,7 +401,6 @@ impl PlanError {
             Self::VarError(e) => e.hint(),
             Self::PgSourcePurification(e) => e.hint(),
             Self::KafkaSourcePurification(e) => e.hint(),
-            Self::TestScriptSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
             Self::CsrPurification(e) => e.hint(),
             Self::KafkaSinkPurification(e) => e.hint(),
@@ -663,7 +659,6 @@ impl fmt::Display for PlanError {
                 or LIMIT INPUT GROUP SIZE"),
             Self::PgSourcePurification(e) => write!(f, "POSTGRES source validation: {}", e),
             Self::KafkaSourcePurification(e) => write!(f, "KAFKA source validation: {}", e),
-            Self::TestScriptSourcePurification(e) => write!(f, "TEST SCRIPT source validation: {}", e),
             Self::LoadGeneratorSourcePurification(e) => write!(f, "LOAD GENERATOR source validation: {}", e),
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
@@ -809,12 +804,6 @@ impl From<KafkaSinkPurificationError> for PlanError {
 impl From<CsrPurificationError> for PlanError {
     fn from(e: CsrPurificationError) -> Self {
         PlanError::CsrPurification(e)
-    }
-}
-
-impl From<TestScriptSourcePurificationError> for PlanError {
-    fn from(e: TestScriptSourcePurificationError) -> Self {
-        PlanError::TestScriptSourcePurification(e)
     }
 }
 

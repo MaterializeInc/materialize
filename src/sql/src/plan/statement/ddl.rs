@@ -87,7 +87,6 @@ use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
 };
-use mz_storage_types::sources::testscript::TestScriptSourceConnection;
 use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
 use prost::Message;
 
@@ -1045,13 +1044,6 @@ pub fn plan_create_source(
             });
 
             (connection, available_subsources)
-        }
-        CreateSourceConnection::TestScript { desc_json } => {
-            scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_FROM_TESTSCRIPT)?;
-            let connection = GenericSourceConnection::from(TestScriptSourceConnection {
-                desc_json: desc_json.clone(),
-            });
-            (connection, None)
         }
     };
 

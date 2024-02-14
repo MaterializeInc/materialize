@@ -1780,13 +1780,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_create_source_from_testscript,
-        desc: "CREATE SOURCE ... FROM TEST SCRIPT",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_date_bin_hopping,
         desc: "the date_bin_hopping function",
         default: false,
