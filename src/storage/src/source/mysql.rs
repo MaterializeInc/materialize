@@ -56,7 +56,7 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
-use itertools::Itertools;
+use itertools::{EitherOrBoth, Itertools};
 use mysql_async::Row as MySqlRow;
 use mysql_common::value::convert::from_value;
 use mysql_common::Value;
@@ -85,6 +85,7 @@ use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod replication;
+mod schemas;
 mod snapshot;
 
 impl SourceRender for MySqlSourceConnection {
@@ -204,6 +205,8 @@ pub enum ReplicationError {
 /// A transient error that never ends up in the collection of a specific table.
 #[derive(Debug, thiserror::Error)]
 pub enum TransientError {
+    #[error("issue when decoding")]
+    DecodeError(String),
     #[error("couldn't decode binlog row")]
     BinlogRowDecodeError(#[from] mysql_async::binlog::row::BinlogRowToRowError),
     #[error("stream ended prematurely")]
@@ -225,8 +228,10 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
-    #[error("table was dropped")]
-    TableDropped,
+    #[error("table was truncated: {0}")]
+    TableTruncated(String),
+    #[error("table was dropped: {0}")]
+    TableDropped(String),
     #[error("incompatible schema change: {0}")]
     IncompatibleSchema(String),
     #[error("received a gtid set from the server that violates our requirements: {0}")]
@@ -278,9 +283,29 @@ pub(crate) fn pack_mysql_row(
     let mut packer = row_container.packer();
     let mut temp_bytes = vec![];
     let mut temp_strs = vec![];
-    let values = row.unwrap();
+    let row_values = row.unwrap();
 
-    for (col_desc, value) in table_desc.columns.iter().zip_eq(values) {
+    for values in table_desc.columns.iter().zip_longest(row_values) {
+        let (col_desc, value) = match values {
+            EitherOrBoth::Both(col_desc, value) => (col_desc, value),
+            EitherOrBoth::Left(col_desc) => {
+                tracing::error!(
+                    "mysql: extra column description {col_desc:?} for table {}",
+                    table_desc.name
+                );
+                Err(TransientError::DecodeError(format!(
+                    "extra column description {col_desc:?} for table {}",
+                    table_desc.name
+                )))?
+            }
+            EitherOrBoth::Right(value) => {
+                tracing::error!("mysql: extra value {value:?} for table {}", table_desc.name);
+                Err(TransientError::DecodeError(format!(
+                    "extra value found: {value:?} for table {}",
+                    table_desc.name
+                )))?
+            }
+        };
         let datum = match value {
             Value::NULL => {
                 if col_desc.column_type.nullable {

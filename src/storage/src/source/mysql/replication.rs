@@ -83,6 +83,8 @@ use super::{
     ReplicationError, RewindRequest, TransientError,
 };
 
+mod events;
+
 /// Used as a partition id to determine if the worker is
 /// responsible for reading from the MySQL replication stream
 static REPL_READER: &str = "reader";
@@ -115,6 +117,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
     let (mut data_output, data_stream) = builder.new_output();
     let (upper_output, upper_stream) = builder.new_output();
+    // Captures DefiniteErrors that affect the entire source, including all subsources
     let (mut definite_error_handle, definite_errors) = builder.new_output();
     let mut rewind_input = builder.new_input_for_many(
         rewind_stream,
@@ -290,6 +293,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let mut table_id_map = BTreeMap::<u64, UnresolvedItemName>::new();
             let mut skipped_table_ids = BTreeSet::<u64>::new();
 
+            let mut errored_tables: BTreeSet<UnresolvedItemName> = BTreeSet::new();
+
             let mut final_row = Row::default();
 
             let mut next_gtid: Option<GtidPartition> = None;
@@ -333,7 +338,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             upper_cap_set.downgrade(&*new_upper);
 
                             rewinds.retain(|_, (_, req)| {
-                                !PartialOrder::less_than(&req.snapshot_upper, &new_upper)
+                                // We need to retain the rewind requests whose snapshot_upper has
+                                // at least one timestamp such that new_upper is less than that
+                                // timestamp
+                                req.snapshot_upper.iter().any(|ts| new_upper.less_than(ts))
                             });
 
                             trace!(%id, "timely-{worker_id} pending rewinds after \
@@ -388,8 +396,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             }
                             _ => unreachable!(),
                         };
-
-                        trace!(%id, "timely-{worker_id} received rows event: {data:?}");
+                        if errored_tables.contains(table) {
+                            continue;
+                        }
 
                         let (output_index, table_desc) = &table_info[table];
                         let new_gtid = next_gtid
@@ -462,15 +471,31 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         upper_cap_set.downgrade(&*new_upper);
 
                         rewinds.retain(|_, (_, req)| {
-                            !PartialOrder::less_than(&req.snapshot_upper, &new_upper)
+                            // We need to retain the rewind requests whose snapshot_upper has
+                            // at least one timestamp such that new_upper is less than that
+                            // timestamp
+                            req.snapshot_upper.iter().any(|ts| new_upper.less_than(ts))
                         });
                         trace!(%id, "timely-{worker_id} pending rewinds \
                                      after filtering: {rewinds:?}");
                     }
+
+                    Some(EventData::QueryEvent(event)) => {
+                        trace!(%id, "timely-{worker_id} received query event {event:?}");
+                        events::handle_query_event(
+                            event,
+                            &config,
+                            &connection_config,
+                            &table_info,
+                            &next_gtid,
+                            &mut errored_tables,
+                            &mut data_output,
+                            data_cap_set,
+                        )
+                        .await?;
+                    }
                     _ => {
                         // TODO: Handle other event types
-                        // We definitely need to handle 'query' events and parse them for DDL changes
-                        // that might affect the schema of the tables we care about.
                     }
                 }
             }

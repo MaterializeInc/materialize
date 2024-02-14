@@ -49,7 +49,7 @@ dummy    subsource
 #
 
 $ mysql-execute name=mysql
-DROP DATABASE IF EXISTS t1;
+DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 CREATE TABLE t1 (f1 INTEGER);
