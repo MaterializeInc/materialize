@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 
-from materialize.buildkite_insights.util import buildkite_api
+from materialize.buildkite_insights.util.buildkite_api import fetch_builds
 from materialize.buildkite_insights.util.data_io import (
     ensure_temp_dir_exists,
     exists_file_with_recent_data,
@@ -101,16 +101,13 @@ def get_data(
         print(f"Using existing data: {file_path}")
         return read_results_from_file(file_path)
 
-    request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
-    params = {"include_retried_jobs": "true", "per_page": str(items_per_page)}
-
-    if branch is not None:
-        params["branch"] = branch
-
-    if build_state is not None:
-        params["state"] = build_state
-
-    result = buildkite_api.get(request_path, params, max_fetches=max_fetches)
+    result = fetch_builds(
+        pipeline_slug=pipeline_slug,
+        max_fetches=max_fetches,
+        branch=branch,
+        build_state=build_state,
+        items_per_page=items_per_page,
+    )
     write_results_to_file(result, file_path)
     return result
 

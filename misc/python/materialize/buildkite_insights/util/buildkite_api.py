@@ -55,3 +55,22 @@ def get(
             break
 
     return results
+
+
+def fetch_builds(
+    pipeline_slug: str,
+    max_fetches: int | None,
+    branch: str | None,
+    build_state: str | None,
+    items_per_page: int = 100,
+) -> list[Any]:
+    request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
+    params = {"include_retried_jobs": "true", "per_page": str(items_per_page)}
+
+    if branch is not None:
+        params["branch"] = branch
+
+    if build_state is not None:
+        params["state"] = build_state
+
+    return get(request_path, params, max_fetches=max_fetches)
