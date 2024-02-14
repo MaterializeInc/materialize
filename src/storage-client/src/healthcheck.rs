@@ -10,25 +10,29 @@
 use mz_repr::{RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
 
-// NOTE: Update the views `mz_prepared_statement_history_redacted`,
-// `mz_activity_log`, and `mz_activity_log_redacted` whenever this
-// is updated, to include the new columns where appropriate.
-//
-// The `redacted` views should contain only those columns that should
-// be queryable by support.
 pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("session_id", ScalarType::Uuid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("sql", ScalarType::String.nullable(false))
-        .with_column("redacted_sql", ScalarType::String.nullable(false))
+        .with_column("sql_hash", ScalarType::Bytes.nullable(false))
         .with_column(
             "prepared_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
         .with_column("statement_type", ScalarType::String.nullable(true))
         .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+});
+
+pub static MZ_SQL_TEXT_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        .with_column(
+            "prepared_day",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("sql_hash", ScalarType::Bytes.nullable(false))
+        .with_column("sql", ScalarType::String.nullable(false))
+        .with_column("redacted_sql", ScalarType::String.nullable(false))
 });
 
 pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {

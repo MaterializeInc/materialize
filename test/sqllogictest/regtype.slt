@@ -142,12 +142,12 @@ CREATE TYPE d.public.t AS LIST (ELEMENT TYPE = int4);
 query T
 SELECT 't'::regtype::oid::int
 ----
-20700
+20704
 
 query T
 SELECT 's.t'::regtype::oid::int
 ----
-20701
+20705
 
 query T
 SELECT 't'::regtype = 's.t'::regtype

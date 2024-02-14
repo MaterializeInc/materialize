@@ -233,14 +233,17 @@ SELECT
     mseh.began_at,
     mseh.finished_at,
     mseh.finished_status,
-    mpsh.sql,
+    mst.sql,
     mpsh.prepared_at,
-    mpsh.redacted_sql
+    mst.redacted_sql
 FROM
     mz_internal.mz_statement_execution_history AS mseh
         LEFT JOIN
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
+        JOIN
+            (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
+            ON mpsh.sql_hash = mst.sql_hash
 ORDER BY mseh.began_at;",
             &[],
         )
@@ -348,10 +351,13 @@ FROM
         LEFT JOIN
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
-WHERE mpsh.sql ~~ 'SELECT%'
-AND mpsh.sql !~~ '%unique string to prevent this query showing up in results after retries%'
-AND mpsh.sql !~~ '%pg_catalog.pg_type%' --this gets executed behind the scenes by tokio-postgres
-OR mpsh.sql ~~ 'CREATE TABLE%'
+        JOIN
+            (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) AS mst
+            ON mpsh.sql_hash = mst.sql_hash
+WHERE mst.sql ~~ 'SELECT%'
+AND mst.sql !~~ '%unique string to prevent this query showing up in results after retries%'
+AND mst.sql !~~ '%pg_catalog.pg_type%' --this gets executed behind the scenes by tokio-postgres
+OR mst.sql ~~ 'CREATE TABLE%'
 ORDER BY mseh.began_at",
                     &[],
                 )
@@ -467,7 +473,9 @@ fn test_statement_logging_throttling() {
                     "SELECT
     sql,
     throttled_count
-FROM mz_internal.mz_prepared_statement_history
+FROM mz_internal.mz_prepared_statement_history mpsh
+JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
+ON mpsh.sql_hash = mst.sql_hash
 WHERE sql IN ('SELECT 1', 'SELECT 2')",
                     &[],
                 )
@@ -549,7 +557,10 @@ FROM
         LEFT JOIN
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
-WHERE mpsh.sql ~~ 'SUBSCRIBE%'
+        JOIN
+            mz_internal.mz_sql_text AS mst
+            ON mpsh.sql_hash = mst.sql_hash
+WHERE mst.sql ~~ 'SUBSCRIBE%'
 ORDER BY mseh.began_at",
             &[],
         )
@@ -594,13 +605,16 @@ fn test_statement_logging_sampling_inner(
     let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
     let sqls: Vec<String> = internal_client
         .query(
-            "SELECT mpsh.sql
+            "SELECT mst.sql
 FROM
     mz_internal.mz_statement_execution_history AS mseh
         JOIN
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
-WHERE mpsh.sql ~~ 'SELECT%'
+        JOIN
+            mz_internal.mz_sql_text AS mst
+            ON mpsh.sql_hash = mst.sql_hash
+WHERE mst.sql ~~ 'SELECT%'
 ORDER BY mseh.began_at ASC;",
             &[],
         )

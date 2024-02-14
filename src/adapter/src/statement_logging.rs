@@ -106,8 +106,7 @@ pub struct StatementEndedExecutionRecord {
 #[derive(Clone, Debug)]
 pub struct StatementPreparedRecord {
     pub id: Uuid,
-    pub sql: String,
-    pub redacted_sql: String,
+    pub sql_hash: [u8; 16],
     pub name: String,
     pub session_id: Uuid,
     pub prepared_at: EpochMillis,

@@ -119,7 +119,7 @@ serializable
 #
 # When we do so, we will need to change this test to encode the improved behavior.
 
-> WITH all_stmts AS (SELECT * FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id),
+> WITH all_stmts AS (SELECT mseh.*, mpsh.*, mst.sql, mst.redacted_sql FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id RIGHT JOIN (SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
   SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation, all_stmts.transient_index_id ~ '^t[0-9]+$'
   FROM all_stmts, test_begin LEFT JOIN mz_clusters c ON c.id = all_stmts.cluster_id WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
@@ -146,7 +146,7 @@ mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SE
 mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null>
 mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true
 
-> WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mpsh.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id),
+> WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash)),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
   SELECT sql, event_type FROM test_begin, mz_internal.mz_statement_lifecycle_history mslh
   JOIN all_stmts ON mslh.statement_id = all_stmts.id
@@ -227,12 +227,14 @@ COMMIT execution-finished
 > ROLLBACK
 
 > WITH begin_tid AS
-  (SELECT transaction_id FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
+  (SELECT transaction_id FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, mz_internal.mz_sql_text mst
    WHERE mseh.prepared_statement_id = mpsh.id
-   AND mpsh.sql = 'BEGIN --hello')
-  SELECT sql FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, begin_tid
+   AND mpsh.sql_hash = mst.sql_hash
+   AND mst.sql = 'BEGIN --hello')
+  SELECT sql FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, begin_tid, mz_internal.mz_sql_text mst
   WHERE mseh.prepared_statement_id = mpsh.id
   AND mseh.transaction_id = begin_tid.transaction_id
+  AND mpsh.sql_hash = mst.sql_hash
   AND mseh.application_name = 'my_app'
 "BEGIN --hello"
 "SELECT 'transaction statement 1'"
