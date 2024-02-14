@@ -91,6 +91,10 @@ CREATE TABLE "таблица" ("колона" TEXT);
 ALTER TABLE "таблица" REPLICA IDENTITY FULL;
 INSERT INTO "таблица" VALUES ('стойност');
 
+CREATE TABLE tstzrange_table (a TSTZRANGE);
+ALTER TABLE tstzrange_table REPLICA IDENTITY FULL;
+INSERT INTO tstzrange_table VALUES ('["2024-02-13 17:01:58.37848+00!?!",)');
+
 CREATE TABLE """literal_quotes""" (a TEXT);
 ALTER TABLE """literal_quotes""" REPLICA IDENTITY FULL;
 INSERT INTO """literal_quotes""" VALUES ('v');
@@ -292,7 +296,8 @@ detail:referenced items: no_replica_identity
     conflict_schema.conflict_table AS public.conflict_table,
     "space table",
     """literal_quotes""",
-    "create"
+    "create",
+    tstzrange_table
   );
 
 > SHOW SOURCES
@@ -311,6 +316,7 @@ pk_table              subsource <null>  <null>
 trailing_space_nopk   subsource <null>  <null>
 trailing_space_pk     subsource <null>  <null>
 "\"literal_quotes\""  subsource <null>  <null>
+tstzrange_table       subsource <null>  <null>
 types_table           subsource <null>  <null>
 utf8_table            subsource <null>  <null>
 таблица               subsource <null>  <null>
@@ -403,6 +409,9 @@ v
 
 > SELECT * FROM "create"
 v
+
+> SELECT * FROM tstzrange_table
+"[2024-02-13 17:01:58.378480 UTC,)"
 
 #
 # Confirm that the new sources can be used to build upon
@@ -575,6 +584,7 @@ DELETE FROM nulls_table;
 DELETE FROM utf8_table;
 DELETE FROM "таблица";
 DELETE FROM conflict_schema.conflict_table;
+DELETE FROM tstzrange_table;
 
 #
 # Check that all data sources empty out on the Materialize side
@@ -611,6 +621,9 @@ DELETE FROM conflict_schema.conflict_table;
 0
 
 > SELECT COUNT(*) FROM conflict_table;
+0
+
+> SELECT COUNT(*) FROM tstzrange_table;
 0
 
 #

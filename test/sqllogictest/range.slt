@@ -7307,6 +7307,16 @@ SELECT '[1970-01-01 00:00:01,]'::tstzrange;
 ----
 ["1970-01-01 00:00:01+00",)
 
+query T
+SELECT '["2024-02-13 17:01:58.37848+00",)'::tstzrange;
+----
+["2024-02-13 17:01:58.37848+00",)
+
+query T
+SELECT '["?!?2024-02-13 17:01:58.37848+00!?!",)'::tstzrange;
+----
+["2024-02-13 17:01:58.37848+00",)
+
 # Range bound errors
 query error range lower bound must be less than or equal to range upper bound
 SELECT '[1970-01-01 00:00:01,1969-12-31 11:59:59]'::tstzrange;
