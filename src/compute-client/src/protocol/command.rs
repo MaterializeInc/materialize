@@ -376,8 +376,6 @@ pub struct ComputeParameters {
     pub enable_mz_join_core: Option<bool>,
     /// Whether to activate jemalloc heap profiling.
     pub enable_jemalloc_profiling: Option<bool>,
-    /// Enable arrangement type specialization.
-    pub enable_specialized_arrangements: Option<bool>,
     /// Enable lgalloc for columnation.
     pub enable_columnation_lgalloc: Option<bool>,
     /// Persist client configuration.
@@ -397,7 +395,6 @@ impl ComputeParameters {
             linear_join_yielding,
             enable_mz_join_core,
             enable_jemalloc_profiling,
-            enable_specialized_arrangements,
             enable_columnation_lgalloc,
             persist,
             tracing,
@@ -419,11 +416,6 @@ impl ComputeParameters {
         if enable_jemalloc_profiling.is_some() {
             self.enable_jemalloc_profiling = enable_jemalloc_profiling;
         }
-
-        if enable_specialized_arrangements.is_some() {
-            self.enable_specialized_arrangements = enable_specialized_arrangements;
-        }
-
         if enable_columnation_lgalloc.is_some() {
             self.enable_columnation_lgalloc = enable_columnation_lgalloc;
         }
@@ -451,7 +443,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             linear_join_yielding: self.linear_join_yielding.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             enable_jemalloc_profiling: self.enable_jemalloc_profiling.into_proto(),
-            enable_specialized_arrangements: self.enable_specialized_arrangements.into_proto(),
             enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
@@ -469,7 +460,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             linear_join_yielding: proto.linear_join_yielding.into_rust()?,
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
             enable_jemalloc_profiling: proto.enable_jemalloc_profiling.into_rust()?,
-            enable_specialized_arrangements: proto.enable_specialized_arrangements.into_rust()?,
             enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
             persist: proto
                 .persist

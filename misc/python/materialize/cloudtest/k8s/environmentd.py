@@ -257,13 +257,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self._meets_maximum_version("0.63.99"):
             system_parameter_defaults["enable_managed_clusters"] = "true"
 
-        # Before #22790, enable_specialized_arrangements would cause
-        # panicked at 'Invalid combination of type specializations: key types differ!
-        if self._meets_minimum_version("0.74.0") and self._meets_maximum_version(
-            "0.74.99"
-        ):
-            system_parameter_defaults["enable_specialized_arrangements"] = "off"
-
         value_from = V1EnvVarSource(
             field_ref=V1ObjectFieldSelector(field_path="metadata.name")
         )

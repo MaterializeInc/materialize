@@ -167,11 +167,6 @@ pub struct OptimizerConfig {
     ///
     /// The refinement happens in the LIR ⇒ LIR phase.
     pub enable_consolidate_after_union_negate: bool,
-    /// Enable collecting type information so that rendering can type-specialize
-    /// arrangements.
-    ///
-    /// The collection of type information happens in MIR ⇒ LIR lowering.
-    pub enable_specialized_arrangements: bool,
     /// An exclusive upper bound on the number of results we may return from a
     /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
     /// [`peek::Optimizer`].
@@ -199,7 +194,6 @@ impl From<&SystemVars> for OptimizerConfig {
             replan: None,
             enable_fast_path: true, // Always enable fast path if available.
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
-            enable_specialized_arrangements: vars.enable_specialized_arrangements(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),

@@ -499,25 +499,16 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        if self.enable_specialized_arrangements {
-            let collection = collection.map(|(k, v)| {
-                assert!(v.is_empty());
-                (k, ())
-            });
-            let (arrangement, errs) = self.build_distinct::<RowSpine<_, _>, RowErrSpine<_, _>, _>(
-                collection,
-                " [val: empty]",
-                mfp_after,
-            );
-            (SpecializedArrangement::RowUnit(arrangement), errs)
-        } else {
-            let collection = collection.inspect(|((_, v), _, _)| assert!(v.is_empty()));
-            let (arrangement, errs) = self
-                .build_distinct::<RowRowSpine<_, _>, RowErrSpine<_, _>, _>(
-                    collection, "", mfp_after,
-                );
-            (SpecializedArrangement::RowRow(arrangement), errs)
-        }
+        let collection = collection.map(|(k, v)| {
+            assert!(v.is_empty());
+            (k, ())
+        });
+        let (arrangement, errs) = self.build_distinct::<RowSpine<_, _>, RowErrSpine<_, _>, _>(
+            collection,
+            " [val: empty]",
+            mfp_after,
+        );
+        (SpecializedArrangement::RowUnit(arrangement), errs)
     }
 
     /// Build the dataflow to compute the set of distinct keys.
