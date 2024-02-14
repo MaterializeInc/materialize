@@ -275,7 +275,7 @@ true true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches, size < 16 * 1024, capacity > 0, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
+> SELECT records, batches, size < 16 * 1024, capacity < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
 0 32 true true true
 
 # Tests that arrangement sizes are approximate
@@ -286,7 +286,7 @@ true true true
 
 # We have 16 workers, and only want to ensure that the sizes are not egregious.
 
-> SELECT records, batches, size < 16 * 1024, capacity > 0, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records, batches, size < 16 * 1024, capacity < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 0 32 true true true
 
 > INSERT INTO t4 SELECT 1
@@ -354,10 +354,11 @@ true true true true true
     size > 0,
     size < 4 * 130 * 1000,
     capacity > 0,
+    capacity < 4 * 130 * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c1%';
-true true true true true true
+true true true true true true true
 
 > SELECT
     records > 1000,
@@ -365,10 +366,11 @@ true true true true true true
     size > 0,
     size < 4 * 100 * 1024,
     capacity > 0,
+    capacity < 4 * 100 * 1024,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c2%';
-true true true true true true
+true true true true true true true
 
 # For coverage, we also include a recursive materialized view to account for dynamic timestamps.
 > CREATE MATERIALIZED VIEW rec AS
@@ -393,10 +395,11 @@ true true true true true true
     size > 0,
     size < 4 * 1000 * 1000,
     capacity > 0,
+    capacity < 4 * 1000 * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';
-true true true true true true
+true true true true true true true
 
 > DROP TABLE ten CASCADE;
 
@@ -426,10 +429,11 @@ true true true true true true
     size > 0,
     size < 4 * 200 * 1000,
     capacity > 0,
+    capacity < 4 * 200 * 1000,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
-true true true true true true
+true true true true true true true
 
 > SELECT
     records >= 2 * 1000,
@@ -437,10 +441,11 @@ true true true true true true
     size > 0,
     size < 4 * 172 * 1000,
     capacity > 0,
+    capacity < 4 * 172 * 1000,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
-true true true true true true
+true true true true true true true
 
 > DROP SOURCE counter CASCADE;
 
