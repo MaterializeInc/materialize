@@ -34,6 +34,8 @@ from materialize.output_consistency.operation.operation import (
 
 GENERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
+TAG_CASTING = "casting"
+
 GENERIC_OPERATION_TYPES.append(
     DbFunction(
         "greatest",
@@ -96,6 +98,6 @@ GENERIC_OPERATION_TYPES.append(
             all_data_types_enum_constant_operation_param(must_be_pg_compatible=True),
         ],
         OtherReturnTypeSpec(),
-        is_pg_compatible=True,
+        tags={TAG_CASTING},
     )
 )
