@@ -17,6 +17,10 @@ if [ "$BUILDKITE_COMMAND_EXIT_STATUS" -ne "0" ] || [ "$BUILDKITE_LAST_HOOK_EXIT_
    ci_unimportant_heading "Buildkite job failure reported, terminating the Buildkite agent in case it is tainted"
    # Supposedly the 'official' way of terminating the buildkite agent
    kill -s SIGTERM "$(/bin/pidof buildkite-agent)"
+
+   if [ "$BUILDKITE_BRANCH" != "main" ]; then
+      bin/ci-builder run stable bin/ci-failure-also-on-main
+   fi
 fi
 
 ci_unimportant_heading ":docker: Cleaning up after mzcompose"
