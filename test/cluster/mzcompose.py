@@ -68,12 +68,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
-        # TODO: Reenable test-compute-controller-metrics when #25214 is fixed
         if name in (
             "default",
             "test-incident-70",
             "test-concurrent-connections",
-            "test-compute-controller-metrics",
         ):
             continue
         if buildkite.accepted_by_shard(i):
@@ -2426,6 +2424,9 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
     mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
+
+    # Wait a bit to let the controller refresh its metrics.
+    time.sleep(2)
 
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
