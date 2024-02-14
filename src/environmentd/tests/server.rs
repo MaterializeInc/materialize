@@ -1314,25 +1314,26 @@ fn test_storage_usage_collection_interval_timestamps() {
 
     // Retry because it may take some time for the initial snapshot to be taken.
     let rows = Retry::default()
-            .max_duration(Duration::from_secs(10))
-            .retry(|_| {
-                let rows = client
-                    .query(
-                        "SELECT EXTRACT(EPOCH FROM collection_timestamp)::integer, ARRAY_AGG(object_id) \
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let rows = client
+                .query(
+                    "SELECT EXTRACT(EPOCH FROM collection_timestamp), ARRAY_AGG(object_id) \
                 FROM mz_catalog.mz_storage_usage \
                 GROUP BY collection_timestamp \
                 ORDER BY collection_timestamp ASC;",
-                        &[],
-                    )
-                    .map_err(|e| e.to_string()).unwrap();
+                    &[],
+                )
+                .map_err(|e| e.to_string())
+                .unwrap();
 
-                if rows.is_empty() {
-                    Err("expected some timestamp, instead found None".to_string())
-                } else {
-                    Ok(rows)
-                }
-            })
-            .unwrap();
+            if rows.is_empty() {
+                Err("expected some timestamp, instead found None".to_string())
+            } else {
+                Ok(rows)
+            }
+        })
+        .unwrap();
 
     // The timestamp is selected after the storage usage is collected, so depending on how long
     // each collection takes, the timestamps can be arbitrarily close together or far apart. If
