@@ -40,7 +40,6 @@ macro_rules! coord_bail {
 
 mod command;
 mod coord;
-mod copy_to;
 mod error;
 mod explain;
 mod notice;

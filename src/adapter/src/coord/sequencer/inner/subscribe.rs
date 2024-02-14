@@ -21,7 +21,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::subscribe::ActiveSubscribe;
+use crate::subscribe::{ActiveComputeSink, ActiveSubscribe};
 use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
@@ -311,7 +311,9 @@ impl Coordinator {
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
         // Add metadata for the new SUBSCRIBE.
-        let write_notify_fut = self.add_active_subscribe(sink_id, active_subscribe).await;
+        let write_notify_fut = self
+            .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+            .await;
         // Ship dataflow.
         let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
 

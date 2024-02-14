@@ -27,6 +27,59 @@ use timely::progress::Antichain;
 use tokio::sync::mpsc;
 
 use crate::coord::peek::PeekResponseUnary;
+use crate::{AdapterError, ExecuteContext, ExecuteResponse};
+
+#[derive(Debug)]
+/// A description of an active compute sink from coord's perspective.
+/// This is either a subscribe sink or a copy to sink.
+pub enum ActiveComputeSink {
+    Subscribe(ActiveSubscribe),
+    CopyTo(ActiveCopyTo),
+}
+
+impl ActiveComputeSink {
+    pub fn cluster_id(&self) -> ClusterId {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => subscribe.cluster_id,
+            ActiveComputeSink::CopyTo(copy_to) => copy_to.cluster_id,
+        }
+    }
+
+    pub fn connection_id(&self) -> &ConnectionId {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => &subscribe.conn_id,
+            ActiveComputeSink::CopyTo(copy_to) => &copy_to.conn_id,
+        }
+    }
+
+    pub fn user(&self) -> &User {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => &subscribe.user,
+            ActiveComputeSink::CopyTo(copy_to) => &copy_to.user,
+        }
+    }
+
+    pub fn depends_on(&self) -> &BTreeSet<GlobalId> {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => &subscribe.depends_on,
+            ActiveComputeSink::CopyTo(copy_to) => &copy_to.depends_on,
+        }
+    }
+
+    pub fn process_subscribe(&mut self, batch: SubscribeBatch) {
+        match self {
+            ActiveComputeSink::Subscribe(subscribe) => subscribe.process_response(batch),
+            ActiveComputeSink::CopyTo(_) => unreachable!(),
+        }
+    }
+
+    pub fn process_copy_to(&mut self, response: Result<ExecuteResponse, AdapterError>) {
+        match self {
+            ActiveComputeSink::Subscribe(_) => unreachable!(),
+            ActiveComputeSink::CopyTo(copy_to) => copy_to.process_response(response),
+        }
+    }
+}
 
 /// A description of an active subscribe from coord's perspective
 #[derive(Debug)]
@@ -324,4 +377,30 @@ pub enum ComputeSinkRemovalReason {
     /// The compute sink was forcibly terminated because an object it depended on
     /// was dropped.
     DependencyDropped(String),
+}
+
+/// A description of an active copy to from coord's perspective.
+#[derive(Debug)]
+pub struct ActiveCopyTo {
+    /// The user of the session that created the subscribe.
+    pub user: User,
+    /// The connection id of the session that created the subscribe.
+    pub conn_id: ConnectionId,
+    /// The context about the COPY TO statement getting executed.
+    /// Used to eventually call `ctx.retire` on.
+    pub ctx: Option<ExecuteContext>,
+    /// The cluster that the copy to is running on.
+    pub cluster_id: ClusterId,
+    /// All `GlobalId`s that the copy to's expression depends on.
+    pub depends_on: BTreeSet<GlobalId>,
+}
+
+impl ActiveCopyTo {
+    pub(crate) fn process_response(&mut self, response: Result<ExecuteResponse, AdapterError>) {
+        // Using an option to get an owned value after take
+        // to call `retire` on it.
+        if let Some(ctx) = self.ctx.take() {
+            let _ = ctx.retire(response);
+        }
+    }
 }

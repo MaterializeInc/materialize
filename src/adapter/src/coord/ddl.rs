@@ -224,8 +224,7 @@ impl Coordinator {
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
-        let mut subscribe_sinks_to_drop = vec![];
-        let mut copy_to_sinks_to_drop = vec![];
+        let mut compute_sinks_to_drop = vec![];
         let mut peeks_to_drop = vec![];
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
@@ -404,16 +403,16 @@ impl Coordinator {
             .chain(views_to_drop.iter())
             .collect();
 
-        // Clean up any active subscribes that rely on dropped relations or clusters.
-        for (&global_id, subscribe) in &self.active_subscribes {
-            let cluster_id = subscribe.cluster_id;
+        // Clean up any active compute sinks like subscribes or copy to-s that rely on dropped relations or clusters.
+        for (&global_id, sink) in &self.active_compute_sinks {
+            let cluster_id = sink.cluster_id();
             let sink_id = ComputeSinkId {
                 cluster_id,
                 global_id,
             };
-            let conn_id = &subscribe.conn_id;
-            if let Some(id) = subscribe
-                .depends_on
+            let conn_id = &sink.connection_id();
+            if let Some(id) = sink
+                .depends_on()
                 .iter()
                 .find(|id| relations_to_drop.contains(id))
             {
@@ -422,7 +421,7 @@ impl Coordinator {
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id))
                     .to_string();
-                subscribe_sinks_to_drop.push((
+                compute_sinks_to_drop.push((
                     sink_id,
                     ComputeSinkRemovalReason::DependencyDropped(format!(
                         "relation {}",
@@ -431,44 +430,7 @@ impl Coordinator {
                 ));
             } else if clusters_to_drop.contains(&cluster_id) {
                 let name = self.catalog().get_cluster(cluster_id).name();
-                subscribe_sinks_to_drop.push((
-                    sink_id,
-                    ComputeSinkRemovalReason::DependencyDropped(format!(
-                        "cluster {}",
-                        name.quoted()
-                    )),
-                ));
-            }
-        }
-
-        // Clean up any active copy tos that rely on dropped relations or clusters.
-        for (&global_id, copy_to) in &self.active_copy_tos {
-            let cluster_id = copy_to.cluster_id;
-            let sink_id = ComputeSinkId {
-                cluster_id,
-                global_id,
-            };
-            let conn_id = &copy_to.conn_id;
-            if let Some(id) = copy_to
-                .depends_on
-                .iter()
-                .find(|id| relations_to_drop.contains(id))
-            {
-                let entry = self.catalog().get_entry(id);
-                let name = self
-                    .catalog()
-                    .resolve_full_name(entry.name(), Some(conn_id))
-                    .to_string();
-                copy_to_sinks_to_drop.push((
-                    sink_id,
-                    ComputeSinkRemovalReason::DependencyDropped(format!(
-                        "relation {}",
-                        name.quoted()
-                    )),
-                ));
-            } else if clusters_to_drop.contains(&cluster_id) {
-                let name = self.catalog().get_cluster(cluster_id).name();
-                copy_to_sinks_to_drop.push((
+                compute_sinks_to_drop.push((
                     sink_id,
                     ComputeSinkRemovalReason::DependencyDropped(format!(
                         "cluster {}",
@@ -598,11 +560,8 @@ impl Coordinator {
             if !storage_sinks_to_drop.is_empty() {
                 self.drop_storage_sinks(storage_sinks_to_drop);
             }
-            if !subscribe_sinks_to_drop.is_empty() {
-                self.drop_compute_sinks(subscribe_sinks_to_drop).await;
-            }
-            if !copy_to_sinks_to_drop.is_empty() {
-                self.drop_compute_sinks(copy_to_sinks_to_drop).await;
+            if !compute_sinks_to_drop.is_empty() {
+                self.drop_compute_sinks(compute_sinks_to_drop).await;
             }
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
@@ -789,9 +748,8 @@ impl Coordinator {
     ) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for (sink, reason) in sinks {
-            self.remove_active_subscribe(sink.global_id, reason.clone())
+            self.remove_active_sink(sink.global_id, reason.clone())
                 .await;
-            self.remove_active_copy_to(&sink.global_id, reason);
 
             if !self
                 .controller

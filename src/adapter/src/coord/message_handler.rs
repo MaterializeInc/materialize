@@ -18,6 +18,7 @@ use futures::FutureExt;
 use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
@@ -347,17 +348,17 @@ impl Coordinator {
                 // aborting a subscribe, we eagerly remove it from
                 // `active_subscribes`, but we might receive a few responses
                 // from the controller about the zombie subscribe.
-                if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
-                    active_subscribe.process_response(response);
+                if let Some(sink) = self.active_compute_sinks.get_mut(&sink_id) {
+                    sink.process_subscribe(response);
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
-                if let Some(active_copy_to) = self.active_copy_tos.get_mut(&sink_id) {
+                if let Some(sink) = self.active_compute_sinks.get_mut(&sink_id) {
                     let response = match response {
                         Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
                         Err(error) => Err(AdapterError::Unstructured(error)),
                     };
-                    active_copy_to.process_response(response);
+                    sink.process_copy_to(response);
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {

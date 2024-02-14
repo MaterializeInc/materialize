@@ -149,7 +149,6 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
-use crate::copy_to::ActiveCopyTo;
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics::Metrics;
@@ -159,7 +158,7 @@ use crate::optimize::dataflows::{
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::subscribe::ActiveSubscribe;
+use crate::subscribe::ActiveComputeSink;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
@@ -1275,10 +1274,8 @@ pub struct Coordinator {
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
 
-    /// A map from active subscribes to the subscribe description.
-    active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
-    /// A map from active copy tos to the copy to description.
-    active_copy_tos: BTreeMap<GlobalId, ActiveCopyTo>,
+    /// A map from the compute sink ID to it's state description.
+    active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
 
@@ -2948,8 +2945,7 @@ pub fn serve(
                     client_pending_peeks: BTreeMap::new(),
                     pending_real_time_recency_timestamp: BTreeMap::new(),
                     pending_linearize_read_txns: BTreeMap::new(),
-                    active_subscribes: BTreeMap::new(),
-                    active_copy_tos: BTreeMap::new(),
+                    active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),

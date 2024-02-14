@@ -43,7 +43,6 @@ use crate::coord::{
     PeekStageOptimize, PeekStageRealTimeRecency, PeekStageTimestampReadHold, PeekStageValidate,
     PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
-use crate::copy_to::ActiveCopyTo;
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
@@ -51,6 +50,7 @@ use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
+use crate::subscribe::{ActiveComputeSink, ActiveCopyTo};
 
 impl Coordinator {
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
@@ -849,7 +849,8 @@ impl Coordinator {
             depends_on: validity.dependency_ids.clone(),
         };
         // Add metadata for the new COPY TO.
-        self.add_active_copy_to(sink_id, active_copy_to);
+        self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
+            .await;
 
         // Ship dataflow.
         self.ship_dataflow(df_desc, cluster_id).await;
