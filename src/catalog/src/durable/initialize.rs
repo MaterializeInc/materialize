@@ -628,6 +628,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> ClusterConfig {
             },
             idle_arrangement_merge_effort: None,
             disk: false,
+            optimizer_feature_overrides: Default::default(),
         }),
     }
 }
