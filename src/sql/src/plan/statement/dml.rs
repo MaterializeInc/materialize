@@ -17,12 +17,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 
-use mz_expr::MirRelationExpr;
+use mz_expr::{MirRelationExpr, RowSetFinishing};
+use mz_ore::num::NonNeg;
+use mz_ore::soft_panic_or_log;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
     IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
@@ -189,21 +191,57 @@ pub fn plan_select(
         return Ok(Plan::SideEffectingFunc(f));
     }
 
+    let (plan, _desc) = plan_select_inner(scx, select, params, copy_to)?;
+    Ok(Plan::Select(plan))
+}
+
+fn plan_select_inner(
+    scx: &StatementContext,
+    select: SelectStatement<Aug>,
+    params: &Params,
+    copy_to: Option<CopyFormat>,
+) -> Result<(SelectPlan, RelationDesc), PlanError> {
     let when = query::plan_as_of(scx, select.as_of)?;
     let query::PlannedRootQuery {
         mut expr,
-        desc: _,
+        desc,
         finishing,
         scope: _,
     } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
     expr.bind_parameters(params)?;
 
-    Ok(Plan::Select(SelectPlan {
+    // A top-level limit cannot be data dependent so eagerly evaluate it.
+    let limit = match finishing.limit {
+        None => None,
+        Some(mut limit) => {
+            limit.bind_parameters(params)?;
+            let Some(limit) = limit.as_literal() else {
+                sql_bail!("Top-level LIMIT must be a constant expression")
+            };
+            match limit {
+                Datum::Null => None,
+                Datum::Int64(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
+                _ => {
+                    soft_panic_or_log!("Valid literal limit must be asserted in `plan_select`");
+                    sql_bail!("LIMIT must be a non negative INT or NULL")
+                }
+            }
+        }
+    };
+
+    let plan = SelectPlan {
         source: expr,
         when,
-        finishing,
+        finishing: RowSetFinishing {
+            limit,
+            offset: finishing.offset,
+            project: finishing.project,
+            order_by: finishing.order_by,
+        },
         copy_to,
-    }))
+    };
+
+    Ok((plan, desc))
 }
 
 pub fn describe_explain_plan(
@@ -338,22 +376,8 @@ pub fn plan_explain_plan(
             }
         }
         Explainee::Select(select, broken) => {
-            // The following code should align with `dml::plan_select`.
-            let when = query::plan_as_of(scx, select.as_of)?;
-            let query::PlannedRootQuery {
-                mut expr,
-                desc,
-                finishing,
-                scope: _,
-            } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
-            expr.bind_parameters(params)?;
-
-            let plan = SelectPlan {
-                source: expr,
-                when,
-                finishing,
-                copy_to: None,
-            };
+            let copy_to = None;
+            let (plan, desc) = plan_select_inner(scx, *select, params, copy_to)?;
 
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
@@ -986,28 +1010,8 @@ pub fn plan_copy(
                 _ => sql_bail!("COPY {} {} not supported", direction, target),
             };
 
-            // slightly different than plan_select, we need the `desc` as well for copy to
-            let when = query::plan_as_of(scx, stmt.as_of)?;
-            let query::PlannedRootQuery {
-                expr,
-                desc,
-                finishing,
-                scope: _,
-            } = query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot)?;
-
-            plan_copy_to(
-                scx,
-                SelectPlan {
-                    source: expr,
-                    when,
-                    finishing,
-                    copy_to: None,
-                },
-                desc,
-                to_expr,
-                format,
-                options,
-            )
+            let (plan, desc) = plan_select_inner(scx, stmt, &Params::empty(), None)?;
+            plan_copy_to(scx, plan, desc, to_expr, format, options)
         }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
     }
