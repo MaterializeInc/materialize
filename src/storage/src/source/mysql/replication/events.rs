@@ -9,9 +9,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mysql_common::binlog::events::QueryEvent;
+use mysql_async::BinlogStream;
+use mysql_common::binlog::events::{QueryEvent, RowsEventData};
 use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::progress::Timestamp;
 use tracing::trace;
 
 use mz_mysql_util::{Config, MySqlTableDesc};
@@ -24,7 +26,7 @@ use mz_timely_util::builder_async::AsyncOutputHandle;
 use crate::source::RawSourceCreationConfig;
 
 use super::super::schemas::verify_schemas;
-use super::super::{table_name, DefiniteError, TransientError};
+use super::super::{pack_mysql_row, table_name, DefiniteError, RewindRequest, TransientError};
 
 /// Returns the UnresolvedItemName for the given table name referenced in a
 /// SQL statement, using the current schema if the table name is unqualified.
@@ -53,7 +55,7 @@ pub(super) async fn handle_query_event(
     config: &RawSourceCreationConfig,
     connection_config: &Config,
     table_info: &BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
-    next_gtid: &Option<GtidPartition>,
+    new_gtid: &GtidPartition,
     errored_tables: &mut BTreeSet<UnresolvedItemName>,
     data_output: &mut AsyncOutputHandle<
         GtidPartition,
@@ -66,8 +68,6 @@ pub(super) async fn handle_query_event(
 
     let query = event.query();
     let current_schema = event.schema();
-
-    let new_gtid = next_gtid.as_ref().expect("gtid cap should be set");
 
     // MySQL does not permit transactional DDL, so luckily we don't need to
     // worry about tracking BEGIN/COMMIT query events. We only need to look
@@ -174,6 +174,108 @@ pub(super) async fn handle_query_event(
             }
         }
     };
+
+    Ok(())
+}
+
+/// Handles RowsEvents from the MySQL replication stream. These events contain
+/// insert/update/delete events for a single transaction or committed statement.
+///
+/// We use these events to update the dataflow with the new rows, and return a new
+/// frontier with which to advance the dataflow's progress.
+pub(super) async fn handle_rows_event(
+    event: RowsEventData<'_>,
+    config: &RawSourceCreationConfig,
+    stream: &BinlogStream,
+    table_id_map: &mut BTreeMap<u64, UnresolvedItemName>,
+    skipped_table_ids: &mut BTreeSet<u64>,
+    errored_tables: &BTreeSet<UnresolvedItemName>,
+    table_info: &BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
+    new_gtid: &GtidPartition,
+    rewinds: &BTreeMap<UnresolvedItemName, ([Capability<GtidPartition>; 2], RewindRequest)>,
+    data_output: &mut AsyncOutputHandle<
+        GtidPartition,
+        Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
+        TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+    >,
+    data_cap_set: &CapabilitySet<GtidPartition>,
+) -> Result<(), TransientError> {
+    let (id, worker_id) = (config.id, config.worker_id);
+
+    // Find the relevant table
+    let binlog_table_id = event.table_id();
+    let table_map_event = stream
+        .get_tme(binlog_table_id)
+        .ok_or_else(|| TransientError::Generic(anyhow::anyhow!("Table map event not found")))?;
+    let table = match (
+        table_id_map.get(&binlog_table_id),
+        skipped_table_ids.get(&binlog_table_id),
+    ) {
+        (Some(table), None) => table,
+        (None, Some(_)) => {
+            // We've seen this table ID before and it was skipped
+            return Ok(());
+        }
+        (None, None) => {
+            let table = table_name(
+                &*table_map_event.database_name(),
+                &*table_map_event.table_name(),
+            )?;
+            if table_info.contains_key(&table) {
+                table_id_map.insert(binlog_table_id, table);
+                &table_id_map[&binlog_table_id]
+            } else {
+                skipped_table_ids.insert(binlog_table_id);
+                trace!(%id,
+                    "timely-{worker_id} skipping table {table:?} \
+                     with id {binlog_table_id}"
+                );
+                // We don't know about this table, so skip this event
+                return Ok(());
+            }
+        }
+        _ => unreachable!(),
+    };
+    if errored_tables.contains(table) {
+        return Ok(());
+    }
+
+    let (output_index, table_desc) = &table_info[table];
+
+    // Iterate over the rows in this RowsEvent. Each row is a pair of 'before_row', 'after_row',
+    // to accomodate for updates and deletes (which include a before_row),
+    // and updates and inserts (which inclued an after row).
+    let mut final_row = Row::default();
+    let mut container = Vec::new();
+    let mut rows_iter = event.rows(table_map_event);
+    while let Some(Ok((before_row, after_row))) = rows_iter.next() {
+        let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
+        for (binlog_row, diff) in updates.into_iter().flatten() {
+            let row = mysql_async::Row::try_from(binlog_row)?;
+            let packed_row = pack_mysql_row(&mut final_row, row, table_desc)?;
+            let data = (*output_index, packed_row);
+
+            // Rewind this update if it was already present in the snapshot
+            if let Some(([data_cap, _upper_cap], rewind_req)) = rewinds.get(table) {
+                if !rewind_req.snapshot_upper.less_equal(new_gtid) {
+                    trace!(%id, "timely-{worker_id} rewinding update \
+                                 {data:?} for {new_gtid:?}");
+                    data_output
+                        .give(data_cap, (data.clone(), GtidPartition::minimum(), -diff))
+                        .await;
+                }
+            }
+            trace!(%id, "timely-{worker_id} sending update {data:?}
+                         for {new_gtid:?}");
+            container.push((data, new_gtid.clone(), diff));
+        }
+    }
+
+    // Flush this data
+    let gtid_cap = data_cap_set.delayed(new_gtid);
+    trace!(%id, "timely-{worker_id} sending container for {new_gtid:?} \
+                 with {container:?} updates");
+    data_output.give_container(&gtid_cap, &mut container).await;
 
     Ok(())
 }
