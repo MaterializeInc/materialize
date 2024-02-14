@@ -50,7 +50,7 @@
             SELECT *
             FROM mz_objects
            JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
-            WHERE mz_schemas.name = lower('{{ schema.prod_deploy }}')
+            WHERE mz_schemas.name = lower(trim('{{ schema.prod_deploy }}'))
                 AND mz_objects.id LIKE 'u%'
         {% endset %}
 
@@ -115,7 +115,7 @@
         {% set cluster_configuration %}
             SELECT managed, size, replication_factor
             FROM mz_clusters
-            WHERE name = lower('{{ cluster.prod }}')
+            WHERE name = lower(trim('{{ cluster.prod }}'))
         {% endset %}
 
         {% set cluster_config_results = run_query(cluster_configuration) %}
