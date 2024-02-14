@@ -245,10 +245,9 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         };
         df_desc.export_sink(self.select_id, sink_desc);
 
-        // Resolve all unmaterializable function calls except mz_now(), because
-        // we don't yet have a timestamp.
+        // Resolve all unmaterializable function calls.
         let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Deferred,
+            logical_time: EvalTime::Time(timestamp_ctx.timestamp_or_default()),
             session,
             catalog_state: self.catalog.state(),
         };
@@ -290,25 +289,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             // Collect the list of indexes used by the dataflow at this point.
             trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
         }
-
-        // Get the single timestamp representing the `as_of` time.
-        let as_of = df_desc
-            .as_of
-            .clone()
-            .expect("as_of antichain")
-            .into_option()
-            .expect("unique as_of element");
-
-        // Resolve all unmaterializable function calls including mz_now().
-        let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Time(as_of),
-            session,
-            catalog_state: self.catalog.state(),
-        };
-        df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
-        )?;
 
         // Ensure all expressions are normalized before finalizing.
         for build in df_desc.objects_to_build.iter_mut() {
