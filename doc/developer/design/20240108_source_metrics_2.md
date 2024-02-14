@@ -5,7 +5,7 @@
 
 ## The Problem
 
-The [existing source statistics](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_statistics_per_worker)
+The [existing source statistics](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_statistics_raw)
 we expose to users for sources answer _some important questions_, like:
 - _Generally_, how fast we are reading data from upstream?
 - Have we committed the source's snapshot?
@@ -84,7 +84,7 @@ The first set of metrics this design document proposes involve _snapshot progres
 on the _percentage_ of the source's snapshot Materialize has _read_. These metrics are designed to
 answer #1 in [the problem statement](#the-problem).
 
-We will introduce 2 new columns in `mz_source_statistics_per_worker`:
+We will introduce 2 new columns in `mz_source_statistics_raw`:
 
 ```
 | `snapshot_total`     | [`uint8`] | The total number of upstream values that are part of the snapshot. |
