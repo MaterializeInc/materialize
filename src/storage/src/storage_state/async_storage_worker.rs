@@ -29,7 +29,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
-    SourceConnection, SourceData, SourceEnvelope, SourceTimestamp, TestScriptSourceConnection,
+    SourceConnection, SourceData, SourceEnvelope, SourceTimestamp,
 };
 use timely::order::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -373,18 +373,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             GenericSourceConnection::LoadGenerator(_) => {
                                 let uppers =
                                     reclock_resume_uppers::<LoadGeneratorSourceConnection, _>(
-                                        &id,
-                                        &persist_clients,
-                                        &ingestion_description,
-                                        as_of.clone(),
-                                        &resume_uppers,
-                                    )
-                                    .await;
-                                to_vec_row(uppers)
-                            }
-                            GenericSourceConnection::TestScript(_) => {
-                                let uppers =
-                                    reclock_resume_uppers::<TestScriptSourceConnection, _>(
                                         &id,
                                         &persist_clients,
                                         &ingestion_description,

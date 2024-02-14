@@ -2362,13 +2362,6 @@ CREATE SOURCE lg FROM LOAD GENERATOR TPCH
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Tpch, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE ts FROM TEST SCRIPT 'foo.json'
-----
-CREATE SOURCE ts FROM TEST SCRIPT 'foo.json'
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("ts")]), in_cluster: None, col_names: [], connection: TestScript { desc_json: "foo.json" }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
-
-parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (IGNORE KEYS 'true', TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (IGNORE KEYS = 'true', TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')

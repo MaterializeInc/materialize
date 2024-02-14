@@ -50,7 +50,6 @@ pub enum StatusNamespace {
     /// A normal status namespaces. Any `Running` status from any worker will mark the object
     /// `Running`.
     Generator,
-    TestScript,
     Kafka,
     Postgres,
     MySql,
@@ -71,7 +70,6 @@ impl fmt::Display for StatusNamespace {
         use StatusNamespace::*;
         match self {
             Generator => write!(f, "generator"),
-            TestScript => write!(f, "testscript"),
             Kafka => write!(f, "kafka"),
             Postgres => write!(f, "postgres"),
             MySql => write!(f, "mysql"),
@@ -617,7 +615,7 @@ mod tests {
                 // Update and assert one is running.
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -634,7 +632,7 @@ mod tests {
                 // For now, we just do this.
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 1,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -645,21 +643,21 @@ mod tests {
                 }]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 1,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
                     status: Status::Stalled,
-                    error: Some("testscript: uhoh".to_string()),
-                    errors: Some("testscript: uhoh".to_string()),
+                    error: Some("generator: uhoh".to_string()),
+                    errors: Some("generator: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 // And that it can recover.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 1,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -699,14 +697,14 @@ mod tests {
                 ]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 1,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
                     status: Status::Stalled,
-                    error: Some("testscript: uhoh".to_string()),
+                    error: Some("generator: uhoh".to_string()),
                     errors: None,
                     ..Default::default()
                 }]),
@@ -738,15 +736,15 @@ mod tests {
                 // Note that these all happen on the same worker id.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: Status::Stalled,
-                    error: Some("testscript: uhoh".to_string()),
-                    errors: Some("testscript: uhoh".to_string()),
+                    error: Some("generator: uhoh".to_string()),
+                    errors: Some("generator: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
@@ -759,7 +757,7 @@ mod tests {
                     collection_index: 0,
                     status: Status::Stalled,
                     error: Some("kafka: uhoh".to_string()),
-                    errors: Some("testscript: uhoh, kafka: uhoh".to_string()),
+                    errors: Some("generator: uhoh, kafka: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 // And that it can recover.
@@ -772,13 +770,13 @@ mod tests {
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: Status::Stalled,
-                    error: Some("testscript: uhoh".to_string()),
-                    errors: Some("testscript: uhoh".to_string()),
+                    error: Some("generator: uhoh".to_string()),
+                    errors: Some("generator: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -852,7 +850,7 @@ mod tests {
                 }]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -886,7 +884,7 @@ mod tests {
                 // Note that these all happen across worker ids.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled(
                         "uhoh".to_string(),
@@ -896,13 +894,13 @@ mod tests {
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: Status::Stalled,
-                    error: Some("testscript: uhoh".to_string()),
-                    errors: Some("testscript: uhoh".to_string()),
+                    error: Some("generator: uhoh".to_string()),
+                    errors: Some("generator: uhoh".to_string()),
                     hint: Some("hint1".to_string()),
                 }]),
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled(
                         "uhoh2".to_string(),
@@ -913,14 +911,14 @@ mod tests {
                     collection_index: 0,
                     status: Status::Stalled,
                     // Note the error sorts later so we just use that.
-                    error: Some("testscript: uhoh2".to_string()),
-                    errors: Some("testscript: uhoh2".to_string()),
+                    error: Some("generator: uhoh2".to_string()),
+                    errors: Some("generator: uhoh2".to_string()),
                     hint: Some("hint1, hint2".to_string()),
                 }]),
                 // Update one of the hints
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled(
                         "uhoh2".to_string(),
@@ -931,14 +929,14 @@ mod tests {
                     collection_index: 0,
                     status: Status::Stalled,
                     // Note the error sorts later so we just use that.
-                    error: Some("testscript: uhoh2".to_string()),
-                    errors: Some("testscript: uhoh2".to_string()),
+                    error: Some("generator: uhoh2".to_string()),
+                    errors: Some("generator: uhoh2".to_string()),
                     hint: Some("hint1, hint3".to_string()),
                 }]),
                 // Assert recovery.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -946,13 +944,13 @@ mod tests {
                     collection_index: 0,
                     status: Status::Stalled,
                     // Note the error sorts later so we just use that.
-                    error: Some("testscript: uhoh2".to_string()),
-                    errors: Some("testscript: uhoh2".to_string()),
+                    error: Some("generator: uhoh2".to_string()),
+                    errors: Some("generator: uhoh2".to_string()),
                     hint: Some("hint3".to_string()),
                 }]),
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::TestScript,
+                    namespace: StatusNamespace::Generator,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),

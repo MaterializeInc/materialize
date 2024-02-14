@@ -151,23 +151,6 @@ impl KafkaSourcePurificationError {
     }
 }
 
-/// Logical errors detectable during purification for a TEST SCRIPT SOURCE.
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum TestScriptSourcePurificationError {
-    #[error("{} is only valid for multi-output sources", .0.to_ast_string())]
-    ReferencedSubsources(ReferencedSubsources<Aug>),
-}
-
-impl TestScriptSourcePurificationError {
-    pub fn detail(&self) -> Option<String> {
-        None
-    }
-
-    pub fn hint(&self) -> Option<String> {
-        None
-    }
-}
-
 /// Logical errors detectable during purification for a LOAD GENERATOR SOURCE.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LoadGeneratorSourcePurificationError {
