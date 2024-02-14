@@ -313,10 +313,21 @@ impl AdapterError {
             ),
             AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, earliest_possible) => {
                 Some(format!(
-                    "the requested REFRESH AT time is {}, \
-                    while the following input collections are readable at no earlier than the following times: {:?}",
+                    "The requested REFRESH AT time is {}, \
+                    while the following input collections are readable at no earlier than the following times: [{}].",
                     oracle_read_ts,
-                    earliest_possible,
+                    earliest_possible.iter().map(|(antichain, id_bundle)|
+                        format!(
+                            "[{}]: {}",
+                            id_bundle.iter().map(|id| format!("{}", id)).join(", "),
+                            if antichain.len() == 1 {
+                                format!("{}", antichain.as_option().expect("antichain contains exactly 1 timestamp"))
+                            } else {
+                                // This can't occur currently
+                                format!("{:?}", antichain)
+                            }
+                        )
+                    ).join("; "),
                 ))
             }
             _ => None,
