@@ -1389,15 +1389,15 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 
         // Wait for initial storage usage collection, to be sure records are present.
         let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
-            client
+                client
                     .query_one(
-                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        "SELECT (EXTRACT(EPOCH FROM MAX(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
                         &[],
                     )
                     .map_err(|e| e.to_string()).unwrap()
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
-        }).expect("Could not fetch initial timestamp");
+            }).expect("Could not fetch initial timestamp");
 
         let initial_server_usage_records = client
             .query_one(
@@ -1422,7 +1422,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
         .expect("negative timestamps are impossible")
         + u64::try_from(retention_period.as_millis()).expect("known to fit")
-        + 200;
+        + 1;
 
     {
         let server = harness.start_blocking();
@@ -1432,15 +1432,15 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
             u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
 
         let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
-            client
-                .query_one(
-                    "SELECT EXTRACT(EPOCH FROM MIN(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
-                    &[],
-                )
-                .map_err(|e| e.to_string()).unwrap()
-                .try_get::<_, i32>(0)
-                .map_err(|e| e.to_string())
-        }).expect("Could not fetch initial timestamp");
+                client
+                    .query_one(
+                        "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        &[],
+                    )
+                    .map_err(|e| e.to_string()).unwrap()
+                    .try_get::<_, i32>(0)
+                    .map_err(|e| e.to_string())
+            }).expect("Could not fetch initial timestamp");
 
         info!(%subsequent_initial_timestamp);
         assert!(
