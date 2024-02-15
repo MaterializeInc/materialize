@@ -213,6 +213,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             enable_mz_join_core,
             enable_jemalloc_profiling,
             enable_columnation_lgalloc,
+            enable_lgalloc_eager_reclamation,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -251,17 +252,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         match enable_columnation_lgalloc {
             Some(true) => {
                 if let Some(path) = self.compute_state.context.scratch_directory.as_ref() {
-                    info!(path = ?path, "Enabling lgalloc");
-                    lgalloc::lgalloc_set_config(
-                        lgalloc::LgAlloc::new()
-                            .enable()
-                            .eager_return(true)
-                            .with_path(path.clone())
-                            .with_background_config(lgalloc::BackgroundWorkerConfig {
-                                interval: Duration::from_secs(1),
-                                batch: 32,
-                            }),
-                    );
+                    info!(path = ?path, eager_return=enable_lgalloc_eager_reclamation, "Enabling lgalloc");
+                    let mut config = lgalloc::LgAlloc::new();
+                    config
+                        .enable()
+                        .with_path(path.clone())
+                        .with_background_config(lgalloc::BackgroundWorkerConfig {
+                            interval: Duration::from_secs(1),
+                            batch: 32,
+                        });
+                    if let Some(eager_return) = enable_lgalloc_eager_reclamation {
+                        config.eager_return(eager_return);
+                    }
+                    lgalloc::lgalloc_set_config(&config);
                 } else {
                     debug!("Not enabling lgalloc, scratch directory not specified");
                 }

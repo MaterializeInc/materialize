@@ -1503,6 +1503,13 @@ pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_LGALLOC_EAGER_RECLAMATION: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_lgalloc_eager_reclamation"),
+    value: true,
+    description: "Enable lgalloc's eager return behavior.",
+    internal: true,
+};
+
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_statement_lifecycle_logging"),
     value: false,
@@ -2980,6 +2987,7 @@ impl SystemVars {
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
+            .with_var(&ENABLE_LGALLOC_EAGER_RECLAMATION)
             .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
             .with_var(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
             .with_var(&TIMESTAMP_ORACLE_IMPL)
@@ -3849,6 +3857,11 @@ impl SystemVars {
     /// Returns the `enable_columnation_lgalloc` configuration parameter.
     pub fn enable_columnation_lgalloc(&self) -> bool {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
+    }
+
+    /// Returns the `enable_lgalloc_eager_reclamation` configuration parameter.
+    pub fn enable_lgalloc_eager_reclamation(&self) -> bool {
+        *self.expect_value(&ENABLE_LGALLOC_EAGER_RECLAMATION)
     }
 
     pub fn enable_statement_lifecycle_logging(&self) -> bool {
@@ -5505,6 +5518,7 @@ impl SystemVars {
             || name == ENABLE_MZ_JOIN_CORE.name()
             || name == ENABLE_JEMALLOC_PROFILING.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
+            || name == ENABLE_LGALLOC_EAGER_RECLAMATION.name()
             || self.is_persist_config_var(name)
             || is_tracing_var(name)
     }

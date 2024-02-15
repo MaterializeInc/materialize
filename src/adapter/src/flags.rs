@@ -39,6 +39,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         enable_mz_join_core: Some(config.enable_mz_join_core()),
         enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),
         enable_columnation_lgalloc: Some(config.enable_columnation_lgalloc()),
+        enable_lgalloc_eager_reclamation: Some(config.enable_columnation_lgalloc()),
         persist: persist_config(config),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
