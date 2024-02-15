@@ -81,7 +81,7 @@ def get_data(
     max_fetches: int | None,
     branch: str | None,
     build_state: str | None,
-    items_per_page: int = 100,
+    items_per_page: int = 50,
 ) -> list[Any]:
     ensure_temp_dir_exists()
 
@@ -266,7 +266,7 @@ if __name__ == "__main__":
         type=str,
         help="Whether to fetch new data from Buildkite or reuse previously fetched, matching data.",
     )
-    parser.add_argument("--max-fetches", default=2, type=int)
+    parser.add_argument("--max-fetches", default=3, type=int)
     parser.add_argument(
         "--branch", default="main", type=str, help="Use '*' for all branches"
     )
