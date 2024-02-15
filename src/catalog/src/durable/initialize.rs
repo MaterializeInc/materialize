@@ -40,7 +40,7 @@ use crate::durable::{
 /// The key used within the "config" collection stores the deploy generation.
 pub(crate) const DEPLOY_GENERATION: &str = "deploy_generation";
 /// The key within the "config" Collection that stores the version of the catalog.
-pub(crate) const USER_VERSION_KEY: &str = "user_version";
+pub const USER_VERSION_KEY: &str = "user_version";
 /// The key within the "config" collection that stores whether the remote configuration was
 /// synchronized at least once.
 pub(crate) const SYSTEM_CONFIG_SYNCED_KEY: &str = "system_config_synced";

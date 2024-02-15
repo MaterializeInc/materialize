@@ -9,12 +9,13 @@
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
     test_persist_backed_catalog_state, test_persist_backed_catalog_state_with_version,
     test_stash_backed_catalog_state, test_stash_config, CatalogError, DurableCatalogError,
-    DurableCatalogState, Epoch, OpenableDurableCatalogState,
+    DurableCatalogState, Epoch, OpenableDurableCatalogState, CATALOG_VERSION,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
@@ -509,8 +510,22 @@ async fn test_open(
 
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         // Check initial snapshot.
-        let snapshot = state.snapshot().await.unwrap();
+        let mut snapshot = state.snapshot().await.unwrap();
+        let user_version_key = proto::ConfigKey {
+            key: USER_VERSION_KEY.to_string(),
+        };
+        let user_version_value = {
+            // The user_version changes frequently so we test the value in rust and remove it from
+            // the snapshot to avoid changing it in the snapshot file.
+            let user_version_value = snapshot.configs.remove(&user_version_key).unwrap();
+            assert_eq!(user_version_value.value, CATALOG_VERSION);
+            user_version_value
+        };
         insta::assert_debug_snapshot!("initial_snapshot", snapshot);
+        // Add user_version back in for later comparisons.
+        snapshot
+            .configs
+            .insert(user_version_key, user_version_value);
         let audit_log = state.get_audit_logs().await.unwrap();
         insta::assert_debug_snapshot!("initial_audit_log", audit_log);
         Box::new(state).expire().await;

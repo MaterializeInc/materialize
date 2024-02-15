@@ -8,10 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use mz_catalog::durable::debug::SettingCollection;
+use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state, test_stash_backed_catalog_state,
-    CatalogError, DurableCatalogError, Epoch, OpenableDurableCatalogState,
+    CatalogError, DurableCatalogError, Epoch, OpenableDurableCatalogState, CATALOG_VERSION,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -88,8 +89,38 @@ async fn test_debug(
     assert_eq!(Epoch::new(2).unwrap(), epoch);
 
     // Check opened trace.
-    let trace = openable_state2.trace().await.unwrap();
+    let mut trace = openable_state2.trace().await.unwrap();
+    let (idx, user_version) = {
+        // The user_version changes frequently so we test the value in rust and remove it from the
+        // trace to avoid changing it in the snapshot file.
+        let configs = &mut trace.configs.values;
+        let idx = configs
+            .iter()
+            .position(|((key, _), _, _)| key.key == USER_VERSION_KEY)
+            .unwrap();
+        let ((user_version_key, user_version_value), user_version_ts, user_version_diff) =
+            configs.remove(idx);
+        assert_eq!(user_version_key.key, USER_VERSION_KEY);
+        assert_eq!(user_version_value.value, CATALOG_VERSION);
+        let expected_ts = match catalog_kind {
+            "persist" => "2",
+            "stash" => "-9223372036854775808",
+            _ => panic!("unexpected catalog_kind {catalog_kind}"),
+        };
+        assert_eq!(user_version_ts, expected_ts);
+        assert_eq!(user_version_diff, 1);
+        (
+            idx,
+            (
+                (user_version_key, user_version_value),
+                user_version_ts,
+                user_version_diff,
+            ),
+        )
+    };
     insta::assert_debug_snapshot!(format!("{catalog_kind}_opened_trace"), trace);
+    // Add user_version back in for later comparisons.
+    trace.configs.values.insert(idx, user_version);
 
     let mut debug_state = Box::new(openable_state2).open_debug().await.unwrap();
 

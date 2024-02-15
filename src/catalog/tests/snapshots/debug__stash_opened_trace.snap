@@ -608,18 +608,6 @@ Trace {
             (
                 (
                     ConfigKey {
-                        key: "user_version",
-                    },
-                    ConfigValue {
-                        value: 46,
-                    },
-                ),
-                "-9223372036854775808",
-                1,
-            ),
-            (
-                (
-                    ConfigKey {
                         key: "deploy_generation",
                     },
                     ConfigValue {
