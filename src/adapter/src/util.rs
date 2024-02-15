@@ -337,7 +337,8 @@ impl ShouldHalt for StorageError {
             | StorageError::InvalidAlter { .. }
             | StorageError::ShuttingDown(_)
             | StorageError::RtrUnavailable(_)
-            | StorageError::RtrTimeout(_) => false,
+            | StorageError::RtrTimeout(_)
+            | StorageError::RtrDropFailure(_) => false,
             StorageError::IOError(e) => e.is_unrecoverable(),
         }
     }
