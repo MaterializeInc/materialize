@@ -2939,6 +2939,7 @@ where
                                     return Ok(());
                                 }
                             }
+                            write_handle.expire().await;
 
                             persist_client
                                 .finalize_shard::<SourceData, (), T, Diff>(
