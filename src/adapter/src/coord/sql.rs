@@ -23,7 +23,7 @@ use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::{ActiveSubscribe, SubscribeRemovalReason};
-use crate::util::{describe, ComputeSinkId};
+use crate::util::describe;
 use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse, PeekResponseUnary};
 
 impl Coordinator {
@@ -232,10 +232,7 @@ impl Coordinator {
             .get_mut(&active_subscribe.conn_id)
             .expect("must exist for active sessions")
             .drop_sinks
-            .insert(ComputeSinkId {
-                cluster_id: active_subscribe.cluster_id,
-                global_id: id,
-            });
+            .insert(id);
 
         self.active_subscribes.insert(id, active_subscribe);
 
@@ -292,10 +289,7 @@ impl Coordinator {
                 .get_mut(&active_subscribe.conn_id)
                 .expect("must exist for active subscribe")
                 .drop_sinks
-                .remove(&ComputeSinkId {
-                    cluster_id: active_subscribe.cluster_id,
-                    global_id: id,
-                });
+                .remove(&id);
 
             let message = match reason {
                 SubscribeRemovalReason::Finished => return,

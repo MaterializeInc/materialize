@@ -159,7 +159,7 @@ use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
@@ -852,7 +852,7 @@ pub struct ConnMeta {
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
-    drop_sinks: BTreeSet<ComputeSinkId>,
+    drop_sinks: BTreeSet<GlobalId>,
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,

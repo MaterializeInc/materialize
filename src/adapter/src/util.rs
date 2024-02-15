@@ -16,7 +16,7 @@ use mz_compute_client::controller::error::{
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{halt, soft_assert_no_log};
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::vars::Var;
@@ -257,13 +257,6 @@ pub fn describe(
             )?)
         }
     }
-}
-
-/// Type identifying a sink maintained by a cluster.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ComputeSinkId {
-    pub cluster_id: ClusterId,
-    pub global_id: GlobalId,
 }
 
 pub trait ResultExt<T> {

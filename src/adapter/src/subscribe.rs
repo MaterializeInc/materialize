@@ -37,8 +37,9 @@ pub struct ActiveSubscribe {
     pub conn_id: ConnectionId,
     /// Channel to send responses to the client.
     ///
-    /// The responses have the form `PeekResponseUnary` but should perhaps become `TailResponse`.
-    pub channel: Option<mpsc::UnboundedSender<PeekResponseUnary>>,
+    /// The responses have the form `PeekResponseUnary` but should perhaps
+    /// become `SubscribeResponse`.
+    pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
     /// Whether progress information should be emitted.
     pub emit_progress: bool,
     /// As of of subscribe
@@ -92,7 +93,7 @@ impl ActiveSubscribe {
     /// Process a subscribe response.
     ///
     /// Returns `true` if the subscribe is finished.
-    pub(crate) fn process_response(&mut self, batch: SubscribeBatch) {
+    pub(crate) fn process_response(&mut self, batch: SubscribeBatch) -> bool {
         let mut row_buf = Row::default();
         match batch.updates {
             Ok(mut rows) => {
@@ -296,21 +297,15 @@ impl ActiveSubscribe {
         if !batch.upper.less_equal(&self.as_of) {
             self.send_progress_message(&batch.upper);
         }
-        if batch.upper.is_empty() {
-            // The subscribe has completed. Drop the channel so that the
-            // client knows there are no further responses coming.
-            self.channel = None;
-        }
+        batch.upper.is_empty()
     }
 
     /// Sends a message to the client if the subscribe has not already completed
     /// and if the client has not already gone away.
     pub fn send(&self, response: PeekResponseUnary) {
-        if let Some(channel) = &self.channel {
-            // TODO(benesch): the lack of backpressure here can result in
-            // unbounded memory usage.
-            let _ = channel.send(response);
-        }
+        // TODO(benesch): the lack of backpressure here can result in
+        // unbounded memory usage.
+        let _ = self.channel.send(response);
     }
 }
 

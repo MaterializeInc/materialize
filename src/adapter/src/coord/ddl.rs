@@ -57,7 +57,7 @@ use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::SubscribeRemovalReason;
 use crate::telemetry::SegmentClientExt;
-use crate::util::{ComputeSinkId, ResultExt};
+use crate::util::ResultExt;
 use crate::{catalog, flags, AdapterError, TimestampProvider};
 
 /// State provided to a catalog transaction closure.
@@ -404,12 +404,8 @@ impl Coordinator {
             .collect();
 
         // Clean up any active subscribes that rely on dropped relations or clusters.
-        for (&global_id, subscribe) in &self.active_subscribes {
+        for (sink_id, subscribe) in &self.active_subscribes {
             let cluster_id = subscribe.cluster_id;
-            let sink_id = ComputeSinkId {
-                cluster_id,
-                global_id,
-            };
             let conn_id = &subscribe.conn_id;
             if let Some(id) = subscribe
                 .depends_on
@@ -422,7 +418,7 @@ impl Coordinator {
                     .resolve_full_name(entry.name(), Some(conn_id))
                     .to_string();
                 subscribe_sinks_to_drop.push((
-                    sink_id,
+                    *sink_id,
                     SubscribeRemovalReason::DependencyDropped(format!(
                         "relation {}",
                         name.quoted()
@@ -431,7 +427,7 @@ impl Coordinator {
             } else if clusters_to_drop.contains(&cluster_id) {
                 let name = self.catalog().get_cluster(cluster_id).name();
                 subscribe_sinks_to_drop.push((
-                    sink_id,
+                    *sink_id,
                     SubscribeRemovalReason::DependencyDropped(format!("cluster {}", name.quoted())),
                 ));
             }
@@ -741,11 +737,19 @@ impl Coordinator {
 
     pub(crate) async fn drop_compute_sinks(
         &mut self,
-        sinks: impl IntoIterator<Item = (ComputeSinkId, SubscribeRemovalReason)>,
+        sinks: impl IntoIterator<Item = (GlobalId, SubscribeRemovalReason)>,
     ) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (sink, reason) in sinks {
-            self.remove_active_subscribe(sink.global_id, reason).await;
+        for (sink_id, reason) in sinks {
+            let cluster_id = match self.active_subscribes.get(&sink_id) {
+                None => {
+                    tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
+                    continue;
+                }
+                Some(s) => s.cluster_id,
+            };
+
+            self.remove_active_subscribe(sink_id, reason).await;
 
             if !self
                 .controller
@@ -754,16 +758,13 @@ impl Coordinator {
             {
                 // If aggressive downgrades are disabled, compute sinks have read policies that we
                 // must drop.
-                if !self.drop_compute_read_policy(&sink.global_id) {
+                if !self.drop_compute_read_policy(&sink_id) {
                     tracing::error!("Instructed to drop a compute sink that isn't one");
                     continue;
                 }
             }
 
-            by_cluster
-                .entry(sink.cluster_id)
-                .or_default()
-                .push(sink.global_id);
+            by_cluster.entry(cluster_id).or_default().push(sink_id);
         }
         let mut compute = self.controller.active_compute();
         for (cluster_id, ids) in by_cluster {
