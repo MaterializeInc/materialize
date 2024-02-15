@@ -1493,6 +1493,12 @@ class MySqlStreaming(MySqlCdc):
 
     SCALE = 5
 
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        # TODO: #25124 (correctness issue)
+        # return version >= MzVersion.parse_mz("...")
+        return False
+
     def shared(self) -> Action:
         return TdAction(
             """
