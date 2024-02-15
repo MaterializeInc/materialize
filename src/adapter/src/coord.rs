@@ -1930,10 +1930,12 @@ impl Coordinator {
                         Some((id, collection_desc))
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        let collection_desc = CollectionDescription::from_desc(
-                            mv.desc.clone(),
-                            DataSourceOther::Compute,
-                        );
+                        let collection_desc = CollectionDescription {
+                            desc: mv.desc.clone(),
+                            data_source: DataSource::Other(DataSourceOther::Compute),
+                            since: mv.initial_as_of.clone(),
+                            status_collection_id: None,
+                        };
                         Some((id, collection_desc))
                     }
                     _ => None,

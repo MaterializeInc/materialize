@@ -688,6 +688,14 @@ impl Coordinator {
             }
 
             Statement::CreateMaterializedView(mut cmvs) => {
+                // `CREATE MATERIALIZED VIEW ... AS OF ...` syntax is disallowed for users and is
+                // only used for storing initial frontiers in the catalog.
+                if cmvs.as_of.is_some() {
+                    return ctx.retire(Err(AdapterError::Unsupported(
+                        "CREATE MATERIALIZED VIEW ... AS OF statements",
+                    )));
+                }
+
                 let mz_now = match self
                     .resolve_mz_now_for_create_materialized_view(
                         &cmvs,
@@ -719,6 +727,7 @@ impl Coordinator {
                         in_cluster: cmvs.in_cluster,
                         query: cmvs.query,
                         with_options: cmvs.with_options,
+                        as_of: None,
                     });
 
                 // (Purifying CreateMaterializedView doesn't happen async, so no need to send

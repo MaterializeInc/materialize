@@ -1858,6 +1858,7 @@ mod builtin_migration_tests {
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
                         refresh_schedule: None,
+                        initial_as_of: None,
                     })
                 }
                 SimplifiedItem::Index { on } => {

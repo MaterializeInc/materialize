@@ -34,7 +34,9 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_repr::{
+    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
+};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
@@ -2284,6 +2286,8 @@ pub fn plan_create_materialized_view(
         }
     };
 
+    let as_of = stmt.as_of.map(Timestamp::from);
+
     if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
     }
@@ -2389,6 +2393,7 @@ pub fn plan_create_materialized_view(
             non_null_assertions,
             compaction_window,
             refresh_schedule,
+            as_of,
         },
         replace,
         drop_ids,
