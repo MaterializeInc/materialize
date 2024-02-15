@@ -60,7 +60,7 @@ impl TryFrom<StateUpdateKindRaw> for proto::StateUpdateKind {
     type Error = String;
 
     fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
-        Ok(value.to_serde::<Self>())
+        value.try_to_serde::<Self>().map_err(|err| err.to_string())
     }
 }
 
