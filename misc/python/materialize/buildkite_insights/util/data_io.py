@@ -23,7 +23,9 @@ PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
 def get_file_path(
     pipeline_slug: str, branch: str | None, build_state: str | None
 ) -> str:
-    hash_value = hashlib.sha256(b"{branch}-{build_state}").hexdigest()[:8]
+    hash_value = hashlib.sha256(
+        bytes(f"{branch}-{build_state}", encoding="utf-8")
+    ).hexdigest()[:8]
     return f"{PATH_TO_TEMP_DIR}/builds-{pipeline_slug}-params-{hash_value}.json"
 
 
