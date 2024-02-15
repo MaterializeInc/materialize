@@ -117,9 +117,9 @@ SERVICES = [
 
 
 def run_one_scenario(
-    c: Composition, scenario: type[Scenario], args: argparse.Namespace
+    c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
 ) -> list[Comparator]:
-    name = scenario.__name__
+    name = scenario_class.__name__
     print(f"--- Now benchmarking {name} ...")
 
     measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
@@ -129,6 +129,8 @@ def run_one_scenario(
     comparators = [make_comparator(name=name, type=t) for t in measurement_types]
 
     common_seed = round(time.time())
+
+    early_abort = False
 
     for mz_id, instance in enumerate(["this", "other"]):
         balancerd, tag, size, params = (
@@ -185,7 +187,7 @@ def run_one_scenario(
             benchmark = Benchmark(
                 mz_id=mz_id,
                 mz_version=mz_version,
-                scenario=scenario,
+                scenario=scenario_class,
                 scale=args.scale,
                 executor=executor,
                 filter=make_filter(args),
@@ -195,13 +197,23 @@ def run_one_scenario(
                 default_size=size,
             )
 
-            aggregations = benchmark.run()
-            for aggregation, comparator in zip(aggregations, comparators):
-                comparator.append(aggregation.aggregate())
+            if not scenario_class.can_run(mz_version):
+                print(
+                    f"Skipping scenario {scenario_class} not supported in version {mz_version}"
+                )
+                early_abort = True
+            else:
+                aggregations = benchmark.run()
+                for aggregation, comparator in zip(aggregations, comparators):
+                    comparator.append(aggregation.aggregate())
 
         c.kill("cockroach", "materialized", "testdrive")
         c.rm("cockroach", "materialized", "testdrive")
         c.rm_volumes("mzdata")
+
+        if early_abort:
+            comparators = []
+            break
 
     return comparators
 
@@ -409,6 +421,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenarios_with_regressions = []
         for scenario in scenarios_to_run:
             comparators = run_one_scenario(c, scenario, args)
+
+            if len(comparators) == 0:
+                continue
+
             report.extend(comparators)
 
             # Do not retry the scenario if no regressions
