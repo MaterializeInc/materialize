@@ -33,10 +33,16 @@ message ProtoComputeResponse {
         ProtoSubscribeResponse resp = 2;
     }
 
+    message ProtoCopyToResponseKind {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        ProtoCopyToResponse resp = 2;
+    }
+
     oneof kind {
         mz_storage_client.client.ProtoTrace frontier_upper = 1;
         ProtoPeekResponseKind peek_response = 2;
         ProtoSubscribeResponseKind subscribe_response = 3;
+        ProtoCopyToResponseKind copy_to_response = 4;
     }
 }
 
@@ -61,6 +67,14 @@ message ProtoSubscribeResponse {
     oneof kind {
         ProtoSubscribeBatch batch = 1;
         mz_repr.antichain.ProtoU64Antichain dropped_at = 2;
+    }
+}
+
+message ProtoCopyToResponse {
+    oneof kind {
+        uint64 rows = 1;
+        string error = 2;
+        google.protobuf.Empty dropped = 3;
     }
 }
 

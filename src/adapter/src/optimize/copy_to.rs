@@ -91,10 +91,6 @@ impl Optimizer {
     pub fn cluster_id(&self) -> ComputeInstanceId {
         self.compute_instance.instance_id()
     }
-
-    pub fn copy_to_uri(&self) -> &Uri {
-        &self.copy_to_uri
-    }
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
@@ -142,6 +138,14 @@ pub struct Resolved<'s> {
 pub struct GlobalLirPlan {
     df_desc: LirDataflowDescription,
     df_meta: DataflowMetainfo,
+}
+
+impl GlobalLirPlan {
+    pub fn sink_id(&self) -> GlobalId {
+        let sink_exports = &self.df_desc.sink_exports;
+        let sink_id = sink_exports.keys().next().expect("valid sink");
+        *sink_id
+    }
 }
 
 impl Optimize<HirRelationExpr> for Optimizer {

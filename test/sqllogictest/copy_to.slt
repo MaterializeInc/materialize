@@ -1,0 +1,54 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Basic tests for `COPY ... TO` statements.
+
+mode cockroach
+
+# Start from a pristine state
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_copy_to_expr = on;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_aws_connection = on;
+----
+COMPLETE 0
+
+statement ok
+CREATE CONNECTION aws_conn TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name');
+
+statement ok
+CREATE TABLE t (a int, b int);
+
+simple conn=mz_system,user=mz_system
+INSERT INTO t VALUES (1, 2), (2, 3);
+----
+COMPLETE 2
+
+simple conn=mz_system,user=mz_system
+COPY t TO 's3://path' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv', MAX FILE SIZE = '100MB')
+----
+COMPLETE 2
+
+statement ok
+DROP CONNECTION aws_conn;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_copy_to_expr = off;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_aws_connection = off;
+----
+COMPLETE 0

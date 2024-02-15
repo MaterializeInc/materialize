@@ -139,6 +139,7 @@ use tracing::{debug, info, info_span, instrument, span, warn, Instrument, Level,
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::active_compute_sink::ActiveComputeSink;
 use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
@@ -158,8 +159,7 @@ use crate::optimize::dataflows::{
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::subscribe::ActiveSubscribe;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
@@ -382,14 +382,18 @@ impl RealTimeRecencyContext {
 
 #[derive(Debug)]
 pub enum PeekStage {
+    /// Common stages across SELECT, EXPLAIN and COPY TO queries.
     Validate(PeekStageValidate),
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
     Optimize(PeekStageOptimize),
+    /// Final stage for a peek.
     Finish(PeekStageFinish),
-    CopyTo(PeekStageCopyTo),
+    /// Final stage for an explain.
     ExplainPlan(PeekStageExplainPlan),
+    /// Final stage for a copy to.
+    CopyTo(PeekStageCopyTo),
 }
 
 impl PeekStage {
@@ -852,7 +856,7 @@ pub struct ConnMeta {
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
-    drop_sinks: BTreeSet<ComputeSinkId>,
+    drop_sinks: BTreeSet<GlobalId>,
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
@@ -1270,8 +1274,8 @@ pub struct Coordinator {
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
 
-    /// A map from active subscribes to the subscribe description.
-    active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
+    /// A map from the compute sink ID to it's state description.
+    active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
 
@@ -2941,7 +2945,7 @@ pub fn serve(
                     client_pending_peeks: BTreeMap::new(),
                     pending_real_time_recency_timestamp: BTreeMap::new(),
                     pending_linearize_read_txns: BTreeMap::new(),
-                    active_subscribes: BTreeMap::new(),
+                    active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),

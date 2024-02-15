@@ -49,15 +49,15 @@ use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, info_span, instrument, warn, Instrument, Level};
 
+use crate::active_compute_sink::ComputeSinkRemovalReason;
 use crate::catalog::{CatalogState, Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::subscribe::SubscribeRemovalReason;
 use crate::telemetry::SegmentClientExt;
-use crate::util::{ComputeSinkId, ResultExt};
+use crate::util::ResultExt;
 use crate::{catalog, flags, AdapterError, TimestampProvider};
 
 /// State provided to a catalog transaction closure.
@@ -224,7 +224,7 @@ impl Coordinator {
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
-        let mut subscribe_sinks_to_drop = vec![];
+        let mut compute_sinks_to_drop = vec![];
         let mut peeks_to_drop = vec![];
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
@@ -403,16 +403,12 @@ impl Coordinator {
             .chain(views_to_drop.iter())
             .collect();
 
-        // Clean up any active subscribes that rely on dropped relations or clusters.
-        for (&global_id, subscribe) in &self.active_subscribes {
-            let cluster_id = subscribe.cluster_id;
-            let sink_id = ComputeSinkId {
-                cluster_id,
-                global_id,
-            };
-            let conn_id = &subscribe.conn_id;
-            if let Some(id) = subscribe
-                .depends_on
+        // Clean up any active compute sinks like subscribes or copy to-s that rely on dropped relations or clusters.
+        for (sink_id, sink) in &self.active_compute_sinks {
+            let cluster_id = sink.cluster_id();
+            let conn_id = &sink.connection_id();
+            if let Some(id) = sink
+                .depends_on()
                 .iter()
                 .find(|id| relations_to_drop.contains(id))
             {
@@ -421,18 +417,21 @@ impl Coordinator {
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id))
                     .to_string();
-                subscribe_sinks_to_drop.push((
-                    sink_id,
-                    SubscribeRemovalReason::DependencyDropped(format!(
+                compute_sinks_to_drop.push((
+                    *sink_id,
+                    ComputeSinkRemovalReason::DependencyDropped(format!(
                         "relation {}",
                         name.quoted()
                     )),
                 ));
             } else if clusters_to_drop.contains(&cluster_id) {
                 let name = self.catalog().get_cluster(cluster_id).name();
-                subscribe_sinks_to_drop.push((
-                    sink_id,
-                    SubscribeRemovalReason::DependencyDropped(format!("cluster {}", name.quoted())),
+                compute_sinks_to_drop.push((
+                    *sink_id,
+                    ComputeSinkRemovalReason::DependencyDropped(format!(
+                        "cluster {}",
+                        name.quoted()
+                    )),
                 ));
             }
         }
@@ -557,8 +556,8 @@ impl Coordinator {
             if !storage_sinks_to_drop.is_empty() {
                 self.drop_storage_sinks(storage_sinks_to_drop);
             }
-            if !subscribe_sinks_to_drop.is_empty() {
-                self.drop_compute_sinks(subscribe_sinks_to_drop).await;
+            if !compute_sinks_to_drop.is_empty() {
+                self.drop_compute_sinks(compute_sinks_to_drop).await;
             }
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
@@ -741,11 +740,19 @@ impl Coordinator {
 
     pub(crate) async fn drop_compute_sinks(
         &mut self,
-        sinks: impl IntoIterator<Item = (ComputeSinkId, SubscribeRemovalReason)>,
+        sinks: impl IntoIterator<Item = (GlobalId, ComputeSinkRemovalReason)>,
     ) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (sink, reason) in sinks {
-            self.remove_active_subscribe(sink.global_id, reason).await;
+        for (sink_id, reason) in sinks {
+            let cluster_id = match self.active_compute_sinks.get(&sink_id) {
+                None => {
+                    tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
+                    continue;
+                }
+                Some(s) => s.cluster_id(),
+            };
+
+            self.remove_active_sink(sink_id, reason.clone()).await;
 
             if !self
                 .controller
@@ -754,16 +761,13 @@ impl Coordinator {
             {
                 // If aggressive downgrades are disabled, compute sinks have read policies that we
                 // must drop.
-                if !self.drop_compute_read_policy(&sink.global_id) {
+                if !self.drop_compute_read_policy(&sink_id) {
                     tracing::error!("Instructed to drop a compute sink that isn't one");
                     continue;
                 }
             }
 
-            by_cluster
-                .entry(sink.cluster_id)
-                .or_default()
-                .push(sink.global_id);
+            by_cluster.entry(cluster_id).or_default().push(sink_id);
         }
         let mut compute = self.controller.active_compute();
         for (cluster_id, ids) in by_cluster {

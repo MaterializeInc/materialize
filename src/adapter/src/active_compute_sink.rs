@@ -27,6 +27,45 @@ use timely::progress::Antichain;
 use tokio::sync::mpsc;
 
 use crate::coord::peek::PeekResponseUnary;
+use crate::{AdapterError, ExecuteContext, ExecuteResponse};
+
+#[derive(Debug)]
+/// A description of an active compute sink from coord's perspective.
+/// This is either a subscribe sink or a copy to sink.
+pub enum ActiveComputeSink {
+    Subscribe(ActiveSubscribe),
+    CopyTo(ActiveCopyTo),
+}
+
+impl ActiveComputeSink {
+    pub fn cluster_id(&self) -> ClusterId {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => subscribe.cluster_id,
+            ActiveComputeSink::CopyTo(copy_to) => copy_to.cluster_id,
+        }
+    }
+
+    pub fn connection_id(&self) -> &ConnectionId {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => &subscribe.conn_id,
+            ActiveComputeSink::CopyTo(copy_to) => &copy_to.conn_id,
+        }
+    }
+
+    pub fn user(&self) -> &User {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => &subscribe.user,
+            ActiveComputeSink::CopyTo(copy_to) => &copy_to.user,
+        }
+    }
+
+    pub fn depends_on(&self) -> &BTreeSet<GlobalId> {
+        match &self {
+            ActiveComputeSink::Subscribe(subscribe) => &subscribe.depends_on,
+            ActiveComputeSink::CopyTo(copy_to) => &copy_to.depends_on,
+        }
+    }
+}
 
 /// A description of an active subscribe from coord's perspective
 #[derive(Debug)]
@@ -37,8 +76,9 @@ pub struct ActiveSubscribe {
     pub conn_id: ConnectionId,
     /// Channel to send responses to the client.
     ///
-    /// The responses have the form `PeekResponseUnary` but should perhaps become `TailResponse`.
-    pub channel: Option<mpsc::UnboundedSender<PeekResponseUnary>>,
+    /// The responses have the form `PeekResponseUnary` but should perhaps
+    /// become `SubscribeResponse`.
+    pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
     /// Whether progress information should be emitted.
     pub emit_progress: bool,
     /// As of of subscribe
@@ -92,7 +132,7 @@ impl ActiveSubscribe {
     /// Process a subscribe response.
     ///
     /// Returns `true` if the subscribe is finished.
-    pub(crate) fn process_response(&mut self, batch: SubscribeBatch) {
+    pub(crate) fn process_response(&mut self, batch: SubscribeBatch) -> bool {
         let mut row_buf = Row::default();
         match batch.updates {
             Ok(mut rows) => {
@@ -296,32 +336,53 @@ impl ActiveSubscribe {
         if !batch.upper.less_equal(&self.as_of) {
             self.send_progress_message(&batch.upper);
         }
-        if batch.upper.is_empty() {
-            // The subscribe has completed. Drop the channel so that the
-            // client knows there are no further responses coming.
-            self.channel = None;
-        }
+        batch.upper.is_empty()
     }
 
     /// Sends a message to the client if the subscribe has not already completed
     /// and if the client has not already gone away.
     pub fn send(&self, response: PeekResponseUnary) {
-        if let Some(channel) = &self.channel {
-            // TODO(benesch): the lack of backpressure here can result in
-            // unbounded memory usage.
-            let _ = channel.send(response);
-        }
+        // TODO(benesch): the lack of backpressure here can result in
+        // unbounded memory usage.
+        let _ = self.channel.send(response);
     }
 }
 
-/// The reason for removing an [`ActiveSubscribe`].
+/// The reason for removing an [`ActiveComputeSink`].
 #[derive(Debug, Clone)]
-pub enum SubscribeRemovalReason {
-    /// The subscribe completed successfully.
+pub enum ComputeSinkRemovalReason {
+    /// The compute sink completed successfully.
     Finished,
-    /// The subscribe was canceled due to a user request.
+    /// The compute sink was canceled due to a user request.
     Canceled,
-    /// The subscribe was forcibly terminated because an object it depended on
+    /// The compute sink was forcibly terminated because an object it depended on
     /// was dropped.
     DependencyDropped(String),
+}
+
+/// A description of an active copy to from coord's perspective.
+#[derive(Debug)]
+pub struct ActiveCopyTo {
+    /// The user of the session that created the subscribe.
+    pub user: User,
+    /// The connection id of the session that created the subscribe.
+    pub conn_id: ConnectionId,
+    /// The context about the COPY TO statement getting executed.
+    /// Used to eventually call `ctx.retire` on.
+    pub ctx: Option<ExecuteContext>,
+    /// The cluster that the copy to is running on.
+    pub cluster_id: ClusterId,
+    /// All `GlobalId`s that the copy to's expression depends on.
+    pub depends_on: BTreeSet<GlobalId>,
+}
+
+impl ActiveCopyTo {
+    pub(crate) fn process_response(&mut self, response: Result<ExecuteResponse, AdapterError>) {
+        // TODO(mouli): refactor so that process_response takes `self` instead of `&mut self`. Then,
+        // we can make `ctx` not optional, and get rid of the `user` and `conn_id` as well.
+        // Using an option to get an owned value after take to call `retire` on it.
+        if let Some(ctx) = self.ctx.take() {
+            let _ = ctx.retire(response);
+        }
+    }
 }

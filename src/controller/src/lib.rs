@@ -111,6 +111,8 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
+    /// The worker's next response to a specified copy to.
+    CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
     WatchSetFinished(Vec<Box<dyn Any>>),
@@ -320,6 +322,9 @@ where
                     }
                     ComputeControllerResponse::SubscribeResponse(id, tail) => {
                         Some(ControllerResponse::SubscribeResponse(id, tail))
+                    }
+                    ComputeControllerResponse::CopyToResponse(id, tail) => {
+                        Some(ControllerResponse::CopyToResponse(id, tail))
                     }
                     ComputeControllerResponse::FrontierUpper { id, upper } => {
                         self.handle_frontier_updates(&[(id, upper)])

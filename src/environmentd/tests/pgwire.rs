@@ -537,6 +537,9 @@ fn test_pgtest_mz() {
             "enable_raise_statement",
             "enable_unmanaged_cluster_replicas",
             "enable_unsafe_functions",
+            // The following flags are required to test out the COPY TO s3 feature
+            "enable_aws_connection",
+            "enable_copy_to_expr",
         ],
     );
 }

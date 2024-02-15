@@ -18,6 +18,7 @@ use futures::FutureExt;
 use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
@@ -30,6 +31,7 @@ use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::active_compute_sink::{ActiveComputeSink, ComputeSinkRemovalReason};
 use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
@@ -41,7 +43,7 @@ use crate::coord::{
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice, TimestampContext};
+use crate::{catalog, AdapterError, AdapterNotice, ExecuteResponse, TimestampContext};
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -343,12 +345,44 @@ impl Coordinator {
                 self.send_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
-                // It's not an error if the subscribe does not exist. When
-                // aborting a subscribe, we eagerly remove it from
-                // `active_subscribes`, but we might receive a few responses
-                // from the controller about the zombie subscribe.
-                if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
-                    active_subscribe.process_response(response);
+                match self.active_compute_sinks.get_mut(&sink_id) {
+                    Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
+                        let finished = active_subscribe.process_response(response);
+                        if finished {
+                            self.drop_compute_sinks([(
+                                sink_id,
+                                ComputeSinkRemovalReason::Finished,
+                            )])
+                            .await;
+                        }
+                    }
+                    _ => {
+                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
+                    }
+                }
+            }
+            ControllerResponse::CopyToResponse(sink_id, response) => {
+                match self.active_compute_sinks.get_mut(&sink_id) {
+                    Some(ActiveComputeSink::CopyTo(active_copy_to)) => {
+                        let response = match response {
+                            Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
+                            Err(error) => Err(AdapterError::Unstructured(error)),
+                        };
+                        // Ideally it would be better to get an owned active_copy_to here
+                        // and have `process_response` take a `self` instead of `&mut self`
+                        // and consume the object along with the `ctx` it holds.
+                        // But if we remove the entry from `active_compute_sinks` here,
+                        // the following `drop_compute_sinks` will not drop the compute sinks
+                        // since it does expect the entry there.
+                        // TODO (mouli): refactor `drop_compute_sinks` so that we can get
+                        // an owned value here.
+                        active_copy_to.process_response(response);
+                        self.drop_compute_sinks([(sink_id, ComputeSinkRemovalReason::Finished)])
+                            .await;
+                    }
+                    _ => {
+                        tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");
+                    }
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {

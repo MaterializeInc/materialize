@@ -20,6 +20,7 @@ pub struct Metrics {
     pub query_total: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
+    pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: HistogramVec,
     pub determine_timestamp: IntCounterVec,
     pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
@@ -54,6 +55,11 @@ impl Metrics {
             active_subscribes: registry.register(metric!(
                 name: "mz_active_subscribes",
                 help: "The number of active SUBSCRIBE queries.",
+                var_labels: ["session_type"],
+            )),
+            active_copy_tos: registry.register(metric!(
+                name: "mz_active_copy_tos",
+                help: "The number of active COPY TO queries.",
                 var_labels: ["session_type"],
             )),
             queue_busy_seconds: registry.register(metric!(
