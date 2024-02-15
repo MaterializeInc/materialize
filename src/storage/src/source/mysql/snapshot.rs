@@ -41,22 +41,20 @@
 //! frontier establishes an upper bound on any possible write to the tables of interest until the
 //! lock is released.
 //!
-//! Each worker now starts a transaction via a new connection with 'REPEATABLE READ' and
-//! 'CONSISTENT SNAPSHOT' semantics. Due to linearizability we know that this transaction's view of
-//! the database must some time `t_snapshot` such that `snapshot_upper <= t_snapshot`. We don't
-//! actually know the exact value of `t_snapshot` and it might be strictly greater than
-//! `snapshot_upper`. However, because this transaction will only be used to read the locked tables
-//! and we know that `snapshot_upper` is an upper bound on all the writes that have happened to
-//! them we can safely pretend that the transaction's `t_snapshot` is *equal* to `snapshot_upper`.
-//! We have therefore succeeded in starting a transaction at a known point in time!
+//! Each worker now starts a transaction via a new connection with 'REPEATABLE READ' semantics,
+//! and issues a SELECT count(*) FROM {table} query to each table. This is done to ensure that
+//! the transaction sees a consistent view of the tables for the remainder of the transaction.
+//! Due to linearizability we know that this transaction's view of the database must some time
+//! `t_snapshot` such that `snapshot_upper <= t_snapshot`. We don't actually know the exact value
+//! of `t_snapshot` and it might be strictly greater than `snapshot_upper`. However, because this
+//! transaction will only be used to read the locked tables and we know that `snapshot_upper` is
+//! an upper bound on all the writes that have happened to them we can safely pretend that the
+//! transaction's `t_snapshot` is *equal* to `snapshot_upper`. We have therefore succeeded in
+//! starting a transaction at a known point in time!
 //!
 //! At this point it is safe for each worker to unlock the tables, since the transaction has
 //! established a point in time, and close the initial connection. Each worker can then read the
 //! snapshot of the tables it is responsible for and publish it downstream.
-//!
-//! TODO: Other software products hold the table lock for the duration of the snapshot, and some do
-//! not. We should figure out why and if we need to hold the lock longer. This may be because of a
-//! difference in how REPEATABLE READ works in some MySQL-compatible systems (e.g. Aurora MySQL).
 //!
 //! ## Rewinding the snapshot to a specific point in time.
 //!
@@ -89,6 +87,7 @@ use std::rc::Rc;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
+use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_timely_util::antichain::AntichainExt;
@@ -202,11 +201,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .await?;
                 let task_name = format!("timely-{worker_id} MySQL snapshotter");
 
-                let lock_clauses = reader_snapshot_table_info
-                    .keys()
-                    .map(|t| format!("{} READ", t.to_ast_string()))
-                    .collect::<Vec<String>>()
-                    .join(", ");
                 let mut lock_conn = connection_config
                     .connect(
                         &task_name,
@@ -214,30 +208,50 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     )
                     .await?;
 
-                trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
-                match lock_conn
-                    .query_drop(format!("LOCK TABLES {lock_clauses}"))
-                    .await
-                {
-                    // Handle the case where a table we are snapshotting has been dropped or renamed.
-                    Err(mysql_async::Error::Server(mysql_async::ServerError {
-                        code,
-                        message,
-                        ..
-                    })) if code == ER_NO_SUCH_TABLE => {
-                        let err = DefiniteError::TableDropped(message);
-                        return Ok(return_definite_error(
-                            err,
-                            &all_outputs,
-                            &mut raw_handle,
-                            data_cap_set,
-                            &mut definite_error_handle,
-                            definite_error_cap_set,
-                        )
-                        .await);
-                    }
-                    e => e?,
-                };
+                // Acquire table locks for all the tables we are snapshotting
+                // This needs to be done for all tables on a per database/schema basis since
+                // FLUSH TABLES .. WITH READ LOCK doesn't allow fully-qualified table names
+                let tables_per_schema = reader_snapshot_table_info
+                    .values()
+                    .map(|t| (&t.1.schema_name, &t.1.name))
+                    .into_group_map();
+                for (schema, tables) in tables_per_schema {
+                    trace!(%id, "timely-{worker_id} acquiring table locks for database {schema}: \
+                           {tables:?}");
+                    lock_conn.query_drop(format!("USE {schema}")).await?;
+                    let lock_clauses = tables
+                        .iter()
+                        .map(|t| format!("`{}`", t))
+                        .collect::<Vec<String>>()
+                        .join(",");
+
+                    // Use FLUSH TABLES .. WITH READ LOCK to acquire table locks rather than
+                    // LOCK TABLES .. since FLUSH TABLES forces the @gtid_executed value to be
+                    // updated to include all committed transactions.
+                    match lock_conn
+                        .query_drop(format!("FLUSH TABLES {lock_clauses} WITH READ LOCK"))
+                        .await
+                    {
+                        // Handle the case where a table we are snapshotting has been dropped or renamed.
+                        Err(mysql_async::Error::Server(mysql_async::ServerError {
+                            code,
+                            message,
+                            ..
+                        })) if code == ER_NO_SUCH_TABLE => {
+                            let err = DefiniteError::TableDropped(message);
+                            return Ok(return_definite_error(
+                                err,
+                                &all_outputs,
+                                &mut raw_handle,
+                                data_cap_set,
+                                &mut definite_error_handle,
+                                definite_error_cap_set,
+                            )
+                            .await);
+                        }
+                        e => e?,
+                    };
+                }
 
                 // Record the frontier of future GTIDs based on the executed GTID set at the start
                 // of the snapshot
@@ -285,15 +299,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .await);
                 }
 
-                trace!(%id, "timely-{worker_id} starting transaction with \
-                             consistent snapshot at: {}", snapshot_gtid_frontier.pretty());
-
-                // Start a transaction with REPEATABLE READ and 'CONSISTENT SNAPSHOT' semantics
-                // so we can read a consistent snapshot of the table at the specific GTID we read.
+                // Start a transaction with REPEATABLE READ semantics.
                 let mut tx_opts = TxOpts::default();
                 tx_opts
                     .with_isolation_level(IsolationLevel::RepeatableRead)
-                    .with_consistent_snapshot(true)
                     .with_readonly(true);
                 conn.start_transaction(tx_opts).await?;
                 // Set the session time zone to UTC so that we can read TIMESTAMP columns as UTC
@@ -303,11 +312,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 conn.query_drop("set @@session.time_zone = '+00:00'")
                     .await?;
 
-                // We have started our transaction so we can unlock the tables.
-                lock_conn.query_drop("UNLOCK TABLES").await?;
-                lock_conn.disconnect().await?;
-
-                trace!(%id, "timely-{worker_id} started transaction");
+                let gtid_set = query_sys_var(&mut conn, "global.gtid_executed").await?;
+                let gtid_frontier = gtid_set_frontier(&gtid_set)?;
+                trace!(%id, "timely-{worker_id} started transaction at \
+                             : {}", gtid_frontier.pretty());
 
                 // Verify the schemas of the tables we are snapshotting
                 let errored_tables = verify_schemas(
@@ -341,6 +349,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 }
                 // This worker has nothing else to do
                 if reader_snapshot_table_info.is_empty() {
+                    lock_conn.query_drop("UNLOCK TABLES").await?;
+                    lock_conn.disconnect().await?;
                     return Ok(());
                 }
 
@@ -355,6 +365,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 }
                 *rewind_cap_set = CapabilitySet::new();
 
+                // This method collects table sizes for progress metrics, but is also used to
+                // trigger a 'consistent read' for each table to ensure that after the locks are
+                // released we still see a view of each table that includes only the rows that
+                // were contained within the snapshot frontier. It's important that this does a
+                // SELECT count(*) FROM table rather than a SELECT * FROM TABLE LIMIT 1 because
+                // in testing only the former would give us a consistent view during the snapshot.
+                // Previously we tried starting the transaction using 'WITH CONSISTENT SNAPSHOT'
+                // to supposedly achieve the same thing but we observed in testing that it did not
+                // and would result in the transaction seeing rows that were written after the
+                // snapshot frontier point.
                 record_table_sizes(
                     &mut conn,
                     metrics,
@@ -370,10 +390,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         .collect(),
                 )
                 .await?;
+                lock_conn.query_drop("UNLOCK TABLES").await?;
+                lock_conn.disconnect().await?;
 
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
                 'outer: for (table, (output_index, table_desc)) in reader_snapshot_table_info {
+                    let mut row_count = 0;
                     let query = format!("SELECT * FROM {}", table.to_ast_string());
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
@@ -392,6 +415,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                         ),
                                     )
                                     .await;
+                                row_count += 1;
                             }
                             Err(err) => {
                                 // A definite error for this table means we should stop ingesting it
@@ -411,6 +435,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             }
                         }
                     }
+                    trace!(%id, "timely-{worker_id} finished snapshot of table {table} with \
+                           {row_count} rows");
                 }
                 Ok(())
             })
