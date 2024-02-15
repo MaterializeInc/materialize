@@ -49,13 +49,13 @@ use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, info_span, instrument, warn, Instrument, Level};
 
+use crate::active_compute_sink::ComputeSinkRemovalReason;
 use crate::catalog::{CatalogState, Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::subscribe::ComputeSinkRemovalReason;
 use crate::telemetry::SegmentClientExt;
 use crate::util::ResultExt;
 use crate::{catalog, flags, AdapterError, TimestampProvider};

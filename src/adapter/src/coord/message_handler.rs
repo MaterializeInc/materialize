@@ -31,6 +31,7 @@ use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::active_compute_sink::{ActiveComputeSink, ComputeSinkRemovalReason};
 use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
@@ -41,7 +42,6 @@ use crate::coord::{
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::subscribe::{ActiveComputeSink, ComputeSinkRemovalReason};
 use crate::util::ResultExt;
 use crate::{catalog, AdapterError, AdapterNotice, ExecuteResponse, TimestampContext};
 

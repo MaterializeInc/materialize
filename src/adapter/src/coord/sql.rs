@@ -19,11 +19,11 @@ use mz_sql::plan::{Params, StatementDesc};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement, StatementKind};
 
+use crate::active_compute_sink::{ActiveComputeSink, ComputeSinkRemovalReason};
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
-use crate::subscribe::{ActiveComputeSink, ComputeSinkRemovalReason};
 use crate::util::describe;
 use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse, PeekResponseUnary};
 

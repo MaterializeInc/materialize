@@ -12,6 +12,7 @@ use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::{instrument, Span};
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::{
@@ -21,7 +22,6 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::subscribe::{ActiveComputeSink, ActiveSubscribe};
 use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 

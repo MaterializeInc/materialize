@@ -29,6 +29,7 @@ use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
@@ -50,7 +51,6 @@ use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::subscribe::{ActiveComputeSink, ActiveCopyTo};
 
 impl Coordinator {
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.

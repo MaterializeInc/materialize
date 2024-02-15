@@ -139,6 +139,7 @@ use tracing::{debug, info, info_span, instrument, span, warn, Instrument, Level,
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::active_compute_sink::ActiveComputeSink;
 use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
@@ -158,7 +159,6 @@ use crate::optimize::dataflows::{
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::subscribe::ActiveComputeSink;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
