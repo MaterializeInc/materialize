@@ -1994,10 +1994,6 @@ async fn test_concurrent_id_reuse() {
     client.batch_execute("SELECT 1").await.unwrap();
 }
 
-// TODO: re-enable once we figure out how to do this test without
-// relying on internal resources:
-// <https://github.com/MaterializeInc/materialize/issues/25294>
-#[ignore]
 #[mz_ore::test]
 fn test_internal_console_proxy() {
     let server = test_util::TestHarness::default().start_blocking();
@@ -2007,7 +2003,7 @@ fn test_internal_console_proxy() {
         .unwrap()
         .get(
             Url::parse(&format!(
-                "http://{}/internal-console/styles.css",
+                "http://{}/internal-console/",
                 server.inner().internal_http_local_addr()
             ))
             .unwrap(),
@@ -2018,7 +2014,7 @@ fn test_internal_console_proxy() {
     assert_eq!(res.status().is_success(), true);
     assert_contains!(
         res.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap(),
-        "text/css"
+        "text/html"
     );
 }
 
