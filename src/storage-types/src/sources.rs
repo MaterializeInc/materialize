@@ -51,7 +51,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::controller::{AlterError, CollectionMetadata};
+use crate::controller::{AlterError, CollectionMetadata, StorageError};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
@@ -838,7 +838,7 @@ impl GenericSourceConnection {
         id: GlobalId,
         config: StorageConfiguration,
         remap_subscribe: Subscribe<SourceData, (), T, mz_repr::Diff>,
-    ) -> Result<T, StorageError> {
+    ) -> Result<T, StorageError<T>> {
         use mz_timely_util::antichain::AntichainExt;
 
         // Currently only Kafka sources can support real-time recency. PG
@@ -876,7 +876,7 @@ impl GenericSourceConnection {
         id: GlobalId,
         external_frontier: timely::progress::Antichain<ExternalFrontier>,
         mut remap_subscribe: Subscribe<SourceData, (), T, mz_repr::Diff>,
-    ) -> Result<T, StorageError> {
+    ) -> Result<T, StorageError<T>> {
         use mz_persist_client::read::ListenEvent;
         use timely::progress::frontier::MutableAntichain;
 

@@ -132,7 +132,6 @@ impl KafkaSourceConnection {
     ) -> Result<timely::progress::Antichain<NativeFrontier>, anyhow::Error> {
         use mz_kafka_util::client::MzClientContext;
         use mz_ore::collections::CollectionExt;
-        use mz_timely_util::antichain::AntichainExt;
         use rdkafka::admin::AdminClient;
         use timely::progress::Antichain;
 

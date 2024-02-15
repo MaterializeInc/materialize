@@ -523,11 +523,9 @@ where
     /// `source_ids` at the time of the function call.
     pub async fn recent_timestamp(
         &self,
-        source_ids: impl Iterator<Item = GlobalId>,
+        ids: BTreeSet<GlobalId>,
     ) -> Result<BoxFuture<'static, Result<T, StorageError<T>>>, StorageError<T>> {
-        self.storage
-            .real_time_recent_timestamp(source_ids.collect())
-            .await
+        self.storage.real_time_recent_timestamp(ids).await
     }
 }
 

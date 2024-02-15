@@ -2000,7 +2000,26 @@ impl Coordinator {
             && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
             && !session.contains_read_timestamp()
         {
-            let r = self.controller.recent_timestamp(source_ids).await;
+            // Find all dependencies transitively because we need to ensure that
+            // RTR queries determine the timestamp from the sources' (i.e.
+            // storage objects that ingest data from external systems) remap
+            // data. We "cheat" a little bit and filter out any IDs that aren't
+            // user objects because we know they are not a RTR source.
+            let mut to_visit = VecDeque::from_iter(source_ids.filter(GlobalId::is_user));
+            let mut visited = BTreeSet::new();
+
+            while let Some(id) = to_visit.pop_front() {
+                visited.insert(id);
+                to_visit.extend(
+                    self.catalog()
+                        .get_entry(&id)
+                        .uses()
+                        .into_iter()
+                        .filter(|id| !visited.contains(id) && id.is_user()),
+                );
+            }
+
+            let r = self.controller.recent_timestamp(visited).await;
             let r = match r {
                 Ok(r) => r,
                 Err(StorageError::RtrUnavailable(ids)) => {

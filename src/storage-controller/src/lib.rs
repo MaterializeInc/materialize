@@ -2612,9 +2612,15 @@ where
 
         let mut rtr_futures = Vec::with_capacity(source_ids.len());
 
+        let mut unavailable_ids = BTreeSet::new();
+
         // Only user sources can be read from w/ RTR.
         for id in source_ids.into_iter().filter(GlobalId::is_user) {
-            let collection = self.collection(id)?;
+            let collection = match self.collection(id) {
+                Ok(c) => c,
+                // Not a storage item, which we accept.
+                Err(_) => continue,
+            };
 
             let (source_conn, remap_id) = match &collection.description.data_source {
                 DataSource::Ingestion(IngestionDescription {
@@ -2627,18 +2633,12 @@ where
                     // Eventually PG and MySQL will support RTR but today we
                     // must error if they're queried with RTR.
                     GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => {
-                        unavilable_ids.insert(id);
+                        unavailable_ids.insert(id);
                         continue;
                     }
                     // These internal sources will never support RTR.
                     GenericSourceConnection::LoadGenerator(_) => continue,
                 },
-                // Subsources don't currently support RTR until we fix the
-                // dependency inversion.
-                DataSource::Other(DataSourceOther::Source) => {
-                    unavilable_ids.insert(id);
-                    continue;
-                }
                 // Skip over all other objects
                 _ => {
                     continue;
@@ -2655,7 +2655,7 @@ where
             // it here because we must prove that we have not taken ownership of
             // `self` to move the stream of data from the remap shard into a
             // future.
-            let mut read_handle = self.read_handle_for_snapshot(remap_id).await?;
+            let read_handle = self.read_handle_for_snapshot(remap_id).await?;
 
             let remap_collection = self.collection(remap_id)?;
             let remap_as_of = remap_collection
