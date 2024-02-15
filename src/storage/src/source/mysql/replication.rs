@@ -410,6 +410,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         // and updates and inserts (which inclued an after row).
                         let mut container = Vec::new();
                         let mut rows_iter = data.rows(table_map_event);
+                        let mut rewind_count = 0;
                         while let Some(Ok((before_row, after_row))) = rows_iter.next() {
                             let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
                             for (binlog_row, diff) in updates.into_iter().flatten() {
@@ -422,8 +423,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                     rewinds.get(table)
                                 {
                                     if !rewind_req.snapshot_upper.less_equal(new_gtid) {
-                                        trace!(%id, "timely-{worker_id} rewinding update \
-                                                     {data:?} for {new_gtid:?}");
+                                        rewind_count += 1;
                                         data_output
                                             .give(
                                                 data_cap,
@@ -432,16 +432,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                             .await;
                                     }
                                 }
-                                trace!(%id, "timely-{worker_id} sending update {data:?}
-                                             for {new_gtid:?}");
                                 container.push((data, new_gtid.clone(), diff));
                             }
                         }
 
                         // Flush this data
                         let gtid_cap = data_cap_set.delayed(new_gtid);
-                        trace!(%id, "timely-{worker_id} sending container for {new_gtid:?} \
-                                     with {container:?} updates");
+                        trace!(%id, "timely-{worker_id} sending update at {new_gtid:?} \
+                                     with {} updates and {} rewinds",
+                                     container.len(), rewind_count);
+
                         data_output.give_container(&gtid_cap, &mut container).await;
 
                         // Advance the frontier up to the point right before this GTID
@@ -481,7 +481,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     }
 
                     Some(EventData::QueryEvent(event)) => {
-                        trace!(%id, "timely-{worker_id} received query event {event:?}");
                         events::handle_query_event(
                             event,
                             &config,
