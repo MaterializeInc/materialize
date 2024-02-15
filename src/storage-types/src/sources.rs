@@ -921,9 +921,9 @@ impl GenericSourceConnection {
                             tracing::trace!("real-time recency ts for {id}: {max_ts:?}");
                             return Ok(max_ts);
                         } else if f.is_empty() {
-                            panic!(
-                                "source dropped before ingesting enough data to be considered RTR"
-                            )
+                            // Collection dropped before we ingested external
+                            // frontier.
+                            return Err(StorageError::RtrDropFailure(id));
                         }
                     }
                 }

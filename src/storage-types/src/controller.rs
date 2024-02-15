@@ -217,6 +217,8 @@ pub enum StorageError<T> {
     RtrUnavailable(BTreeSet<GlobalId>),
     /// We failed to determine the real-time-recency timestamp.
     RtrTimeout(GlobalId),
+    /// The collection was dropped before we could ingest its external frontier.
+    RtrDropFailure(GlobalId),
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -245,6 +247,7 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::MissingSubsourceReference { .. } => None,
             Self::RtrUnavailable(_) => None,
             Self::RtrTimeout(_) => None,
+            Self::RtrDropFailure(_) => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -330,6 +333,10 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
             Self::RtrTimeout(_) => {
                 write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
             }
+            Self::RtrDropFailure(_) => write!(
+                f,
+                "real-time source dropped before ingesting the upstream system's visible frontier"
+            ),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }

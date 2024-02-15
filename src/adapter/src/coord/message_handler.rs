@@ -812,7 +812,19 @@ impl Coordinator {
             Err(e) => {
                 let ctx = real_time_recency_context.take_context();
                 let e = match e {
+                    // TODO: we should be able to generalize this conversion
+                    // from `GlobalId` to minimally qualified name string.
                     StorageError::RtrTimeout(id) => {
+                        let session = ctx.session();
+                        let conn_catalog = self.catalog().for_session(session);
+                        let name = conn_catalog
+                            .minimal_qualification(conn_catalog.get_item(&id).name())
+                            .to_string();
+                        crate::AdapterError::RtrTimeout(name)
+                    }
+                    // TODO: we should be able to generalize this conversion
+                    // from `GlobalId` to minimally qualified name string.
+                    StorageError::RtrDropFailure(id) => {
                         let session = ctx.session();
                         let conn_catalog = self.catalog().for_session(session);
                         let name = conn_catalog

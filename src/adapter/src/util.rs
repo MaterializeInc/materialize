@@ -360,7 +360,8 @@ impl<T> ShouldHalt for StorageError<T> {
             | StorageError::ShuttingDown(_)
             | StorageError::MissingSubsourceReference { .. }
             | StorageError::RtrUnavailable(_)
-            | StorageError::RtrTimeout(_) => false,
+            | StorageError::RtrTimeout(_)
+            | StorageError::RtrDropFailure(_) => false,
         }
     }
 }
