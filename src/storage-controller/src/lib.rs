@@ -1314,7 +1314,11 @@ where
                 std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
                 update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
                 if !update.is_empty() {
-                    read_capability_changes.insert(id, update);
+                    update.drain_into(
+                        read_capability_changes
+                            .entry(id)
+                            .or_insert_with(ChangeBatch::new),
+                    );
                 }
             }
 

@@ -723,7 +723,7 @@ impl Coordinator {
             };
             let read_ts = oracle.read_ts().await;
             if read_holds.times().any(|time| time.less_than(&read_ts)) {
-                read_holds = self.update_read_hold(read_holds, read_ts);
+                read_holds = self.update_read_holds(read_holds, read_ts);
             }
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });

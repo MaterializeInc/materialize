@@ -984,6 +984,9 @@ impl Coordinator {
         // we must acquire read holds here so they are held until the off-thread work
         // returns to the coordinator.
         if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+            // Transactions involving peeks will acquire read holds at most once.
+            assert_eq!(txn_reads.len(), 1);
+            let txn_reads = &txn_reads[0];
             // Find referenced ids not in the read hold. A reference could be caused by a
             // user specifying an object in a different schema than the first query. An
             // index could be caused by a CREATE INDEX after the transaction started.
@@ -1000,7 +1003,8 @@ impl Coordinator {
                 });
             }
         } else if let Some((timestamp, bundle)) = potential_read_holds {
-            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle);
+            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle, true)
+                .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
