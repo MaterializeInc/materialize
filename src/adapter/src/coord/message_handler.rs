@@ -41,7 +41,7 @@ use crate::coord::{
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::subscribe::ComputeSinkRemovalReason;
+use crate::subscribe::{ActiveComputeSink, ComputeSinkRemovalReason};
 use crate::util::ResultExt;
 use crate::{catalog, AdapterError, AdapterNotice, ExecuteResponse, TimestampContext};
 
@@ -346,11 +346,8 @@ impl Coordinator {
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 match self.active_compute_sinks.get_mut(&sink_id) {
-                    None => {
-                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
-                    }
-                    Some(active_subscribe) => {
-                        let finished = active_subscribe.process_subscribe(response);
+                    Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
+                        let finished = active_subscribe.process_response(response);
                         if finished {
                             self.drop_compute_sinks([(
                                 sink_id,
@@ -359,15 +356,33 @@ impl Coordinator {
                             .await;
                         }
                     }
+                    _ => {
+                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
+                    }
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
-                if let Some(sink) = self.active_compute_sinks.get_mut(&sink_id) {
-                    let response = match response {
-                        Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
-                        Err(error) => Err(AdapterError::Unstructured(error)),
-                    };
-                    sink.process_copy_to(response);
+                match self.active_compute_sinks.get_mut(&sink_id) {
+                    Some(ActiveComputeSink::CopyTo(active_copy_to)) => {
+                        let response = match response {
+                            Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
+                            Err(error) => Err(AdapterError::Unstructured(error)),
+                        };
+                        // Ideally it would be better to get an owned active_copy_to here
+                        // and have `process_response` take a `self` instead of `&mut self`
+                        // and consume the object along with the `ctx` it holds.
+                        // But if we remove the entry from `active_compute_sinks` here,
+                        // the following `drop_compute_sinks` will not drop the compute sinks
+                        // since it does expect the entry there.
+                        // TODO (mouli): refactor `drop_compute_sinks` so that we can get
+                        // an owned value here.
+                        active_copy_to.process_response(response);
+                        self.drop_compute_sinks([(sink_id, ComputeSinkRemovalReason::Finished)])
+                            .await;
+                    }
+                    _ => {
+                        tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");
+                    }
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {

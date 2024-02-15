@@ -65,20 +65,6 @@ impl ActiveComputeSink {
             ActiveComputeSink::CopyTo(copy_to) => &copy_to.depends_on,
         }
     }
-
-    pub fn process_subscribe(&mut self, batch: SubscribeBatch) -> bool {
-        match self {
-            ActiveComputeSink::Subscribe(subscribe) => subscribe.process_response(batch),
-            ActiveComputeSink::CopyTo(_) => unreachable!(),
-        }
-    }
-
-    pub fn process_copy_to(&mut self, response: Result<ExecuteResponse, AdapterError>) {
-        match self {
-            ActiveComputeSink::Subscribe(_) => unreachable!(),
-            ActiveComputeSink::CopyTo(copy_to) => copy_to.process_response(response),
-        }
-    }
 }
 
 /// A description of an active subscribe from coord's perspective
@@ -362,7 +348,7 @@ impl ActiveSubscribe {
     }
 }
 
-/// The reason for removing an [`ActiveSubscribe`].
+/// The reason for removing an [`ActiveComputeSink`].
 #[derive(Debug, Clone)]
 pub enum ComputeSinkRemovalReason {
     /// The compute sink completed successfully.
@@ -392,8 +378,9 @@ pub struct ActiveCopyTo {
 
 impl ActiveCopyTo {
     pub(crate) fn process_response(&mut self, response: Result<ExecuteResponse, AdapterError>) {
-        // Using an option to get an owned value after take
-        // to call `retire` on it.
+        // TODO(mouli): refactor so that process_response takes `self` instead of `&mut self`. Then,
+        // we can make `ctx` not optional, and get rid of the `user` and `conn_id` as well.
+        // Using an option to get an owned value after take to call `retire` on it.
         if let Some(ctx) = self.ctx.take() {
             let _ = ctx.retire(response);
         }

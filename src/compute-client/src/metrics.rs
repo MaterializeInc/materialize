@@ -212,7 +212,7 @@ pub struct InstanceMetrics {
     pub peek_count: UIntGauge,
     /// TODO(#25239): Add documentation.
     pub subscribe_count: UIntGauge,
-    /// TODO(#25239): Add documentation.
+    /// A counter to keep track of the number of active COPY TO queries in progress.
     pub copy_to_count: UIntGauge,
     /// TODO(#25239): Add documentation.
     pub history_command_count: CommandMetrics<UIntGauge>,
