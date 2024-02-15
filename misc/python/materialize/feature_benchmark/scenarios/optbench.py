@@ -24,6 +24,9 @@ from materialize.feature_benchmark.measurement_source import (
 )
 from materialize.feature_benchmark.scenario import Scenario
 
+# for pdoc ignores
+__pdoc__ = {}
+
 
 class OptbenchInit(Action):
     def __init__(self, scenario: str, no_indexes: bool = False) -> None:
@@ -77,6 +80,10 @@ def name_with_query(
     cls: type["OptbenchTPCH"], num: int, params_dict: dict[str, Any]
 ) -> str:
     return f"OptbenchTPCHQ{params_dict['QUERY']:02d}"
+
+
+for i in range(1, 23):
+    __pdoc__[f"OptbenchTPCHQ{i:02d}"] = False
 
 
 @parameterized_class(
