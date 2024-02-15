@@ -629,9 +629,7 @@ To see the available workflows, run:
             ):
                 raise UIError("at least one test case failed")
 
-    def shall_generate_junit_report(self, composition: str) -> bool:
-        assert composition is not None
-
+    def shall_generate_junit_report(self, composition: str | None) -> bool:
         # sqllogictest already generates a proper junit.xml file
         return composition != "sqllogictest"
 
