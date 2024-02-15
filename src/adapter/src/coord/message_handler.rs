@@ -41,6 +41,7 @@ use crate::coord::{
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
+use crate::subscribe::ComputeSinkRemovalReason;
 use crate::util::ResultExt;
 use crate::{catalog, AdapterError, AdapterNotice, ExecuteResponse, TimestampContext};
 
@@ -344,12 +345,20 @@ impl Coordinator {
                 self.send_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
-                // It's not an error if the subscribe does not exist. When
-                // aborting a subscribe, we eagerly remove it from
-                // `active_subscribes`, but we might receive a few responses
-                // from the controller about the zombie subscribe.
-                if let Some(sink) = self.active_compute_sinks.get_mut(&sink_id) {
-                    sink.process_subscribe(response);
+                match self.active_compute_sinks.get_mut(&sink_id) {
+                    None => {
+                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
+                    }
+                    Some(active_subscribe) => {
+                        let finished = active_subscribe.process_subscribe(response);
+                        if finished {
+                            self.drop_compute_sinks([(
+                                sink_id,
+                                ComputeSinkRemovalReason::Finished,
+                            )])
+                            .await;
+                        }
+                    }
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {

@@ -293,7 +293,7 @@ impl Coordinator {
         let active_subscribe = ActiveSubscribe {
             user: ctx.session().user().clone(),
             conn_id: ctx.session().conn_id().clone(),
-            channel: Some(tx),
+            channel: tx,
             emit_progress,
             as_of: global_lir_plan
                 .as_of()

@@ -24,7 +24,7 @@ use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::{ActiveComputeSink, ComputeSinkRemovalReason};
-use crate::util::{describe, ComputeSinkId};
+use crate::util::describe;
 use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse, PeekResponseUnary};
 
 impl Coordinator {
@@ -221,10 +221,7 @@ impl Coordinator {
             .get_mut(active_sink.connection_id())
             .expect("must exist for active sessions")
             .drop_sinks
-            .insert(ComputeSinkId {
-                cluster_id: active_sink.cluster_id(),
-                global_id: id,
-            });
+            .insert(id);
 
         let ret_fut = match &active_sink {
             ActiveComputeSink::Subscribe(active_subscribe) => {
@@ -292,10 +289,7 @@ impl Coordinator {
                 .get_mut(sink.connection_id())
                 .expect("must exist for active compute sink")
                 .drop_sinks
-                .remove(&ComputeSinkId {
-                    cluster_id: sink.cluster_id(),
-                    global_id: id,
-                });
+                .remove(&id);
 
             match sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {

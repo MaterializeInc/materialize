@@ -161,7 +161,8 @@ pub(super) struct Instance<T> {
     /// New entries are added for all s3 oneshot sinks (corresponding to a COPY TO) exported from
     /// dataflows created through [`ActiveInstance::create_dataflow`].
     ///
-    /// The entry for a copy to is removed once at least one replica has finished.
+    /// The entry for a copy to is removed once at least one replica has finished
+    /// or the exporting collection is dropped.
     copy_tos: BTreeSet<GlobalId>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<UIntGauge, T>,
