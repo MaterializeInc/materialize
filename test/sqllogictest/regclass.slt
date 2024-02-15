@@ -292,3 +292,11 @@ query T
 SELECT 'mz_internal.mz_activity_log'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_activity_log')
 ----
 true
+
+query T
+SELECT 'materialize.public.t'::regclass::oid::int
+----
+20696
+
+query error db error: ERROR: relation "t" does not exist
+SELECT 't'::regclass::oid::int
