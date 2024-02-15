@@ -833,7 +833,7 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds)`.
-    #[tracing::instrument(level = "info", skip(self, pcx, catalog))]
+    #[tracing::instrument(skip_all)]
     pub(crate) fn parse_plan(
         &self,
         id: GlobalId,
