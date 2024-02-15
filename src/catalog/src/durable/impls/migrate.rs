@@ -69,7 +69,7 @@ pub struct CatalogMigrator {
 impl OpenableDurableCatalogState for CatalogMigrator {
     async fn open_savepoint(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
@@ -85,7 +85,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
                 let tombstone = self.get_tombstone().await?;
                 let mut stash = self
                     .openable_stash
-                    .open_savepoint(boot_ts, bootstrap_args, deploy_generation, None)
+                    .open_savepoint(initial_ts, bootstrap_args, deploy_generation, None)
                     .await?;
                 // Forcibly mark the rollback as complete so we look at the correct implementation
                 // (stash) on re-boot. This is really a no-op because it's a savepoint catalog, but
@@ -107,7 +107,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         let stash = self
             .openable_stash
             .open_savepoint(
-                boot_ts.clone(),
+                initial_ts.clone(),
                 bootstrap_args,
                 deploy_generation.clone(),
                 persist_epoch,
@@ -115,7 +115,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             .await;
         let persist = self
             .openable_persist
-            .open_savepoint(boot_ts, bootstrap_args, deploy_generation, stash_epoch)
+            .open_savepoint(initial_ts, bootstrap_args, deploy_generation, stash_epoch)
             .await;
 
         // If our target implementation is the stash, but persist is uninitialized, then we can
@@ -147,7 +147,6 @@ impl OpenableDurableCatalogState for CatalogMigrator {
 
     async fn open_read_only(
         self: Box<Self>,
-        _boot_ts: EpochMillis,
         _bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         panic!("cannot use a read only catalog with the migrate implementation")
@@ -155,7 +154,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
 
     async fn open(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
@@ -171,7 +170,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
                 let tombstone = self.get_tombstone().await?;
                 let mut stash = self
                     .openable_stash
-                    .open(boot_ts, bootstrap_args, deploy_generation, None)
+                    .open(initial_ts, bootstrap_args, deploy_generation, None)
                     .await?;
                 // Forcibly mark the rollback as complete so we look at the correct implementation
                 // (stash) on re-boot.
@@ -201,7 +200,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         let stash = self
             .openable_stash
             .open(
-                boot_ts.clone(),
+                initial_ts.clone(),
                 bootstrap_args,
                 deploy_generation.clone(),
                 persist_epoch,
@@ -210,7 +209,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         fail::fail_point!("post_stash_fence");
         let persist = self
             .openable_persist
-            .open(boot_ts, bootstrap_args, deploy_generation, stash_epoch)
+            .open(initial_ts, bootstrap_args, deploy_generation, stash_epoch)
             .await?;
         fail::fail_point!("post_persist_fence");
         Self::open_inner(stash, persist, direction).await
