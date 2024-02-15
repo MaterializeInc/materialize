@@ -28,15 +28,6 @@ from materialize.version_list import (
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
-from scenarios import *  # noqa: F401 F403
-from scenarios import MySqlStreaming, Scenario
-from scenarios_concurrency import *  # noqa: F401 F403
-from scenarios_customer import *  # noqa: F401 F403
-from scenarios_optbench import *  # noqa: F401 F403
-from scenarios_scale import *  # noqa: F401 F403
-from scenarios_skew import *  # noqa: F401 F403
-from scenarios_subscribe import *  # noqa: F401 F403
-
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report
 from materialize.feature_benchmark.comparator import (
@@ -46,6 +37,17 @@ from materialize.feature_benchmark.comparator import (
 from materialize.feature_benchmark.executor import Docker
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.measurement import MeasurementType
+from materialize.feature_benchmark.scenarios.benchmark_main import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.benchmark_main import (
+    MySqlStreaming,
+    Scenario,
+)
+from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.customer import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.scale import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.skew import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.subscribe import *  # noqa: F401 F403
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
