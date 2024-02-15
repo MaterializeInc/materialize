@@ -1998,7 +1998,11 @@ where
 
         // Only user sources can be read from w/ RTR.
         for id in source_ids.into_iter().filter(GlobalId::is_user) {
-            let collection = self.collection(id)?;
+            let collection = match self.collection(id) {
+                Ok(c) => c,
+                // Not a storage item, which we accept.
+                Err(_) => continue,
+            };
 
             let (source_conn, remap_id) = match &collection.description.data_source {
                 DataSource::Ingestion(IngestionDescription {
