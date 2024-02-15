@@ -18,7 +18,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 tempfile = "3.8.1"
 
 [build-dependencies]
-cc = "1.0.78"
+cc = { version = "1.0.83", default-features = false, features = ["parallel"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
