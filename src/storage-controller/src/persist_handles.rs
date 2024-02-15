@@ -70,7 +70,7 @@ pub(crate) enum SnapshotStatsAsOf<T: Timestamp + Lattice + Codec64> {
 enum PersistReadWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
     Update(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
-    Downgrade(BTreeMap<GlobalId, (Antichain<T>, oneshot::Sender<bool>)>),
+    Downgrade(BTreeMap<GlobalId, (Antichain<T>, oneshot::Sender<Result<(), ()>>)>),
     SnapshotStats(
         GlobalId,
         SnapshotStatsAsOf<T>,
@@ -182,13 +182,18 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
                                 .instrument(span)
                                 .await
                         };
-                        // Notify listeners of the result of the downgrade.
-                        let was_success = result.as_ref().map(|res| res.is_ok()).unwrap_or(true);
-                        let _ = tx.send(was_success);
 
-                        if let Some(Err(other_epoch)) = result {
+                        if let Some(Err(other_epoch)) = &result {
                             mz_ore::halt!("fenced by envd @ {other_epoch:?}. ours = {epoch:?}");
                         }
+
+                        // Notify listeners of the result of the downgrade.
+                        let notify_result = match result {
+                            None => Err(()),
+                            Some(Err(_)) => Err(()),
+                            Some(Ok(_)) => Ok(()),
+                        };
+                        let _ = tx.send(notify_result);
 
                         // If we're not done we put the handle back
                         if !since.is_empty() {
@@ -235,7 +240,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
 
     pub(crate) fn downgrade(
         &self,
-        frontiers: BTreeMap<GlobalId, (Antichain<T>, oneshot::Sender<bool>)>,
+        frontiers: BTreeMap<GlobalId, (Antichain<T>, oneshot::Sender<Result<(), ()>>)>,
     ) {
         self.send(PersistReadWorkerCmd::Downgrade(frontiers));
     }

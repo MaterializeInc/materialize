@@ -135,7 +135,7 @@ struct PendingCompactionCommand<T> {
     cluster_id: Option<StorageInstanceId>,
     /// Future that returns if since of the collection has been downgraded.
     #[derivative(Debug = "ignore")]
-    downgrade_notif: BoxFuture<'static, bool>,
+    downgrade_notif: BoxFuture<'static, Result<(), ()>>,
 }
 
 /// A storage controller for a storage instance.
@@ -1522,12 +1522,18 @@ where
         for (id, (read_frontier, cluster_id, rx)) in worker_compaction_commands {
             // Acquiring a client for a storage instance requires await, so we
             // instead stash these for later and process when we can.
+            let downgrade_notif = rx
+                .map(|res| match res {
+                    Ok(res) => res,
+                    Err(_) => Err(()),
+                })
+                .boxed();
             self.pending_compaction_commands
                 .push(PendingCompactionCommand {
                     id,
                     read_frontier,
                     cluster_id,
-                    downgrade_notif: rx.map(|res| res.unwrap_or(false)).boxed(),
+                    downgrade_notif,
                 });
         }
     }
@@ -1566,8 +1572,11 @@ where
                 let shards_to_finalize: Vec<_> = ids
                     .iter()
                     .filter_map(|id| {
-                        // Note: All handles to the id should have been dropped by now, otherwise
-                        // finalizing the shard is not safe.
+                        // Note: All handles to the id should be dropped by now and the since of
+                        // the collection should be downgraded to the empty antichain. If handles
+                        // to the shard still exist, then we will incorrectly report the shard as
+                        // alive, and if the since of the shard has not been downgraded, then we
+                        // will continuously fail to finalize it.
                         //
                         // TODO(parkmycar): Should we be asserting that .remove(...) is some? In
                         // other words that we know about the collection we're receiving an event
@@ -1677,42 +1686,40 @@ where
             // Check if a collection is managed by the storage-controller itself.
             let collection = self.collections.get(&id);
             if let Some(CollectionState { description, .. }) = collection {
-                let is_controller_managed = matches!(
-                    description.data_source,
-                    DataSource::Webhook
-                        | DataSource::Introspection(_)
-                        | DataSource::Other(DataSourceOther::TableWrites)
-                );
-
                 // Normally `clusterd` will emit this StorageResponse when it knows we can drop an
                 // ID, but some collections are managed by the storage controller itself, so we
                 // must emit this event here.
-                if is_controller_managed && read_frontier.is_empty() {
-                    pending_collection_drops.push(id);
+                let drop_notif = match description.data_source {
+                    DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
+                        pending_collection_drops.push(id);
+                        Some(self.persist_table_worker.drop_handle(id))
+                    }
+                    DataSource::Webhook | DataSource::Introspection(_)
+                        if read_frontier.is_empty() =>
+                    {
+                        pending_collection_drops.push(id);
+                        // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
+                        // could probably use some love and maybe get merged together?
+                        let unregister_notif = self.collection_manager.unregister_collection(id);
+                        let monotonic_worker = self.persist_monotonic_worker.clone();
+                        let drop_fut = async move {
+                            // Wait for the collection manager to stop writing.
+                            unregister_notif.await;
+                            // Wait for the montonic worker to drop the handle.
+                            monotonic_worker.drop_handle(id).await;
+                        };
+                        Some(drop_fut.boxed())
+                    }
+                    // These sources are manged by `clusterd`.
+                    DataSource::Webhook
+                    | DataSource::Introspection(_)
+                    | DataSource::Other(_)
+                    | DataSource::Progress
+                    | DataSource::Ingestion(_) => None,
+                };
 
-                    // Get a Future that notifies us when all of the dependent resources have been
-                    // cleaned up.
-                    let drop_notif = match &description.data_source {
-                        DataSource::Other(DataSourceOther::TableWrites) => {
-                            self.persist_table_worker.drop_handle(id)
-                        }
-                        DataSource::Webhook | DataSource::Introspection(_) => {
-                            // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                            // could probably use some love and maybe get merged together?
-                            let unregister_notif =
-                                self.collection_manager.unregister_collection(id);
-                            let monotonic_worker = self.persist_monotonic_worker.clone();
-                            let drop_fut = async move {
-                                // Wait for the collection manager to stop writing.
-                                unregister_notif.await;
-                                // Wait for the montonic worker to drop the handle.
-                                monotonic_worker.drop_handle(id).await;
-                            };
-                            Box::pin(drop_fut)
-                        }
-                        x => unreachable!("should have matched above, {x:?}"),
-                    };
-
+                // Wait for all of the resources to get cleaned up, but emitting our event.
+                if let Some(drop_notif) = drop_notif {
                     let internal_response_sender = self.internal_response_sender.clone();
                     mz_ore::task::spawn(|| format!("storage-cleanup-{id}"), async move {
                         // Wait for the relevant component to drop its resources and handles, this
@@ -1723,7 +1730,7 @@ where
                         //
                         // If we fail to downgrade the since the process will halt, but as a back
                         // stop we only notify the storage-controller if it succeeds.
-                        if downgrade_notif.await {
+                        if downgrade_notif.await.is_ok() {
                             // Notify that this ID has been dropped, which will start finalization of
                             // the shard.
                             let _ = internal_response_sender
@@ -1751,12 +1758,14 @@ where
             }
         }
 
-        // Delete all collection->shard mappings
-        let shards_to_update = pending_source_drops
+        // Delete all collection->shard mappings, making sure to de-duplicate.
+        let shards_to_update: BTreeSet<_> = pending_source_drops
             .iter()
             .chain(pending_collection_drops.iter())
-            .cloned();
-        self.append_shard_mappings(shards_to_update, -1).await;
+            .cloned()
+            .collect();
+        self.append_shard_mappings(shards_to_update.into_iter(), -1)
+            .await;
 
         // Record the drop status for all pending source and sink drops.
         //
