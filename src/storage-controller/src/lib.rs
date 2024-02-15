@@ -45,15 +45,15 @@ use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampMan
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
-    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, Status, StatusUpdate, StorageCommand,
-    StorageResponse, TimestamplessUpdate,
+    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
+    StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
     ExportState, IntrospectionType, MonotonicAppender, Response, SnapshotCursor, StorageController,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
+use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_types::collections as proto;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;

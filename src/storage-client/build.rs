@@ -43,6 +43,13 @@ fn main() {
         .extern_path(".mz_tracing", "::mz_tracing")
         .extern_path(".mz_service", "::mz_service")
         .extern_path(".mz_storage_types", "::mz_storage_types")
-        .compile_with_config(config, &["storage-client/src/client.proto"], &[".."])
+        .compile_with_config(
+            config,
+            &[
+                "storage-client/src/client.proto",
+                "storage-client/src/statistics.proto",
+            ],
+            &[".."],
+        )
         .unwrap_or_else(|e| panic!("{e}"))
 }

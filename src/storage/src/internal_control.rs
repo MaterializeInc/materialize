@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use mz_repr::{GlobalId, Row};
 use mz_rocksdb::config::SharedWriteBufferManager;
-use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
