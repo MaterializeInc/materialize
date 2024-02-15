@@ -277,3 +277,26 @@ NULL
 # ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)
+
+# ensure that catalog items can be resolved if the active database is invalid
+
+statement OK
+SET database TO ''
+
+query T
+SELECT 'mz_tables'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_tables')
+----
+true
+
+query T
+SELECT 'mz_internal.mz_activity_log'::regclass = (SELECT oid FROM mz_objects WHERE name = 'mz_activity_log')
+----
+true
+
+query T
+SELECT 'materialize.public.t'::regclass::oid::int
+----
+20696
+
+query error db error: ERROR: relation "t" does not exist
+SELECT 't'::regclass::oid::int
