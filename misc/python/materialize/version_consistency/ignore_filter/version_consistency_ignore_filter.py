@@ -40,10 +40,11 @@ from materialize.output_consistency.operation.operation import (
 )
 from materialize.output_consistency.selection.selection import DataRowSelection
 
+# Do not specify "-dev" versions. The suffix will be cropped; it is not necessary.
 MZ_VERSION_0_77_0 = MzVersion.parse_mz("v0.77.0")
 MZ_VERSION_0_78_0 = MzVersion.parse_mz("v0.78.0")
 MZ_VERSION_0_81_0 = MzVersion.parse_mz("v0.81.0")
-MZ_VERSION_0_88_0 = MzVersion.parse_mz("v0.88.0-dev")
+MZ_VERSION_0_88_0 = MzVersion.parse_mz("v0.88.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
