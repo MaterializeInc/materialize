@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use futures::future::{self, BoxFuture};
+use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::CompactionWindow;
@@ -1812,9 +1812,7 @@ impl Coordinator {
                     // As a special case, if we're canceling ourselves, we send
                     // back a canceled resposne to the client issuing the query,
                     // and so we need to do no further processing of the cancel.
-                    ctx.retire(Ok(ExecuteResponse::SendingRows {
-                        future: Box::pin(future::ready(PeekResponseUnary::Canceled)),
-                    }));
+                    ctx.retire(Err(AdapterError::Canceled));
                     return;
                 }
 
