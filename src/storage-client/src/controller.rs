@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
@@ -705,6 +706,7 @@ pub trait StorageController: Debug {
     async fn real_time_recent_timestamp(
         &self,
         source_ids: BTreeSet<GlobalId>,
+        timeout: Duration,
     ) -> Result<
         BoxFuture<'static, Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,

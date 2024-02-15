@@ -883,7 +883,6 @@ impl GenericSourceConnection {
         let mut native_upper = MutableAntichain::new();
         let mut remap_updates = vec![];
 
-        // TODO: this should timeout eventually with Err(StorageError::RtrTimeout(id))
         loop {
             for event in remap_subscribe.fetch_next().await {
                 match event {
