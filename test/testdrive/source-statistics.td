@@ -129,8 +129,8 @@ users          true      false   true  true  false   true
     SUM(u.updates_staged) BETWEEN 3 AND 11,
     SUM(u.updates_committed) BETWEEN 3 AND 11,
     SUM(u.bytes_received) > 0,
-    SUM(u.envelope_state_bytes) > 0,
-    SUM(u.envelope_state_records),
+    SUM(u.bytes_indexed) > 0,
+    SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
@@ -142,7 +142,7 @@ upsert true 9 true true true true 3 true
 # While we can't control how batching works above, we can ensure that this new, later update
 # causes 1 more messages to be received, which is 1 update, a delete.
 # We use `set-from-sql` to assert this. We will also use this to validate that the
-# `envelope_state_bytes` value goes down because of the delete.
+# `bytes_indexed` value goes down because of the delete.
 $ set-from-sql var=updates-committed
 SELECT
     (SUM(u.updates_committed) + 1)::text
@@ -152,7 +152,7 @@ SELECT
 
 $ set-from-sql var=state-bytes
 SELECT
-    (SUM(u.envelope_state_bytes))::text
+    (SUM(u.bytes_indexed))::text
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
@@ -166,8 +166,8 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.updates_staged),
     SUM(u.updates_committed),
     SUM(u.bytes_received) > 0,
-    SUM(u.envelope_state_bytes) < ${state-bytes},
-    SUM(u.envelope_state_records)
+    SUM(u.bytes_indexed) < ${state-bytes},
+    SUM(u.records_indexed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
@@ -182,8 +182,8 @@ upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
     u.updates_staged,
     u.updates_committed,
     u.bytes_received > 0,
-    u.envelope_state_bytes < ${state-bytes},
-    u.envelope_state_records,
+    u.bytes_indexed < ${state-bytes},
+    u.records_indexed,
     u.rehydration_latency IS NOT NULL
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id

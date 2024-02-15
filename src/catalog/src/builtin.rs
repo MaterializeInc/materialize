@@ -6154,8 +6154,8 @@ SELECT
     SUM(bytes_received)::uint8 AS bytes_received,
     SUM(updates_staged)::uint8 AS updates_staged,
     SUM(updates_committed)::uint8 AS updates_committed,
-    SUM(envelope_state_bytes)::uint8 AS envelope_state_bytes,
-    SUM(envelope_state_records)::uint8 AS envelope_state_records,
+    SUM(bytes_indexed)::uint8 AS bytes_indexed,
+    SUM(records_indexed)::uint8 AS records_indexed,
     -- Ensure we aggregate to NULL when not all workers are done rehydrating.
     CASE
         WHEN bool_or(rehydration_latency IS NULL) THEN NULL

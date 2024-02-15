@@ -55,7 +55,7 @@ sink1 1 1 true true
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
   SUM(u.messages_received),
-  SUM(snapshot_read) IS NULL
+  SUM(snapshot_records_staged) IS NULL
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
@@ -76,7 +76,7 @@ sink1 1 1 true true
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
   SUM(u.messages_received),
-  SUM(snapshot_read) IS NULL
+  SUM(snapshot_records_staged) IS NULL
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
@@ -101,7 +101,7 @@ sink1 2 2 true true
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
   SUM(u.messages_received),
-  SUM(snapshot_read) IS NULL
+  SUM(snapshot_records_staged) IS NULL
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')

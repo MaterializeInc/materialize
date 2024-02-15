@@ -25,15 +25,15 @@ message ProtoSourceStatisticsUpdate {
     uint64 updates_committed = 4;
     uint64 bytes_received = 5;
 
-    uint64 envelope_state_records = 7;
-    uint64 envelope_state_bytes = 6;
+    uint64 records_indexed = 7;
+    uint64 bytes_indexed = 6;
     optional int64 rehydration_latency_ms = 8;
-    optional uint64 snapshot_total = 9;
-    optional uint64 snapshot_read = 10;
+    optional uint64 snapshot_records_known = 9;
+    optional uint64 snapshot_records_staged = 10;
 
     bool snapshot_committed = 11;
-    optional uint64 upstream_values = 12;
-    optional uint64 committed_values = 13;
+    optional uint64 offset_known = 12;
+    optional uint64 offset_committed = 13;
 }
 
 message ProtoSinkStatisticsUpdate {

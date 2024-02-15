@@ -42,13 +42,13 @@ pub(crate) struct SourceStatisticsMetricDefs {
 
     // Gauges
     pub(crate) snapshot_committed: UIntGaugeVec,
-    pub(crate) envelope_state_bytes: UIntGaugeVec,
-    pub(crate) envelope_state_records: UIntGaugeVec,
+    pub(crate) bytes_indexed: UIntGaugeVec,
+    pub(crate) records_indexed: UIntGaugeVec,
     pub(crate) rehydration_latency_ms: IntGaugeVec,
 
     // statistics that are not yet exposed to users.
-    pub(crate) upstream_values: UIntGaugeVec,
-    pub(crate) committed_values: UIntGaugeVec,
+    pub(crate) offset_known: UIntGaugeVec,
+    pub(crate) offset_committed: UIntGaugeVec,
 }
 
 impl SourceStatisticsMetricDefs {
@@ -79,13 +79,13 @@ impl SourceStatisticsMetricDefs {
                 help: "The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
             )),
-            envelope_state_bytes: registry.register(metric!(
-                name: "mz_source_envelope_state_bytes",
+            bytes_indexed: registry.register(metric!(
+                name: "mz_source_bytes_indexed",
                 help: "The number of bytes of the source envelope state kept. This will be specific to the envelope in use.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
-            envelope_state_records: registry.register(metric!(
-                name: "mz_source_envelope_state_records",
+            records_indexed: registry.register(metric!(
+                name: "mz_source_records_indexed",
                 help: "The number of records in the source envelope state. This will be specific to the envelope in use",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
@@ -94,13 +94,13 @@ impl SourceStatisticsMetricDefs {
                 help: "The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id", "envelope"],
             )),
-            upstream_values: registry.register(metric!(
-                name: "mz_source_upstream_values",
+            offset_known: registry.register(metric!(
+                name: "mz_source_offset_known",
                 help: "The total number of _values_ (source-defined unit) present in upstream.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
             )),
-            committed_values: registry.register(metric!(
-                name: "mz_source_committed_values",
+            offset_committed: registry.register(metric!(
+                name: "mz_source_offset_committed",
                 help: "The total number of _values_ (source-defined unit) we have fully processed, and storage and committed.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
             )),
@@ -119,13 +119,13 @@ pub struct SourceStatisticsMetrics {
 
     // Gauges
     pub(crate) snapshot_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) envelope_state_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) bytes_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) records_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
 
     // statistics that are not yet exposed to users.
-    pub(crate) upstream_values: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) committed_values: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_known: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -173,13 +173,13 @@ impl SourceStatisticsMetrics {
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            envelope_state_bytes: defs.envelope_state_bytes.get_delete_on_drop_gauge(vec![
+            bytes_indexed: defs.bytes_indexed.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            envelope_state_records: defs.envelope_state_records.get_delete_on_drop_gauge(vec![
+            records_indexed: defs.records_indexed.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
@@ -192,12 +192,12 @@ impl SourceStatisticsMetrics {
                 shard.clone(),
                 envelope.to_string(),
             ]),
-            upstream_values: defs.upstream_values.get_delete_on_drop_gauge(vec![
+            offset_known: defs.offset_known.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            committed_values: defs.committed_values.get_delete_on_drop_gauge(vec![
+            offset_committed: defs.offset_committed.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
@@ -343,19 +343,19 @@ pub struct SourceStatisticsRecord {
 
     // Gauges are always wrapped in an `Option` that represents if that gauge has been
     // initialized by that worker.
-    envelope_state_records: Option<u64>,
-    envelope_state_bytes: Option<u64>,
+    records_indexed: Option<u64>,
+    bytes_indexed: Option<u64>,
 
     // This field is nullable, so its value is an `Option`.
     rehydration_latency_ms: Option<Option<i64>>,
 
     // The following fields are able to be unset when shipped to the controller, so their
     // values are `Option`'s
-    snapshot_total: Option<Option<u64>>,
-    snapshot_read: Option<Option<u64>>,
+    snapshot_records_known: Option<Option<u64>>,
+    snapshot_records_staged: Option<Option<u64>>,
     snapshot_committed: Option<bool>,
-    upstream_values: Option<Option<u64>>,
-    committed_values: Option<Option<u64>>,
+    offset_known: Option<Option<u64>>,
+    offset_committed: Option<Option<u64>>,
 }
 
 impl SourceStatisticsRecord {
@@ -371,14 +371,14 @@ impl SourceStatisticsRecord {
         self.snapshot_committed = None;
 
         // We consider these gauges always initialized
-        self.envelope_state_bytes = Some(0);
-        self.envelope_state_records = Some(0);
+        self.bytes_indexed = Some(0);
+        self.records_indexed = Some(0);
 
         // We don't yet populate these, so we consider the initialized (with an empty value).
-        self.snapshot_total = Some(None);
-        self.snapshot_read = Some(None);
-        self.upstream_values = Some(None);
-        self.committed_values = Some(None);
+        self.snapshot_records_known = Some(None);
+        self.snapshot_records_staged = Some(None);
+        self.offset_known = Some(None);
+        self.offset_committed = Some(None);
     }
 
     /// Reset counters so that we continue to ship diffs to the controller.
@@ -399,14 +399,14 @@ impl SourceStatisticsRecord {
             bytes_received,
             updates_staged,
             updates_committed,
-            envelope_state_records,
-            envelope_state_bytes,
+            records_indexed,
+            bytes_indexed,
             rehydration_latency_ms,
-            snapshot_total,
-            snapshot_read,
+            snapshot_records_known,
+            snapshot_records_staged,
             snapshot_committed,
-            upstream_values,
-            committed_values,
+            offset_known,
+            offset_committed,
         } = self.clone();
 
         SourceStatisticsUpdate {
@@ -415,14 +415,14 @@ impl SourceStatisticsRecord {
             bytes_received: bytes_received.into(),
             updates_staged: updates_staged.into(),
             updates_committed: updates_committed.into(),
-            envelope_state_records: Gauge::gauge(envelope_state_records.unwrap()),
-            envelope_state_bytes: Gauge::gauge(envelope_state_bytes.unwrap()),
+            records_indexed: Gauge::gauge(records_indexed.unwrap()),
+            bytes_indexed: Gauge::gauge(bytes_indexed.unwrap()),
             rehydration_latency_ms: Gauge::gauge(rehydration_latency_ms.unwrap()),
-            snapshot_total: Gauge::gauge(snapshot_total.unwrap()),
-            snapshot_read: Gauge::gauge(snapshot_read.unwrap()),
+            snapshot_records_known: Gauge::gauge(snapshot_records_known.unwrap()),
+            snapshot_records_staged: Gauge::gauge(snapshot_records_staged.unwrap()),
             snapshot_committed: Gauge::gauge(snapshot_committed.unwrap()),
-            upstream_values: SkippableGauge::gauge(upstream_values.unwrap()),
-            committed_values: SkippableGauge::gauge(committed_values.unwrap()),
+            offset_known: SkippableGauge::gauge(offset_known.unwrap()),
+            offset_committed: SkippableGauge::gauge(offset_committed.unwrap()),
         }
     }
 }
@@ -503,14 +503,14 @@ impl SourceStatistics {
                     updates_staged: 0,
                     updates_committed: 0,
                     bytes_received: 0,
-                    envelope_state_records: Some(0),
-                    envelope_state_bytes: Some(0),
+                    records_indexed: Some(0),
+                    bytes_indexed: Some(0),
                     rehydration_latency_ms: None,
-                    snapshot_read: Some(None),
-                    snapshot_total: Some(None),
+                    snapshot_records_staged: Some(None),
+                    snapshot_records_known: Some(None),
                     snapshot_committed: None,
-                    upstream_values: Some(None),
-                    committed_values: Some(None),
+                    offset_known: Some(None),
+                    offset_committed: Some(None),
                 },
                 prom: SourceStatisticsMetrics::new(
                     metrics,
@@ -540,14 +540,14 @@ impl SourceStatistics {
 
         match &cur.stats {
             SourceStatisticsRecord {
-                envelope_state_records: Some(_),
-                envelope_state_bytes: Some(_),
+                records_indexed: Some(_),
+                bytes_indexed: Some(_),
                 rehydration_latency_ms: Some(_),
-                snapshot_total: Some(_),
-                snapshot_read: Some(_),
+                snapshot_records_known: Some(_),
+                snapshot_records_staged: Some(_),
                 snapshot_committed: Some(_),
-                upstream_values: Some(_),
-                committed_values: Some(_),
+                offset_known: Some(_),
+                offset_committed: Some(_),
                 ..
             } => {
                 let ret = Some(cur.stats.clone());
@@ -604,84 +604,78 @@ impl SourceStatistics {
         cur.prom.bytes_received.inc_by(value);
     }
 
-    /// Update the `envelope_state_bytes` stat.
+    /// Update the `bytes_indexed` stat.
     /// A positive value will add and a negative value will subtract.
-    pub fn update_envelope_state_bytes_by(&self, value: i64) {
+    pub fn update_bytes_indexed_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         if let Some(updated) = cur
             .stats
-            .envelope_state_bytes
+            .bytes_indexed
             .unwrap_or(0)
             .checked_add_signed(value)
         {
-            cur.stats.envelope_state_bytes = Some(updated);
-            cur.prom.envelope_state_bytes.set(updated);
+            cur.stats.bytes_indexed = Some(updated);
+            cur.prom.bytes_indexed.set(updated);
         } else {
-            let envelope_state_bytes = cur.stats.envelope_state_bytes.unwrap_or(0);
+            let bytes_indexed = cur.stats.bytes_indexed.unwrap_or(0);
             tracing::warn!(
-                "Unexpected u64 overflow while updating envelope_state_bytes value {} with {}",
-                envelope_state_bytes,
+                "Unexpected u64 overflow while updating bytes_indexed value {} with {}",
+                bytes_indexed,
                 value
             );
-            cur.stats.envelope_state_bytes = Some(0);
-            cur.prom.envelope_state_bytes.set(0);
+            cur.stats.bytes_indexed = Some(0);
+            cur.prom.bytes_indexed.set(0);
         }
     }
 
-    /// Set the `envelope_state_bytes` to the given value
-    pub fn set_envelope_state_bytes(&self, value: i64) {
+    /// Set the `bytes_indexed` to the given value
+    pub fn set_bytes_indexed(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         let value = if value < 0 {
-            tracing::warn!(
-                "Unexpected negative value for envelope_state_bytes {}",
-                value
-            );
+            tracing::warn!("Unexpected negative value for bytes_indexed {}", value);
             0
         } else {
             value.unsigned_abs()
         };
-        cur.stats.envelope_state_bytes = Some(value);
-        cur.prom.envelope_state_bytes.set(value);
+        cur.stats.bytes_indexed = Some(value);
+        cur.prom.bytes_indexed.set(value);
     }
 
-    /// Update the `envelope_state_records` stat.
+    /// Update the `records_indexed` stat.
     /// A positive value will add and a negative value will subtract.
-    pub fn update_envelope_state_records_by(&self, value: i64) {
+    pub fn update_records_indexed_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         if let Some(updated) = cur
             .stats
-            .envelope_state_records
+            .records_indexed
             .unwrap_or(0)
             .checked_add_signed(value)
         {
-            cur.stats.envelope_state_records = Some(updated);
-            cur.prom.envelope_state_records.set(updated);
+            cur.stats.records_indexed = Some(updated);
+            cur.prom.records_indexed.set(updated);
         } else {
-            let envelope_state_records = cur.stats.envelope_state_records.unwrap_or(0);
+            let records_indexed = cur.stats.records_indexed.unwrap_or(0);
             tracing::warn!(
-                "Unexpected u64 overflow while updating envelope_state_records value {} with {}",
-                envelope_state_records,
+                "Unexpected u64 overflow while updating records_indexed value {} with {}",
+                records_indexed,
                 value
             );
-            cur.stats.envelope_state_records = Some(0);
-            cur.prom.envelope_state_records.set(0);
+            cur.stats.records_indexed = Some(0);
+            cur.prom.records_indexed.set(0);
         }
     }
 
-    /// Set the `envelope_state_records` to the given value
-    pub fn set_envelope_state_records(&self, value: i64) {
+    /// Set the `records_indexed` to the given value
+    pub fn set_records_indexed(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         let value = if value < 0 {
-            tracing::warn!(
-                "Unexpected negative value for envelope_state_records {}",
-                value
-            );
+            tracing::warn!("Unexpected negative value for records_indexed {}", value);
             0
         } else {
             value.unsigned_abs()
         };
-        cur.stats.envelope_state_records = Some(value);
-        cur.prom.envelope_state_records.set(value);
+        cur.stats.records_indexed = Some(value);
+        cur.prom.records_indexed.set(value);
     }
 
     /// Initialize the `rehydration_latency_ms` stat as `NULL`.
@@ -710,20 +704,20 @@ impl SourceStatistics {
         cur.prom.rehydration_latency_ms.set(value);
     }
 
-    /// Set the `upstream_values` stat to the given value.
-    pub fn set_upstream_values(&self, value: u64) {
+    /// Set the `offset_known` stat to the given value.
+    pub fn set_offset_known(&self, value: u64) {
         let cur = self.stats.borrow_mut();
         // Not yet exposed to users.
-        // cur.prom.upstream_values = value;
-        cur.prom.upstream_values.set(value);
+        // cur.prom.offset_known = value;
+        cur.prom.offset_known.set(value);
     }
 
-    /// Set the `committed_values` stat to the given value.
-    pub fn set_committed_values(&self, value: u64) {
+    /// Set the `offset_committed` stat to the given value.
+    pub fn set_offset_committed(&self, value: u64) {
         let cur = self.stats.borrow_mut();
         // Not yet exposed to users.
-        // cur.prom.committed_values = value;
-        cur.prom.committed_values.set(value);
+        // cur.prom.offset_committed = value;
+        cur.prom.offset_committed.set(value);
     }
 }
 

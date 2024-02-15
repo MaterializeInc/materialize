@@ -492,14 +492,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  bytes_received  uint8
 4  updates_staged  uint8
 5  updates_committed  uint8
-6  envelope_state_records  uint8
-7  envelope_state_bytes  uint8
+6  records_indexed  uint8
+7  bytes_indexed  uint8
 8  rehydration_latency  interval
-9  snapshot_total  uint8
-10  snapshot_read  uint8
+9  snapshot_records_known  uint8
+10  snapshot_records_staged  uint8
 11  snapshot_committed  boolean
-12  upstream_values  uint8
-13  committed_values  uint8
+12  offset_known  uint8
+13  offset_committed  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
@@ -510,8 +510,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  bytes_received  uint8
 5  updates_staged  uint8
 6  updates_committed  uint8
-7  envelope_state_bytes  uint8
-8  envelope_state_records  uint8
+7  bytes_indexed  uint8
+8  records_indexed  uint8
 9  rehydration_latency  interval
 
 query ITT

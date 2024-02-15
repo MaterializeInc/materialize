@@ -9,7 +9,7 @@
 
 $ set-from-sql var=previous-bytes
 SELECT
-  (SUM(u.envelope_state_bytes))::text
+  (SUM(u.bytes_indexed))::text
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name = 'autospill'
@@ -22,13 +22,13 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
 3
 
 > SELECT
-    SUM(u.envelope_state_bytes) > 0,
+    SUM(u.bytes_indexed) > 0,
     -- This + the assertion below that ensures the byte count goes to 0 tests
-    -- that we correctly transition the `envelope_state_bytes` count to the
+    -- that we correctly transition the `bytes_indexed` count to the
     -- in-rocksdb. In the past, we would accidentally SUM the previous and
     -- new size here.
-    SUM(u.envelope_state_bytes) < (${previous-bytes} * 2),
-    SUM(u.envelope_state_records)
+    SUM(u.bytes_indexed) < (${previous-bytes} * 2),
+    SUM(u.records_indexed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name = 'autospill'
@@ -45,10 +45,10 @@ animal:
 > SELECT count(*) from autospill;
 0
 
-# Both envelope_state_bytes and envelope_state_records should be zero
+# Both bytes_indexed and records_indexed should be zero
 > SELECT
-    SUM(u.envelope_state_bytes),
-    SUM(u.envelope_state_records)
+    SUM(u.bytes_indexed),
+    SUM(u.records_indexed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name = 'autospill'

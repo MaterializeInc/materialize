@@ -599,7 +599,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.testdrive(
                     dedent(
                         f"""
-                > select sum(envelope_state_records)
+                > select sum(records_indexed)
                   from mz_internal.mz_source_statistics_raw st
                   join mz_sources s on s.id = st.id
                   where name = 's1';

@@ -48,10 +48,10 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         //
         // A gauge of the number of records in the envelope state. 0 for sources
         // Resetted when the source is restarted, for any reason.
-        .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
+        .with_column("records_indexed", ScalarType::UInt64.nullable(false))
         // A gauge of the number of bytes in the envelope state. 0 for sources
         // Resetted when the source is restarted, for any reason.
-        .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_indexed", ScalarType::UInt64.nullable(false))
         // A gauge that shows the duration of rehydration. `NULL` before rehydration
         // is done.
         // Resetted when the source is restarted, for any reason.
@@ -63,14 +63,14 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         // (like pg and mysql) may repopulate this column when tables are added.
         //
         // `NULL` while we discover the snapshot size.
-        .with_column("snapshot_total", ScalarType::UInt64.nullable(true))
+        .with_column("snapshot_records_known", ScalarType::UInt64.nullable(true))
         // A gauge of the number of _values_ (source defined unit) we have read of the _snapshot_
         // of this source.
         // Sometimes resetted when the source can snapshot new pieces of upstream (like Postgres and
         // MySql).
         //
         // `NULL` while we discover the snapshot size.
-        .with_column("snapshot_read", ScalarType::UInt64.nullable(true))
+        .with_column("snapshot_records_staged", ScalarType::UInt64.nullable(true))
         //
         // Non-resetting gauges
         //
@@ -81,10 +81,10 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         //
         // A gauge of the number of _values_ (source defined unit) available to be read from upstream.
         // Never resets. Not to be confused with any of the counters above.
-        .with_column("upstream_values", ScalarType::UInt64.nullable(false))
+        .with_column("offset_known", ScalarType::UInt64.nullable(false))
         // A gauge of the number of _values_ (source defined unit) we have committed.
         // Never resets. Not to be confused with any of the counters above.
-        .with_column("committed_values", ScalarType::UInt64.nullable(false))
+        .with_column("offset_committed", ScalarType::UInt64.nullable(false))
 });
 
 pub static MZ_SINK_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
@@ -416,15 +416,15 @@ pub struct SourceStatisticsUpdate {
     pub updates_staged: Counter,
     pub updates_committed: Counter,
 
-    pub envelope_state_records: Gauge<ResettingTotal>,
-    pub envelope_state_bytes: Gauge<ResettingTotal>,
+    pub records_indexed: Gauge<ResettingTotal>,
+    pub bytes_indexed: Gauge<ResettingTotal>,
     pub rehydration_latency_ms: Gauge<ResettingLatency>,
-    pub snapshot_total: Gauge<ResettingNullableTotal>,
-    pub snapshot_read: Gauge<ResettingNullableTotal>,
+    pub snapshot_records_known: Gauge<ResettingNullableTotal>,
+    pub snapshot_records_staged: Gauge<ResettingNullableTotal>,
 
     pub snapshot_committed: Gauge<Boolean>,
-    pub upstream_values: SkippableGauge<Total>,
-    pub committed_values: SkippableGauge<Total>,
+    pub offset_known: SkippableGauge<Total>,
+    pub offset_committed: SkippableGauge<Total>,
 }
 
 impl SourceStatisticsUpdate {
@@ -444,25 +444,23 @@ impl SourceStatisticsUpdate {
             updates_committed: Counter::summarize(
                 values().into_iter().map(|s| &s.updates_committed),
             ),
-            envelope_state_records: Gauge::summarize(
-                values().into_iter().map(|s| &s.envelope_state_records),
-            ),
-            envelope_state_bytes: Gauge::summarize(
-                values().into_iter().map(|s| &s.envelope_state_bytes),
-            ),
+            records_indexed: Gauge::summarize(values().into_iter().map(|s| &s.records_indexed)),
+            bytes_indexed: Gauge::summarize(values().into_iter().map(|s| &s.bytes_indexed)),
             rehydration_latency_ms: Gauge::summarize(
                 values().into_iter().map(|s| &s.rehydration_latency_ms),
             ),
-            snapshot_total: Gauge::summarize(values().into_iter().map(|s| &s.snapshot_total)),
-            snapshot_read: Gauge::summarize(values().into_iter().map(|s| &s.snapshot_read)),
+            snapshot_records_known: Gauge::summarize(
+                values().into_iter().map(|s| &s.snapshot_records_known),
+            ),
+            snapshot_records_staged: Gauge::summarize(
+                values().into_iter().map(|s| &s.snapshot_records_staged),
+            ),
             snapshot_committed: Gauge::summarize(
                 values().into_iter().map(|s| &s.snapshot_committed),
             ),
-            upstream_values: SkippableGauge::summarize(
-                values().into_iter().map(|s| &s.upstream_values),
-            ),
-            committed_values: SkippableGauge::summarize(
-                values().into_iter().map(|s| &s.committed_values),
+            offset_known: SkippableGauge::summarize(values().into_iter().map(|s| &s.offset_known)),
+            offset_committed: SkippableGauge::summarize(
+                values().into_iter().map(|s| &s.offset_committed),
             ),
         }
     }
@@ -481,14 +479,14 @@ impl SourceStatisticsUpdate {
             bytes_received,
             updates_staged,
             updates_committed,
-            envelope_state_records,
-            envelope_state_bytes,
+            records_indexed,
+            bytes_indexed,
             rehydration_latency_ms,
-            snapshot_total,
-            snapshot_read,
+            snapshot_records_known,
+            snapshot_records_staged,
             snapshot_committed,
-            upstream_values,
-            committed_values,
+            offset_known,
+            offset_committed,
             ..
         } = self;
 
@@ -496,14 +494,15 @@ impl SourceStatisticsUpdate {
         bytes_received.incorporate(other.bytes_received, "bytes_received");
         updates_staged.incorporate(other.updates_staged, "updates_staged");
         updates_committed.incorporate(other.updates_committed, "updates_committed");
-        envelope_state_records.incorporate(other.envelope_state_records, "envelope_state_records");
-        envelope_state_bytes.incorporate(other.envelope_state_bytes, "envelope_state_bytes");
+        records_indexed.incorporate(other.records_indexed, "records_indexed");
+        bytes_indexed.incorporate(other.bytes_indexed, "bytes_indexed");
         rehydration_latency_ms.incorporate(other.rehydration_latency_ms, "rehydration_latency_ms");
-        snapshot_total.incorporate(other.snapshot_total, "snapshot_total");
-        snapshot_read.incorporate(other.snapshot_read, "snapshot_read");
+        snapshot_records_known.incorporate(other.snapshot_records_known, "snapshot_records_known");
+        snapshot_records_staged
+            .incorporate(other.snapshot_records_staged, "snapshot_records_staged");
         snapshot_committed.incorporate(other.snapshot_committed, "snapshot_committed");
-        upstream_values.incorporate(other.upstream_values, "upstream_values");
-        committed_values.incorporate(other.committed_values, "committed_values");
+        offset_known.incorporate(other.offset_known, "offset_known");
+        offset_committed.incorporate(other.offset_committed, "offset_committed");
     }
 }
 
@@ -518,20 +517,20 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.updates_staged.0));
         packer.push(Datum::from(self.updates_committed.0));
         // Resetting gauges.
-        packer.push(Datum::from(self.envelope_state_records.0 .0));
-        packer.push(Datum::from(self.envelope_state_bytes.0 .0));
+        packer.push(Datum::from(self.records_indexed.0 .0));
+        packer.push(Datum::from(self.bytes_indexed.0 .0));
         let rehydration_latency = self
             .rehydration_latency_ms
             .0
              .0
             .map(|ms| mz_repr::adt::interval::Interval::new(0, 0, ms * 1000));
         packer.push(Datum::from(rehydration_latency));
-        packer.push(Datum::from(self.snapshot_total.0 .0));
-        packer.push(Datum::from(self.snapshot_read.0 .0));
+        packer.push(Datum::from(self.snapshot_records_known.0 .0));
+        packer.push(Datum::from(self.snapshot_records_staged.0 .0));
         // Gauges
         packer.push(Datum::from(self.snapshot_committed.0 .0));
-        packer.push(Datum::from(self.upstream_values.pack().0));
-        packer.push(Datum::from(self.committed_values.pack().0));
+        packer.push(Datum::from(self.offset_known.pack().0));
+        packer.push(Datum::from(self.offset_committed.pack().0));
     }
 
     fn unpack(row: Row) -> (GlobalId, Self) {
@@ -544,19 +543,23 @@ impl PackableStats for SourceStatisticsUpdate {
             updates_staged: iter.next().unwrap().unwrap_uint64().into(),
             updates_committed: iter.next().unwrap().unwrap_uint64().into(),
 
-            envelope_state_records: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
-            envelope_state_bytes: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
+            records_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
+            bytes_indexed: Gauge::gauge(iter.next().unwrap().unwrap_uint64()),
             rehydration_latency_ms: Gauge::gauge(
                 <Option<mz_repr::adt::interval::Interval>>::try_from(iter.next().unwrap())
                     .unwrap()
                     .map(|int| int.micros),
             ),
-            snapshot_total: Gauge::gauge(<Option<u64>>::try_from(iter.next().unwrap()).unwrap()),
-            snapshot_read: Gauge::gauge(<Option<u64>>::try_from(iter.next().unwrap()).unwrap()),
+            snapshot_records_known: Gauge::gauge(
+                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
+            ),
+            snapshot_records_staged: Gauge::gauge(
+                <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),
+            ),
 
             snapshot_committed: Gauge::gauge(iter.next().unwrap().unwrap_bool()),
-            upstream_values: SkippableGauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
-            committed_values: SkippableGauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_known: SkippableGauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
+            offset_committed: SkippableGauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
         };
 
         (s.id, s)
@@ -573,15 +576,15 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
             updates_staged: self.updates_staged.0,
             updates_committed: self.updates_committed.0,
 
-            envelope_state_records: self.envelope_state_records.0 .0,
-            envelope_state_bytes: self.envelope_state_bytes.0 .0,
+            records_indexed: self.records_indexed.0 .0,
+            bytes_indexed: self.bytes_indexed.0 .0,
             rehydration_latency_ms: self.rehydration_latency_ms.0 .0,
-            snapshot_total: self.snapshot_total.0 .0,
-            snapshot_read: self.snapshot_read.0 .0,
+            snapshot_records_known: self.snapshot_records_known.0 .0,
+            snapshot_records_staged: self.snapshot_records_staged.0 .0,
 
             snapshot_committed: self.snapshot_committed.0 .0,
-            upstream_values: self.upstream_values.0.clone().map(|i| i.0),
-            committed_values: self.committed_values.0.clone().map(|i| i.0),
+            offset_known: self.offset_known.0.clone().map(|i| i.0),
+            offset_committed: self.offset_committed.0.clone().map(|i| i.0),
         }
     }
 
@@ -596,15 +599,15 @@ impl RustType<ProtoSourceStatisticsUpdate> for SourceStatisticsUpdate {
             updates_staged: Counter(proto.updates_staged),
             updates_committed: Counter(proto.updates_committed),
 
-            envelope_state_records: Gauge::gauge(proto.envelope_state_records),
-            envelope_state_bytes: Gauge::gauge(proto.envelope_state_bytes),
+            records_indexed: Gauge::gauge(proto.records_indexed),
+            bytes_indexed: Gauge::gauge(proto.bytes_indexed),
             rehydration_latency_ms: Gauge::gauge(proto.rehydration_latency_ms),
-            snapshot_total: Gauge::gauge(proto.snapshot_total),
-            snapshot_read: Gauge::gauge(proto.snapshot_read),
+            snapshot_records_known: Gauge::gauge(proto.snapshot_records_known),
+            snapshot_records_staged: Gauge::gauge(proto.snapshot_records_staged),
 
             snapshot_committed: Gauge::gauge(proto.snapshot_committed),
-            upstream_values: SkippableGauge::gauge(proto.upstream_values),
-            committed_values: SkippableGauge::gauge(proto.committed_values),
+            offset_known: SkippableGauge::gauge(proto.offset_known),
+            offset_committed: SkippableGauge::gauge(proto.offset_committed),
         })
     }
 }
