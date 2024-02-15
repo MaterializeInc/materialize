@@ -43,7 +43,40 @@ $ mysql-execute name=mysql
 ALTER TABLE add_columns ADD COLUMN f2 varchar(2);
 INSERT INTO add_columns VALUES (2, 'ab');
 
-! SELECT * FROM add_columns;
+> SELECT * FROM add_columns;
+1
+
+#
+# Now remove that added column
+#
+
+$ mysql-execute name=mysql
+ALTER TABLE add_columns DROP COLUMN f2;
+
+> SELECT * FROM add_columns;
+1
+
+> DROP SOURCE mz_source;
+
+
+#
+# ALTER TABLE <tbl> DROP COLUMN
+#
+
+$ mysql-execute name=mysql
+CREATE TABLE drop_columns (f1 INTEGER, f2 INTEGER);
+INSERT INTO drop_columns VALUES (1, 1);
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.drop_columns);
+
+> SELECT * FROM drop_columns;
+1 1
+
+$ mysql-execute name=mysql
+ALTER TABLE drop_columns DROP COLUMN f2;
+
+! SELECT * FROM drop_columns;
 contains:incompatible schema change
 
 > DROP SOURCE mz_source;
@@ -88,6 +121,94 @@ ALTER TABLE public.alter_column_2 MODIFY f2 INT;
 INSERT INTO public.alter_column_2 VALUES (3, 23);
 
 ! SELECT * from alter_column_2;
+contains:incompatible schema change
+
+> DROP SOURCE mz_source;
+
+#
+# ALTER TABLE <tbl> MODIFY <col> TYPE NON NULLABLE
+# Adding a non-null constraint should be allowed
+#
+
+$ mysql-execute name=mysql
+USE public;
+CREATE TABLE alter_column_nullable (f1 INTEGER, f2 VARCHAR(2));
+INSERT INTO alter_column_nullable VALUES (2, '12');
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.alter_column_nullable);
+
+$ mysql-execute name=mysql
+ALTER TABLE alter_column_nullable MODIFY f2 VARCHAR(2) NOT NULL;
+INSERT INTO alter_column_nullable VALUES (3, '23');
+
+> SELECT * from alter_column_nullable;
+2 12
+3 23
+
+> DROP SOURCE mz_source;
+
+#
+# ALTER TABLE <tbl> MODIFY <col> TYPE NULLABLE
+# Removing a non-null constraint should error
+#
+
+$ mysql-execute name=mysql
+CREATE TABLE alter_column_nullable_2 (f1 INTEGER, f2 VARCHAR(2) NOT NULL);
+INSERT INTO alter_column_nullable_2 VALUES (2, '12');
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.alter_column_nullable_2);
+
+$ mysql-execute name=mysql
+ALTER TABLE alter_column_nullable_2 MODIFY f2 VARCHAR(2);
+INSERT INTO alter_column_nullable_2 VALUES (3, '23');
+
+! SELECT * from alter_column_nullable_2;
+contains:incompatible schema change
+
+> DROP SOURCE mz_source;
+
+#
+# ALTER TABLE <tbl> ADD CONSTRAINT <uq> UNIQUE (col);
+# Adding a new unique constraint should be allowed
+#
+
+$ mysql-execute name=mysql
+CREATE TABLE alter_column_uq (f1 INTEGER, f2 VARCHAR(2));
+INSERT INTO alter_column_uq VALUES (2, '12');
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.alter_column_uq);
+
+$ mysql-execute name=mysql
+ALTER TABLE alter_column_uq ADD CONSTRAINT uq_f2 UNIQUE (f1);
+INSERT INTO alter_column_uq VALUES (3, '23');
+
+> SELECT * from alter_column_uq;
+2 12
+3 23
+
+> DROP SOURCE mz_source;
+
+#
+# ALTER TABLE <tbl> DROP INDEX <uq>;
+# Dropping new unique constraint should error
+#
+
+$ mysql-execute name=mysql
+CREATE TABLE alter_column_uq_2 (f1 INTEGER, f2 VARCHAR(2));
+ALTER TABLE alter_column_uq_2 ADD CONSTRAINT uq_f2 UNIQUE (f1);
+INSERT INTO alter_column_uq_2 VALUES (2, '12');
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.alter_column_uq_2);
+
+$ mysql-execute name=mysql
+ALTER TABLE alter_column_uq_2 DROP INDEX uq_f2;
+INSERT INTO alter_column_uq_2 VALUES (3, '23');
+
+! SELECT * from alter_column_uq_2;
 contains:incompatible schema change
 
 > DROP SOURCE mz_source;

@@ -9,11 +9,13 @@
 
 use std::collections::BTreeSet;
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::ColumnType;
+use anyhow::bail;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_repr::ColumnType;
 
 include!(concat!(env!("OUT_DIR"), "/mz_mysql_util.rs"));
 
@@ -64,6 +66,71 @@ impl RustType<ProtoMySqlTableDesc> for MySqlTableDesc {
     }
 }
 
+impl MySqlTableDesc {
+    /// Determines if two `MySqlTableDesc` are compatible with one another in
+    /// a way that Materialize can handle.
+    ///
+    /// Currently this means that the values are equal except for the following
+    /// exceptions:
+    /// - `self`'s columns are a prefix of `other`'s columns.
+    /// - `self`'s keys are all present in `other`
+    pub fn determine_compatibility(&self, other: &MySqlTableDesc) -> Result<(), anyhow::Error> {
+        if self == other {
+            return Ok(());
+        }
+
+        if self.schema_name != other.schema_name || self.name != other.name {
+            bail!(
+                "table name mismatch: self: {}.{}, other: {}.{}",
+                self.schema_name,
+                self.name,
+                other.schema_name,
+                other.name
+            );
+        }
+
+        // `columns` is ordered by the ordinal_position of each column in the table,
+        // so as long as `self.columns` is a compatible prefix of `other.columns`, we can
+        // ignore extra columns from `other.columns`.
+        let mut other_columns = other.columns.iter();
+        for self_column in &self.columns {
+            let other_column = other_columns.next().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "column {} no longer present in table {}",
+                    self_column.name,
+                    self.name
+                )
+            })?;
+            if !self_column.is_compatible(other_column) {
+                bail!(
+                    "column {} in table {} has been altered",
+                    self_column.name,
+                    self.name
+                );
+            }
+        }
+
+        // Our keys are all still present in exactly the same shape.
+        // TODO: Implement a more relaxed key compatibility check:
+        // We should check that for all keys that we know about there exists an upstream key whose
+        // set of columns is a subset of the set of columns of the key we know about. For example
+        // if we had previously discovered that the table had two compound unique keys, key1 made
+        // up of columns (a, b) and key2 made up of columns (a, c) but now the table only has a
+        // single unique key of just the column a then it's compatible because {a} ⊆ {a, b} and
+        // {a} ⊆ {a, c}.
+        if self.keys.difference(&other.keys).next().is_some() {
+            bail!(
+                "keys in table {} have been altered: self: {:?}, other: {:?}",
+                self.name,
+                self.keys,
+                other.keys
+            );
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlColumnDesc {
     /// The name of the column.
@@ -87,6 +154,20 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                 .column_type
                 .into_rust_if_some("ProtoMySqlColumnDesc::column_type")?,
         })
+    }
+}
+
+impl MySqlColumnDesc {
+    /// Determines if two `MySqlColumnDesc` are compatible with one another in
+    /// a way that Materialize can handle.
+    pub fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
+        self.name == other.name
+            && self.column_type.scalar_type == other.column_type.scalar_type
+            // Columns are compatible if:
+            // - self is nullable; introducing a not null constraint doesn't
+            //   change this column's behavior.
+            // - self and other are both not nullable
+            && (self.column_type.nullable || self.column_type.nullable == other.column_type.nullable)
     }
 }
 
