@@ -19,6 +19,7 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_fun_by_any_name,
+    matches_fun_by_name,
     matches_op_by_any_pattern,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import YesIgnore
@@ -42,6 +43,7 @@ from materialize.output_consistency.selection.selection import DataRowSelection
 MZ_VERSION_0_77_0 = MzVersion.parse_mz("v0.77.0")
 MZ_VERSION_0_78_0 = MzVersion.parse_mz("v0.78.0")
 MZ_VERSION_0_81_0 = MzVersion.parse_mz("v0.81.0")
+MZ_VERSION_0_88_0 = MzVersion.parse_mz("v0.88.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -108,6 +110,18 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore("Implemented min/max for interval and time types in 24007")
+
+        if (
+            self.lower_version < MZ_VERSION_0_88_0 <= self.higher_version
+            and expression.matches(
+                partial(
+                    matches_fun_by_name,
+                    function_name_in_lower_case="date_trunc",
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("date_trunc fixed in 25202")
 
         return super().shall_ignore_expression(expression, row_selection)
 
