@@ -37,14 +37,17 @@ from materialize.feature_benchmark.comparator import (
 from materialize.feature_benchmark.executor import Docker
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.measurement import MeasurementType
-from materialize.feature_benchmark.scenarios.scenarios import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.scenarios import MySqlStreaming, Scenario
-from materialize.feature_benchmark.scenarios.scenarios_concurrency import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.scenarios_customer import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.scenarios_optbench import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.scenarios_scale import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.scenarios_skew import *  # noqa: F401 F403
-from materialize.feature_benchmark.scenarios.scenarios_subscribe import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.benchmark_main import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.benchmark_main import (
+    MySqlStreaming,
+    Scenario,
+)
+from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.customer import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.scale import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.skew import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.subscribe import *  # noqa: F401 F403
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
