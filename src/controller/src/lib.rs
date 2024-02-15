@@ -393,8 +393,9 @@ where
     pub async fn recent_timestamp(
         &self,
         ids: BTreeSet<GlobalId>,
+        timeout: Duration,
     ) -> Result<BoxFuture<'static, Result<T, StorageError>>, StorageError> {
-        self.storage.real_time_recent_timestamp(ids).await
+        self.storage.real_time_recent_timestamp(ids, timeout).await
     }
 }
 

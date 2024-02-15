@@ -1837,12 +1837,14 @@ impl Coordinator {
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
     ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError>>>, AdapterError> {
+        let vars = session.vars();
+
         // Ideally this logic belongs inside of
         // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
         // logic in there would make it extremely difficult and inconvenient to pull the waiting off
         // of the main coord thread.
-        let r = if session.vars().real_time_recency()
-            && session.vars().transaction_isolation() == &IsolationLevel::StrictSerializable
+        let r = if vars.real_time_recency()
+            && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
             && !session.contains_read_timestamp()
         {
             // Find all dependencies transitively because we need to ensure that
@@ -1864,7 +1866,10 @@ impl Coordinator {
                 );
             }
 
-            let r = self.controller.recent_timestamp(visited).await;
+            let r = self
+                .controller
+                .recent_timestamp(visited, *vars.statement_timeout())
+                .await;
             let r = match r {
                 Ok(r) => r,
                 Err(StorageError::RtrUnavailable(ids)) => {

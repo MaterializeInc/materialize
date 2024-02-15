@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -1990,11 +1991,12 @@ where
     async fn real_time_recent_timestamp(
         &self,
         source_ids: BTreeSet<GlobalId>,
+        timeout: Duration,
     ) -> Result<BoxFuture<'static, Result<Self::Timestamp, StorageError>>, StorageError> {
         use mz_storage_types::sources::GenericSourceConnection;
 
         let mut unavilable_ids = BTreeSet::new();
-        let mut rtr_futures = Vec::with_capacity(source_ids.len());
+        let mut rtr_futures = BTreeMap::new();
 
         // Only user sources can be read from w/ RTR.
         for id in source_ids.into_iter().filter(GlobalId::is_user) {
@@ -2057,30 +2059,33 @@ where
                 .into_option()
                 .ok_or(StorageError::ReadBeforeSince(remap_id))?;
 
-            rtr_futures.push(async move {
-                // Fetch the remap shard's contents; we must do this first so
-                // that the `as_of` doesn't change.
-                let as_of = Antichain::from_elem(remap_as_of);
-                let remap_subsrcribe = read_handle
-                    .subscribe(as_of)
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(remap_id))?;
+            rtr_futures.insert(
+                id,
+                tokio::time::timeout(timeout, async move {
+                    // Fetch the remap shard's contents; we must do this first so
+                    // that the `as_of` doesn't change.
+                    let as_of = Antichain::from_elem(remap_as_of);
+                    let remap_subsrcribe = read_handle
+                        .subscribe(as_of)
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(remap_id))?;
 
-                source_conn
-                    .real_time_recency_ts(id, config, remap_subsrcribe)
-                    .await
-            });
+                    source_conn
+                        .real_time_recency_ts(id, config, remap_subsrcribe)
+                        .await
+                }),
+            );
         }
 
         if !unavilable_ids.is_empty() {
             Err(StorageError::RtrUnavailable(unavilable_ids))
         } else {
             Ok(Box::pin(async move {
-                futures::future::join_all(rtr_futures)
-                    .await
-                    .into_iter()
-                    .try_fold(T::minimum(), |curr, per_source_res| {
-                        let new = per_source_res?;
+                let (ids, futs): (Vec<_>, Vec<_>) = rtr_futures.into_iter().unzip();
+                ids.into_iter()
+                    .zip_eq(futures::future::join_all(futs).await)
+                    .try_fold(T::minimum(), |curr, (id, per_source_res)| {
+                        let new = per_source_res.map_err(|_| StorageError::RtrTimeout(id))??;
                         Ok::<_, StorageError>(std::cmp::max(curr, new))
                     })
             }))
