@@ -3932,8 +3932,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         -- If the provided database does not exist, add a row for it so that it
                         -- can still join against ambient schemas.
                         UNION ALL
-                        SELECT '', $1
-                        WHERE (SELECT $1 NOT IN (SELECT name FROM mz_catalog.mz_databases))
+                        SELECT '', $1 WHERE $1 NOT IN (SELECT name FROM mz_catalog.mz_databases)
                     ) AS d
                     ON d.id = COALESCE(s.database_id, d.id)
             WHERE d.name = CAST($1 AS pg_catalog.text);
