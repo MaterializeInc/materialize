@@ -21,8 +21,12 @@ def get(
     request_path: str, params: dict[str, str], max_fetches: int | None
 ) -> list[Any]:
     headers = {}
-    if token := os.getenv("BUILDKITE_TOKEN"):
+    token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
+
+    if token is not None and len(token) > 0:
         headers["Authorization"] = f"Bearer {token}"
+    else:
+        print("Authentication token is not specified or empty!")
 
     url = f"{BUILDKITE_API_URL}/{request_path}"
     results = []
