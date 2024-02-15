@@ -109,6 +109,17 @@ def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
     :param ancestor_overrides: one of #ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
     :return: image of the ancestor
     """
+
+    manual_ancestor_override = os.getenv("COMMON_ANCESTOR_OVERRIDE")
+    if manual_ancestor_override is not None:
+        image_tag = _manual_ancestor_specification_to_image_tag(
+            manual_ancestor_override
+        )
+        print(
+            f"Using specified {image_tag} as image tag for ancestor (context: specified in $COMMON_ANCESTOR_OVERRIDE)"
+        )
+        return image_tag
+
     ancestor_image_resolution = _create_ancestor_image_resolution(ancestor_overrides)
     image_tag, context = ancestor_image_resolution.resolve_image_tag()
     print(f"Using {image_tag} as image tag for ancestor (context: {context})")
@@ -122,6 +133,13 @@ def _create_ancestor_image_resolution(
         return AncestorImageResolutionInBuildkite(ancestor_overrides)
     else:
         return AncestorImageResolutionLocal(ancestor_overrides)
+
+
+def _manual_ancestor_specification_to_image_tag(ancestor_spec: str) -> str:
+    if MzVersion.is_valid_version_string(ancestor_spec):
+        return version_to_image_tag(MzVersion.parse_mz(ancestor_spec))
+    else:
+        return commit_to_image_tag(ancestor_spec)
 
 
 class AncestorImageResolutionBase:
