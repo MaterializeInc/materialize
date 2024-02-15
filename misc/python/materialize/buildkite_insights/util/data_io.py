@@ -21,11 +21,15 @@ PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
 
 
 def get_file_path(
-    pipeline_slug: str, branch: str | None, build_state: str | None
+    pipeline_slug: str,
+    branch: str | None,
+    build_state: str | None,
+    max_fetches: int,
+    items_per_page: int,
 ) -> str:
-    hash_value = hashlib.sha256(
-        bytes(f"{branch}-{build_state}", encoding="utf-8")
-    ).hexdigest()[:8]
+    max_entries = max_fetches * items_per_page
+    meta_data = f"{branch}-{build_state}-{max_entries}"
+    hash_value = hashlib.sha256(bytes(meta_data, encoding="utf-8")).hexdigest()[:8]
     return f"{PATH_TO_TEMP_DIR}/builds-{pipeline_slug}-params-{hash_value}.json"
 
 

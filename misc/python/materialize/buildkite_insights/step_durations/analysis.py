@@ -78,14 +78,20 @@ class StepData:
 def get_data(
     pipeline_slug: str,
     fetch_mode: str,
-    max_fetches: int | None,
+    max_fetches: int,
     branch: str | None,
     build_state: str | None,
     items_per_page: int = 50,
 ) -> list[Any]:
     ensure_temp_dir_exists()
 
-    file_path = get_file_path(pipeline_slug, branch, build_state)
+    file_path = get_file_path(
+        pipeline_slug=pipeline_slug,
+        branch=branch,
+        build_state=build_state,
+        max_fetches=max_fetches,
+        items_per_page=items_per_page,
+    )
     no_fetch = fetch_mode == FETCH_MODE_NO
 
     if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(file_path):
@@ -241,7 +247,7 @@ def main(
     pipeline_slug: str,
     build_step_keys: list[str],
     fetch_mode: str,
-    max_fetches: int | None,
+    max_fetches: int,
     branch: str | None,
     build_state: str | None,
     output_type: str,
