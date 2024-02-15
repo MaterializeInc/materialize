@@ -52,6 +52,8 @@ use crate::parser::{
 use crate::util;
 use crate::util::postgres::postgres_client;
 
+pub mod consistency;
+
 mod file;
 mod http;
 mod kafka;
@@ -104,7 +106,7 @@ pub struct Config {
     /// Set to 1 to retry at a steady pace.
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
-    pub no_consistency_checks: bool,
+    pub consistency_checks: consistency::Level,
 
     // === Materialize options. ===
     /// The pgwire connection parameters for the Materialize instance that
@@ -175,7 +177,7 @@ pub struct State {
     max_tries: usize,
     initial_backoff: Duration,
     backoff_factor: f64,
-    no_consistency_checks: bool,
+    consistency_checks: consistency::Level,
     regex: Option<Regex>,
     regex_replacement: String,
     postgres_factory: StashFactory,
@@ -1033,7 +1035,7 @@ pub async fn create_state(
         max_tries: config.default_max_tries,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
-        no_consistency_checks: config.no_consistency_checks,
+        consistency_checks: config.consistency_checks,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),
