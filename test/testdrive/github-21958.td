@@ -11,6 +11,7 @@
 # resolved_ids on restart. This is asserted by testdrive during its catalog verification step after
 #each DDL.
 
+> CREATE MATERIALIZED VIEW foo AS SELECT ARRAY[]::int[] f1;
 > CREATE TYPE point AS (x integer, y integer);
 > CREATE TYPE custom_map AS MAP (KEY TYPE = text, VALUE TYPE = bool);
 > CREATE TABLE t (c1 point, c2 custom_map, c3 integer[], c4 map[text=>map[text=>map[text=>text]]]);

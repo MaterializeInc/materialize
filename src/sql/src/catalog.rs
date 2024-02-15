@@ -847,14 +847,17 @@ impl<T: TypeReference> CatalogType<T> {
     pub fn references(&self) -> Vec<&T::Reference> {
         match self {
             CatalogType::Array { element_reference } => vec![element_reference],
-            CatalogType::List { element_reference } => vec![element_reference],
+            CatalogType::List {
+                element_reference, ..
+            } => vec![element_reference],
             CatalogType::Map {
                 key_reference,
                 value_reference,
+                ..
             } => vec![key_reference, value_reference],
             CatalogType::Range { element_reference } => vec![element_reference],
             CatalogType::Record { fields } => {
-                fields.iter().map(|(_name, reference)| reference).collect()
+                fields.iter().map(|field| &field.type_reference).collect()
             }
 
             CatalogType::AclItem
