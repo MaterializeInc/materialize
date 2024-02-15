@@ -4563,7 +4563,6 @@ dependencies = [
  "itertools",
  "maplit",
  "mz-avro",
- "mz-avro-derive",
  "mz-ccsr",
  "mz-ore",
  "mz-repr",
