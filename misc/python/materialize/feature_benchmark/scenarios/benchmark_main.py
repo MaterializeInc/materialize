@@ -27,6 +27,9 @@ from materialize.feature_benchmark.scenario import (
 )
 from materialize.mz_version import MzVersion
 
+# for pdoc ignores
+__pdoc__ = {}
+
 
 class FastPath(Scenario):
     """Feature benchmarks related to the "fast path" in query execution, as described in the
@@ -1151,6 +1154,10 @@ true
 """
             ),
         ]
+
+
+for i in [5, 6, 7, 8, 9]:
+    __pdoc__[f"KafkaEnvelopeNoneBytesScalability_scale_{i}"] = False
 
 
 @parameterized_class(
