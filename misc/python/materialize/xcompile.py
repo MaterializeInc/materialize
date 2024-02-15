@@ -141,6 +141,8 @@ def cargo(
     env = {
         **extra_env,
         "RUSTFLAGS": " ".join(rustflags),
+        "CC": "clang",
+        "CXX": "clang++",
     }
 
     return [

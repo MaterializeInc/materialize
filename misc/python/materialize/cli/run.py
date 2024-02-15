@@ -312,6 +312,8 @@ def _build(
         features.extend(args.features.split(","))
     if features:
         command += [f"--features={','.join(features)}"]
+    env["CC"] = "clang",
+    env["CXX"] = "clang++",
 
     programs = [*REQUIRED_SERVICES, *extra_programs]
     for program in programs:
