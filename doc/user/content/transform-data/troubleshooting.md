@@ -6,7 +6,7 @@ menu:
     name: "Troubleshooting"
     identifier: transform-troubleshooting
     parent: transform-data
-    weight: 25
+    weight: 30
 ---
 
 Once data is flowing into Materialize and you start modeling it in SQL, you

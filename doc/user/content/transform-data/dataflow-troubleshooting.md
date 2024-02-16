@@ -1,27 +1,34 @@
 ---
-title: "Troubleshooting dataflows"
-description: ""
-menu:
-  main:
-    name: "Troubleshooting dataflows"
-    identifier: dataflow-troubleshooting-transform
-    parent: transform
-    weight: 25
+title: "Dataflow troubleshooting"
+description: "How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected."
 ---
 
-If you're looking for somewhere to start for troubleshooting slow or unresponsive queries, start at the main [troubleshooting](/transform-data/troubleshooting) page.
+If you're unable to troubleshoot your issue using the [`Ingest data`](/ingest-data/troubleshooting/)
+and [`Transform data`](/transform-data/troubleshooting/) troubleshooting guides,
+going a level deeper in the stack might be needed. This guide collects common
+questions around dataflows to help you troubleshoot your queries.
 
 <!-- Copied over from the old manage/troubleshooting guide -->
 ## Dataflows: mental model and basic terminology
 
-When you create a materialized view, an index, or issue an ad-hoc query, Materialize creates a so-called dataflow. A dataflow consists of instructions on how to respond to data input and to changes to that data. Once executed, the dataflow computes the result of the SQL query, waits for updates from the sources, and then incrementally updates the query results when new data arrives.
+When you create a materialized view, an index, or issue an ad-hoc query,
+Materialize creates a so-called dataflow. A dataflow consists of instructions
+on how to respond to data input and to changes to that data. Once executed, the
+dataflow computes the result of the SQL query, waits for updates from the
+sources, and then incrementally updates the query results when new data
+arrives.
 
-Materialize dataflows act on collections of data. To provide fast access to the changes to individual records, the records can be stored in an indexed representation called [arrangements](https://materialize.com/docs/get-started/arrangements/#arrangements). Arrangements can be manually created by users on views by creating an index on the view. But they are also used internally in dataflows, for instance, when joining relations.
-
+Materialize dataflows act on collections of data. To provide fast access to the
+changes to individual records, the records can be stored in an indexed
+representation called [arrangements](https://materialize.com/docs/get-started/arrangements/#arrangements).
+Arrangements can be manually created by users on views by creating an index on
+the view. But they are also used internally in dataflows, for instance, when
+joining relations.
 
 ### Translating SQL to dataflows
 
-To make these concepts a bit more tangible, let's look at the example from the [getting started guide](https://materialize.com/docs/get-started/quickstart/).
+To make these concepts a bit more tangible, let's look at the example from the
+[getting started guide](https://materialize.com/docs/get-started/quickstart/).
 
 ```sql
 CREATE SOURCE auction_house
@@ -39,7 +46,11 @@ CREATE MATERIALIZED VIEW num_bids AS
 CREATE INDEX num_bids_idx ON num_bids (item);
 ```
 
-The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the plan used to evaluate the join.
+The query of the materialized view joins the relations `bids` and `auctions`,
+groups by `auctions.item` and determines the number of bids per auction. To
+understand how this SQL query is translated to a dataflow, we can use
+[`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the
+plan used to evaluate the join.
 
 ```sql
 EXPLAIN MATERIALIZED VIEW num_bids;
@@ -63,34 +74,45 @@ EXPLAIN MATERIALIZED VIEW num_bids;
 ```
 
 The plan describes the specific operators that are used to evaluate the query.
-Some of these operators resemble relational algebra or map reduce style operators (`Filter`, `Join`, `Project`).
-Others are specific to Materialize (`ArrangeBy`, `ReadStorage`).
+Some of these operators resemble relational algebra or map reduce style
+operators (`Filter`, `Join`, `Project`). Others are specific to Materialize
+(`ArrangeBy`, `ReadStorage`).
 
-In general, a high level understanding of what these operators do is sufficient for effective debugging:
-`Filter` filters records, `Join` joins records from two or more inputs, `Map` applies a function to transform records, etc.
-You can find more details on these operators in the [`EXPLAIN PLAN` documentation](https://materialize.com/docs/sql/explain-plan/#operators-in-decorrelated-and-optimized-plans).
-But it's not important to have a deep understanding of all these operators for effective debugging.
+In general, a high level understanding of what these operators do is sufficient
+for effective debugging: `Filter` filters records, `Join` joins records from
+two or more inputs, `Map` applies a function to transform records, etc. You can
+find more details on these operators in the [`EXPLAIN PLAN` documentation](https://materialize.com/docs/sql/explain-plan/#operators-in-decorrelated-and-optimized-plans).
+But it's not important to have a deep understanding of all these operators for
+effective debugging.
 
-
-Behind the scenes, the operator graph is turned into a dataflow.
-The dataflow is organized in a hierarchical structure that contains operators and _regions_, which define a hierarchy on the operators.
-In our example, the dataflow contains an `InputRegion`, a `BuildRegion`, and a region for the sink.
+Behind the scenes, the operator graph is turned into a dataflow. The dataflow is
+organized in a hierarchical structure that contains operators and _regions_,
+which define a hierarchy on the operators. In our example, the dataflow
+contains an `InputRegion`, a `BuildRegion`, and a region for the sink.
 
 ![Regions and operator visualization](/images/regions-and-operators-hierarchy.png)
 
-Again, it's not too important for our purposes to understand what these regions do and how they are used to structure the operator graph.
-For our purposes it's just important to know than that they define a hierarchy on the operators.
+Again, it's not too important for our purposes to understand what these regions
+do and how they are used to structure the operator graph. For our purposes it's
+just important to know than that they define a hierarchy on the operators.
 
 
 ## The system catalog and introspection relations
 
-Materialize collects a lot of useful information about the dataflows and operators in the system catalog in [introspection relations](/sql/system-catalog/mz_internal/#replica-introspection-relations).
-The introspection relations are useful to troubleshoot and understand what is happening under the hood when Materialize is not behaving as expected.
-However, it is important to understand that most of the statistics we need for troubleshooting purposes are specific to the cluster that is running the queries we want to debug.
+Materialize collects a lot of useful information about the dataflows and
+operators in the system catalog in [introspection relations](/sql/system-catalog/mz_internal/#replica-introspection-relations).
+The introspection relations are useful to troubleshoot and understand what is
+happening under the hood when Materialize is not behaving as expected. However,
+it is important to understand that most of the statistics we need for
+troubleshooting purposes are specific to the cluster that is running the
+queries we want to debug.
 
 {{< warning >}}
-Indexes and dataflows are local to a cluster, so their introspection information will vary across clusters depending on the active cluster and replica.
-As a consequence, you should expect the results of the queries below to vary depending on the values set for the `cluster` and `cluster_replica` [session variables](/sql/set/#session-variables).
+Indexes and dataflows are local to a cluster, so their introspection information
+will vary across clusters depending on the active cluster and replica. As a
+consequence, you should expect the results of the queries below to vary
+depending on the values set for the `cluster` and `cluster_replica`
+[session variables](/sql/set/#session-variables).
 {{< /warning >}}
 
 <!--
@@ -99,18 +121,19 @@ As a consequence, you should expect the results of the queries below to vary dep
 
 ## Where is Materialize spending compute time?
 
-Materialize spends time in various dataflow operators.
-Dataflows are created to maintain materialized views or indexes.
-In addition, temporary dataflow will be created for ad-hoc queries that don't just make a lookup to an existing index.
+Materialize spends time in various dataflow operators. Dataflows are created to
+maintain materialized views or indexes. In addition, temporary dataflow will be
+created for ad-hoc queries that don't just make a lookup to an existing index.
 
-If Materialize is taking more time to update
-results than you expect, you can identify which operators
-take the largest total amount of time.
+If Materialize is taking more time to update results than you expect, you can
+identify which operators take the largest total amount of time.
 
 ### Identifying expensive dataflows
 
-To understand which dataflow is taking the most time we can query the `mz_scheduling_elapsed` relation.
-The `elapsed_time` metric shows the absolute time the dataflows was busy since the system started and the dataflow was created.
+To understand which dataflow is taking the most time we can query the
+`mz_scheduling_elapsed` relation. The `elapsed_time` metric shows the absolute
+time the dataflows was busy since the system started and the dataflow was
+created.
 
 ```sql
 -- Extract raw elapsed time information for dataflows
@@ -132,22 +155,27 @@ ORDER BY elapsed_ns DESC
  (2 rows)
 ```
 
-These results show that Materialize spends the most time keeping the materialized view `num_bids` up to date,
-followed by the work on the index `avg_bids_idx`.
+These results show that Materialize spends the most time keeping the
+materialized view `num_bids` up to date, followed by the work on the index
+`avg_bids_idx`.
 
 ### Identifying expensive operators in a dataflow
 
-The previous query is a good starting point to get an overview of the work happening in the cluster because it only returns dataflows.
+The previous query is a good starting point to get an overview of the work
+happening in the cluster because it only returns dataflows.
 
-The `mz_scheduling_elapsed` relation also contains details for regions and operators.
-Removing the condition `list_length(address) = 1` will include the regions and operators in the result.
-But be aware that every row shows aggregated times for all the elements it contains.
-The `elapsed_time` reported for the dataflows above also includes the elapsed time for all the regions and operators they contain.
+The `mz_scheduling_elapsed` relation also contains details for regions and
+operators. Removing the condition `list_length(address) = 1` will include the
+regions and operators in the result. But be aware that every row shows
+aggregated times for all the elements it contains. The `elapsed_time` reported
+for the dataflows above also includes the elapsed time for all the regions and
+operators they contain.
 
-But because the parent-child relationship is not always obvious,
-the results containing a mixture of dataflows, regions, and operators can be a bit hard to interpret.
-The following query therefore only returns operators from the  `mz_scheduling_elapsed` relation.
-You can further drill down by adding a filter condition that matches the name of a specific dataflow.
+But because the parent-child relationship is not always obvious, the results
+containing a mixture of dataflows, regions, and operators can be a bit hard to
+interpret. The following query therefore only returns operators from the
+`mz_scheduling_elapsed` relation. You can further drill down by adding a filter
+condition that matches the name of a specific dataflow.
 
 ```sql
 SELECT
@@ -179,24 +207,29 @@ ORDER BY elapsed_ns DESC
 ...
 ```
 
-From the results of this query we can see that most of the elapsed time of the dataflow is caused by the time it takes to maintain the updates in one of the arrangements of the dataflow of the materialized view.
+From the results of this query we can see that most of the elapsed time of the
+dataflow is caused by the time it takes to maintain the updates in one of the
+arrangements of the dataflow of the materialized view.
 
 ### Debugging expensive dataflows and operators
 
-A large class of problems can be identified by using [`elapsed_time`](#identifying-expensive-operators-in-a-dataflow) to estimate the most expensive dataflows and operators.
-However, `elapsed_time` contains all work since the operator or dataflow was first created.
-Sometimes, a lot of work happens initially when the operator is created, but later on it takes only little continuous effort.
-If you want to see what operator is taking the most time **right now**,
-the `elapsed_time` metric is not enough.
+A large class of problems can be identified by using [`elapsed_time`](#identifying-expensive-operators-in-a-dataflow)
+to estimate the most expensive dataflows and operators. However, `elapsed_time`
+contains all work since the operator or dataflow was first created. Sometimes,
+a lot of work happens initially when the operator is created, but later on it
+takes only little continuous effort. If you want to see what operator is taking
+the most time **right now**, the `elapsed_time` metric is not enough.
 
-The relation `mz_compute_operator_durations_histogram` also tracks the time operators are busy,
-but instead of aggregating `elapsed_time` since an operator got created,
-it tracks how long each operator was scheduled at a time in a histogram.
-This information can show you two things: operators that block progress for others and operators that are currently doing work.
+The relation `mz_compute_operator_durations_histogram` also tracks the time
+operators are busy, but instead of aggregating `elapsed_time` since an operator
+got created, it tracks how long each operator was scheduled at a time in a
+histogram. This information can show you two things: operators that block
+progress for others and operators that are currently doing work.
 
-If there is a very expensive operator that blocks progress for all other operators,
-it will become visible in the histogram.
-The offending operator will be scheduled in much longer intervals compared to other operators, which reflects in the histogram as larger time buckets.
+If there is a very expensive operator that blocks progress for all other
+operators, it will become visible in the histogram. The offending operator will
+be scheduled in much longer intervals compared to other operators, which
+reflects in the histogram as larger time buckets.
 
 ```sql
 -- Extract raw scheduling histogram information for operators
@@ -237,14 +270,15 @@ ORDER BY duration DESC
  (5 rows)
 ```
 
-Note that this relation contains a lot of information.
-The query therefore filters all durations below `100 millisecond`.
-In this example, the result of the query shows that the longest an operator got scheduled is just over one second.
-So it's unlikely that Materialize is unresponsive because of a single operator blocking progress for others.
+Note that this relation contains a lot of information. The query therefore
+filters all durations below `100 millisecond`. In this example, the result of
+the query shows that the longest an operator got scheduled is just over one
+second. So it's unlikely that Materialize is unresponsive because of a single
+operator blocking progress for others.
 
-The reported duration is still reporting aggregated values since the operator has been created.
-To get a feeling for which operators are currently doing work,
-you can subscribe to the changes of the relation.
+The reported duration is still reporting aggregated values since the operator
+has been created. To get a feeling for which operators are currently doing
+work, you can subscribe to the changes of the relation.
 
 ```sql
 -- Observe changes to the raw scheduling histogram information
@@ -284,16 +318,16 @@ COPY(SUBSCRIBE(
 ...
 ```
 
-In this way you can see that currently the only operator that is doing more than 100 milliseconds worth of work
-is the `ArrangeBy` operator from the materialized view `num_bids`.
+In this way you can see that currently the only operator that is doing more than
+100 milliseconds worth of work is the `ArrangeBy` operator from the
+materialized view `num_bids`.
 
 
 ## Why is Materialize using so much memory?
 
-[Arrangements](/overview/arrangements)
-take up most of Materialize's memory use. Arrangements maintain indexes for data
-as it changes. These queries extract the numbers of records and
-the size of the arrangements. The reported records may
+[Arrangements](/overview/arrangements) take up most of Materialize's memory use.
+Arrangements maintain indexes for data as it changes. These queries extract the
+numbers of records and the size of the arrangements. The reported records may
 exceed the number of logical records; the report reflects the uncompacted
 state.
 
@@ -314,7 +348,8 @@ ORDER BY size DESC
  19158 | Dataflow: materialize.qck.num_bids_idx |      13 |       0
 ```
 
-If you need to drill down into individual operators, you can query `mz_arrangement_sizes` instead.
+If you need to drill down into individual operators, you can query
+`mz_arrangement_sizes` instead.
 
 ```sql
 -- Extract operator records and sizes
@@ -343,10 +378,10 @@ ORDER BY mas.records DESC
 ```
 
 We've also bundled an interactive, web-based memory usage visualization tool to
-aid in debugging. The memory visualization tool shows all user-created arrangements,
-grouped by dataflow. The amount of memory used
-by Materialize should correlate with the number of arrangement records that are
-displayed by either the visual interface or the SQL queries.
+aid in debugging. The memory visualization tool shows all user-created
+arrangements, grouped by dataflow. The amount of memory used by Materialize
+should correlate with the number of arrangement records that are displayed by
+either the visual interface or the SQL queries.
 
 You can access the memory usage visualization for your Materialize region at
 `https://<region host>/memory`.
@@ -398,11 +433,11 @@ ORDER BY ratio DESC;
 
 ## I found a problematic operator. Where did it come from?
 
-Look up the operator in `mz_dataflow_addresses`. If an operator has
-value `x` at position `n`, then it is part of the `x` subregion of the region
-defined by positions `0..n-1`. The example SQL query and result below shows an
-operator whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow
-21".
+Look up the operator in `mz_dataflow_addresses`. If an operator has value `x` at
+position `n`, then it is part of the `x` subregion of the region defined by
+positions `0..n-1`. The example SQL query and result below shows an operator
+whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow 21".
+
 ```sql
 SELECT * FROM mz_internal.mz_dataflow_addresses WHERE id=515;
 ```
@@ -418,8 +453,8 @@ an index or materialized view in Materialize.
 
 Each dataflow has an operator representing the entire dataflow. The address of
 said operator has only a single entry. For the example operator 515 above, you
-can find the name of the dataflow if you can find the name of the operator whose
-address is just "dataflow 21."
+can find the name of the dataflow if you can find the name of the operator
+whose address is just "dataflow 21."
 
 ```sql
 -- get id and name of the operator representing the entirety of the dataflow
