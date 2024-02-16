@@ -13,7 +13,9 @@ import argparse
 import os
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import IO
 
 import requests
 
@@ -36,6 +38,8 @@ GROUP_REPO = {
 REFERENCE_RE = re.compile(
     r"""
     ( reenable
+    | re-enable
+    | reconsider
     | TODO
     # Used in Buildkite pipeline config files
     | skip:
@@ -55,20 +59,30 @@ REFERENCE_RE = re.compile(
 
 IGNORE_RE = re.compile(
     r"""
+    ( discussion\ of\ this\ in
+    | discussed\ in
+    | See\ \<
     # is_null_propagation.slt
-    ( isnull\(\#0\)
+    | isnull\(\#0\)
     # src/transform/tests/test_transforms/column_knowledge.spec
     | \(\#1\)\ IS\ NULL
     # test/sqllogictest/cockroach/*.slt
     | cockroach\#
+    | Liquibase
     # cloud repo
     | cloud\#
     # ci/test/lint-buf/README.md
     | Ignore\ because\ of\ #99999
+    # src/storage-client/src/controller.rs
+    | issues/20211\>
+    # src/sql/src/plan/statement.rs
+    | issues/20019\>
     )
     """,
     re.VERBOSE | re.IGNORECASE,
 )
+
+COMMENT_RE = re.compile(r"#|//")
 
 IGNORE_FILENAME_RE = re.compile(
     r"""
@@ -88,32 +102,71 @@ class IssueRef:
     issue_id: int
     filename: str
     line_number: int
-    line: str | None
+    text: str | None
+
+
+@dataclass
+class CommentBlock:
+    char: str
+    pos: int
+    text: str
+    line_number: int
+
+
+def comment_blocks(file: IO) -> Iterator[tuple[int, str]]:
+    comment: CommentBlock | None = None
+
+    for line_number, line in enumerate(file):
+        if comment_match := COMMENT_RE.search(line):
+            char = comment_match.group(0)
+            pos = comment_match.span()[0]
+            if comment is None:
+                comment = CommentBlock(char, pos, line, line_number + 1)
+                continue
+            if char == comment.char and pos == comment.pos:
+                comment.text += line
+                continue
+            yield (comment.line_number, comment.text)
+            comment = CommentBlock(char, pos, line, line_number + 1)
+            continue
+        if comment is not None:
+            yield (comment.line_number, comment.text)
+            comment = None
+        yield (line_number + 1, line)
+
+    if comment is not None:
+        yield (comment.line_number, comment.text)
 
 
 def detect_closed_issues(filename: str) -> list[IssueRef]:
     issue_refs: list[IssueRef] = []
 
     with open(filename) as file:
-        for line_number, line in enumerate(file):
-            if REFERENCE_RE.search(line) and not IGNORE_RE.search(line):
-                if issue_match := ISSUE_RE.search(line):
-                    groups = [
-                        (key, value)
-                        for key, value in issue_match.groupdict().items()
-                        if value
-                    ]
-                    assert len(groups) == 1, f"Expected only 1 element in {groups}"
-                    group, issue_id = groups[0]
-                    issue_refs.append(
-                        IssueRef(
-                            GROUP_REPO[group],
-                            int(issue_id),
-                            filename,
-                            line_number + 1,
-                            line.strip(),
-                        )
+        for line_number, text in comment_blocks(file):
+            if not REFERENCE_RE.search(text) or IGNORE_RE.search(text):
+                continue
+            if issue_match := ISSUE_RE.search(text):
+                groups = [
+                    (key, value)
+                    for key, value in issue_match.groupdict().items()
+                    if value
+                ]
+                assert len(groups) == 1, f"Expected only 1 element in {groups}"
+                group, issue_id = groups[0]
+
+                # Explain plans can look like issue references
+                if int(issue_id) < 10:
+                    continue
+
+                issue_refs.append(
+                    IssueRef(
+                        GROUP_REPO[group],
+                        int(issue_id),
+                        filename,
+                        line_number,
+                        text.strip(),
                     )
+                )
 
     return issue_refs
 
@@ -146,7 +199,11 @@ def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
     return [
         issue_ref
         for issue_ref in issue_refs
-        if (issue_ref.filename, issue_ref.line_number) in changed_lines
+        if issue_ref.text is not None
+        and any(
+            (issue_ref.filename, issue_ref.line_number + i) in changed_lines
+            for i in range(issue_ref.text.count("\n"))
+        )
     ]
 
 
@@ -219,8 +276,9 @@ def main() -> int:
             f"#{issue_ref.issue_id}",
         )
         print(f"--- Issue is referenced in comment but already closed: {url}")
-        if issue_ref.line is not None:
-            print(f"{issue_ref.filename}:{issue_ref.line_number}: {issue_ref.line}")
+        if issue_ref.text is not None:
+            print(f"{issue_ref.filename}:{issue_ref.line_number}:")
+            print(issue_ref.text)
         else:
             print(f"{issue_ref.filename} (filename)")
 
