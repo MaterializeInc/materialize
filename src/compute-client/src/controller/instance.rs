@@ -1729,9 +1729,7 @@ where
             let mut new_capability = Antichain::new();
             for frontier in compute_frontiers.chain(storage_frontiers) {
                 for time in frontier.iter() {
-                    if let Some(time) = time.step_back() {
-                        new_capability.insert(time);
-                    }
+                    new_capability.insert(time.step_back().unwrap_or(time.clone()));
                 }
             }
 
