@@ -14,6 +14,7 @@ use mz_repr::RelationDesc;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan::{self};
+use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;

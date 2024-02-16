@@ -19,6 +19,7 @@ use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_sql::session::metadata::SessionMetadata;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use timely::progress::Antichain;
@@ -1767,15 +1768,14 @@ impl CatalogState {
 
     pub fn resolve_search_path(
         &self,
-        session: &Session,
+        session: &dyn SessionMetadata,
     ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
         let database = self
             .database_by_name
-            .get(session.vars().database())
+            .get(session.database())
             .map(|id| id.clone());
 
         session
-            .vars()
             .search_path()
             .iter()
             .map(|schema| {
@@ -1784,6 +1784,39 @@ impl CatalogState {
             .filter_map(|schema| schema.ok())
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect()
+    }
+
+    pub fn effective_search_path(
+        &self,
+        search_path: &[(ResolvedDatabaseSpecifier, SchemaSpecifier)],
+        include_temp_schema: bool,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
+        let mut v = Vec::with_capacity(search_path.len() + 3);
+        // Temp schema is only included for relations and data types, not for functions and operators
+        let temp_schema = (
+            ResolvedDatabaseSpecifier::Ambient,
+            SchemaSpecifier::Temporary,
+        );
+        if include_temp_schema && !search_path.contains(&temp_schema) {
+            v.push(temp_schema);
+        }
+        let default_schemas = [
+            (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+            ),
+            (
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Id(self.get_pg_catalog_schema_id().clone()),
+            ),
+        ];
+        for schema in default_schemas.into_iter() {
+            if !search_path.contains(&schema) {
+                v.push(schema);
+            }
+        }
+        v.extend_from_slice(search_path);
+        v
     }
 
     pub fn resolve_cluster(&self, name: &str) -> Result<&Cluster, SqlCatalogError> {

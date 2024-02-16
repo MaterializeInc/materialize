@@ -29,14 +29,15 @@ use mz_repr::user::ExternalUserMetadata;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
     RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
 };
 pub use mz_sql::session::vars::{
-    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    EndTransactionAction, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
-use mz_sql::session::vars::{IsolationLevel, VarInput};
+use mz_sql::session::vars::{IsolationLevel, SystemVars, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{StatementKind, TransactionIsolationLevel};
 use mz_storage_types::sources::Timeline;
@@ -109,6 +110,135 @@ where
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
 }
 
+impl<T> SessionMetadata for Session<T>
+where
+    T: Debug + Clone + Send + Sync,
+    T: TimestampManipulation,
+{
+    fn user(&self) -> &User {
+        self.vars.user()
+    }
+
+    fn database(&self) -> &str {
+        self.vars.database()
+    }
+
+    fn search_path(&self) -> &[mz_sql_parser::ast::Ident] {
+        self.vars.search_path()
+    }
+
+    fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    fn pcx(&self) -> &PlanContext {
+        &self
+            .transaction()
+            .inner()
+            .expect("no active transaction")
+            .pcx
+    }
+
+    fn current_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .current_role
+    }
+
+    fn session_role_id(&self) -> &RoleId {
+        &self
+            .role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+            .session_role
+    }
+
+    fn is_superuser(&self) -> bool {
+        self.vars.is_superuser()
+    }
+
+    fn enable_session_rbac_checks(&self) -> bool {
+        self.vars.enable_session_rbac_checks()
+    }
+
+    fn role_metadata(&self) -> &RoleMetadata {
+        self.role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+    }
+}
+
+/// Data structure suitable for passing to other threads that need access to some common Session
+/// properties.
+#[derive(Debug)]
+pub struct SessionMeta {
+    database: String,
+    search_path: Vec<mz_sql_parser::ast::Ident>,
+    user: User,
+    conn_id: ConnectionId,
+    pcx: PlanContext,
+    role_metadata: RoleMetadata,
+    is_superuser: bool,
+    enable_session_rbac_checks: bool,
+    // TODO: Make this a cheap snapshot of the session vars, possibly by using an immutable map.
+    visible_vars: Vec<(&'static str, String, &'static str)>,
+}
+
+impl SessionMeta {
+    /// Returns the visible session and system vars as (name, val, desc).
+    pub fn visible_vars(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        Box::new(
+            self.visible_vars
+                .iter()
+                .map(|(name, val, desc)| (*name, val.as_str(), *desc)),
+        )
+    }
+}
+
+impl SessionMetadata for SessionMeta {
+    fn user(&self) -> &User {
+        &self.user
+    }
+
+    fn database(&self) -> &str {
+        &self.database
+    }
+
+    fn search_path(&self) -> &[mz_sql_parser::ast::Ident] {
+        &self.search_path
+    }
+
+    fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    fn pcx(&self) -> &PlanContext {
+        &self.pcx
+    }
+
+    fn current_role_id(&self) -> &RoleId {
+        &self.role_metadata.current_role
+    }
+
+    fn session_role_id(&self) -> &RoleId {
+        &self.role_metadata.session_role
+    }
+
+    fn is_superuser(&self) -> bool {
+        self.is_superuser
+    }
+
+    fn enable_session_rbac_checks(&self) -> bool {
+        self.enable_session_rbac_checks
+    }
+
+    fn role_metadata(&self) -> &RoleMetadata {
+        &self.role_metadata
+    }
+}
+
 /// Configures a new [`Session`].
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -126,6 +256,37 @@ impl<T: TimestampManipulation> Session<T> {
     pub(crate) fn new(build_info: &'static BuildInfo, config: SessionConfig) -> Session<T> {
         assert_ne!(config.conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(build_info, config)
+    }
+
+    /// Returns a reference-less collection of data usable by other tasks that don't have ownership
+    /// of the Session.
+    pub fn meta(&self, system_vars: &SystemVars) -> SessionMeta {
+        SessionMeta {
+            user: self.user().clone(),
+            database: self.vars.database().into(),
+            search_path: self.vars.search_path().to_vec(),
+            conn_id: self.conn_id().clone(),
+            pcx: self.pcx().clone(),
+            role_metadata: self.role_metadata().clone(),
+            is_superuser: self.is_superuser(),
+            enable_session_rbac_checks: self.enable_session_rbac_checks(),
+            visible_vars: self.viewable_vars(system_vars),
+        }
+
+        // TODO: soft_assert that these are the same as Session.
+    }
+
+    /// Returns the viewable session and system variables.
+    pub(crate) fn viewable_vars(
+        &self,
+        system_vars: &SystemVars,
+    ) -> Vec<(&'static str, String, &'static str)> {
+        self.vars()
+            .iter()
+            .chain(system_vars.iter())
+            .filter(|v| v.visible(self.user(), Some(system_vars)).is_ok())
+            .map(|var| (var.name(), var.value(), var.description()))
+            .collect()
     }
 
     /// Creates new statement logging metadata for a one-off
@@ -224,24 +385,9 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns the connection ID associated with the session.
-    pub fn conn_id(&self) -> &ConnectionId {
-        &self.conn_id
-    }
-
     /// Returns the secret key associated with the session.
     pub fn secret_key(&self) -> u32 {
         self.secret_key
-    }
-
-    /// Returns the current transaction's PlanContext. Panics if there is not a
-    /// current transaction.
-    pub fn pcx(&self) -> &PlanContext {
-        &self
-            .transaction()
-            .inner()
-            .expect("no active transaction")
-            .pcx
     }
 
     fn new_pcx(&self, mut wall_time: DateTime<Utc>) -> PlanContext {
@@ -693,11 +839,6 @@ impl<T: TimestampManipulation> Session<T> {
         self.vars.reset_all();
     }
 
-    /// Returns the user who owns this session.
-    pub fn user(&self) -> &User {
-        self.vars.user()
-    }
-
     /// Returns the [application_name] that created this session.
     ///
     /// [application_name]: (https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
@@ -733,11 +874,6 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns whether the current session is a superuser.
-    pub fn is_superuser(&self) -> bool {
-        self.vars.is_superuser()
-    }
-
     /// Drains any external metadata updates and applies the changes from the latest update.
     pub fn apply_external_metadata_updates(&mut self) {
         // If no sender is registered then there isn't anything to do.
@@ -763,40 +899,6 @@ impl<T: TimestampManipulation> Session<T> {
             session_role: role_id,
             current_role: role_id,
         });
-    }
-
-    /// Returns the session's role metadata.
-    ///
-    /// # Panics
-    /// If the session has not connected successfully.
-    pub fn role_metadata(&self) -> &RoleMetadata {
-        self.role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-    }
-
-    /// Returns the session's session role ID.
-    ///
-    /// # Panics
-    /// If the session has not connected successfully.
-    pub fn session_role_id(&self) -> &RoleId {
-        &self
-            .role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-            .session_role
-    }
-
-    /// Returns the session's current role ID.
-    ///
-    /// # Panics
-    /// If the session has not connected successfully.
-    pub fn current_role_id(&self) -> &RoleId {
-        &self
-            .role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-            .current_role
     }
 
     /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to

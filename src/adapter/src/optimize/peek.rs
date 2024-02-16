@@ -36,7 +36,7 @@ use crate::optimize::{
     optimize_mir_local, trace_plan, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerConfig, OptimizerError,
 };
-use crate::session::Session;
+use crate::session::SessionMeta;
 use crate::TimestampContext;
 
 pub struct Optimizer {
@@ -123,7 +123,7 @@ pub struct LocalMirPlan<T = Unresolved> {
 pub struct Resolved<'s> {
     timestamp_ctx: TimestampContext<Timestamp>,
     stats: Box<dyn StatisticsOracle>,
-    session: &'s Session,
+    session: &'s SessionMeta,
 }
 
 /// The (final) result after
@@ -171,7 +171,7 @@ impl LocalMirPlan<Unresolved> {
     pub fn resolve(
         self,
         timestamp_ctx: TimestampContext<Timestamp>,
-        session: &Session,
+        session: &SessionMeta,
         stats: Box<dyn StatisticsOracle>,
     ) -> LocalMirPlan<Resolved> {
         LocalMirPlan {

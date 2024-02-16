@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_compute_types::ComputeInstanceId;
 use mz_repr::GlobalId;
+use mz_sql::session::metadata::SessionMetadata;
 use serde::Deserialize;
 
 use crate::coord::Coordinator;

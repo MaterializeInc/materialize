@@ -16,6 +16,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
+use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;

@@ -54,6 +54,7 @@ use mz_sql::plan::{
     Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
     UpdatePrivilege, VariableValue,
 };
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
     self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, SCHEMA_ALIAS,
@@ -94,7 +95,7 @@ use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
-use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
+use crate::util::{ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
 mod create_index;
@@ -1132,7 +1133,7 @@ impl Coordinator {
 
         // Make sure this stays in sync with the beginning of `rbac::check_plan`.
         let session_catalog = self.catalog().for_session(session);
-        if rbac::is_rbac_enabled_for_session(session_catalog.system_vars(), session.vars())
+        if rbac::is_rbac_enabled_for_session(session_catalog.system_vars(), session)
             && !session.is_superuser()
         {
             // Obtain all roles that the current session is a member of.
@@ -1396,9 +1397,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut rows = viewable_variables(self.catalog().state(), session)
-            .map(|v| (v.name(), v.value(), v.description()))
-            .collect::<Vec<_>>();
+        let mut rows = session.viewable_vars(self.catalog().system_config());
         rows.sort_by_cached_key(|(name, _, _)| name.to_lowercase());
         Ok(Self::send_immediate_rows(
             rows.into_iter()
@@ -3718,7 +3717,7 @@ impl Coordinator {
             secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: EvalTime::NotAvailable,
-                session,
+                session: &session.meta(self.catalog().system_config()),
                 catalog_state: self.catalog().state(),
             },
         )?;

@@ -36,16 +36,16 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::explain::trace_plan;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, Row};
-use mz_sql::catalog::{CatalogRole, SessionCatalog};
+use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::dataflow::DataflowMetainfo;
 use tracing::warn;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::optimize::{view, Optimize, OptimizerConfig, OptimizerError};
-use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::util::viewable_variables;
+use crate::session::{SessionMeta, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 
 /// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
 /// to exist after this has been made.
@@ -115,7 +115,9 @@ pub enum ExprPrepStyle<'a> {
     /// time in the specified session.
     OneShot {
         logical_time: EvalTime,
-        session: &'a Session,
+        // TODO: A `dyn SessionMetadata` would be nice here, but `Var` is not easily shareable or
+        // Clone, so has been difficult to add to that trait. For now stick with a struct.
+        session: &'a SessionMeta,
         catalog_state: &'a CatalogState,
     },
     /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
@@ -545,7 +547,7 @@ fn eval_unmaterializable_func(
     state: &CatalogState,
     f: &UnmaterializableFunc,
     logical_time: EvalTime,
-    session: &Session,
+    session: &SessionMeta,
 ) -> Result<MirScalarExpr, OptimizerError> {
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
@@ -578,18 +580,17 @@ fn eval_unmaterializable_func(
     };
 
     match f {
-        UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
+        UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.database())),
         UnmaterializableFunc::CurrentSchema => {
-            let catalog = state.for_session(session);
-            let schema = catalog
-                .search_path()
+            let search_path = state.resolve_search_path(session);
+            let schema = search_path
                 .first()
                 .map(|(db, schema)| &*state.get_schema(db, schema, session.conn_id()).name.schema);
             pack(Datum::from(schema))
         }
         UnmaterializableFunc::CurrentSchemasWithSystem => {
-            let catalog = state.for_session(session);
-            let search_path = catalog.effective_search_path(false);
+            let search_path = state.resolve_search_path(session);
+            let search_path = state.effective_search_path(&search_path, false);
             pack_1d_array(
                 search_path
                     .into_iter()
@@ -601,21 +602,21 @@ fn eval_unmaterializable_func(
             )
         }
         UnmaterializableFunc::CurrentSchemasWithoutSystem => {
-            let catalog = state.for_session(session);
-            let search_path = catalog.search_path();
+            let search_path = state.resolve_search_path(session);
             pack_1d_array(
                 search_path
                     .into_iter()
                     .map(|(db, schema)| {
-                        let schema = state.get_schema(db, schema, session.conn_id());
+                        let schema = state.get_schema(&db, &schema, session.conn_id());
                         Datum::String(&schema.name.schema)
                     })
                     .collect(),
             )
         }
         UnmaterializableFunc::ViewableVariables => pack_dict(
-            viewable_variables(state, session)
-                .map(|var| (var.name().to_lowercase(), var.value()))
+            session
+                .visible_vars()
+                .map(|(name, val, _desc)| (name.to_lowercase(), val.to_string()))
                 .collect(),
         ),
         UnmaterializableFunc::CurrentTimestamp => {
@@ -629,7 +630,7 @@ fn eval_unmaterializable_func(
             state.get_role(session.session_role_id()).name(),
         )),
         UnmaterializableFunc::IsRbacEnabled => pack(Datum::from(
-            rbac::is_rbac_enabled_for_session(state.system_config(), session.vars()),
+            rbac::is_rbac_enabled_for_session(state.system_config(), session),
         )),
         UnmaterializableFunc::MzEnvironmentId => {
             pack(Datum::from(&*state.config().environment_id.to_string()))

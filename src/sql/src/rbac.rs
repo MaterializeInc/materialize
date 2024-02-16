@@ -33,54 +33,53 @@ use crate::plan;
 use crate::plan::{
     DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
 };
-use crate::session::user::{
-    RoleMetadata, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER,
-};
-use crate::session::vars::{SessionVars, SystemVars};
+use crate::session::metadata::SessionMetadata;
+use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
+use crate::session::vars::SystemVars;
 
 /// Common checks that need to be performed before we can start checking a role's privileges.
 macro_rules! rbac_preamble {
-    ($catalog:expr, $role_metadata:expr, $session_vars:expr) => {
+    ($catalog:expr, $session_meta:expr) => {
         // PostgreSQL allows users that have their role dropped to perform some actions,
         // such as `SET ROLE` and certain `SELECT` queries. We haven't implemented
         // `SET ROLE` and feel it's safer to force to user to re-authenticate if their
         // role is dropped.
         if $catalog
-            .try_get_role(&$role_metadata.current_role)
+            .try_get_role(&$session_meta.role_metadata().current_role)
             .is_none()
         {
             return Err(UnauthorizedError::ConcurrentRoleDrop(
-                $role_metadata.current_role.clone(),
+                $session_meta.role_metadata().current_role.clone(),
             ));
         };
         if $catalog
-            .try_get_role(&$role_metadata.session_role)
+            .try_get_role(&$session_meta.role_metadata().session_role)
             .is_none()
         {
             return Err(UnauthorizedError::ConcurrentRoleDrop(
-                $role_metadata.session_role.clone(),
+                $session_meta.role_metadata().session_role.clone(),
             ));
         };
         if $catalog
-            .try_get_role(&$role_metadata.authenticated_role)
+            .try_get_role(&$session_meta.role_metadata().authenticated_role)
             .is_none()
         {
             return Err(UnauthorizedError::ConcurrentRoleDrop(
-                $role_metadata.authenticated_role.clone(),
+                $session_meta.role_metadata().authenticated_role.clone(),
             ));
         };
 
         // Skip RBAC checks if RBAC is disabled. However, we never skip RBAC checks for system
         // roles. This allows us to limit access of system users even when RBAC is off.
-        if !is_rbac_enabled_for_session($catalog.system_vars(), $session_vars)
-            && !$role_metadata.current_role.is_system()
-            && !$role_metadata.session_role.is_system()
+        if !is_rbac_enabled_for_session($catalog.system_vars(), $session_meta)
+            && !$session_meta.role_metadata().current_role.is_system()
+            && !$session_meta.role_metadata().session_role.is_system()
         {
             return Ok(());
         }
 
         // Skip RBAC checks if the session is a superuser.
-        if $session_vars.is_superuser() {
+        if $session_meta.is_superuser() {
             return Ok(());
         }
     };
@@ -175,20 +174,14 @@ impl RbacRequirements {
     fn validate(
         self,
         catalog: &impl SessionCatalog,
-        role_metadata: &RoleMetadata,
-        session_vars: &SessionVars,
+        session: &dyn SessionMetadata,
         resolved_ids: &ResolvedIds,
     ) -> Result<(), UnauthorizedError> {
         // Obtain all roles that the current session is a member of.
-        let role_membership = catalog.collect_role_membership(&role_metadata.current_role);
+        let role_membership =
+            catalog.collect_role_membership(&session.role_metadata().current_role);
 
-        check_usage(
-            catalog,
-            role_metadata,
-            session_vars,
-            resolved_ids,
-            self.item_usage,
-        )?;
+        check_usage(catalog, session, resolved_ids, self.item_usage)?;
 
         // Validate that the current session has the required role membership to execute the provided
         // plan.
@@ -220,7 +213,7 @@ impl RbacRequirements {
             catalog,
             self.privileges,
             role_membership,
-            role_metadata.current_role,
+            session.role_metadata().current_role,
         )?;
 
         if let Some(action) = self.superuser_action {
@@ -246,15 +239,14 @@ impl Default for RbacRequirements {
 /// Checks if a `session` is authorized to use `resolved_ids`. If not, an error is returned.
 pub fn check_usage(
     catalog: &impl SessionCatalog,
-    role_metadata: &RoleMetadata,
-    session_vars: &SessionVars,
+    session: &dyn SessionMetadata,
     resolved_ids: &ResolvedIds,
     item_types: &BTreeSet<CatalogItemType>,
 ) -> Result<(), UnauthorizedError> {
-    rbac_preamble!(catalog, role_metadata, session_vars);
+    rbac_preamble!(catalog, session);
 
     // Obtain all roles that the current session is a member of.
-    let role_membership = catalog.collect_role_membership(&role_metadata.current_role);
+    let role_membership = catalog.collect_role_membership(&session.role_metadata().current_role);
 
     // Certain statements depend on objects that haven't been created yet, like sub-sources, so we
     // need to filter those out.
@@ -269,7 +261,7 @@ pub fn check_usage(
     let required_privileges = generate_usage_privileges(
         catalog,
         &existing_resolved_ids,
-        role_metadata.current_role,
+        session.role_metadata().current_role,
         item_types,
     )
     .into_iter()
@@ -278,7 +270,7 @@ pub fn check_usage(
         catalog,
         required_privileges,
         role_membership,
-        role_metadata.current_role,
+        session.role_metadata().current_role,
     )?;
 
     Ok(())
@@ -289,31 +281,33 @@ pub fn check_plan(
     catalog: &impl SessionCatalog,
     // Map from connection IDs to authenticated roles. The roles may have been dropped concurrently.
     active_conns: &BTreeMap<u32, RoleId>,
-    role_metadata: &RoleMetadata,
-    session_vars: &SessionVars,
+    session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
     resolved_ids: &ResolvedIds,
 ) -> Result<(), UnauthorizedError> {
-    rbac_preamble!(catalog, role_metadata, session_vars);
+    rbac_preamble!(catalog, session);
 
     let rbac_requirements = generate_rbac_requirements(
         catalog,
         plan,
         active_conns,
         target_cluster_id,
-        role_metadata.current_role,
+        session.role_metadata().current_role,
     );
     debug!("rbac requirements {rbac_requirements:?} for plan {plan:?}");
-    rbac_requirements.validate(catalog, role_metadata, session_vars, resolved_ids)
+    rbac_requirements.validate(catalog, session, resolved_ids)
 }
 
 /// Returns true if RBAC is turned on for a session, false otherwise.
-pub fn is_rbac_enabled_for_session(system_vars: &SystemVars, session_vars: &SessionVars) -> bool {
+pub fn is_rbac_enabled_for_session(
+    system_vars: &SystemVars,
+    session: &dyn SessionMetadata,
+) -> bool {
     let server_enabled = system_vars.enable_rbac_checks();
-    let session_enabled = session_vars.enable_session_rbac_checks();
+    let session_enabled = session.enable_session_rbac_checks();
 
-    //The session flag allows users to turn RBAC on for just their session while the server flag
+    // The session flag allows users to turn RBAC on for just their session while the server flag
     // allows users to turn RBAC on for everyone.
     server_enabled || session_enabled
 }

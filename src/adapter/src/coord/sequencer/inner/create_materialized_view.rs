@@ -19,6 +19,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};

@@ -11,6 +11,7 @@
 //! client via some external Materialize API (ex: HTTP and psql).
 
 use differential_dataflow::lattice::Lattice;
+use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -646,8 +647,7 @@ impl Coordinator {
                     // planning, which may require the use of some connections and secrets.
                     if let Err(e) = rbac::check_usage(
                         &catalog,
-                        ctx.session().role_metadata(),
-                        ctx.session().vars(),
+                        ctx.session(),
                         &resolved_ids,
                         &CREATE_ITEM_USAGE,
                     ) {

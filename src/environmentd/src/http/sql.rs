@@ -38,6 +38,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
+use mz_sql::session::metadata::SessionMetadata;
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;

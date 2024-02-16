@@ -20,6 +20,7 @@ use mz_ore::cast::CastLossy;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};

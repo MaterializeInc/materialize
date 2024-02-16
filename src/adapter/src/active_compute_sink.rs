@@ -24,6 +24,7 @@ use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::plan::SubscribeOutput;
+use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 
