@@ -1195,10 +1195,11 @@ where
             let old_capability = &collection.implied_capability;
             let new_capability = new_policy.frontier(collection.write_frontier.borrow());
             if PartialOrder::less_than(old_capability, &new_capability) {
-                let mut update = ChangeBatch::new();
-                update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
-                update.extend(new_capability.iter().map(|t| (t.clone(), 1)));
-                read_capability_changes.insert(id, update);
+                let entry = read_capability_changes
+                    .entry(id)
+                    .or_insert_with(ChangeBatch::new);
+                entry.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+                entry.extend(new_capability.iter().map(|t| (t.clone(), 1)));
                 collection.implied_capability = new_capability;
             }
 
