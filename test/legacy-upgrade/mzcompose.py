@@ -182,7 +182,7 @@ def test_upgrade_from_version(
     with c.override(
         Testdrive(
             postgres_stash="cockroach",
-            validate_catalog_store="emergency-stash",
+            validate_catalog_store="stash",
             volumes_extra=["secrets:/share/secrets"],
         )
     ):
