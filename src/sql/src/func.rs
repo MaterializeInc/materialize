@@ -4102,19 +4102,42 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             ") => Oid, oid::FUNC_DATABASE_OID_OID;
         },
         // There is no regclass equivalent for schemas to look up oids, so we have this helper function instead.
-        // TODO: Support qualified names.
-        // TODO: This should take into account the search path when looking for an object.
         "mz_schema_oid" => Scalar {
             params!(String) => sql_impl_func("
-                CASE
+            CASE
                 WHEN $1 IS NULL THEN NULL
-                ELSE (
-                    mz_unsafe.mz_error_if_null(
-                        (SELECT oid FROM mz_schemas WHERE name = $1),
-                        'schema \"' || $1 || '\" does not exist'
-                    )
+            ELSE
+                mz_unsafe.mz_error_if_null(
+                    (
+                        SELECT
+                            CASE
+                                -- Schema names should only have 2 components, so error if there's
+                                -- three.
+                                WHEN n[1] IS NOT NULL THEN
+                                    mz_unsafe.mz_error_if_null(
+                                        NULL,
+                                        'invalid schema \"' || $1 || '\"'
+                                    )::oid
+                            ELSE
+                                (
+                                    SELECT s.oid
+                                    FROM mz_schemas AS s
+                                    LEFT JOIN mz_databases AS d ON s.database_id = d.id
+                                    WHERE
+                                        (
+                                            -- Filter to only schemas in the named database or the
+                                            -- current database if no database was specified.
+                                            d.name = COALESCE(n[2], pg_catalog.current_database())
+                                            -- Always include all ambient schemas.
+                                            OR s.database_id IS NULL
+                                        ) AND s.name = n[3]
+                                )
+                            END
+                        FROM mz_internal.mz_normalize_object_name($1) AS n
+                    ),
+                    'schema \"' || $1 || '\" does not exist'
                 )
-                END
+            END
             ") => Oid, oid::FUNC_SCHEMA_OID_OID;
         },
         // There is no regclass equivalent for roles to look up oids, so we have this helper function instead.

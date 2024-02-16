@@ -4153,12 +4153,12 @@ false
 ## Schemas
 
 query B
-SELECT has_schema_privilege('s1', 'CREATE')
+SELECT has_schema_privilege('d1.s1', 'CREATE')
 ----
 false
 
 query B
-SELECT has_schema_privilege('s2', 'CREATE')
+SELECT has_schema_privilege('d2.s2', 'CREATE')
 ----
 false
 
@@ -4168,12 +4168,12 @@ GRANT CREATE ON ALL SCHEMAS IN DATABASE d1, d2 TO materialize;
 COMPLETE 0
 
 query B
-SELECT has_schema_privilege('s1', 'CREATE')
+SELECT has_schema_privilege('d1.s1', 'CREATE')
 ----
 true
 
 query B
-SELECT has_schema_privilege('s2', 'CREATE')
+SELECT has_schema_privilege('d2.s2', 'CREATE')
 ----
 true
 
@@ -4183,12 +4183,12 @@ REVOKE CREATE ON ALL SCHEMAS IN DATABASE d1, d2 FROM materialize;
 COMPLETE 0
 
 query B
-SELECT has_schema_privilege('s1', 'CREATE')
+SELECT has_schema_privilege('d1.s1', 'CREATE')
 ----
 false
 
 query B
-SELECT has_schema_privilege('s2', 'CREATE')
+SELECT has_schema_privilege('d2.s2', 'CREATE')
 ----
 false
 
@@ -4495,12 +4495,12 @@ false
 ## Schemas
 
 query B
-SELECT has_schema_privilege('s1', 'CREATE')
+SELECT has_schema_privilege('d1.s1', 'CREATE')
 ----
 false
 
 query B
-SELECT has_schema_privilege('s2', 'CREATE')
+SELECT has_schema_privilege('d2.s2', 'CREATE')
 ----
 false
 
@@ -4510,12 +4510,12 @@ GRANT CREATE ON ALL SCHEMAS TO materialize;
 COMPLETE 0
 
 query B
-SELECT has_schema_privilege('s1', 'CREATE')
+SELECT has_schema_privilege('d1.s1', 'CREATE')
 ----
 true
 
 query B
-SELECT has_schema_privilege('s2', 'CREATE')
+SELECT has_schema_privilege('d2.s2', 'CREATE')
 ----
 true
 
@@ -4525,12 +4525,12 @@ REVOKE CREATE ON ALL SCHEMAS FROM materialize;
 COMPLETE 0
 
 query B
-SELECT has_schema_privilege('s1', 'CREATE')
+SELECT has_schema_privilege('d1.s1', 'CREATE')
 ----
 false
 
 query B
-SELECT has_schema_privilege('s2', 'CREATE')
+SELECT has_schema_privilege('d2.s2', 'CREATE')
 ----
 false
 
