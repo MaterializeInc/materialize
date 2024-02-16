@@ -39,7 +39,7 @@
 //! for a table that were present in the snapshot, we negate the snapshot update
 //! (at the minimum timestamp) and send it again at the correct GTID.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
@@ -81,6 +81,7 @@ use super::{
     RewindRequest, TransientError,
 };
 
+mod context;
 mod events;
 mod partitions;
 
@@ -288,15 +289,20 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             // capabilities.
             let mut repl_partitions: partitions::GtidReplicationPartitions = resume_upper.into();
 
-            // Binlog Table Id -> Table Name (its key in the `table_info` map)
-            let mut table_id_map = BTreeMap::<u64, UnresolvedItemName>::new();
-            let mut skipped_table_ids = BTreeSet::<u64>::new();
-
-            let mut errored_tables: BTreeSet<UnresolvedItemName> = BTreeSet::new();
+            let mut repl_context = context::ReplContext::new(
+                &config,
+                &connection_config,
+                stream.as_mut(),
+                &table_info,
+                &mut data_output,
+                data_cap_set,
+                upper_cap_set,
+                rewinds,
+            );
 
             let mut next_gtid: Option<GtidPartition> = None;
 
-            while let Some(event) = stream.as_mut().next().await {
+            while let Some(event) = repl_context.stream.next().await {
                 use mysql_async::binlog::events::*;
                 let event = event?;
                 let event_data = event.read_data()?;
@@ -328,21 +334,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 .await);
                             }
                             let new_upper = repl_partitions.frontier();
-
-                            trace!(%id, "timely-{worker_id} advancing frontier from \
-                                         heartbeat to {new_upper:?}");
-                            data_cap_set.downgrade(&*new_upper);
-                            upper_cap_set.downgrade(&*new_upper);
-
-                            rewinds.retain(|_, (_, req)| {
-                                // We need to retain the rewind requests whose snapshot_upper has
-                                // at least one timestamp such that new_upper is less than that
-                                // timestamp
-                                req.snapshot_upper.iter().any(|ts| new_upper.less_than(ts))
-                            });
-
-                            trace!(%id, "timely-{worker_id} pending rewinds after \
-                                         filtering: {rewinds:?}");
+                            repl_context.advance(new_upper);
                         }
                     }
                     // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
@@ -359,20 +351,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             .as_ref()
                             .expect("gtid cap should be set by previous GtidEvent");
 
-                        events::handle_rows_event(
-                            data,
-                            &config,
-                            stream.get_ref(),
-                            &mut table_id_map,
-                            &mut skipped_table_ids,
-                            &errored_tables,
-                            &table_info,
-                            &new_gtid,
-                            &mut rewinds,
-                            &mut data_output,
-                            data_cap_set,
-                        )
-                        .await?;
+                        events::handle_rows_event(data, &mut repl_context, new_gtid).await?;
 
                         // Advance the frontier up to the point right before this GTID
                         // We are being careful here and not advancing beyond this GTID since we aren't
@@ -396,37 +375,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         }
                         let new_upper = repl_partitions.frontier();
 
-                        trace!(%id, "timely-{worker_id} advancing frontier \
-                                to {new_upper:?}");
-                        data_cap_set.downgrade(&*new_upper);
-                        upper_cap_set.downgrade(&*new_upper);
-
-                        rewinds.retain(|_, (_, req)| {
-                            // We need to retain the rewind requests whose snapshot_upper
-                            // has at least one timestamp such that new_upper is less than
-                            // that timestamp
-                            req.snapshot_upper.iter().any(|ts| new_upper.less_than(ts))
-                        });
-                        trace!(%id, "timely-{worker_id} pending rewinds \
-                               after filtering: {rewinds:?}");
+                        repl_context.advance(new_upper);
                     }
                     Some(EventData::QueryEvent(event)) => {
                         let new_gtid = next_gtid
                             .as_ref()
                             .expect("gtid cap should be set by previous GtidEvent");
 
-                        trace!(%id, "timely-{worker_id} received query event {event:?}");
-                        events::handle_query_event(
-                            event,
-                            &config,
-                            &connection_config,
-                            &table_info,
-                            &new_gtid,
-                            &mut errored_tables,
-                            &mut data_output,
-                            data_cap_set,
-                        )
-                        .await?;
+                        events::handle_query_event(event, &mut repl_context, new_gtid).await?;
                     }
                     _ => {
                         // TODO: Handle other event types
