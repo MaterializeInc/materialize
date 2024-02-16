@@ -94,10 +94,34 @@ def get_all_and_latest_two_minor_mz_versions(
         version_list = VersionsFromDocs()
         all_versions = version_list.all_versions()
         tested_versions = version_list.minor_versions()[-2:]
+        # this is only necessary for versions from docs because they might not be up-to-date
+        tested_versions = fix_tested_versions(tested_versions)
     else:
         tested_versions = get_published_minor_mz_versions(limit=2)
         all_versions = get_all_published_mz_versions(newest_first=False)
     return all_versions, tested_versions
+
+
+def fix_tested_versions(tested_versions: list[MzVersion]) -> list[MzVersion]:
+    current_version = MzVersion.parse_cargo()
+
+    # version must be at most one version behind because the catalog must be upgraded one version at a time
+    fixed_versions = [
+        v
+        for v in tested_versions
+        if v.major == current_version.major and v.minor >= current_version.minor - 1
+    ]
+
+    if len(fixed_versions) == 0:
+        # get the previous minor version and hope that it is not broken
+        result = [MzVersion.create(0, current_version.minor - 1, 0)]
+
+    if tested_versions != fixed_versions:
+        print(
+            f"Versions were fixed to satisfy 'catalog must be upgraded one version at a time'. Using {result} instead of {tested_versions}."
+        )
+
+    return fixed_versions
 
 
 def test_upgrade_from_version(
