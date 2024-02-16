@@ -181,7 +181,7 @@ guidance.
 ### Stalled source
 
 <!-- TODO: update this to use the query history UI once it's available -->
-To detect and address stalled sources, follow the [`Ingest data` troubleshooting](/ingest-data/ingest-troubleshooting)
+To detect and address stalled sources, follow the [`Ingest data` troubleshooting](/ingest-data/troubleshooting)
 guide.
 
 ### Unhealthy cluster

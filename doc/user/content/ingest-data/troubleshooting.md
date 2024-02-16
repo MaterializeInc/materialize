@@ -16,7 +16,7 @@ As you wire up data ingestion in Materialize, you might run into some snags or
 unexpected scenarios. This guide collects common questions around data
 ingestion to help you troubleshoot your sources. If you're looking for
 troubleshooting guidance for slow or unresponsive queries, check out the
-[`Transform data` troubleshooting](/sql/transform-data/troubleshooting) guide
+[`Transform data` troubleshooting](/transform-data/troubleshooting) guide
 instead.
 
 ## Why isn't my source ingesting data?
