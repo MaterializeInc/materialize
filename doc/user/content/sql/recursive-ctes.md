@@ -3,7 +3,7 @@ title: Recursive CTEs
 description: "Recursive CTEs are used to define recursive queries."
 menu:
   main:
-    parent: 'transform'
+    parent: 'transform-overview'
     name: Recursive CTEs
     weight: 23
 ---
