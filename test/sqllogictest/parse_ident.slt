@@ -333,7 +333,7 @@ SELECT mz_internal.mz_normalize_schema_name('"SchemaX"')::text;
 query error db error: ERROR: improper schema name \(too many dotted names\): Dbz\.Schemax\.Tabley
 SELECT mz_internal.mz_normalize_schema_name('Dbz.Schemax.Tabley')::text;
 
-query error db error: ERROR: improper relation name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"
+query error db error: ERROR: improper schema name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"
 SELECT mz_internal.mz_normalize_schema_name('"Dbz"."SchemaX"."TableY"')::text;
 
 query error string is not a valid identifier: ""
