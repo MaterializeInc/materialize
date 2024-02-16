@@ -197,7 +197,6 @@ def workflow_many_inserts(c: Composition) -> None:
             {concurrent_sql}
             """
         )
-        print(x)
         c.testdrive(args=["--no-reset"], input=x)
 
     insert_thread = threading.Thread(target=do_inserts, args=(c,))
