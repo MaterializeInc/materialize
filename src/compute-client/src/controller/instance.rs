@@ -726,7 +726,7 @@ where
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().collect();
 
         // Initialize frontier tracking for the new replica.
-        let mut updates = Vec::new();
+        let mut updates = BTreeMap::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
             if collection.log_collection && !log_ids.contains(compute_id) {
@@ -734,7 +734,7 @@ where
             }
 
             let read_frontier = collection.read_frontier();
-            updates.push((*compute_id, read_frontier.to_owned()));
+            updates.insert(*compute_id, read_frontier.to_owned());
         }
         self.update_replica_write_frontiers(id, &updates);
 
@@ -927,7 +927,7 @@ where
         self.update_read_capabilities(compute_read_updates);
 
         // Install collection state for each of the exports.
-        let mut updates = Vec::new();
+        let mut updates = BTreeMap::new();
         for export_id in dataflow.export_ids() {
             let write_only = dataflow.sink_exports.contains_key(&export_id);
             self.compute.add_collection(
@@ -937,7 +937,7 @@ where
                 compute_dependencies.clone(),
                 write_only,
             );
-            updates.push((export_id, replica_write_frontier.clone()));
+            updates.insert(export_id, replica_write_frontier.clone());
         }
         // Initialize tracking of replica frontiers.
         let replica_ids: Vec<_> = self.compute.replica_ids().collect();
@@ -1225,7 +1225,7 @@ where
     fn update_write_frontiers(
         &mut self,
         replica_id: ReplicaId,
-        updates: &[(GlobalId, Antichain<T>)],
+        updates: &BTreeMap<GlobalId, Antichain<T>>,
     ) {
         // Apply advancements of replica frontiers.
         self.update_replica_write_frontiers(replica_id, updates);
@@ -1244,7 +1244,7 @@ where
     fn update_replica_write_frontiers(
         &mut self,
         replica_id: ReplicaId,
-        updates: &[(GlobalId, Antichain<T>)],
+        updates: &BTreeMap<GlobalId, Antichain<T>>,
     ) {
         // Compute and apply read hold downgrades on storage dependencies that result from
         // replica frontier advancements.
@@ -1315,7 +1315,7 @@ where
     ///
     /// Panics if any of the `updates` references an absent collection.
     #[tracing::instrument(level = "debug", skip(self))]
-    fn maybe_update_global_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
+    fn maybe_update_global_write_frontiers(&mut self, updates: &BTreeMap<GlobalId, Antichain<T>>) {
         // Compute and apply read capability downgrades that result from collection frontier
         // advancements.
         let mut read_capability_changes = BTreeMap::new();
@@ -1359,8 +1359,10 @@ where
         // advanced by compute sinks.
         let storage_updates: Vec<_> = updates
             .iter()
-            .filter(|(id, _upper)| self.storage_controller.collection(*id).is_ok())
-            .cloned()
+            .filter_map(|(&id, upper)| {
+                let found = self.storage_controller.collection(id).is_ok();
+                found.then_some((id, upper.clone()))
+            })
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates);
@@ -1549,7 +1551,7 @@ where
 
         self.compute
             .update_hydration_status(id, replica_id, &new_frontier);
-        self.update_write_frontiers(replica_id, &[(id, new_frontier)]);
+        self.update_write_frontiers(replica_id, &[(id, new_frontier)].into());
     }
 
     fn handle_peek_response(
@@ -1636,7 +1638,9 @@ where
 
         self.compute
             .update_hydration_status(subscribe_id, replica_id, &write_frontier);
-        self.update_replica_write_frontiers(replica_id, &[(subscribe_id, write_frontier.clone())]);
+
+        let write_frontier_updates = [(subscribe_id, write_frontier)].into();
+        self.update_replica_write_frontiers(replica_id, &write_frontier_updates);
 
         // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
         let mut subscribe = self.compute.subscribes.get(&subscribe_id)?.clone();
@@ -1650,7 +1654,7 @@ where
         // frontier only based on responses from the targeted replica. Otherwise, another replica
         // could advance to the empty frontier, making us drop the subscribe on the targeted
         // replica prematurely.
-        self.maybe_update_global_write_frontiers(&[(subscribe_id, write_frontier)]);
+        self.maybe_update_global_write_frontiers(&write_frontier_updates);
 
         match response {
             SubscribeResponse::Batch(batch) => {
