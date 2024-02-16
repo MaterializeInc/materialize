@@ -1344,10 +1344,11 @@ where
             };
 
             if PartialOrder::less_than(old_since, &new_since) {
-                let mut update = ChangeBatch::new();
-                update.extend(old_since.iter().map(|t| (t.clone(), -1)));
-                update.extend(new_since.iter().map(|t| (t.clone(), 1)));
-                read_capability_changes.insert(*id, update);
+                let entry = read_capability_changes
+                    .entry(*id)
+                    .or_insert_with(ChangeBatch::new);
+                entry.extend(old_since.iter().map(|t| (t.clone(), -1)));
+                entry.extend(new_since.iter().map(|t| (t.clone(), 1)));
                 collection.implied_capability = new_since;
             }
         }
