@@ -407,7 +407,7 @@ def get_previous_mz_version(
         excluded_versions = set()
 
     if previous_major:
-        version = MzVersion.create(version.major, 0, 0)
+        version = MzVersion.create(version.major, version.minor, 0)
 
     if version.prerelease is not None and len(version.prerelease) > 0:
         # simply drop the prerelease, do not try to find a decremented version
