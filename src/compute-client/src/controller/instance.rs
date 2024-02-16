@@ -990,7 +990,9 @@ where
                     ComputeSinkConnection::Persist(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
-                ComputeSinkConnection::S3Oneshot(conn) => ComputeSinkConnection::S3Oneshot(conn),
+                ComputeSinkConnection::CopyToS3Oneshot(conn) => {
+                    ComputeSinkConnection::CopyToS3Oneshot(conn)
+                }
             };
             let desc = ComputeSinkDesc {
                 from: se.from,

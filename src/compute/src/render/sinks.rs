@@ -118,7 +118,7 @@ where
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
             ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
-            ComputeSinkConnection::S3Oneshot(_) => format!("S3Sink({:?})", sink_id),
+            ComputeSinkConnection::CopyToS3Oneshot(_) => format!("S3Sink({:?})", sink_id),
         };
         self.scope
             .parent
@@ -172,6 +172,6 @@ where
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::Persist(connection) => Box::new(connection.clone()),
-        ComputeSinkConnection::S3Oneshot(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
     }
 }
