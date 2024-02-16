@@ -74,13 +74,13 @@ weight= 35
 #
 
 [[menu.main]]
-identifier = "transform"
+identifier = "transform-data"
 name = "Transform data"
 weight= 12
 
 [[menu.main]]
 name = "Overview"
-parent = 'transform'
+parent = 'transform-data'
 identifier = 'transform-overview'
 weight = 5
 
@@ -104,7 +104,7 @@ weight= 15
 
 [[menu.main]]
 name = "Common patterns"
-parent = 'transform'
+parent = 'transform-data'
 identifier = 'sql-patterns'
 weight = 30
 

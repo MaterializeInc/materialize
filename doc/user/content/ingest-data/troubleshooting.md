@@ -1,6 +1,6 @@
 ---
 title: "Troubleshooting"
-description: ""
+description: "How to troubleshoot common data ingestion scenarios where Materialize is not working as expected."
 menu:
   main:
     name: "Troubleshooting"
