@@ -130,7 +130,7 @@ steps:
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=100000, --max-execution-time=8h]
 
   - id: feature-benchmark-scale-plus-one
-    label: "Feature benchmark against 'latest' with --scale=+1 %N"
+    label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
     timeout_in_minutes: 2880
     parallelism: 8
     agents:
@@ -138,7 +138,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
-          args: [--other-tag=latest, --scale=+1]
+          args: [--other-tag=common-ancestor, --scale=+1]
 
   - group: SQLsmith
     key: sqlsmith
