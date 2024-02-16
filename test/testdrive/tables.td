@@ -378,3 +378,24 @@ name nullable type
 -----------------------
 b    true     integer
 a    true     integer
+
+
+# Test that the underlying Persist shard gets cleaned up on DROP.
+> CREATE TABLE shard_drop_test (a int, b text);
+
+> INSERT INTO shard_drop_test VALUES (1, 'hello');
+
+$ set-from-sql var=shard-drop-test-id
+SELECT id FROM mz_tables WHERE name = 'shard_drop_test';
+
+> CREATE TABLE shard_drop_test_empty (a int, b text);
+
+$ set-from-sql var=shard-drop-test-empty-id
+SELECT id FROM mz_tables WHERE name = 'shard_drop_test_empty';
+
+> DROP TABLE shard_drop_test;
+
+> DROP TABLE shard_drop_test_empty;
+
+> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id IN ('$shard-drop-test-id', '$shard-drop-test-empty-id');
+0
