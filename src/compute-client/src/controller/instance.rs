@@ -1325,13 +1325,13 @@ where
         for (id, new_upper) in updates {
             let collection = self.compute.expect_collection_mut(*id);
 
-            let old_upper = std::mem::replace(&mut collection.write_frontier, new_upper.clone());
-            let old_since = &collection.implied_capability;
-
-            if !PartialOrder::less_than(&old_upper, new_upper) {
+            if !PartialOrder::less_than(&collection.write_frontier, new_upper) {
                 continue; // frontier has not advanced
             }
 
+            collection.write_frontier = new_upper.clone();
+
+            let old_since = &collection.implied_capability;
             let new_since = match &collection.read_policy {
                 Some(read_policy) => {
                     // For readable collections the read frontier is determined by applying the
