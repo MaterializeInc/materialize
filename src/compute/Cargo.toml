@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.66"
 async-trait = "0.1.68"
 bytesize = "1.1.0"
-clap = { version = "3.2.24", features = ["derive", "env"] }
+clap = { version = "4.5.0", features = ["derive", "env"] }
 core_affinity = "0.8.0"
 crossbeam-channel = "0.5.8"
 dec = { version = "0.4.8", features = ["serde"] }

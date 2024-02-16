@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.24", features = ["derive"] }
+clap = { version = "4.5.0", features = ["derive"] }
 crossbeam = "0.8.2"
 fancy-regex = "0.11.0"
 futures = "0.3.25"
