@@ -110,7 +110,7 @@ Follow our [ingest troubleshooting](/ingest-data/ingest-troubleshooting) guide f
 #### Detect
 If your cluster runs out of memory (OOM)s, it will result in a crash. In that case, the cluster has to restart which can take a few seconds. When the cluster restarts, your query will also automatically restart execution from the beginning.
 
-If your cluster's CPU is maxed out (at ~100% utilization), your query may be blocked while the cluster processes the other activity. It may eventually complete, but will continue to be slow and potentially blocked until the CPU usage goes down. If you issue a lot of resource-intensive queries at once, that can spike the CPU.
+If your cluster's CPU is maxed out (at \~100% utilization), your query may be blocked while the cluster processes the other activity. It may eventually complete, but will continue to be slow and potentially blocked until the CPU usage goes down. If you issue a lot of resource-intensive queries at once, that can spike the CPU.
 
 To see memory and CPU usage for your cluster in the Materialize console, go to https://console.materialize.com/, click the “Clusters” tab in the nav bar, and click into the cluster.
 

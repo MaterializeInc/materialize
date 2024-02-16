@@ -7,6 +7,9 @@ menu:
     identifier: ingest-troubleshooting
     parent: ingest-data
     weight: 40
+aliases:
+  - /ops/diagnosing-using-sql/
+  - /ops/troubleshooting/
 ---
 
 As you wire up data ingestion in Materialize, you might run into some snags or
