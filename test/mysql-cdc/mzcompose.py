@@ -38,12 +38,17 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in c.workflows:
-        if name == "default":
-            continue
+    # If args were passed then we are running the main CDC workflow
+    if parser.args:
+        workflow_cdc(c, parser)
+    else:
+        # Otherwise we are running all workflows
+        for name in c.workflows:
+            if name == "default":
+                continue
 
-        with c.test_case(name):
-            c.workflow(name)
+            with c.test_case(name):
+                c.workflow(name)
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:

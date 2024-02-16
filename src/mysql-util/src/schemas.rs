@@ -182,7 +182,7 @@ where
                     // this is bounds-checked in the TryFrom impl
                     precision: info
                         .datetime_precision
-                        .and_then(|precision| Some(TimestampPrecision::try_from(precision)))
+                        .map(TimestampPrecision::try_from)
                         .transpose()
                         .map_err(|_| MySqlError::UnsupportedDataType {
                             column_type: info.column_type,
