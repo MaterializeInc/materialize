@@ -2291,24 +2291,27 @@ impl Coordinator {
             .expect("MV dataflow must export a sink");
         let write_frontier = self.storage_write_frontier(*sink_id);
 
-        // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        let mut as_of = if write_frontier.is_empty() {
-            min_as_of.clone()
-        } else {
-            min_as_of.join(write_frontier)
-        };
+        // // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
+        // let mut as_of = if write_frontier.is_empty() {
+        //     min_as_of.clone()
+        // } else {
+        //     min_as_of.join(write_frontier)
+        // };
+        let mut as_of = min_as_of.join(write_frontier);
 
-        // If we have a RefreshSchedule, then round up the `as_of` to the next refresh.
-        // Note that in many cases the `as_of` would already be at this refresh, because the `write_frontier` will be
-        // usually there. However, it can happen that we restart after the MV was created in the catalog but before
-        // its upper was initialized in persist.
-        if let Some(refresh_schedule) = &refresh_schedule {
-            if let Some(rounded_up_ts) =
-                refresh_schedule.round_up_timestamp(*as_of.as_option().expect("as_of is non-empty"))
-            {
-                as_of = Antichain::from_elem(rounded_up_ts);
-            } else {
-                // We are past the last refresh. Let's not move the as_of.
+        if !as_of.is_empty() {
+            // If we have a RefreshSchedule, then round up the `as_of` to the next refresh.
+            // Note that in many cases the `as_of` would already be at this refresh, because the `write_frontier` will be
+            // usually there. However, it can happen that we restart after the MV was created in the catalog but before
+            // its upper was initialized in persist.
+            if let Some(refresh_schedule) = &refresh_schedule {
+                if let Some(rounded_up_ts) = refresh_schedule
+                    .round_up_timestamp(*as_of.as_option().expect("as_of is non-empty"))
+                {
+                    as_of = Antichain::from_elem(rounded_up_ts);
+                } else {
+                    // We are past the last refresh. Let's not move the as_of.
+                }
             }
         }
 
