@@ -908,7 +908,12 @@ where
         // Update compute read capabilities for inputs.
         let mut compute_read_updates = compute_dependencies
             .iter()
-            .map(|id| (*id, changes.clone()))
+            .map(|id| {
+                if id.is_user() {
+                    tracing::error!("[{id}] installing input holds");
+                }
+                (*id, changes.clone())
+            })
             .collect();
         self.update_read_capabilities(&mut compute_read_updates);
 
@@ -1031,6 +1036,10 @@ where
         for id in &ids {
             let collection = self.compute.collection_mut(*id)?;
 
+            if id.is_user() {
+                tracing::error!("[{id}] dropping collection");
+            }
+
             // Mark the collection as dropped to allow it to be removed from the controller state.
             collection.dropped = true;
 
@@ -1085,6 +1094,10 @@ where
             if !self.compute.replica_exists(target) {
                 return Err(PeekError::ReplicaMissing(target));
             }
+        }
+
+        if id.is_user() {
+            tracing::error!("[{id}] installing peek hold: {timestamp:?}");
         }
 
         // Install a compaction hold on `id` at `timestamp`.
@@ -1168,6 +1181,9 @@ where
     ) -> Result<(), ReadPolicyError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_policy) in policies.into_iter() {
+            if id.is_user() {
+                tracing::error!("[{id}] set read policy: {new_policy:?}");
+            }
             let collection = self.compute.collection_mut(id)?;
 
             let old_capability = &collection.implied_capability;
@@ -1321,6 +1337,9 @@ where
             };
 
             if PartialOrder::less_than(old_since, &new_since) {
+                if id.is_user() {
+                    tracing::error!("[{id}] downgrading implied capability: {:?} -> {:?}", old_since.elements(), new_since.elements());
+                }
                 let mut update = ChangeBatch::new();
                 update.extend(old_since.iter().map(|t| (t.clone(), -1)));
                 update.extend(new_since.iter().map(|t| (t.clone(), 1)));
@@ -1368,6 +1387,9 @@ where
                         .extend(update.iter().cloned());
                 }
                 compute_net.push((key, update));
+                if key.is_user() {
+                    tracing::error!("[{key}] new read_capabilities: {:?}", collection.read_capabilities);
+                }
             } else {
                 // Storage presumably, but verify.
                 if self.storage_controller.collection(key).is_ok() {
@@ -1398,6 +1420,9 @@ where
                 .read_frontier()
                 .to_owned();
             let frontier = frontier.to_owned();
+            if id.is_user() {
+                tracing::error!("[{id}] allow compaction: {:?}", frontier.elements());
+            }
             self.compute
                 .send(ComputeCommand::AllowCompaction { id: *id, frontier });
         }
@@ -1424,6 +1449,11 @@ where
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold,
         // to avoid the edge case that caused #16615.
         self.compute.send(ComputeCommand::CancelPeek { uuid });
+
+        let id = peek.target.id();
+        if id.is_user() {
+            tracing::error!("[{id}] removing peek hold: {:?}", peek.time);
+        }
 
         let update = (peek.target.id(), ChangeBatch::new_from(peek.time, -1));
         let mut updates = [update].into();
@@ -1479,6 +1509,10 @@ where
         new_frontier: Antichain<T>,
         replica_id: ReplicaId,
     ) {
+        if id.is_user() {
+            tracing::error!("[{id}][{replica_id}] frontier upper: {:?}", new_frontier.elements());
+        }
+
         // According to the compute protocol, replicas are not allowed to send `FrontierUpper`s
         // that regress frontiers they have reported previously. We still perform a check here,
         // rather than risking the controller becoming confused trying to handle regressions.
@@ -1688,6 +1722,10 @@ where
         for (id, new_capability) in new_capabilities {
             let collection = self.compute.expect_collection_mut(id);
             let old_capability = &collection.warmup_capability;
+
+            if id.is_user() {
+                tracing::error!("[{id}] downgrade warmup capability: {:?} -> {:?}", old_capability.elements(), new_capability.elements());
+            }
 
             let mut update = ChangeBatch::new();
             update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
