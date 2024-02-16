@@ -44,6 +44,7 @@ use mz_sql::session::vars::{
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
@@ -557,7 +558,8 @@ impl Coordinator {
                 self.drop_storage_sinks(storage_sinks_to_drop);
             }
             if !compute_sinks_to_drop.is_empty() {
-                self.drop_compute_sinks(compute_sinks_to_drop).await;
+                self.drop_compute_sinks_with_reason(compute_sinks_to_drop)
+                    .await;
             }
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
@@ -738,22 +740,12 @@ impl Coordinator {
         }
     }
 
-    pub(crate) async fn drop_compute_sinks(
+    pub(crate) fn drop_compute_sinks(
         &mut self,
-        sinks: impl IntoIterator<Item = (GlobalId, ComputeSinkRemovalReason)>,
+        sink_and_cluster_ids: impl IntoIterator<Item = (GlobalId, StorageInstanceId)>,
     ) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (sink_id, reason) in sinks {
-            let cluster_id = match self.active_compute_sinks.get(&sink_id) {
-                None => {
-                    tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
-                    continue;
-                }
-                Some(s) => s.cluster_id(),
-            };
-
-            self.remove_active_sink(sink_id, reason.clone()).await;
-
+        for (sink_id, cluster_id) in sink_and_cluster_ids {
             if !self
                 .controller
                 .compute
@@ -778,6 +770,23 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
+    }
+
+    pub(crate) async fn drop_compute_sinks_with_reason(
+        &mut self,
+        sinks: impl IntoIterator<Item = (GlobalId, ComputeSinkRemovalReason)>,
+    ) {
+        let mut sink_cluster_id_map = BTreeMap::new();
+        for (sink_id, reason) in sinks {
+            if let Some(sink) = self.remove_active_sink(sink_id).await {
+                sink_cluster_id_map.insert(sink_id, sink.cluster_id());
+                sink.drop_with_reason(reason);
+            } else {
+                tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
+                continue;
+            }
+        }
+        self.drop_compute_sinks(sink_cluster_id_map.into_iter());
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {

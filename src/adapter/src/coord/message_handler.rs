@@ -349,7 +349,7 @@ impl Coordinator {
                     Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
                         let finished = active_subscribe.process_response(response);
                         if finished {
-                            self.drop_compute_sinks([(
+                            self.drop_compute_sinks_with_reason([(
                                 sink_id,
                                 ComputeSinkRemovalReason::Finished,
                             )])
@@ -362,23 +362,15 @@ impl Coordinator {
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
-                match self.active_compute_sinks.get_mut(&sink_id) {
+                match self.remove_active_sink(sink_id).await {
                     Some(ActiveComputeSink::CopyTo(active_copy_to)) => {
                         let response = match response {
                             Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
                             Err(error) => Err(AdapterError::Unstructured(error)),
                         };
-                        // Ideally it would be better to get an owned active_copy_to here
-                        // and have `process_response` take a `self` instead of `&mut self`
-                        // and consume the object along with the `ctx` it holds.
-                        // But if we remove the entry from `active_compute_sinks` here,
-                        // the following `drop_compute_sinks` will not drop the compute sinks
-                        // since it does expect the entry there.
-                        // TODO (mouli): refactor `drop_compute_sinks` so that we can get
-                        // an owned value here.
+                        let sink_and_cluster_id = (sink_id, active_copy_to.cluster_id);
                         active_copy_to.process_response(response);
-                        self.drop_compute_sinks([(sink_id, ComputeSinkRemovalReason::Finished)])
-                            .await;
+                        self.drop_compute_sinks([sink_and_cluster_id]);
                     }
                     _ => {
                         tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");

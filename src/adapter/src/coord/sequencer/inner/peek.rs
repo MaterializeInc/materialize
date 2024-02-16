@@ -842,9 +842,7 @@ impl Coordinator {
 
         // Callback for the active copy to.
         let active_copy_to = ActiveCopyTo {
-            user: ctx.session().user().clone(),
-            conn_id: ctx.session().conn_id().clone(),
-            ctx: Some(ctx),
+            ctx,
             cluster_id,
             depends_on: validity.dependency_ids.clone(),
         };
