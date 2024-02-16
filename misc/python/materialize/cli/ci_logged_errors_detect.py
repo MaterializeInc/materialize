@@ -114,7 +114,7 @@ IGNORE_RE = re.compile(
     # For persist-catalog-migration ignore failpoint panics
     | persist-catalog-migration-materialized.* \| .* failpoint\ .* panic
     # For tests we purposely trigger this error
-    | persist-catalog-migration-materialized.* \| .* incompatible persist version \d+\.\d+\.\d+(-dev)?, current: \d+\.\d+\.\d+(-dev)?, make sure to upgrade the catalog one version at a time
+    | persist-catalog-migration-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ at\ a\ time
     )
     """,
     re.VERBOSE | re.MULTILINE,
