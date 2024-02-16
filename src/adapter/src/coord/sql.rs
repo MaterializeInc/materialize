@@ -10,7 +10,6 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
-use anyhow::anyhow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
@@ -25,7 +24,7 @@ use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::util::describe;
-use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse, PeekResponseUnary};
+use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
@@ -272,16 +271,12 @@ impl Coordinator {
             .iter()
             .map(|sink_id| (*sink_id, reason.clone()))
             .collect::<Vec<_>>();
-        self.drop_compute_sinks(drop_sinks).await;
+        self.drop_compute_sinks_with_reason(drop_sinks).await;
     }
 
     /// Handle removing metadata associated with a SUBSCRIBE or a COPY TO query.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_active_sink(
-        &mut self,
-        id: GlobalId,
-        reason: ComputeSinkRemovalReason,
-    ) {
+    pub(crate) async fn remove_active_sink(&mut self, id: GlobalId) -> Option<ActiveComputeSink> {
         if let Some(sink) = self.active_compute_sinks.remove(&id) {
             let session_type = metrics::session_type_label_value(sink.user());
 
@@ -291,48 +286,29 @@ impl Coordinator {
                 .drop_sinks
                 .remove(&id);
 
-            match sink {
+            match &sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {
                     let update =
                         self.catalog()
                             .state()
-                            .pack_subscribe_update(id, &active_subscribe, -1);
+                            .pack_subscribe_update(id, active_subscribe, -1);
                     self.builtin_table_update().blocking(vec![update]).await;
 
                     self.metrics
                         .active_subscribes
                         .with_label_values(&[session_type])
                         .dec();
-
-                    let message = match reason {
-                        ComputeSinkRemovalReason::Finished => return,
-                        ComputeSinkRemovalReason::Canceled => PeekResponseUnary::Canceled,
-                        ComputeSinkRemovalReason::DependencyDropped(d) => {
-                            PeekResponseUnary::Error(format!(
-                                "subscribe has been terminated because underlying {d} was dropped"
-                            ))
-                        }
-                    };
-                    active_subscribe.send(message);
                 }
-                ActiveComputeSink::CopyTo(mut active_copy_to) => {
+                ActiveComputeSink::CopyTo(_) => {
                     self.metrics
                         .active_copy_tos
                         .with_label_values(&[session_type])
                         .dec();
-
-                    let message = match reason {
-                        ComputeSinkRemovalReason::Finished => return,
-                        ComputeSinkRemovalReason::Canceled => Err(AdapterError::Canceled),
-                        ComputeSinkRemovalReason::DependencyDropped(d) => {
-                            Err(AdapterError::Unstructured(anyhow!(
-                                "copy has been terminated because underlying {d} was dropped"
-                            )))
-                        }
-                    };
-                    active_copy_to.process_response(message);
                 }
             }
+            Some(sink)
+        } else {
+            None
         }
     }
 }

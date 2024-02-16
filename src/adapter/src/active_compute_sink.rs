@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::iter;
 
+use anyhow::anyhow;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
@@ -48,14 +49,14 @@ impl ActiveComputeSink {
     pub fn connection_id(&self) -> &ConnectionId {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.conn_id,
-            ActiveComputeSink::CopyTo(copy_to) => &copy_to.conn_id,
+            ActiveComputeSink::CopyTo(copy_to) => copy_to.ctx.session().conn_id(),
         }
     }
 
     pub fn user(&self) -> &User {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.user,
-            ActiveComputeSink::CopyTo(copy_to) => &copy_to.user,
+            ActiveComputeSink::CopyTo(copy_to) => copy_to.ctx.session().user(),
         }
     }
 
@@ -63,6 +64,34 @@ impl ActiveComputeSink {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.depends_on,
             ActiveComputeSink::CopyTo(copy_to) => &copy_to.depends_on,
+        }
+    }
+
+    /// Consumes the `ActiveComputeSink` and sends a response if required.
+    pub fn drop_with_reason(self, reason: ComputeSinkRemovalReason) {
+        match self {
+            ActiveComputeSink::Subscribe(subscribe) => {
+                let message = match reason {
+                    ComputeSinkRemovalReason::Finished => return,
+                    ComputeSinkRemovalReason::Canceled => PeekResponseUnary::Canceled,
+                    ComputeSinkRemovalReason::DependencyDropped(d) => PeekResponseUnary::Error(
+                        format!("subscribe has been terminated because underlying {d} was dropped"),
+                    ),
+                };
+                subscribe.send(message);
+            }
+            ActiveComputeSink::CopyTo(copy_to) => {
+                let message = match reason {
+                    ComputeSinkRemovalReason::Finished => return,
+                    ComputeSinkRemovalReason::Canceled => Err(AdapterError::Canceled),
+                    ComputeSinkRemovalReason::DependencyDropped(d) => {
+                        Err(AdapterError::Unstructured(anyhow!(
+                            "copy has been terminated because underlying {d} was dropped"
+                        )))
+                    }
+                };
+                copy_to.process_response(message);
+            }
         }
     }
 }
@@ -363,13 +392,9 @@ pub enum ComputeSinkRemovalReason {
 /// A description of an active copy to from coord's perspective.
 #[derive(Debug)]
 pub struct ActiveCopyTo {
-    /// The user of the session that created the subscribe.
-    pub user: User,
-    /// The connection id of the session that created the subscribe.
-    pub conn_id: ConnectionId,
     /// The context about the COPY TO statement getting executed.
     /// Used to eventually call `ctx.retire` on.
-    pub ctx: Option<ExecuteContext>,
+    pub ctx: ExecuteContext,
     /// The cluster that the copy to is running on.
     pub cluster_id: ClusterId,
     /// All `GlobalId`s that the copy to's expression depends on.
@@ -377,12 +402,7 @@ pub struct ActiveCopyTo {
 }
 
 impl ActiveCopyTo {
-    pub(crate) fn process_response(&mut self, response: Result<ExecuteResponse, AdapterError>) {
-        // TODO(mouli): refactor so that process_response takes `self` instead of `&mut self`. Then,
-        // we can make `ctx` not optional, and get rid of the `user` and `conn_id` as well.
-        // Using an option to get an owned value after take to call `retire` on it.
-        if let Some(ctx) = self.ctx.take() {
-            let _ = ctx.retire(response);
-        }
+    pub(crate) fn process_response(self, response: Result<ExecuteResponse, AdapterError>) {
+        let _ = self.ctx.retire(response);
     }
 }
