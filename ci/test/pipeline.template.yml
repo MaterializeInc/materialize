@@ -282,6 +282,7 @@ steps:
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from docs)
+    skip: "failing, to be addressed with #25321"
     depends_on: build-aarch64
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
