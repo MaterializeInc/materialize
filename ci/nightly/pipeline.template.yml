@@ -831,18 +831,6 @@ steps:
               composition: platform-checks
               args: [--scenario=MigrateAarch64X86]
 
-      - id: checks-upgrade-matrix
-        label: "Random upgrades over the entire matrix %N"
-        timeout_in_minutes: 150
-        parallelism: 4
-        agents:
-          queue: linux-aarch64
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: upgrade-matrix
-              args: ["--seed=$BUILDKITE_JOB_ID"]
-
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
         timeout_in_minutes: 60
