@@ -60,7 +60,7 @@ SELECT mz_internal.mz_schema_oid('db.s') = (SELECT s.oid FROM mz_schemas s JOIN 
 ----
 true
 
-query error improper schema name (too many dotted names): "db.s.i"
+query error improper schema name (too many dotted names): db.s.i
 SELECT mz_internal.mz_schema_oid('db.s.i')
 
 query error schema "schmutz" does not exist

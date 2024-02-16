@@ -4134,30 +4134,21 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 mz_unsafe.mz_error_if_null(
                     (
                         SELECT
-                            CASE
-                                -- Schema names should only have 2 components, so error if there's
-                                -- three.
-                                WHEN n[1] IS NOT NULL THEN
-                                    mz_unsafe.mz_error_if_null(
-                                        NULL,
-                                        'invalid schema \"' || $1 || '\"'
-                                    )::oid
-                            ELSE
-                                (
-                                    SELECT s.oid
-                                    FROM mz_schemas AS s
-                                    LEFT JOIN mz_databases AS d ON s.database_id = d.id
-                                    WHERE
-                                        (
-                                            -- Filter to only schemas in the named database or the
-                                            -- current database if no database was specified.
-                                            d.name = COALESCE(n[2], pg_catalog.current_database())
-                                            -- Always include all ambient schemas.
-                                            OR s.database_id IS NULL
-                                        ) AND s.name = n[3]
-                                )
-                            END
-                        FROM mz_internal.mz_normalize_object_name($1) AS n
+                            (
+                                SELECT s.oid
+                                FROM mz_schemas AS s
+                                LEFT JOIN mz_databases AS d ON s.database_id = d.id
+                                WHERE
+                                    (
+                                        -- Filter to only schemas in the named database or the
+                                        -- current database if no database was specified.
+                                        d.name = COALESCE(n[1], pg_catalog.current_database())
+                                        -- Always include all ambient schemas.
+                                        OR s.database_id IS NULL
+                                    )
+                                    AND s.name = n[2]
+                            )
+                        FROM mz_internal.mz_normalize_schema_name($1) AS n
                     ),
                     'schema \"' || $1 || '\" does not exist'
                 )
