@@ -42,7 +42,11 @@ SERVICES = [
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
-        catalog_store="stash",
+        # This test will skip versions when testing certain upgrade paths. The persist catalog
+        # will panic if a version is skipped when upgrading. Even when using the stash
+        # implementation we open the persist catalog, which will cause the panic. To avoid this, we
+        # use the emergency-stash, which doesn't even attempt to open the persist catalog.
+        catalog_store="emergency-stash",
     ),
     # N.B.: we need to use `validate_catalog_store=None` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
@@ -141,7 +145,7 @@ def test_upgrade_from_version(
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
-            catalog_store="stash",
+            catalog_store="emergency-stash",
         )
         with c.override(mz_from):
             c.up("materialized")
@@ -178,7 +182,7 @@ def test_upgrade_from_version(
     with c.override(
         Testdrive(
             postgres_stash="cockroach",
-            validate_catalog_store="stash",
+            validate_catalog_store="emergency-stash",
             volumes_extra=["secrets:/share/secrets"],
         )
     ):
