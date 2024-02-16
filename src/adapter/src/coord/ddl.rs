@@ -740,12 +740,18 @@ impl Coordinator {
         }
     }
 
+    /// This method drops the compute sink, by calling `compute.drop_collections`.
+    /// This should only be called after removing the corresponding sink entry from
+    /// `self.active_compute_sinks`.
     pub(crate) fn drop_compute_sinks(
         &mut self,
         sink_and_cluster_ids: impl IntoIterator<Item = (GlobalId, StorageInstanceId)>,
     ) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for (sink_id, cluster_id) in sink_and_cluster_ids {
+            // The active sink should have already been removed from the state
+            assert!(!self.active_compute_sinks.contains_key(&sink_id));
+
             if !self
                 .controller
                 .compute
@@ -772,6 +778,8 @@ impl Coordinator {
         }
     }
 
+    /// Drops active compute sinks and might send appropriate response back
+    /// depending upon the reason.
     pub(crate) async fn drop_compute_sinks_with_reason(
         &mut self,
         sinks: impl IntoIterator<Item = (GlobalId, ComputeSinkRemovalReason)>,
