@@ -454,6 +454,12 @@ fn continuously_refresh(
                 }
                 Ok(claims) => claims,
             };
+            tracing::debug!(
+                ?claims,
+                ?id,
+                frontegg_trace_id = ?latest_response.frontegg_trace_id,
+                "validated token claims"
+            );
             let valid_for = valid_for(&validation_config.now, &claims);
 
             // Notify listeners that we've refreshed.
@@ -476,9 +482,15 @@ fn continuously_refresh(
             // The Frontegg Python SDK scales the expires_in this way.
             //
             // <https://github.com/frontegg/python-sdk/blob/840f8318aced35cea6a41d83270597edfceb4019/frontegg/common/frontegg_authenticator.py#L45>
-            let scaled_expires_in = expires_in * 0.8;
+            let scaled_expires_in = expires_in * 0.5;
             let scaled_expires_in = Duration::from_secs_f64(scaled_expires_in);
-            tracing::debug!(?id, ?expires_in, ?scaled_expires_in, "waiting to refresh");
+            tracing::debug!(
+                ?id,
+                ?expires_in,
+                ?scaled_expires_in,
+                expires_at = latest_response.expires,
+                "waiting to refresh"
+            );
 
             // Weird. The token would expire before the refresh token window.
             let refresh_in = if valid_for < scaled_expires_in {

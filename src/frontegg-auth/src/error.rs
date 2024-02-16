@@ -22,6 +22,8 @@ pub enum Error {
     ReqwestError(Arc<reqwest::Error>),
     #[error("middleware programming error: {0}")]
     MiddlewareError(Arc<anyhow::Error>),
+    #[error("request to Frontegg failed: {0:?}")]
+    FronteggError(Arc<(reqwest::Error, String)>),
     #[error("authentication token expired")]
     TokenExpired,
     #[error("unauthorized organization")]

@@ -7,11 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use mz_ore::metrics::MetricsFutureExt;
 use uuid::Uuid;
 
 use crate::metrics::Metrics;
 use crate::{Client, Error};
+
+const FRONTEGG_TRACE_ID_HEADER_NAME: &str = "frontegg-trace-id";
 
 impl Client {
     /// Exchanges a client id and secret for a jwt token.
@@ -39,7 +43,27 @@ impl Client {
             .with_label_values(&[name, &status])
             .inc();
 
-        let result = response.error_for_status()?.json().await?;
+        let frontegg_trace_id = response
+            .headers()
+            .get(FRONTEGG_TRACE_ID_HEADER_NAME)
+            .map(|v| v.to_str().ok())
+            .flatten()
+            .map(|trace_id| trace_id.to_string());
+
+        // If we get an error back from Frontegg we want to log the body.
+        if let Err(err) = response.error_for_status_ref() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or("failed to deserialize body".to_string());
+            let error = Arc::new((err, body));
+            return Err(Error::FronteggError(error));
+        }
+
+        let mut result: ApiTokenResponse = response.error_for_status()?.json().await?;
+        // Splice in the Frontegg Trace ID, if we got one.
+        result.frontegg_trace_id = frontegg_trace_id;
+
         Ok(result)
     }
 
@@ -68,7 +92,27 @@ impl Client {
             .with_label_values(&[name, &status])
             .inc();
 
-        let result = response.error_for_status()?.json().await?;
+        let frontegg_trace_id = response
+            .headers()
+            .get(FRONTEGG_TRACE_ID_HEADER_NAME)
+            .map(|v| v.to_str().ok())
+            .flatten()
+            .map(|trace_id| trace_id.to_string());
+
+        // If we get an error back from Frontegg we want to log the body.
+        if let Err(err) = response.error_for_status_ref() {
+            let body = response
+                .text()
+                .await
+                .unwrap_or("failed to deserialize body".to_string());
+            let error = Arc::new((err, body));
+            return Err(Error::FronteggError(error));
+        }
+
+        let mut result: ApiTokenResponse = response.error_for_status()?.json().await?;
+        // Splice in the Frontegg Trace ID, if we got one.
+        result.frontegg_trace_id = frontegg_trace_id;
+
         Ok(result)
     }
 }
@@ -87,6 +131,7 @@ pub struct ApiTokenResponse {
     pub expires_in: i64,
     pub access_token: String,
     pub refresh_token: String,
+    pub frontegg_trace_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -128,6 +173,7 @@ mod tests {
                         expires_in: 0,
                         access_token: "test".to_string(),
                         refresh_token: "test".to_string(),
+                        frontegg_trace_id: Some("test".to_string()),
                     };
                     let resp = serde_json::to_string(&resp).unwrap();
 
