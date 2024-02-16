@@ -4081,6 +4081,30 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 ) AS i
             )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
         },
+        "mz_normalize_schema_name" => Scalar {
+            params!(String) => sql_impl_func("
+             (
+                SELECT
+                    CASE
+                        WHEN $1 IS NULL THEN NULL
+                        WHEN pg_catalog.array_length(ident, 1) > 2
+                            THEN mz_unsafe.mz_error_if_null(
+                                NULL::pg_catalog.text[],
+                                'improper schema name (too many dotted names): ' || $1
+                            )
+                        ELSE pg_catalog.array_cat(
+                            pg_catalog.array_fill(
+                                CAST(NULL AS pg_catalog.text),
+                                ARRAY[2 - pg_catalog.array_length(ident, 1)]
+                            ),
+                            ident
+                        )
+                    END
+                FROM (
+                    SELECT pg_catalog.parse_ident($1) AS ident
+                ) AS i
+            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_SCHEMA_NAME;
+        },
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
@@ -4102,19 +4126,33 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             ") => Oid, oid::FUNC_DATABASE_OID_OID;
         },
         // There is no regclass equivalent for schemas to look up oids, so we have this helper function instead.
-        // TODO: Support qualified names.
-        // TODO: This should take into account the search path when looking for an object.
         "mz_schema_oid" => Scalar {
             params!(String) => sql_impl_func("
-                CASE
+            CASE
                 WHEN $1 IS NULL THEN NULL
-                ELSE (
-                    mz_unsafe.mz_error_if_null(
-                        (SELECT oid FROM mz_schemas WHERE name = $1),
-                        'schema \"' || $1 || '\" does not exist'
-                    )
+            ELSE
+                mz_unsafe.mz_error_if_null(
+                    (
+                        SELECT
+                            (
+                                SELECT s.oid
+                                FROM mz_schemas AS s
+                                LEFT JOIN mz_databases AS d ON s.database_id = d.id
+                                WHERE
+                                    (
+                                        -- Filter to only schemas in the named database or the
+                                        -- current database if no database was specified.
+                                        d.name = COALESCE(n[1], pg_catalog.current_database())
+                                        -- Always include all ambient schemas.
+                                        OR s.database_id IS NULL
+                                    )
+                                    AND s.name = n[2]
+                            )
+                        FROM mz_internal.mz_normalize_schema_name($1) AS n
+                    ),
+                    'schema \"' || $1 || '\" does not exist'
                 )
-                END
+            END
             ") => Oid, oid::FUNC_SCHEMA_OID_OID;
         },
         // There is no regclass equivalent for roles to look up oids, so we have this helper function instead.
