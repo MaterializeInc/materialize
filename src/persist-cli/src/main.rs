@@ -42,6 +42,7 @@ enum Command {
     OpenLoop(crate::open_loop::Args),
     Inspect(mz_persist_client::cli::inspect::InspectArgs),
     Admin(mz_persist_client::cli::admin::AdminArgs),
+    Bench(mz_persist_client::cli::bench::BenchArgs),
     Service(crate::service::Args),
 }
 
@@ -78,6 +79,7 @@ fn main() {
             runtime.block_on(mz_persist_client::cli::inspect::run(command))
         }
         Command::Admin(command) => runtime.block_on(mz_persist_client::cli::admin::run(command)),
+        Command::Bench(command) => runtime.block_on(mz_persist_client::cli::bench::run(command)),
         Command::Service(args) => runtime.block_on(crate::service::run(args)),
     };
 
