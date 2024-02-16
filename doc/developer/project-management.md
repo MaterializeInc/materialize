@@ -111,7 +111,7 @@ from Internal Development to General Availability.
 
 It is not required that the DRI personally deliver each piece
 of work attached to a project. The DRI will likely require help from a
-Product Manager, a Product Designer, Engineers, and our QA and GTM
+Product Manager, a Product Designer, Engineers, and our testing and GTM
 teams along the way. The DRI is responsible for assigning each piece of
 work attached to a project, and ensuring that progress is moving along
 as expected.
