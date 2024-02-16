@@ -36,7 +36,7 @@ message ProtoComputeSinkConnection {
     oneof kind {
         google.protobuf.Empty subscribe = 1;
         ProtoPersistSinkConnection persist = 2;
-        ProtoS3OneshotSinkConnection copy_to_s3_oneshot = 3;
+        ProtoCopyToS3OneshotSinkConnection copy_to_s3_oneshot = 3;
     }
 }
 
@@ -45,7 +45,7 @@ message ProtoPersistSinkConnection {
     mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
 }
 
-message ProtoS3OneshotSinkConnection {
+message ProtoCopyToS3OneshotSinkConnection {
     string prefix = 1;
     mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
 }

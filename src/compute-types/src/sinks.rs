@@ -181,20 +181,20 @@ pub struct CopyToS3OneshotSinkConnection {
     pub aws_connection: mz_storage_types::connections::aws::AwsConnection,
 }
 
-impl RustType<ProtoS3OneshotSinkConnection> for CopyToS3OneshotSinkConnection {
-    fn into_proto(&self) -> ProtoS3OneshotSinkConnection {
-        ProtoS3OneshotSinkConnection {
+impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnection {
+    fn into_proto(&self) -> ProtoCopyToS3OneshotSinkConnection {
+        ProtoCopyToS3OneshotSinkConnection {
             prefix: self.prefix.clone(),
             aws_connection: Some(self.aws_connection.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoS3OneshotSinkConnection) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoCopyToS3OneshotSinkConnection) -> Result<Self, TryFromProtoError> {
         Ok(CopyToS3OneshotSinkConnection {
             prefix: proto.prefix,
             aws_connection: proto
                 .aws_connection
-                .into_rust_if_some("ProtoS3OneshotSinkConnection::aws_connection")?,
+                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::aws_connection")?,
         })
     }
 }
