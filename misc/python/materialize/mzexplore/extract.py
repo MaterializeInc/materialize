@@ -185,7 +185,7 @@ def plans(
                                 suffix,
                                 "txt",
                             ]
-                            if part != None
+                            if part is not None
                         )
                         info(f"Explaining {stage} for {explainee} in `{file_name}`")
                         try:
@@ -228,7 +228,7 @@ def plans(
                             suffix,
                             "txt",
                         ]
-                        if part != None
+                        if part is not None
                     )
                     info(f"Explaining {stage} for CREATE {fqname} in `{file_name}`")
                     try:

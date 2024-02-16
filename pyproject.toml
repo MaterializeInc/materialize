@@ -16,6 +16,7 @@ select = [
     "F",
     "I",
     "UP", # e.g. PEP585 (Python 3.10+) type annotations
+    "E711", # comparisons to none
 ]
 extend-exclude = [
     "venv", "target",
