@@ -1495,9 +1495,7 @@ class MySqlStreaming(MySqlCdc):
 
     @classmethod
     def can_run(cls, version: MzVersion) -> bool:
-        # TODO: #25124 (correctness issue)
-        # return version >= MzVersion.parse_mz("...")
-        return False
+        return version >= MzVersion.parse_mz("v0.88.0-dev")
 
     def shared(self) -> Action:
         return TdAction(
