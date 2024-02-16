@@ -118,7 +118,9 @@ where
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
             ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
-            ComputeSinkConnection::CopyToS3Oneshot(_) => format!("S3Sink({:?})", sink_id),
+            ComputeSinkConnection::CopyToS3Oneshot(_) => {
+                format!("CopyToS3OneshotSink({:?})", sink_id)
+            }
         };
         self.scope
             .parent
