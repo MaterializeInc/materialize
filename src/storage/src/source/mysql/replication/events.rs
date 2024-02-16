@@ -96,7 +96,7 @@ pub(super) async fn handle_query_event(
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
-                if let Some((err_table, err)) = verify_schemas(&mut conn, &[(&table, table_desc)])
+                if let Some((err_table, err)) = verify_schemas(&mut *conn, &[(&table, table_desc)])
                     .await?
                     .drain(..)
                     .next()
@@ -125,7 +125,7 @@ pub(super) async fn handle_query_event(
                 .filter(|(t, _)| !errored_tables.contains(t))
                 .map(|(t, d)| (t, &d.1))
                 .collect::<Vec<_>>();
-            let schema_errors = verify_schemas(&mut conn, &expected).await?;
+            let schema_errors = verify_schemas(&mut *conn, &expected).await?;
             for (dropped_table, err) in schema_errors {
                 if table_info.contains_key(dropped_table) && !errored_tables.contains(dropped_table)
                 {

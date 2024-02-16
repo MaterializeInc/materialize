@@ -23,9 +23,9 @@ $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-pass
 # Create some test tables
 # Insert a bunch of rows one of the tables so the snapshot doesn't complete before we restart MZ
 $ mysql-execute name=mysql
-DROP DATABASE IF EXISTS dummyschema;
-CREATE DATABASE dummyschema;
-USE dummyschema;
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
 CREATE TABLE dummy (f1 INTEGER, f2 INTEGER);
 SET @i:=0;
 INSERT INTO dummy (f1, f2) SELECT @i:=@i+1, FLOOR(RAND()*10000) FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 50000;
@@ -36,7 +36,7 @@ INSERT INTO other VALUES (1), (2), (3);
 
 # Now alter the dummy table
 $ mysql-execute name=mysql
-USE dummyschema;
+USE public;
 ALTER TABLE dummy ADD COLUMN f3 varchar(2);
 
 # Now restart MZ
