@@ -468,8 +468,8 @@ def _are_regressions_justified(
         return False, ""
 
     # Checked in _tag_references_release_version
-    assert this_tag != None
-    assert baseline_tag != None
+    assert this_tag is not None
+    assert baseline_tag is not None
 
     this_version = MzVersion.parse_mz(this_tag)
     baseline_version = MzVersion.parse_mz(baseline_tag)
@@ -490,7 +490,7 @@ def _are_regressions_justified(
 
 
 def _tag_references_release_version(image_tag: str | None) -> bool:
-    if image_tag == None:
+    if image_tag is None:
         return False
     return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
         image_tag

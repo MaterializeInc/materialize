@@ -333,16 +333,16 @@ class Composition:
                         text=True,
                         bufsize=1,
                     )
-                    if stdin != None:
+                    if stdin is not None:
                         p.stdin.write(stdin)  # type: ignore
-                    if p.stdin != None:
+                    if p.stdin is not None:
                         p.stdin.close()
                     for line in p.stdout:  # type: ignore
                         print(line, end="")
                         stdout_result += line
                     p.wait()
                     retcode = p.poll()
-                    assert retcode != None
+                    assert retcode is not None
                     if check and retcode:
                         raise subprocess.CalledProcessError(
                             retcode, p.args, output=stdout_result
@@ -432,7 +432,7 @@ class Composition:
                 # trivial help message.
                 parser.parse_args()
                 func(self)
-            if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") != None:
+            if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") is not None:
                 self.final_preflight_check()
             else:
                 self.sanity_restart_mz()
@@ -881,7 +881,7 @@ class Composition:
     def final_preflight_check(self) -> None:
         """Check if Mz can do the preflight-check and upgrade/rollback with specified version."""
         version = os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION")
-        if version == None:
+        if version is None:
             return
         rollback = ui.env_is_truthy("CI_FINAL_PREFLIGHT_CHECK_ROLLBACK")
         if "materialized" in self.compose["services"]:
@@ -1015,7 +1015,7 @@ class Composition:
             sanity_restart_mz: Try restarting materialize first if it is part
                 of the composition, as a sanity check.
         """
-        if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") != None:
+        if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") is not None:
             self.final_preflight_check()
         elif sanity_restart_mz:
             self.sanity_restart_mz()
