@@ -39,7 +39,6 @@ from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.scenarios.benchmark_main import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.benchmark_main import (
-    MySqlInitialLoad,
     Scenario,
 )
 from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F401 F403
@@ -389,9 +388,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             [s for s in all_subclasses(root_scenario) if not s.__subclasses__()],
             key=repr,
         )
-        # TODO: Re-enable -- was failing spuriously when testing release qual:
-        # https://github.com/MaterializeInc/materialize/issues/25323
-        selected_scenarios.remove(MySqlInitialLoad)
     else:
         selected_scenarios = [root_scenario]
 
