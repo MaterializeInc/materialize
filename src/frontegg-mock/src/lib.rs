@@ -141,6 +141,7 @@ impl FronteggMockServer {
         };
         let roles = context.roles.get(&email).cloned().unwrap_or_default();
         let refresh_token = Uuid::new_v4().to_string();
+        let trace_id = Uuid::new_v4().to_string();
         context
             .refresh_tokens
             .lock()
@@ -165,6 +166,7 @@ impl FronteggMockServer {
             expires_in: context.expires_in_secs,
             access_token,
             refresh_token,
+            frontegg_trace_id: Some(trace_id),
         };
         Ok(Response::new(Body::from(
             serde_json::to_vec(&resp).unwrap(),
