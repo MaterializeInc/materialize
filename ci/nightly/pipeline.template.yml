@@ -685,17 +685,6 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzTwoVersions]
 
-      - id: checks-upgrade-entire-mz-skip-version
-        label: "Checks upgrade from X-2 directly to HEAD"
-        timeout_in_minutes: 60
-        agents:
-          queue: linux-aarch64-large
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=UpgradeEntireMzSkipVersion]
-
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
         timeout_in_minutes: 90

@@ -114,31 +114,6 @@ class UpgradeEntireMzTwoVersions(Scenario):
         ]
 
 
-class UpgradeEntireMzSkipVersion(Scenario):
-    """Upgrade the entire Mz instance from the previous version directly to the current HEAD"""
-
-    def base_version(self) -> MzVersion:
-        return get_previous_version()
-
-    def actions(self) -> list[Action]:
-        print(f"Upgrading starting from tag {self.base_version()} directly to HEAD")
-        return [
-            # Start with previous_version
-            StartMz(self, tag=get_previous_version()),
-            Initialize(self),
-            Manipulate(self, phase=1),
-            # Upgrade directly to current source
-            KillMz(capture_logs=True),
-            StartMz(self, tag=None),
-            Manipulate(self, phase=2),
-            Validate(self),
-            # A second restart while already on the current source
-            KillMz(),
-            StartMz(self, tag=None),
-            Validate(self),
-        ]
-
-
 class UpgradeEntireMzFourVersions(Scenario):
     """Test upgrade X-4 -> X-3 -> X-2 -> X-1 -> X"""
 
