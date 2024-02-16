@@ -106,16 +106,18 @@ upload_artifact() {
     fi
 }
 
-rm -rf prof
-mkdir prof
-(while true; do
-    sleep 10
-    for cservice in $(mzcompose --mz-quiet ps --services); do
-        artifact=$(date "+prof/$cservice-%Y-%m-%d_%H:%M:%S.pb.gz")
-        upload_artifact "$cservice" "$artifact" &
+if [ -n "${CI_HEAP_PROFILES:-}" ]; then
+    rm -rf prof
+    mkdir prof
+    (while true; do
+        sleep 10
+        for cservice in $(mzcompose --mz-quiet ps --services); do
+            artifact=$(date "+prof/$cservice-%Y-%m-%d_%H:%M:%S.pb.gz")
+            upload_artifact "$cservice" "$artifact" &
+        done
     done
-done
-) &
+    ) &
+fi
 
 ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
 
