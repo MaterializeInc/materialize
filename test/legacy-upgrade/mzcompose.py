@@ -18,6 +18,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
@@ -42,6 +43,7 @@ SERVICES = [
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
+        external_minio=True,
         catalog_store="shadow",
     ),
     # N.B.: we need to use `validate_catalog_store=None` because testdrive uses
@@ -57,9 +59,11 @@ SERVICES = [
     # testdrive commands.
     Testdrive(
         external_cockroach=True,
+        external_minio=True,
         validate_catalog_store=None,
         volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
     ),
+    Minio(setup_materialize=True),
 ]
 
 
@@ -149,6 +153,7 @@ def test_upgrade_from_version(
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
+            external_minio=True,
             catalog_store=catalog_store,
         )
         with c.override(mz_from):
@@ -179,6 +184,7 @@ def test_upgrade_from_version(
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
+        external_minio=True,
         catalog_store=catalog_store,
     )
     with c.override(mz_to):
@@ -193,6 +199,7 @@ def test_upgrade_from_version(
             Testdrive(
                 postgres_stash="cockroach",
                 external_cockroach=True,
+                external_minio=True,
                 validate_catalog_store=catalog_store,
                 volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
             )
