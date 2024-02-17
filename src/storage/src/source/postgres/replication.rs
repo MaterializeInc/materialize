@@ -508,6 +508,7 @@ async fn raw_stream<'a>(
     let progress_stat_task_value = Arc::clone(&progress_stat_shared_value);
     let max_lsn_task_handle =
         mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
+            // TODO(guswynn): make configurable.
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
             loop {
