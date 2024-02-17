@@ -1924,10 +1924,14 @@ impl HirRelationExpr {
     }
 
     /// Whether the expression contains an [`UnmaterializableFunc::MzNow`] call.
-    pub fn contains_temporal(&self) -> bool {
+    pub fn contains_temporal(&self) -> Result<bool, RecursionLimitError> {
         let mut contains = false;
-        self.visit_children(|expr: &HirScalarExpr| contains = contains || expr.contains_temporal());
-        contains
+        self.visit_post(&mut |expr| {
+            expr.visit_children(|expr: &HirScalarExpr| {
+                contains = contains || expr.contains_temporal()
+            })
+        })?;
+        Ok(contains)
     }
 }
 
