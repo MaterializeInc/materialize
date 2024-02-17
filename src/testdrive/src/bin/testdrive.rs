@@ -105,7 +105,7 @@ struct Args {
     #[clap(long, value_name = "FILE")]
     junit_report: Option<PathBuf>,
     /// Whether we skip coordinator and catalog consistency checks.
-    #[clap(long, value_enum)]
+    #[clap(long, default_value_t = ConsistencyCheckLevel::default(), value_enum)]
     consistency_checks: ConsistencyCheckLevel,
     /// Which log messages to emit.
     ///

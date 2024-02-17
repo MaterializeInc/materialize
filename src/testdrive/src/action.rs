@@ -727,6 +727,10 @@ impl Run for PosCommand {
                     *line = subst(line, &state.cmd_vars)?;
                 }
                 match builtin.name.as_ref() {
+                    "check-consistency" => consistency::run_consistency_checks(state).await,
+                    "check-shard-tombstone" => {
+                        consistency::run_check_shard_tombstoned(builtin, state).await
+                    }
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
                     "http-request" => http::run_request(builtin, state).await,
