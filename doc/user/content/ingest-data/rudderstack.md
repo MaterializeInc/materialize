@@ -5,7 +5,6 @@ menu:
   main:
     parent: "webhooks"
     name: "RudderStack"
-    weight: 10
 ---
 
 This guide walks through the steps to ingest data from [RudderStack](https://rudderstack.com/)

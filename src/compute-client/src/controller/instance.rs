@@ -25,7 +25,7 @@ use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
 use thiserror::Error;
@@ -45,7 +45,9 @@ use crate::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
 use crate::protocol::history::ComputeCommandHistory;
-use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
+use crate::protocol::response::{
+    ComputeResponse, CopyToResponse, PeekResponse, SubscribeBatch, SubscribeResponse,
+};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 #[derive(Error, Debug)]
@@ -154,6 +156,14 @@ pub(super) struct Instance<T> {
     /// on the subscribe's input. `subscribes` is only used to track which updates have been
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
+    /// Tracks all in-progress COPY TOs.
+    ///
+    /// New entries are added for all s3 oneshot sinks (corresponding to a COPY TO) exported from
+    /// dataflows created through [`ActiveInstance::create_dataflow`].
+    ///
+    /// The entry for a copy to is removed once at least one replica has finished
+    /// or the exporting collection is dropped.
+    copy_tos: BTreeSet<GlobalId>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<UIntGauge, T>,
     /// Sender for responses to be delivered.
@@ -318,12 +328,6 @@ impl<T: Timestamp> Instance<T> {
         }
     }
 
-    /// Return whether this instance has any processing work scheduled.
-    pub fn wants_processing(&self) -> bool {
-        // Do we need to rehydrate failed replicas?
-        self.replicas.values().any(|r| r.failed)
-    }
-
     /// Returns whether the identified replica exists.
     pub fn replica_exists(&self, id: ReplicaId) -> bool {
         self.replicas.contains_key(&id)
@@ -377,6 +381,9 @@ impl<T: Timestamp> Instance<T> {
         self.metrics
             .subscribe_count
             .set(u64::cast_from(self.subscribes.len()));
+        self.metrics
+            .copy_to_count
+            .set(u64::cast_from(self.copy_tos.len()));
     }
 
     /// Report updates (inserts or retractions) to the identified collection's dependencies.
@@ -514,6 +521,7 @@ where
             log_sources: arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
+            copy_tos: Default::default(),
             history,
             response_tx,
             introspection_tx,
@@ -777,11 +785,11 @@ where
             let subscribe = self.compute.subscribes.remove(&subscribe_id).unwrap();
             let response = ComputeControllerResponse::SubscribeResponse(
                 subscribe_id,
-                SubscribeResponse::Batch(SubscribeBatch {
+                SubscribeBatch {
                     lower: subscribe.frontier.clone(),
                     upper: subscribe.frontier,
                     updates: Err("target replica failed or was dropped".into()),
-                }),
+                },
             );
             self.compute.deliver_response(response);
         }
@@ -944,6 +952,11 @@ where
                 .insert(subscribe_id, ActiveSubscribe::new());
         }
 
+        // Initialize tracking of copy tos.
+        for copy_to_id in dataflow.copy_to_ids() {
+            self.compute.copy_tos.insert(copy_to_id);
+        }
+
         // Here we augment all imported sources and all exported sinks with with the appropriate
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
@@ -1040,12 +1053,21 @@ where
             // Mark the collection as dropped to allow it to be removed from the controller state.
             collection.dropped = true;
 
-            // Drop the implied read capability to announce that clients are not interested in the
-            // collection anymore.
-            let old_capability = std::mem::take(&mut collection.implied_capability);
+            // Drop the implied and warmup read capabilities to announce that clients are not
+            // interested in the collection anymore.
+            let implied_capability = std::mem::take(&mut collection.implied_capability);
+            let warmup_capability = std::mem::take(&mut collection.warmup_capability);
             let mut update = ChangeBatch::new();
-            update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+            update.extend(implied_capability.iter().map(|t| (t.clone(), -1)));
+            update.extend(warmup_capability.iter().map(|t| (t.clone(), -1)));
             read_capability_updates.insert(*id, update);
+
+            // If the collection is a subscribe, stop tracking it. This ensures that the controller
+            // ceases to produce `SubscribeResponse`s for this subscribe.
+            self.compute.subscribes.remove(id);
+            // If the collection is a copy to, stop tracking it. This ensures that the controller
+            // ceases to produce `CopyToResponse`s` for this copy to.
+            self.compute.copy_tos.remove(id);
         }
 
         if !read_capability_updates.is_empty() {
@@ -1173,10 +1195,11 @@ where
             let old_capability = &collection.implied_capability;
             let new_capability = new_policy.frontier(collection.write_frontier.borrow());
             if PartialOrder::less_than(old_capability, &new_capability) {
-                let mut update = ChangeBatch::new();
-                update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
-                update.extend(new_capability.iter().map(|t| (t.clone(), 1)));
-                read_capability_changes.insert(id, update);
+                let entry = read_capability_changes
+                    .entry(id)
+                    .or_insert_with(ChangeBatch::new);
+                entry.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+                entry.extend(new_capability.iter().map(|t| (t.clone(), 1)));
                 collection.implied_capability = new_capability;
             }
 
@@ -1266,13 +1289,14 @@ where
         let mut storage_read_capability_changes = BTreeMap::default();
         for collection in self.compute.collections.values_mut() {
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
+            let Some(frontier) = last_upper else { continue };
 
-            if let Some(frontier) = last_upper {
+            if !frontier.is_empty() {
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
                     let update = storage_read_capability_changes
                         .entry(*storage_id)
-                        .or_insert_with(|| ChangeBatch::new());
+                        .or_insert_with(ChangeBatch::new);
                     update.extend(frontier.iter().map(|time| (time.clone(), -1)));
                 }
             }
@@ -1298,13 +1322,13 @@ where
         for (id, new_upper) in updates {
             let collection = self.compute.expect_collection_mut(*id);
 
-            let old_upper = std::mem::replace(&mut collection.write_frontier, new_upper.clone());
-            let old_since = &collection.implied_capability;
-
-            if !PartialOrder::less_than(&old_upper, new_upper) {
+            if !PartialOrder::less_than(&collection.write_frontier, new_upper) {
                 continue; // frontier has not advanced
             }
 
+            collection.write_frontier = new_upper.clone();
+
+            let old_since = &collection.implied_capability;
             let new_since = match &collection.read_policy {
                 Some(read_policy) => {
                     // For readable collections the read frontier is determined by applying the
@@ -1383,18 +1407,22 @@ where
             }
         }
 
+        // Prune empty changes. We might end up with empty changes for dependencies that have been
+        // dropped already, which is fine but might be confusing if we reported them.
+        compute_net.retain_mut(|(_key, update)| !update.is_empty());
+        storage_todo.retain(|_key, update| !update.is_empty());
+
         // Translate our net compute actions into `AllowCompaction` commands.
-        for (id, change) in compute_net.iter_mut() {
+        for (id, _change) in compute_net.iter_mut() {
             let frontier = self
                 .compute
                 .collection(*id)
                 .expect("existence checked above")
-                .read_frontier();
-            if !change.is_empty() {
-                let frontier = frontier.to_owned();
-                self.compute
-                    .send(ComputeCommand::AllowCompaction { id: *id, frontier });
-            }
+                .read_frontier()
+                .to_owned();
+            let frontier = frontier.to_owned();
+            self.compute
+                .send(ComputeCommand::AllowCompaction { id: *id, frontier });
         }
 
         // We may have storage consequences to process.
@@ -1461,6 +1489,9 @@ where
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
+            }
+            ComputeResponse::CopyToResponse(id, response) => {
+                self.handle_copy_to_response(id, response, replica_id)
             }
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
@@ -1536,6 +1567,37 @@ where
         ))
     }
 
+    fn handle_copy_to_response(
+        &mut self,
+        sink_id: GlobalId,
+        response: CopyToResponse,
+        replica_id: ReplicaId,
+    ) -> Option<ComputeControllerResponse<T>> {
+        // We might not be tracking this COPY TO because we have already returned a response
+        // from one of the replicas. In that case, we ignore the response.
+        if self.compute.copy_tos.remove(&sink_id) {
+            let result = match response {
+                CopyToResponse::RowCount(count) => Ok(count),
+                CopyToResponse::Error(error) => Err(anyhow::anyhow!(error)),
+                // We should never get here: Replicas only drop copy to collections in response
+                // to the controller allowing them to do so, and when the controller drops a
+                // copy to it also removes it from the list of tracked copy_tos (see
+                // [`Instance::drop_collections`]).
+                CopyToResponse::Dropped => {
+                    tracing::error!(
+                        %sink_id,
+                        %replica_id,
+                        "received `Dropped` response for a tracked copy to",
+                    );
+                    return None;
+                }
+            };
+            Some(ComputeControllerResponse::CopyToResponse(sink_id, result))
+        } else {
+            None
+        }
+    }
+
     fn handle_subscribe_response(
         &mut self,
         subscribe_id: GlobalId,
@@ -1597,25 +1659,100 @@ where
                     }
                     Some(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
-                        SubscribeResponse::Batch(SubscribeBatch {
+                        SubscribeBatch {
                             lower,
                             upper,
                             updates,
-                        }),
+                        },
                     ))
                 } else {
                     None
                 }
             }
-            SubscribeResponse::DroppedAt(_) => {
-                // This subscribe cannot produce more data. Stop tracking it.
+            SubscribeResponse::DroppedAt(frontier) => {
+                // We should never get here: Replicas only drop subscribe collections in response
+                // to the controller allowing them to do so, and when the controller drops a
+                // subscribe it also removes it from the list of tracked subscribes (see
+                // [`Instance::drop_collections`]).
+                tracing::error!(
+                    %subscribe_id,
+                    %replica_id,
+                    frontier = ?frontier.elements(),
+                    "received `DroppedAt` response for a tracked subscribe",
+                );
                 self.compute.subscribes.remove(&subscribe_id);
-
-                Some(ComputeControllerResponse::SubscribeResponse(
-                    subscribe_id,
-                    SubscribeResponse::DroppedAt(subscribe.frontier),
-                ))
+                None
             }
+        }
+    }
+}
+
+impl<'a, T> ActiveInstance<'a, T>
+where
+    T: TimestampManipulation,
+    ComputeGrpcClient: ComputeClient<T>,
+{
+    /// Downgrade the warmup capabilities of collections as much as possible.
+    ///
+    /// The only requirement we have for a collection's warmup capability is that it is for a time
+    /// that is available in all of the collection's inputs. For each input the latest time that is
+    /// the case for is `write_frontier - 1`. So the farthest we can downgrade a collection's
+    /// warmup capability is the minimum of `write_frontier - 1` of all its inputs.
+    ///
+    /// This method expects to be periodically called as part of instance maintenance work.
+    /// We would like to instead update the warmup capabilities synchronously in response to
+    /// frontier updates of dependency collections, but that is not generally possible because we
+    /// don't learn about frontier updates of storage collections synchronously. We could do
+    /// synchronous updates for compute dependencies, but we refrain from doing for simplicity.
+    fn downgrade_warmup_capabilities(&mut self) {
+        let mut new_capabilities = BTreeMap::new();
+        for (id, collection) in &self.compute.collections {
+            // For write-only collections that have advanced to the empty frontier, we can drop the
+            // warmup capability entirely. There is no reason why we would need to hydrate those
+            // collections again, so being able to warm them up is not useful.
+            if collection.read_policy.is_none()
+                && collection.write_frontier.is_empty()
+                && !collection.warmup_capability.is_empty()
+            {
+                new_capabilities.insert(*id, Antichain::new());
+                continue;
+            }
+
+            let compute_frontiers = collection.compute_dependencies.iter().flat_map(|dep_id| {
+                let collection = self.compute.collections.get(dep_id);
+                collection.map(|c| &c.write_frontier)
+            });
+            let storage_frontiers = collection.storage_dependencies.iter().flat_map(|dep_id| {
+                let collection = &self.storage_controller.collection(*dep_id).ok();
+                collection.map(|c| &c.write_frontier)
+            });
+
+            let mut new_capability = Antichain::new();
+            for frontier in compute_frontiers.chain(storage_frontiers) {
+                for time in frontier.iter() {
+                    new_capability.insert(time.step_back().unwrap_or(time.clone()));
+                }
+            }
+
+            if PartialOrder::less_than(&collection.warmup_capability, &new_capability) {
+                new_capabilities.insert(*id, new_capability);
+            }
+        }
+
+        let mut read_capability_changes = BTreeMap::new();
+        for (id, new_capability) in new_capabilities {
+            let collection = self.compute.expect_collection_mut(id);
+            let old_capability = &collection.warmup_capability;
+
+            let mut update = ChangeBatch::new();
+            update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+            update.extend(new_capability.iter().map(|t| (t.clone(), 1)));
+            read_capability_changes.insert(id, update);
+            collection.warmup_capability = new_capability;
+        }
+
+        if !read_capability_changes.is_empty() {
+            self.update_read_capabilities(&mut read_capability_changes);
         }
     }
 
@@ -1625,9 +1762,10 @@ where
     /// It is a good place to perform maintenance work that arises from various controller state
     /// changes and that cannot conveniently be handled synchronously with those state changes.
     pub fn maintain(&mut self) {
-        self.compute.refresh_state_metrics();
-        self.compute.cleanup_collections();
         self.rehydrate_failed_replicas();
+        self.downgrade_warmup_capabilities();
+        self.compute.cleanup_collections();
+        self.compute.refresh_state_metrics();
     }
 }
 

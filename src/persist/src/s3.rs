@@ -30,7 +30,8 @@ use aws_types::region::Region;
 use bytes::Bytes;
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
-use mz_ore::bytes::SegmentedBytes;
+use mz_dyncfg::{Config, ConfigSet};
+use mz_ore::bytes::{MaybeLgBytes, SegmentedBytes};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
@@ -50,6 +51,8 @@ pub struct S3BlobConfig {
     client: S3Client,
     bucket: String,
     prefix: String,
+    cfg: ConfigSet,
+    is_cc_active: bool,
 }
 
 // There is no simple way to hook into the S3 client to capture when its various timeouts
@@ -119,7 +122,9 @@ impl S3BlobConfig {
         credentials: Option<(String, String)>,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
+        cfg: ConfigSet,
     ) -> Result<Self, Error> {
+        let is_cc_active = knobs.is_cc_active();
         let mut loader = mz_aws_util::defaults();
 
         if let Some(region) = region {
@@ -172,6 +177,8 @@ impl S3BlobConfig {
             client,
             bucket,
             prefix,
+            cfg,
+            is_cc_active,
         })
     }
 
@@ -244,6 +251,10 @@ impl S3BlobConfig {
             fn read_timeout(&self) -> Duration {
                 READ_TIMEOUT_MARKER
             }
+
+            fn is_cc_active(&self) -> bool {
+                false
+            }
         }
 
         // Give each test a unique prefix so they don't conflict. We don't have
@@ -261,6 +272,9 @@ impl S3BlobConfig {
             None,
             Box::new(TestBlobKnobs),
             metrics,
+            ConfigSet::default()
+                .add(&ENABLE_S3_LGALLOC_CC_SIZES)
+                .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
         )
         .await?;
         Ok(Some(config))
@@ -286,6 +300,8 @@ pub struct S3Blob {
     // Defaults to 1000 which is the current AWS max.
     max_keys: i32,
     multipart_config: MultipartConfig,
+    cfg: ConfigSet,
+    is_cc_active: bool,
 }
 
 impl S3Blob {
@@ -298,6 +314,8 @@ impl S3Blob {
             prefix: config.prefix,
             max_keys: 1_000,
             multipart_config: MultipartConfig::default(),
+            cfg: config.cfg,
+            is_cc_active: config.is_cc_active,
         };
         // Connect before returning success. We don't particularly care about
         // what's stored in this blob (nothing writes to it, so presumably it's
@@ -310,6 +328,18 @@ impl S3Blob {
         format!("{}/{}", self.prefix, key)
     }
 }
+
+pub(crate) const ENABLE_S3_LGALLOC_CC_SIZES: Config<bool> = Config::new(
+    "persist_enable_s3_lgalloc_cc_sizes",
+    true,
+    "An incident flag to disable copying fetched s3 data into lgalloc on cc sized clusters.",
+);
+
+pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
+    "persist_enable_s3_lgalloc_noncc_sizes",
+    false,
+    "A feature flag to enable copying fetched s3 data into lgalloc on non-cc sized clusters.",
+);
 
 #[async_trait]
 impl Blob for S3Blob {
@@ -408,7 +438,7 @@ impl Blob for S3Blob {
             let request_future = async move {
                 // Fetch the headers of the rest of the parts. (Using the existing headers
                 // for part 1.
-                let object = match first_part {
+                let mut object = match first_part {
                     Some(first_part) => {
                         assert_eq!(part_num, 1, "only the first part should be prefetched");
                         first_part
@@ -436,11 +466,32 @@ impl Blob for S3Blob {
 
                 // Request the body.
                 let body_start = Instant::now();
-                let body = object
-                    .body
-                    .collect()
-                    .await
-                    .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+                let mut body = Vec::new();
+                while let Some(data) = object.body.next().await {
+                    let data =
+                        data.map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+                    // Get the data into lgalloc at the absolute earliest
+                    // possible point without (yet) having to fork the s3 client
+                    // library.
+                    let enable_s3_lgalloc = if self.is_cc_active {
+                        ENABLE_S3_LGALLOC_CC_SIZES.get(&self.cfg)
+                    } else {
+                        ENABLE_S3_LGALLOC_NONCC_SIZES.get(&self.cfg)
+                    };
+                    let data = if enable_s3_lgalloc {
+                        MaybeLgBytes::LgBytes(self.metrics.lgbytes.persist_s3.try_mmap(&data))
+                    } else {
+                        // In the CYA fallback case, make sure we skip the
+                        // memcpy to preserve the previous behavior as closely
+                        // as possible.
+                        //
+                        // TODO: Once we've validated the LgBytes path, change
+                        // this fallback path to be a heap allocated LgBytes.
+                        // Then we can remove the pub from MaybeLgBytes.
+                        MaybeLgBytes::Bytes(data)
+                    };
+                    body.push(data)
+                }
                 let body_elapsed = body_start.elapsed();
                 min_body_elapsed.observe(body_elapsed, "s3 download part body");
 
@@ -453,12 +504,12 @@ impl Blob for S3Blob {
         // Await on all of our parts requests.
         let mut segments = vec![];
         while let Some(result) = body_futures.next().await {
-            let part_body = result
+            let mut part_body = result
                 // Download failure, we failed to fetch the body from S3.
                 .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
 
             // Collect all of our segments.
-            segments.extend(part_body.into_segments());
+            segments.append(&mut part_body);
         }
 
         debug!(
@@ -1001,6 +1052,10 @@ mod tests {
                     client: config.client.clone(),
                     bucket: config.bucket.clone(),
                     prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, path),
+                    cfg: ConfigSet::default()
+                        .add(&ENABLE_S3_LGALLOC_CC_SIZES)
+                        .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
+                    is_cc_active: true,
                 };
                 let mut blob = S3Blob::open(config).await?;
                 blob.max_keys = 2;

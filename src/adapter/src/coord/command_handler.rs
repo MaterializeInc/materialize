@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use differential_dataflow::lattice::Lattice;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -18,7 +19,6 @@ use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -46,15 +46,14 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{debug_span, instrument, Instrument};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{debug_span, instrument, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::{
-    Canceled, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
+    CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
-use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -63,7 +62,7 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
-use crate::{catalog, metrics, AppendWebhookError, ExecuteContext};
+use crate::{catalog, metrics, AppendWebhookError, ExecuteContext, TimestampProvider};
 
 use super::ExecuteContextExtra;
 
@@ -78,7 +77,6 @@ impl Coordinator {
             }
             match cmd {
                 Command::Startup {
-                    cancel_tx,
                     tx,
                     user,
                     conn_id,
@@ -90,7 +88,6 @@ impl Coordinator {
                     // Note: We purposefully do not use a ClientTransmitter here because startup
                     // handles errors and cleanup of sessions itself.
                     self.handle_startup(
-                        cancel_tx,
                         tx,
                         user,
                         conn_id,
@@ -120,11 +117,11 @@ impl Coordinator {
                     conn_id,
                     secret_key,
                 } => {
-                    self.handle_cancel(conn_id, secret_key);
+                    self.handle_cancel(conn_id, secret_key).await;
                 }
 
                 Command::PrivilegedCancelRequest { conn_id } => {
-                    self.handle_privileged_cancel(conn_id);
+                    self.handle_privileged_cancel(conn_id).await;
                 }
 
                 Command::GetWebhook {
@@ -226,10 +223,9 @@ impl Coordinator {
         .boxed_local()
     }
 
-    #[tracing::instrument(level = "debug", skip(self, cancel_tx, tx, secret_key, notice_tx))]
+    #[tracing::instrument(level = "debug", skip(self, tx, secret_key, notice_tx))]
     async fn handle_startup(
         &mut self,
-        cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         user: User,
         conn_id: ConnectionId,
@@ -274,10 +270,9 @@ impl Coordinator {
                     .with_label_values(&[session_type])
                     .inc();
                 let conn = ConnMeta {
-                    cancel_tx,
                     secret_key,
                     notice_tx,
-                    drop_sinks: Vec::new(),
+                    drop_sinks: BTreeSet::new(),
                     connected_at: self.now(),
                     user,
                     application_name,
@@ -629,7 +624,7 @@ impl Coordinator {
         //   - In the handler for `Message::PurifiedStatementReady`, before we handle the purified statement.
         // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
         // occurs.
-        match stmt {
+        let (stmt, resolved_ids) = match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
             stmt @ (Statement::CreateSource(_)
@@ -680,20 +675,33 @@ impl Coordinator {
                         tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                     }
                 });
+                return;
             }
 
             // `CREATE SUBSOURCE` statements are disallowed for users and are only generated
             // automatically as part of purification
-            Statement::CreateSubsource(_) => ctx.retire(Err(AdapterError::Unsupported(
-                "CREATE SUBSOURCE statements",
-            ))),
+            Statement::CreateSubsource(_) => {
+                ctx.retire(Err(AdapterError::Unsupported(
+                    "CREATE SUBSOURCE statements",
+                )));
+                return;
+            }
 
             Statement::CreateMaterializedView(mut cmvs) => {
+                // `CREATE MATERIALIZED VIEW ... AS OF ...` syntax is disallowed for users and is
+                // only used for storing initial frontiers in the catalog.
+                if cmvs.as_of.is_some() {
+                    return ctx.retire(Err(AdapterError::Unsupported(
+                        "CREATE MATERIALIZED VIEW ... AS OF statements",
+                    )));
+                }
+
                 let mz_now = match self
                     .resolve_mz_now_for_create_materialized_view(
                         &cmvs,
                         &resolved_ids,
-                        Some(ctx.session_mut()),
+                        ctx.session_mut(),
+                        true,
                     )
                     .await
                 {
@@ -719,14 +727,12 @@ impl Coordinator {
                         in_cluster: cmvs.in_cluster,
                         query: cmvs.query,
                         with_options: cmvs.with_options,
+                        as_of: None,
                     });
 
                 // (Purifying CreateMaterializedView doesn't happen async, so no need to send
                 // `Message::PurifiedStatementReady` here.)
-                match self.plan_statement(ctx.session(), purified_stmt, &params, &resolved_ids) {
-                    Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
-                    Err(e) => ctx.retire(Err(e)),
-                }
+                (purified_stmt, resolved_ids)
             }
 
             Statement::ExplainPlan(ExplainPlanStatement {
@@ -737,7 +743,12 @@ impl Coordinator {
             }) => {
                 let mut cmvs = *box_cmvs;
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(&cmvs, &resolved_ids, None)
+                    .resolve_mz_now_for_create_materialized_view(
+                        &cmvs,
+                        &resolved_ids,
+                        ctx.session_mut(),
+                        false,
+                    )
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -761,17 +772,16 @@ impl Coordinator {
                     explainee: Explainee::CreateMaterializedView(Box::new(cmvs), broken),
                 });
 
-                match self.plan_statement(ctx.session(), purified_stmt, &params, &resolved_ids) {
-                    Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
-                    Err(e) => ctx.retire(Err(e)),
-                }
+                (purified_stmt, resolved_ids)
             }
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
-                Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
-                Err(e) => ctx.retire(Err(e)),
-            },
+            _ => (stmt, resolved_ids),
+        };
+
+        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+            Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+            Err(e) => ctx.retire(Err(e)),
         }
     }
 
@@ -784,7 +794,8 @@ impl Coordinator {
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
         resolved_ids: &ResolvedIds,
-        acquire_read_holds_for: Option<&mut Session>,
+        session: &mut Session,
+        acquire_read_holds: bool,
     ) -> Result<Option<Timestamp>, AdapterError> {
         // (This won't be the same timestamp as the system table inserts, unfortunately.)
         if cmvs
@@ -804,41 +815,36 @@ impl Coordinator {
             let timeline = timeline_context
                 .timeline()
                 .unwrap_or(&Timeline::EpochMilliseconds);
-            let timestamp = self.get_timestamp_oracle(timeline).read_ts().await;
-            // TODO: It might be good to take into account `least_valid_read` in addition to
-            // the oracle's `read_ts`, but there are two problems:
-            // 1. At this point, we don't know which indexes would be used. We could do an
-            // overestimation here by grabbing the ids of all indexes that are on ids
-            // involved in the query (`sufficient_collections_all_clusters`).
-            // 2. For a peek, when the `least_valid_read` is later than the oracle's
-            // `read_ts`, then the peek doesn't return before it completes at the chosen
-            // timestamp. However, for a CRATE MATERIALIZED VIEW statement, it's not clear
-            // whether we want to make it block until the chosen time. If it doesn't block,
-            // then a REFRESH AT CREATION wouldn't be linearized with the CREATE MATERIALIZED
-            // VIEW statement, in the sense that a query from the MV after its creation might
-            // see input changes that happened after the CRATE MATERIALIZED VIEW statement
-            // returned.
+
+            // Let's start with the timestamp oracle read timestamp.
+            let mut timestamp = self.get_timestamp_oracle(timeline).read_ts().await;
+
+            // If `least_valid_read` is later than the oracle, then advance to that time.
+            // If we didn't do this, then there would be a danger of missing the first refresh,
+            // which might cause the materialized view to be unreadable for hours. This might
+            // be what was happening here:
+            // https://github.com/MaterializeInc/materialize/issues/24288#issuecomment-1931856361
             //
-            // Note: The Adapter is usually keeping a read hold of all objects at the oracle
-            // read timestamp, so `least_valid_read` usually won't actually be later than
-            // the oracle's `read_ts`. (see `Coordinator::advance_timelines`)
-            //
-            // Note 2: If we choose a timestamp here that is earlier than
-            // `least_valid_read`, that is somewhat bad, but not catastrophic: The only
-            // bad thing that happens is that we won't perform that refresh that was
-            // specified to be at `mz_now()` (which is usually the initial refresh)
-            // (similarly to how we don't perform refreshes that were specified to be in the
-            // past).
+            // In the long term, it would be good to actually block the MV creation statement
+            // until `least_valid_read`. https://github.com/MaterializeInc/materialize/issues/25127
+            // Without blocking, we have the problem that a REFRESH AT CREATION is not linearized
+            // with the CREATE MATERIALIZED VIEW statement, in the sense that a query from the MV
+            // after its creation might see input changes that happened after the CRATE MATERIALIZED
+            // VIEW statement returned.
+            let catalog = self.catalog().for_session(session);
+            let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
+            let ids = self
+                .index_oracle(cluster)
+                .sufficient_collections(resolved_ids.0.iter());
+            let oracle_timestamp = timestamp;
+            timestamp.advance_by(self.least_valid_read(&ids).borrow());
+            if oracle_timestamp != timestamp {
+                warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
+            }
 
-            if let Some(session) = acquire_read_holds_for {
-                let catalog = self.catalog().for_session(session);
-                let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
-
-                let ids = self
-                    .index_oracle(cluster)
-                    .sufficient_collections(resolved_ids.0.iter());
-
-                self.acquire_read_holds_auto_cleanup(session, timestamp, &ids);
+            if acquire_read_holds {
+                self.acquire_read_holds_auto_cleanup(session, timestamp, &ids, false)
+                    .expect("precise==false, so acquiring read holds always succeeds");
             }
 
             Ok(Some(timestamp))
@@ -854,7 +860,7 @@ impl Coordinator {
     /// `ConnectionId` because this method gets called by external clients when
     /// they request to cancel a request.
     #[tracing::instrument(level = "debug", skip(self, secret_key))]
-    fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
+    async fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         if let Some((id_handle, conn_meta)) = self.active_conns.get_key_value(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -866,84 +872,64 @@ impl Coordinator {
             // Now that we've verified the secret key, this is a privileged
             // cancellation request. We can upgrade the raw connection ID to a
             // proper `IdHandle`.
-            self.handle_privileged_cancel(id_handle.clone())
+            self.handle_privileged_cancel(id_handle.clone()).await;
         }
     }
 
     /// Unconditionally instructs the dataflow layer to cancel any ongoing,
     /// interactive work for the named `conn_id`.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
-        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
-            // Cancel pending writes. There is at most one pending write per session.
-            let mut maybe_ctx = None;
-            if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
-                matches!(pending_write_txn, PendingWriteTxn::User {
-                    pending_txn: PendingTxn { ctx, .. },
-                    ..
-                } if *ctx.session().conn_id() == conn_id)
-            }) {
-                if let PendingWriteTxn::User {
-                    pending_txn: PendingTxn { ctx, .. },
-                    ..
-                } = self.pending_writes.remove(idx)
-                {
-                    maybe_ctx = Some(ctx);
-                }
-            }
-
-            // Cancel deferred writes. There is at most one deferred write per session.
-            if let Some(idx) = self
-                .write_lock_wait_group
-                .iter()
-                .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.ctx.session().conn_id() == conn_id))
+    pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
+        // Cancel pending writes. There is at most one pending write per session.
+        let mut maybe_ctx = None;
+        if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
+            matches!(pending_write_txn, PendingWriteTxn::User {
+                pending_txn: PendingTxn { ctx, .. },
+                ..
+            } if *ctx.session().conn_id() == conn_id)
+        }) {
+            if let PendingWriteTxn::User {
+                pending_txn: PendingTxn { ctx, .. },
+                ..
+            } = self.pending_writes.remove(idx)
             {
-                let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
-                if let Deferred::Plan(ready) = ready {
-                    maybe_ctx = Some(ready.ctx);
-                }
-            }
-
-            // Cancel commands waiting on a real time recency timestamp. There is at most one  per session.
-            if let Some(real_time_recency_context) =
-                self.pending_real_time_recency_timestamp.remove(&conn_id)
-            {
-                let ctx = real_time_recency_context.take_context();
                 maybe_ctx = Some(ctx);
-            }
-
-            // Cancel reads waiting on being linearized. There is at most one linearized read per
-            // session.
-            if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
-                let ctx = pending_read_txn.take_context();
-                maybe_ctx = Some(ctx);
-            }
-
-            if let Some(ctx) = maybe_ctx {
-                ctx.retire(Err(AdapterError::Canceled));
-            }
-
-            // Inform the target session (if it asks) about the cancellation.
-            let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
-
-            for PendingPeek {
-                sender: rows_tx,
-                conn_id: _,
-                cluster_id: _,
-                depends_on: _,
-                // We take responsibility for retiring the
-                // peek in `self.cancel_pending_peeks`,
-                // so we don't need to do anything with `ctx_extra` here.
-                ctx_extra: _,
-                is_fast_path: _,
-            } in self.cancel_pending_peeks(&conn_id)
-            {
-                // Cancel messages can be sent after the connection has hung
-                // up, but before the connection's state has been cleaned up.
-                // So we ignore errors when sending the response.
-                let _ = rows_tx.send(PeekResponse::Canceled);
             }
         }
+
+        // Cancel deferred writes. There is at most one deferred write per session.
+        if let Some(idx) = self
+            .write_lock_wait_group
+            .iter()
+            .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.ctx.session().conn_id() == conn_id))
+        {
+            let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
+            if let Deferred::Plan(ready) = ready {
+                maybe_ctx = Some(ready.ctx);
+            }
+        }
+
+        // Cancel commands waiting on a real time recency timestamp. There is at most one  per session.
+        if let Some(real_time_recency_context) =
+            self.pending_real_time_recency_timestamp.remove(&conn_id)
+        {
+            let ctx = real_time_recency_context.take_context();
+            maybe_ctx = Some(ctx);
+        }
+
+        // Cancel reads waiting on being linearized. There is at most one linearized read per
+        // session.
+        if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
+            let ctx = pending_read_txn.take_context();
+            maybe_ctx = Some(ctx);
+        }
+
+        if let Some(ctx) = maybe_ctx {
+            ctx.retire(Err(AdapterError::Canceled));
+        }
+
+        self.cancel_pending_peeks(&conn_id);
+        self.cancel_active_compute_sinks(&conn_id).await;
     }
 
     /// Handle termination of a client session.
@@ -961,7 +947,7 @@ impl Coordinator {
 
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
-        self.clear_connection(&conn_id);
+        self.clear_connection(&conn_id).await;
 
         self.drop_temp_items(&conn_id).await;
         self.catalog_mut()

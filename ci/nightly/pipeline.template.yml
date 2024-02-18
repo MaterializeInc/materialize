@@ -8,26 +8,29 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - id: build-x86_64
-    label: Build x86_64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
-    timeout_in_minutes: 60
-    # For releases we trigger nightly from the test job directly, no need to build again
-    branches: "!v*.*"
-    agents:
-      queue: builder-linux-x86_64
+  - group: Builds
+    key: builds
+    steps:
+    - id: build-x86_64
+      label: Build x86_64
+      command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+      timeout_in_minutes: 60
+      # For releases we trigger nightly from the test job directly, no need to build again
+      branches: "!v*.*"
+      agents:
+        queue: builder-linux-x86_64
 
-  - id: build-aarch64
-    label: Build aarch64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
-    timeout_in_minutes: 60
-    # For releases we trigger nightly from the test job directly, no need to build again
-    branches: "!v*.*"
-    agents:
-      queue: builder-linux-aarch64
-    # TODO(def-) Remove automatic retry when #24818 is fixed
-    retry:
-      automatic: true
+    - id: build-aarch64
+      label: Build aarch64
+      command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
+      timeout_in_minutes: 60
+      # For releases we trigger nightly from the test job directly, no need to build again
+      branches: "!v*.*"
+      agents:
+        queue: builder-linux-aarch64
+      # TODO(def-) Remove automatic retry when #24818 is fixed
+      retry:
+        automatic: true
 
   - wait: ~
 
@@ -682,17 +685,6 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzTwoVersions]
 
-      - id: checks-upgrade-entire-mz-skip-version
-        label: "Checks upgrade from X-2 directly to HEAD"
-        timeout_in_minutes: 60
-        agents:
-          queue: linux-aarch64-large
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=UpgradeEntireMzSkipVersion]
-
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
         timeout_in_minutes: 90
@@ -839,18 +831,6 @@ steps:
               composition: platform-checks
               args: [--scenario=MigrateAarch64X86]
 
-      - id: checks-upgrade-matrix
-        label: "Random upgrades over the entire matrix %N"
-        timeout_in_minutes: 150
-        parallelism: 4
-        agents:
-          queue: linux-aarch64
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: upgrade-matrix
-              args: ["--seed=$BUILDKITE_JOB_ID"]
-
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
         timeout_in_minutes: 60
@@ -868,6 +848,11 @@ steps:
       - id: k8s-node-recovery-storage-on-failing
         label: "K8s recovery: storage on failing node"
         timeout_in_minutes: 30
+        # TODO: #25108 (k8s node recovery tests flaky)
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -884,6 +869,12 @@ steps:
       - id: k8s-node-recovery-compute-on-failing
         label: "K8s recovery: compute on failing node"
         timeout_in_minutes: 30
+        # TODO: #25108 (k8s node recovery tests flaky)
+        retry:
+          automatic:
+            - exit_status: 1
+              limit:
+                1
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -900,6 +891,11 @@ steps:
       - id: k8s-node-recovery-replicated-compute-on-failing
         label: "K8s recovery: replicated compute on failing node"
         timeout_in_minutes: 30
+        # TODO: #25108 (k8s node recovery tests flaky)
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -916,6 +912,11 @@ steps:
       - id: k8s-node-recovery-envd-on-failing
         label: "K8s recovery: envd on failing node"
         timeout_in_minutes: 30
+        # TODO: #25108 (k8s node recovery tests flaky)
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -1037,20 +1038,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: mz-e2e
-
-  - id: qa-canary-load
-    label: "QA Canary Environment Base Load"
-    artifact_paths: junit_*.xml
-    timeout_in_minutes: 360
-    concurrency: 1
-    concurrency_group: 'qa-canary-load'
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: canary-load
-          args: ["--runtime=18000"]
-    agents:
-      queue: linux-aarch64-small
-    branches: "main"
 
   - group: "Output consistency"
     key: output-consistency
@@ -1221,6 +1208,7 @@ steps:
 
     - id: rqg-wmr
       label: "RQG WMR workload"
+      skip: "flaky until #24904 is fixed"
       artifact_paths: junit_*.xml
       timeout_in_minutes: 45
       agents:

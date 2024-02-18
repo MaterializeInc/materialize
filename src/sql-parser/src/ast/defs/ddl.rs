@@ -376,20 +376,15 @@ impl_display!(CsrSeedProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceFormat<T: AstInfo> {
-    None,
     /// `CREATE SOURCE .. FORMAT`
     Bare(Format<T>),
     /// `CREATE SOURCE .. KEY FORMAT .. VALUE FORMAT`
-    KeyValue {
-        key: Format<T>,
-        value: Format<T>,
-    },
+    KeyValue { key: Format<T>, value: Format<T> },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceFormat<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceFormat::None => {}
             CreateSourceFormat::Bare(format) => {
                 f.write_str(" FORMAT ");
                 f.write_node(format)
@@ -985,9 +980,6 @@ pub enum CreateSourceConnection<T: AstInfo> {
         generator: LoadGenerator,
         options: Vec<LoadGeneratorOption<T>>,
     },
-    TestScript {
-        desc_json: String,
-    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
@@ -1037,12 +1029,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                     f.write_node(&display::comma_separated(options));
                     f.write_str(")");
                 }
-            }
-            CreateSourceConnection::TestScript { desc_json } => {
-                f.write_str("TEST SCRIPT ");
-                f.write_str("'");
-                f.write_str(&display::escape_single_quote_string(desc_json));
-                f.write_str("'");
             }
         }
     }

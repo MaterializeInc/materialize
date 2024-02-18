@@ -18,24 +18,19 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::capture::YieldingIter;
+use differential_dataflow::capture::{Message, Progress, YieldingIter};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use mz_interchange::avro::ConfluentAvroResolver;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
-use mz_storage_types::connections::CsrConnection;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
-use mz_storage_types::sources::encoding::{
-    AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
-};
+use mz_storage_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use regex::Regex;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::Map;
+use timely::dataflow::operators::{Map, Operator};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::scheduling::SyncActivator;
@@ -58,77 +53,88 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: Timestamp>(
-    input: &Collection<G, SourceOutput<FromTime>, Diff>,
-    schema: String,
-    storage_configuration: StorageConfiguration,
-    csr_connection: Option<CsrConnection>,
-    confluent_wire_format: bool,
+    input: &Collection<G, DecodeResult<FromTime>, Diff>,
 ) -> (Collection<G, Row, Diff>, PressOnDropButton) {
     let channel_rx = Rc::new(RefCell::new(VecDeque::new()));
     let activator_set: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
 
-    let mut builder = AsyncOperatorBuilder::new("CDCv2-Decode".to_owned(), input.scope());
-
-    let mut input_handle = builder.new_disconnected_input(
-        &input.inner,
-        Exchange::new(|(x, _, _): &(SourceOutput<FromTime>, _, _)| x.key.hashed()),
-    );
-
+    let mut row_buf = Row::default();
+    let mut vector = vec![];
     let channel_tx = Rc::clone(&channel_rx);
     let activator_get = Rc::clone(&activator_set);
-    builder.build(move |_| async move {
-        let registry = match csr_connection {
-            None => None,
-            Some(conn) => Some(
-                // This also panics on connections errors. cdc_v2 is unused so we don't handle
-                // errors right now.
-                conn.connect(&storage_configuration)
-                    .await
-                    .expect("CSR connection unexpectedly missing secrets"),
-            ),
-        };
-
-        // We have already checked validity of the schema by now, so this can't fail.
-        let mut resolver =
-            ConfluentAvroResolver::new(&schema, registry, confluent_wire_format).unwrap();
-
-        while let Some(event) = input_handle.next().await {
-            let AsyncEvent::Data(_time, data) = event else {
-                continue;
-            };
-
-            for (data, _time, _diff) in data {
-                let value = match data.value.unpack_first() {
-                    Datum::Bytes(value) => value,
-                    Datum::Null => continue,
-                    _ => unreachable!("invalid datum"),
-                };
-                let (mut data, schema, _) = match resolver.resolve(&*value).await {
-                    Ok(Ok(ok)) => ok,
-                    // TODO: restart the dataflow on transient errors
-                    Ok(Err(e)) | Err(e) => {
-                        error!("Failed to get schema info for CDCv2 record: {}", e);
+    let pact = Exchange::new(|(x, _, _): &(DecodeResult<FromTime>, _, _)| x.key.hashed());
+    input.inner.sink(pact, "CDCv2Unpack", move |input| {
+        while let Some((_, data)) = input.next() {
+            data.swap(&mut vector);
+            // The inputs are rows containing two columns that encode an enum, i.e only one of them
+            // is ever set while the other is unset. This is the convention we follow in our Avro
+            // decoder. When the first field of the record is set then we have a data message.
+            // Otherwise we have a progress message.
+            for (row, _time, _diff) in vector.drain(..) {
+                let mut record = match &row.value {
+                    Some(Ok(row)) => row.iter(),
+                    Some(Err(err)) => {
+                        error!("Ignoring errored record: {err}");
                         continue;
                     }
+                    None => continue,
                 };
-                let d = GeneralDeserializer {
-                    schema: schema.top_node(),
-                };
-                let dec = mz_interchange::avro::cdc_v2::Decoder;
-                let message = match d.deserialize(&mut data, dec) {
-                    Ok(ok) => ok,
-                    Err(e) => {
-                        error!("Failed to deserialize avro message: {}", e);
-                        continue;
+                let message = match (record.next().unwrap(), record.next().unwrap()) {
+                    (Datum::List(datum_updates), Datum::Null) => {
+                        let mut updates = vec![];
+                        for update in datum_updates.iter() {
+                            let mut update = update.unwrap_list().iter();
+                            let data = update.next().unwrap().unwrap_list();
+                            let time = update.next().unwrap().unwrap_int64();
+                            let diff = update.next().unwrap().unwrap_int64();
+
+                            row_buf.packer().extend(&data);
+                            let data = row_buf.clone();
+                            let time = u64::try_from(time).expect("non-negative");
+                            let time = mz_repr::Timestamp::from(time);
+                            updates.push((data, time, diff));
+                        }
+                        Message::Updates(updates)
                     }
+                    (Datum::Null, Datum::List(progress)) => {
+                        let mut progress = progress.iter();
+                        let mut lower = vec![];
+                        for time in &progress.next().unwrap().unwrap_list() {
+                            let time = u64::try_from(time.unwrap_int64()).expect("non-negative");
+                            lower.push(mz_repr::Timestamp::from(time));
+                        }
+                        let mut upper = vec![];
+                        for time in &progress.next().unwrap().unwrap_list() {
+                            let time = u64::try_from(time.unwrap_int64()).expect("non-negative");
+                            upper.push(mz_repr::Timestamp::from(time));
+                        }
+                        let mut counts = vec![];
+                        for pair in &progress.next().unwrap().unwrap_list() {
+                            let mut pair = pair.unwrap_list().iter();
+                            let time = pair.next().unwrap().unwrap_int64();
+                            let count = pair.next().unwrap().unwrap_int64();
+
+                            let time = u64::try_from(time).expect("non-negative");
+                            let count = usize::try_from(count).expect("non-negative");
+                            counts.push((mz_repr::Timestamp::from(time), count));
+                        }
+                        let progress = Progress {
+                            lower,
+                            upper,
+                            counts,
+                        };
+                        Message::Progress(progress)
+                    }
+                    _ => unreachable!("invalid input"),
                 };
                 channel_tx.borrow_mut().push_back(message);
             }
-            if let Some(activator) = activator_get.borrow_mut().as_mut() {
-                activator.activate().unwrap()
-            }
+        }
+        if let Some(activator) = activator_get.borrow_mut().as_mut() {
+            activator.activate().unwrap()
         }
     });
+
     struct VdIterator<T>(Rc<RefCell<VecDeque<T>>>);
     impl<T> Iterator for VdIterator<T> {
         type Item = T;
@@ -301,8 +307,8 @@ async fn get_decoder(
     metrics: DecodeMetricDefs,
     storage_configuration: &StorageConfiguration,
 ) -> Result<DataDecoder, CsrConnectError> {
-    let decoder = match encoding.inner {
-        DataEncodingInner::Avro(AvroEncoding {
+    let decoder = match encoding {
+        DataEncoding::Avro(AvroEncoding {
             schema,
             csr_connection,
             confluent_wire_format,
@@ -323,24 +329,24 @@ async fn get_decoder(
                 metrics,
             }
         }
-        DataEncodingInner::Text
-        | DataEncodingInner::Bytes
-        | DataEncodingInner::Json
-        | DataEncodingInner::Protobuf(_)
-        | DataEncodingInner::Regex(_) => {
-            let after_delimiting = match encoding.inner {
-                DataEncodingInner::Regex(RegexEncoding { regex }) => {
+        DataEncoding::Text
+        | DataEncoding::Bytes
+        | DataEncoding::Json
+        | DataEncoding::Protobuf(_)
+        | DataEncoding::Regex(_) => {
+            let after_delimiting = match encoding {
+                DataEncoding::Regex(RegexEncoding { regex }) => {
                     PreDelimitedFormat::Regex(regex.regex, Default::default())
                 }
-                DataEncodingInner::Protobuf(encoding) => {
+                DataEncoding::Protobuf(encoding) => {
                     PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding).expect(
                         "Failed to create protobuf decoder, even though we validated ccsr \
                                     client creation in purification.",
                     ))
                 }
-                DataEncodingInner::Bytes => PreDelimitedFormat::Bytes,
-                DataEncodingInner::Json => PreDelimitedFormat::Json,
-                DataEncodingInner::Text => PreDelimitedFormat::Text,
+                DataEncoding::Bytes => PreDelimitedFormat::Bytes,
+                DataEncoding::Json => PreDelimitedFormat::Json,
+                DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };
             let inner = if is_connection_delimited {
@@ -353,15 +359,12 @@ async fn get_decoder(
             };
             DataDecoder { inner, metrics }
         }
-        DataEncodingInner::Csv(enc) => {
+        DataEncoding::Csv(enc) => {
             let state = CsvDecoderState::new(enc);
             DataDecoder {
                 inner: DataDecoderInner::Csv(state),
                 metrics,
             }
-        }
-        DataEncodingInner::RowCodec(_) => {
-            unreachable!("RowCodec sources should not go through the general decoding path.")
         }
     };
     Ok(decoder)

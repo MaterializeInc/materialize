@@ -235,6 +235,13 @@ CREATE TABLE " " (x int)
              ^
 
 parse-statement
+CREATE TABLE row (row int)
+----
+CREATE TABLE row (row int4)
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("row")]), columns: [ColumnDef { name: Ident("row"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
+
+parse-statement
 CREATE TABLE t (x int) WITH (RETAIN HISTORY = FOR '1 day')
 ----
 CREATE TABLE t (x int4) WITH (RETAIN HISTORY = FOR '1 day')

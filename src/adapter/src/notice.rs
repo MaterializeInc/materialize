@@ -86,9 +86,6 @@ pub enum AdapterNotice {
         isolation_level: String,
     },
     StrongSessionSerializable,
-    DroppedSubscribe {
-        dropped_name: String,
-    },
     BadStartupSetting {
         name: String,
         reason: String,
@@ -173,7 +170,6 @@ impl AdapterNotice {
             AdapterNotice::QueryTrace { .. } => Severity::Notice,
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
             AdapterNotice::StrongSessionSerializable => Severity::Notice,
-            AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
             AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
             AdapterNotice::RbacUserDisabled => Severity::Notice,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
@@ -264,7 +260,6 @@ impl AdapterNotice {
             AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
             AdapterNotice::StrongSessionSerializable => SqlState::WARNING,
-            AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
             AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
             AdapterNotice::RbacUserDisabled => SqlState::WARNING,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
@@ -370,12 +365,6 @@ impl fmt::Display for AdapterNotice {
                 write!(
                     f,
                     "The Strong Session Serializable isolation level may exhibit consistency violations when reading from catalog objects",
-                )
-            }
-            AdapterNotice::DroppedSubscribe { dropped_name } => {
-                write!(
-                    f,
-                    "subscribe has been terminated because underlying {dropped_name} was dropped"
                 )
             }
             AdapterNotice::BadStartupSetting { name, reason } => {

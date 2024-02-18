@@ -42,9 +42,7 @@ use itertools::Itertools;
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LetRecLimit, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
-use mz_ore::num::NonNeg;
 use mz_ore::option::FallibleMapExt;
-use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::str::StrExt;
 use mz_repr::adt::char::CharLength;
@@ -99,7 +97,7 @@ use crate::session::vars::{self, FeatureFlag};
 pub struct PlannedRootQuery<E> {
     pub expr: E,
     pub desc: RelationDesc,
-    pub finishing: RowSetFinishing,
+    pub finishing: RowSetFinishing<HirScalarExpr>,
     pub scope: Scope,
 }
 
@@ -128,24 +126,6 @@ pub fn plan_root_query(
         project,
         group_size_hints,
     } = plan_query(&mut qcx, &query)?;
-
-    // A top-level limit cannot be data dependent so eagerly evaluate it.
-    let limit = match limit {
-        None => None,
-        Some(limit) => {
-            let Some(limit) = limit.as_literal() else {
-                sql_bail!("Top-level LIMIT must be a constant expression")
-            };
-            match limit {
-                Datum::Null => None,
-                Datum::Int64(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
-                _ => {
-                    soft_panic_or_log!("Valid literal limit must be asserted in `plan_query`");
-                    sql_bail!("LIMIT must be a non negative INT or NULL")
-                }
-            }
-        }
-    };
 
     let mut finishing = RowSetFinishing {
         limit,
@@ -900,7 +880,8 @@ pub fn plan_up_to(
         .lower_uncorrelated()
 }
 
-/// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE` statement.
+/// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE`, or `CREATE MATERIALIZED
+/// VIEW` statement.
 pub fn plan_as_of(
     scx: &StatementContext,
     as_of: Option<AsOf<Aug>>,

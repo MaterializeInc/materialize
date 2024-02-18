@@ -9,6 +9,8 @@
 
 //! Implementation-specific metrics for persist blobs and consensus
 
+use mz_dyncfg::ConfigSet;
+use mz_ore::lgbytes::{LgBytesMetrics, LgBytesOpMetrics};
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use prometheus::IntCounterVec;
@@ -28,6 +30,11 @@ pub struct S3BlobMetrics {
     pub(crate) delete_head: IntCounter,
     pub(crate) delete_object: IntCounter,
     pub(crate) list_objects: IntCounter,
+
+    /// Metrics for all usages of LgBytes. Exposed as public for convenience in
+    /// persist boot, we'll have to pull this out and do the plumbing
+    /// differently if mz gains a non-persist user of LgBytes.
+    pub lgbytes: LgBytesMetrics,
 }
 
 impl S3BlobMetrics {
@@ -63,6 +70,37 @@ impl S3BlobMetrics {
             delete_head: operations.with_label_values(&["delete_head"]),
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
+            lgbytes: LgBytesMetrics::new(registry),
         }
+    }
+}
+
+/// Metrics for `ColumnarRecords`.
+#[derive(Debug)]
+pub struct ColumnarMetrics {
+    pub(crate) lgbytes_arrow: LgBytesOpMetrics,
+    // TODO: Having these two here isn't quite the right thing to do, but it
+    // saves a LOT of plumbing.
+    pub(crate) cfg: ConfigSet,
+    pub(crate) is_cc_active: bool,
+}
+
+impl ColumnarMetrics {
+    /// Returns a new [ColumnarMetrics].
+    pub fn new(lgbytes: &LgBytesMetrics, cfg: ConfigSet, is_cc_active: bool) -> Self {
+        ColumnarMetrics {
+            lgbytes_arrow: lgbytes.persist_arrow.clone(),
+            cfg,
+            is_cc_active,
+        }
+    }
+
+    /// Returns a [ColumnarMetrics] disconnected from any metrics registry.
+    ///
+    /// Exposed for testing.
+    pub fn disconnected() -> Self {
+        let lgbytes = LgBytesMetrics::new(&MetricsRegistry::new());
+        let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
+        Self::new(&lgbytes, cfg, false)
     }
 }

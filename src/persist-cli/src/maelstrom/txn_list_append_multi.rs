@@ -383,6 +383,7 @@ impl Service for TransactorService {
                     blob_uri,
                     Box::new(config.clone()),
                     metrics.s3_blob.clone(),
+                    config.configs.clone(),
                 )
                 .await
                 .expect("blob_uri should be valid");
@@ -435,7 +436,7 @@ impl Service for TransactorService {
             Arc::new(UnreliableConsensus::new(consensus, unreliable));
 
         // Wire up the TransactorService.
-        let isolated_runtime = Arc::new(IsolatedRuntime::new());
+        let isolated_runtime = Arc::new(IsolatedRuntime::default());
         let pubsub_sender = PubSubClientConnection::noop().sender;
         let shared_states = Arc::new(StateCache::new(
             &config,

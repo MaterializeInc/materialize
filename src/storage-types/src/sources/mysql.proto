@@ -23,4 +23,5 @@ message ProtoMySqlSourceConnection {
 
 message ProtoMySqlSourceDetails {
     repeated mz_mysql_util.ProtoMySqlTableDesc tables = 1;
+    string initial_gtid_set = 2;
 }

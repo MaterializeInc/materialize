@@ -1,0 +1,77 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+reset-server
+
+statement OK
+CREATE SCHEMA s
+
+query T
+SELECT mz_internal.mz_schema_oid('s') = (SELECT oid FROM mz_schemas WHERE name = 's')
+----
+true
+
+query T
+SELECT mz_internal.mz_schema_oid('materialize.s') = (SELECT oid FROM mz_schemas WHERE name = 's')
+----
+true
+
+query T
+SELECT mz_internal.mz_schema_oid('mz_catalog') = (SELECT oid FROM mz_schemas WHERE name = 'mz_catalog')
+----
+true
+
+query T
+SELECT mz_internal.mz_schema_oid(NULL) IS NULL
+----
+true
+
+statement OK
+CREATE DATABASE db
+
+statement OK
+CREATE SCHEMA db.sc
+
+query error schema "sc" does not exist
+SELECT mz_internal.mz_schema_oid('sc')
+
+query T
+SELECT mz_internal.mz_schema_oid('db.sc') = (SELECT oid FROM mz_schemas WHERE name = 'sc')
+----
+true
+
+statement OK
+CREATE SCHEMA db.s
+
+query T
+SELECT mz_internal.mz_schema_oid('s') = (SELECT s.oid FROM mz_schemas s JOIN mz_databases d ON s.database_id = d.id WHERE s.name = 's' AND d.name = 'materialize')
+----
+true
+
+query T
+SELECT mz_internal.mz_schema_oid('db.s') = (SELECT s.oid FROM mz_schemas s JOIN mz_databases d ON s.database_id = d.id WHERE s.name = 's' AND d.name = 'db')
+----
+true
+
+query error improper schema name \(too many dotted names\): db\.s\.i
+SELECT mz_internal.mz_schema_oid('db.s.i')
+
+query error schema "schmutz" does not exist
+SELECT mz_internal.mz_schema_oid('schmutz')
+
+statement OK
+SET database TO ''
+
+query T
+SELECT mz_internal.mz_schema_oid('mz_catalog') = (SELECT oid FROM mz_schemas WHERE name = 'mz_catalog')
+----
+true
+
+query error schema "s" does not exist
+SELECT mz_internal.mz_schema_oid('s')

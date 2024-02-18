@@ -7,14 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use mz_pgrepr::Type;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
+use tokio_postgres::Client;
 
-use crate::destination::config;
+use crate::destination::{config, FIVETRAN_SYSTEM_COLUMN_DELETE};
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{
-    AlterTableRequest, Column, CreateTableRequest, DescribeTableRequest, Table,
+    AlterTableRequest, Column, CreateTableRequest, DataType, DecimalParams, DescribeTableRequest,
+    Table,
 };
 use crate::utils;
 
@@ -25,7 +29,15 @@ pub async fn handle_describe_table(
     request: DescribeTableRequest,
 ) -> Result<Option<Table>, OpError> {
     let (dbname, client) = config::connect(request.configuration).await?;
+    describe_table(&client, &dbname, &request.schema_name, &request.table_name).await
+}
 
+pub async fn describe_table(
+    client: &Client,
+    database: &str,
+    schema: &str,
+    table: &str,
+) -> Result<Option<Table>, OpError> {
     let table_id = {
         let rows = client
             .query(
@@ -35,7 +47,7 @@ pub async fn handle_describe_table(
                    JOIN mz_databases d ON d.id = s.database_id
                    WHERE d.name = $1 AND s.name = $2 AND t.name = $3
                 "#,
-                &[&dbname, &request.schema_name, &request.table_name],
+                &[&database, &schema, &table],
             )
             .await
             .context("fetching table ID")?;
@@ -61,7 +73,8 @@ pub async fn handle_describe_table(
                FROM mz_columns AS cols
                LEFT JOIN mz_internal.mz_comments AS coms
                ON cols.id = coms.id AND cols.position = coms.object_sub_id
-               WHERE cols.id = $2"#;
+               WHERE cols.id = $2
+               ORDER BY cols.position ASC"#;
 
         let rows = client
             .query(stmt, &[&PRIMARY_KEY_MAGIC_STRING, &table_id])
@@ -90,7 +103,7 @@ pub async fn handle_describe_table(
     };
 
     Ok(Some(Table {
-        name: request.table_name,
+        name: table.to_string(),
         columns,
     }))
 }
@@ -102,9 +115,29 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
     let qualified_table_name =
         UnresolvedItemName::qualified(&[schema.clone(), Ident::new(&table.name)?]);
 
+    let mut total_columns = table.columns;
+    // We want to make sure the deleted system column is always provided.
+    //
+    // Note: Instead of creating a map we check existence in the Vec, to retain original order
+    // of the columns from the request.
+    //
+    // TODO(parkmycar): Use an IndexMap here.
+    let contains_delete = total_columns
+        .iter()
+        .any(|col| col.name == FIVETRAN_SYSTEM_COLUMN_DELETE);
+    if !contains_delete {
+        let delete_column = Column {
+            name: FIVETRAN_SYSTEM_COLUMN_DELETE.to_string(),
+            r#type: DataType::Boolean.into(),
+            primary_key: false,
+            decimal: None,
+        };
+        total_columns.push(delete_column);
+    }
+
     let mut defs = vec![];
     let mut primary_key_columns = vec![];
-    for column in table.columns {
+    for column in total_columns {
         let name = escape::escape_identifier(&column.name);
         let mut ty = utils::to_materialize_type(column.r#type())?.to_string();
         if let Some(d) = column.decimal {
@@ -114,7 +147,7 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
         defs.push(format!("{name} {ty}"));
 
         if column.primary_key {
-            primary_key_columns.push(name.clone());
+            primary_key_columns.push(name);
         }
     }
 
@@ -146,7 +179,68 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
     Ok(())
 }
 
-#[allow(clippy::unused_async)]
-pub async fn handle_alter_table(_: AlterTableRequest) -> Result<(), OpError> {
-    Err(OpErrorKind::Unsupported("alter_table".to_string()).into())
+pub async fn handle_alter_table(request: AlterTableRequest) -> Result<(), OpError> {
+    let (dbname, client) = config::connect(request.configuration).await?;
+
+    // Bail early if there isn't a table to alter.
+    let Some(request_table) = request.table else {
+        return Ok(());
+    };
+
+    let current_table = describe_table(&client, &dbname, &request.schema_name, &request_table.name)
+        .await
+        .context("alter table")?;
+    let Some(current_table) = current_table else {
+        return Err(OpErrorKind::UnknownTable {
+            database: dbname,
+            schema: request.schema_name,
+            table: request_table.name,
+        }
+        .into());
+    };
+
+    if columns_match(&request_table, &current_table) {
+        Ok(())
+    } else {
+        let error = format!(
+            "alter_table, request: {:?}, current: {:?}",
+            request_table, current_table
+        );
+        Err(OpErrorKind::Unsupported(error).into())
+    }
+}
+
+// TODO(parkmycar): Implement some more complex diffing logic.
+fn columns_match(request: &Table, current: &Table) -> bool {
+    #[derive(Clone, Debug)]
+    struct ColumnMetadata {
+        ty: DataType,
+        primary_key: bool,
+        decimal: Option<DecimalParams>,
+    }
+
+    impl PartialEq<ColumnMetadata> for ColumnMetadata {
+        fn eq(&self, other: &ColumnMetadata) -> bool {
+            self.ty == other.ty
+                && self.primary_key == other.primary_key
+                // TODO(parkmycar): Better comparison for decimals.
+                && self.decimal.is_some() == other.decimal.is_some()
+        }
+    }
+
+    let map_columns = |col: &Column| {
+        let metadata = ColumnMetadata {
+            ty: col.r#type(),
+            primary_key: col.primary_key,
+            decimal: col.decimal.clone(),
+        };
+        (col.name.clone(), metadata)
+    };
+
+    // Sort the columns by name, and check if they're equal. Eventually we'll have some more
+    // complex logic here.
+    let request_cols: BTreeMap<_, _> = request.columns.iter().map(map_columns).collect();
+    let current_cols: BTreeMap<_, _> = current.columns.iter().map(map_columns).collect();
+
+    request_cols == current_cols
 }

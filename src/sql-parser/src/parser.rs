@@ -573,7 +573,9 @@ impl<'a> Parser<'a> {
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
-            Token::Keyword(ROW) => self.parse_row_expr(),
+            Token::Keyword(ROW) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_row_expr()
+            }
             Token::Keyword(TRIM) => self.parse_trim_expr(),
             Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_position_expr()
@@ -1908,7 +1910,8 @@ impl<'a> Parser<'a> {
             };
             Format::Csv { columns, delimiter }
         } else if self.parse_keyword(JSON) {
-            Format::Json { array: false }
+            let array = self.parse_keyword(ARRAY);
+            Format::Json { array }
         } else if self.parse_keyword(TEXT) {
             Format::Text
         } else if self.parse_keyword(BYTES) {
@@ -2622,11 +2625,11 @@ impl<'a> Parser<'a> {
                 let key = self.parse_format()?;
                 self.expect_keywords(&[VALUE, FORMAT])?;
                 let value = self.parse_format()?;
-                CreateSourceFormat::KeyValue { key, value }
+                Some(CreateSourceFormat::KeyValue { key, value })
             }
-            Some(FORMAT) => CreateSourceFormat::Bare(self.parse_format()?),
+            Some(FORMAT) => Some(CreateSourceFormat::Bare(self.parse_format()?)),
             Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
-            None => CreateSourceFormat::None,
+            None => None,
         };
         let include_metadata = self.parse_source_include_metadata()?;
 
@@ -2998,7 +3001,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD, TEST])? {
+        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -3073,12 +3076,6 @@ impl<'a> Parser<'a> {
                     vec![]
                 };
                 Ok(CreateSourceConnection::LoadGenerator { generator, options })
-            }
-            TEST => {
-                self.expect_keyword(SCRIPT)?;
-                Ok(CreateSourceConnection::TestScript {
-                    desc_json: self.parse_literal_string()?,
-                })
             }
             _ => unreachable!(),
         }
@@ -3258,6 +3255,7 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
+        let as_of = self.parse_optional_internal_as_of()?;
 
         Ok(Statement::CreateMaterializedView(
             CreateMaterializedViewStatement {
@@ -3266,6 +3264,7 @@ impl<'a> Parser<'a> {
                 columns,
                 in_cluster,
                 query,
+                as_of,
                 with_options,
             },
         ))
@@ -6869,10 +6868,7 @@ impl<'a> Parser<'a> {
             Ok(JoinConstraint::On(constraint))
         } else if self.parse_keyword(USING) {
             let columns = self.parse_parenthesized_column_list(Mandatory)?;
-            let alias = self
-                .parse_keyword(AS)
-                .then(|| self.parse_identifier())
-                .transpose()?;
+            let alias = self.parse_optional_alias(Keyword::is_reserved_in_table_alias)?;
 
             Ok(JoinConstraint::Using { columns, alias })
         } else {
@@ -7000,6 +6996,30 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(UP) {
             self.expect_keyword(TO)?;
             self.parse_expr().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Parse `AS OF`, if present.
+    ///
+    /// In contrast to `parse_optional_as_of`, this parser only supports `AS OF <time>` syntax and
+    /// directly returns an `u64`. It is only meant to be used for internal SQL syntax.
+    fn parse_optional_internal_as_of(&mut self) -> Result<Option<u64>, ParserError> {
+        fn try_parse_u64(parser: &mut Parser) -> Option<u64> {
+            let value = parser.parse_value().ok()?;
+            let Value::Number(s) = value else { return None };
+            s.parse().ok()
+        }
+
+        if self.parse_keywords(&[AS, OF]) {
+            match try_parse_u64(self) {
+                Some(time) => Ok(Some(time)),
+                None => {
+                    self.prev_token();
+                    self.expected(self.peek_pos(), "`u64` literal", self.peek_token())
+                }
+            }
         } else {
             Ok(None)
         }

@@ -584,8 +584,8 @@ where
     let target_relation_desc = target.relation_desc.clone();
 
     let source_statistics = storage_state
-        .source_statistics
-        .get(&collection_id)
+        .aggregated_statistics
+        .get_source(&collection_id)
         .expect("statistics initialized")
         .clone();
 
@@ -956,8 +956,8 @@ where
     }
 
     let source_statistics = storage_state
-        .source_statistics
-        .get(&collection_id)
+        .aggregated_statistics
+        .get_source(&collection_id)
         .expect("statistics initialized")
         .clone();
 
@@ -998,6 +998,7 @@ where
             BatchSet,
         >::new();
 
+        source_statistics.initialize_rehydration_latency_ms();
         if !active_worker {
             // The non-active workers report that they are done snapshotting and hydrating.
             let empty_frontier = Antichain::new();

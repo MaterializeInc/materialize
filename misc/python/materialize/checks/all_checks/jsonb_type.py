@@ -44,7 +44,6 @@ class JsonbType(Check):
                       jsonb_col <@ '{"boolean_element": true}' AS c11,
                       jsonb_col ? 'number_element' AS c12
                     FROM jsonb_type_table, cte;
-                > SET statement_timeout = '120s'
                 > INSERT INTO jsonb_type_table SELECT * FROM jsonb_type_table LIMIT 1;
                 """,
                 """
@@ -64,7 +63,6 @@ class JsonbType(Check):
                       jsonb_col <@ '{"boolean_element": true}' AS c11,
                       jsonb_col ? 'number_element' AS c12
                     FROM jsonb_type_table, cte;
-                > SET statement_timeout = '120s'
                 > INSERT INTO jsonb_type_table SELECT * FROM jsonb_type_table LIMIT 1;
                 """,
             ]

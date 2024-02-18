@@ -18,33 +18,22 @@ import "storage-types/src/connections.proto";
 package mz_storage_types.sources.encoding;
 
 message ProtoSourceDataEncoding {
-    message ProtoKeyValue {
-        ProtoDataEncoding key = 1;
-        ProtoDataEncoding value = 2;
-    }
-
-    oneof kind {
-        ProtoDataEncoding single = 1;
-        ProtoKeyValue key_value = 2;
-    }
-}
-
-message ProtoDataEncodingInner {
-    oneof kind {
-        ProtoAvroEncoding avro = 1;
-        ProtoProtobufEncoding protobuf = 2;
-        ProtoCsvEncoding csv = 3;
-        ProtoRegexEncoding regex = 4;
-        google.protobuf.Empty bytes = 5;
-        google.protobuf.Empty text = 6;
-        mz_repr.relation_and_scalar.ProtoRelationDesc row_codec = 7;
-        google.protobuf.Empty json = 8;
-    }
+    reserved 1, 2;
+    optional ProtoDataEncoding key = 3;
+    ProtoDataEncoding value = 4;
 }
 
 message ProtoDataEncoding {
-    bool force_nullable_columns = 1;
-    ProtoDataEncodingInner inner = 2;
+    reserved 1, 2;
+    oneof kind {
+        ProtoAvroEncoding avro = 3;
+        ProtoProtobufEncoding protobuf = 4;
+        ProtoCsvEncoding csv = 5;
+        ProtoRegexEncoding regex = 6;
+        google.protobuf.Empty bytes = 7;
+        google.protobuf.Empty text = 8;
+        google.protobuf.Empty json = 9;
+    }
 }
 
 message ProtoAvroEncoding {

@@ -64,9 +64,9 @@ use mz_storage_types::sources::{
 };
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::active_compute_sink::ActiveSubscribe;
 use crate::catalog::CatalogState;
 use crate::coord::ConnMeta;
-use crate::subscribe::ActiveSubscribe;
 
 /// An update to a built-in table.
 #[derive(Debug)]

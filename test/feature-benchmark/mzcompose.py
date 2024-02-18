@@ -17,6 +17,7 @@ from textwrap import dedent
 from materialize import buildkite
 from materialize.docker import is_image_tag_of_version
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.services.mysql import MySql
 from materialize.version_list import (
     ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
     get_commits_of_accepted_regressions_between_versions,
@@ -27,15 +28,6 @@ from materialize.version_list import (
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
-from scenarios import *  # noqa: F401 F403
-from scenarios import Scenario
-from scenarios_concurrency import *  # noqa: F401 F403
-from scenarios_customer import *  # noqa: F401 F403
-from scenarios_optbench import *  # noqa: F401 F403
-from scenarios_scale import *  # noqa: F401 F403
-from scenarios_skew import *  # noqa: F401 F403
-from scenarios_subscribe import *  # noqa: F401 F403
-
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report
 from materialize.feature_benchmark.comparator import (
@@ -45,6 +37,16 @@ from materialize.feature_benchmark.comparator import (
 from materialize.feature_benchmark.executor import Docker
 from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.measurement import MeasurementType
+from materialize.feature_benchmark.scenarios.benchmark_main import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.benchmark_main import (
+    Scenario,
+)
+from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.customer import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.optbench import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.scale import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.skew import *  # noqa: F401 F403
+from materialize.feature_benchmark.scenarios.subscribe import *  # noqa: F401 F403
 from materialize.feature_benchmark.termination import (
     NormalDistributionOverlap,
     ProbForMin,
@@ -105,6 +107,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     KgenService(),
     Postgres(),
+    MySql(),
     Balancerd(),
     # Overridden below
     Materialized(),
@@ -113,9 +116,9 @@ SERVICES = [
 
 
 def run_one_scenario(
-    c: Composition, scenario: type[Scenario], args: argparse.Namespace
+    c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
 ) -> list[Comparator]:
-    name = scenario.__name__
+    name = scenario_class.__name__
     print(f"--- Now benchmarking {name} ...")
 
     measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
@@ -125,6 +128,8 @@ def run_one_scenario(
     comparators = [make_comparator(name=name, type=t) for t in measurement_types]
 
     common_seed = round(time.time())
+
+    early_abort = False
 
     for mz_id, instance in enumerate(["this", "other"]):
         balancerd, tag, size, params = (
@@ -181,7 +186,7 @@ def run_one_scenario(
             benchmark = Benchmark(
                 mz_id=mz_id,
                 mz_version=mz_version,
-                scenario=scenario,
+                scenario=scenario_class,
                 scale=args.scale,
                 executor=executor,
                 filter=make_filter(args),
@@ -191,13 +196,23 @@ def run_one_scenario(
                 default_size=size,
             )
 
-            aggregations = benchmark.run()
-            for aggregation, comparator in zip(aggregations, comparators):
-                comparator.append(aggregation.aggregate())
+            if not scenario_class.can_run(mz_version):
+                print(
+                    f"Skipping scenario {scenario_class} not supported in version {mz_version}"
+                )
+                early_abort = True
+            else:
+                aggregations = benchmark.run()
+                for aggregation, comparator in zip(aggregations, comparators):
+                    comparator.append(aggregation.aggregate())
 
         c.kill("cockroach", "materialized", "testdrive")
         c.rm("cockroach", "materialized", "testdrive")
         c.rm_volumes("mzdata")
+
+        if early_abort:
+            comparators = []
+            break
 
     return comparators
 
@@ -217,7 +232,7 @@ def create_mz_service(
         external_cockroach=True,
         external_minio=True,
         sanity_restart=False,
-        catalog_store="stash",
+        catalog_store="persist",
     )
 
 
@@ -225,14 +240,16 @@ def start_overridden_mz_and_cockroach(
     c: Composition, mz: Materialized, instance: str
 ) -> None:
     with c.override(mz):
-        print(f"The version of the '{instance.upper()}' Mz instance is:")
-        c.run(
+        version_request_command = c.run(
             "materialized",
             "-c",
             "environmentd --version | grep environmentd",
             entrypoint="bash",
             rm=True,
+            capture=True,
         )
+        version = version_request_command.stdout.strip()
+        print(f"The version of the '{instance.upper()}' Mz instance is: {version}")
 
         c.up("cockroach", "materialized")
 
@@ -374,7 +391,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         selected_scenarios = [root_scenario]
 
-    dependencies = ["postgres"]
+    dependencies = ["postgres", "mysql"]
 
     if args.redpanda:
         dependencies += ["redpanda"]
@@ -400,6 +417,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenarios_with_regressions = []
         for scenario in scenarios_to_run:
             comparators = run_one_scenario(c, scenario, args)
+
+            if len(comparators) == 0:
+                continue
+
             report.extend(comparators)
 
             # Do not retry the scenario if no regressions
@@ -443,8 +464,8 @@ def _are_regressions_justified(
         return False, ""
 
     # Checked in _tag_references_release_version
-    assert this_tag != None
-    assert baseline_tag != None
+    assert this_tag is not None
+    assert baseline_tag is not None
 
     this_version = MzVersion.parse_mz(this_tag)
     baseline_version = MzVersion.parse_mz(baseline_tag)
@@ -465,7 +486,7 @@ def _are_regressions_justified(
 
 
 def _tag_references_release_version(image_tag: str | None) -> bool:
-    if image_tag == None:
+    if image_tag is None:
         return False
     return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
         image_tag

@@ -101,7 +101,7 @@ use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::task::spawn;
+use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
@@ -134,14 +134,15 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::{debug, info, info_span, instrument, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::active_compute_sink::ActiveComputeSink;
 use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
-use crate::command::{Canceled, Command, ExecuteResponse};
+use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::catalog_oracle::CatalogTimestampPersistence;
@@ -158,8 +159,7 @@ use crate::optimize::dataflows::{
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::subscribe::ActiveSubscribe;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
@@ -214,7 +214,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ),
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
-    RemovePendingPeeks {
+    CancelPendingPeeks {
         conn_id: ConnectionId,
     },
     LinearizeReads,
@@ -246,22 +246,22 @@ pub enum Message<T = mz_repr::Timestamp> {
     },
     CreateIndexStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateIndexStage,
     },
     CreateViewStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateViewStage,
     },
     CreateMaterializedViewStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: CreateMaterializedViewStage,
     },
     SubscribeStageReady {
         ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
+        span: Span,
         stage: SubscribeStage,
     },
     DrainStatementLog,
@@ -294,7 +294,7 @@ impl Message {
             Message::GroupCommitApply(..) => "group_commit_apply",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
-            Message::RemovePendingPeeks { .. } => "remove_pending_peeks",
+            Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
@@ -367,7 +367,7 @@ pub enum RealTimeRecencyContext {
         oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
         optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-        explain_ctx: Option<ExplainContext>,
+        explain_ctx: ExplainContext,
     },
 }
 
@@ -382,15 +382,18 @@ impl RealTimeRecencyContext {
 
 #[derive(Debug)]
 pub enum PeekStage {
+    /// Common stages across SELECT, EXPLAIN and COPY TO queries.
     Validate(PeekStageValidate),
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
-    OptimizeMir(PeekStageOptimizeMir),
-    OptimizeLir(PeekStageOptimizeLir),
+    Optimize(PeekStageOptimize),
+    /// Final stage for a peek.
     Finish(PeekStageFinish),
+    /// Final stage for an explain.
+    ExplainPlan(PeekStageExplainPlan),
+    /// Final stage for a copy to.
     CopyTo(PeekStageCopyTo),
-    Explain(PeekStageExplain),
 }
 
 impl PeekStage {
@@ -400,11 +403,10 @@ impl PeekStage {
             PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::TimestampReadHold(PeekStageTimestampReadHold { validity, .. })
-            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
-            | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. })
             | PeekStage::CopyTo(PeekStageCopyTo { validity, .. })
-            | PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
+            | PeekStage::ExplainPlan(PeekStageExplainPlan { validity, .. }) => Some(validity),
         }
     }
 }
@@ -429,7 +431,7 @@ pub struct PeekStageValidate {
     copy_to_ctx: Option<CopyToContext>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -442,7 +444,7 @@ pub struct PeekStageLinearizeTimestamp {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -456,7 +458,7 @@ pub struct PeekStageRealTimeRecency {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -471,11 +473,11 @@ pub struct PeekStageTimestampReadHold {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimizeMir {
+pub struct PeekStageOptimize {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
@@ -485,22 +487,7 @@ pub struct PeekStageOptimizeMir {
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimizeLir {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
-    source_ids: BTreeSet<GlobalId>,
-    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
-    global_mir_plan: Either<optimize::peek::GlobalMirPlan, optimize::copy_to::GlobalMirPlan>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -523,40 +510,19 @@ pub struct PeekStageCopyTo {
 }
 
 #[derive(Debug)]
-pub struct PeekStageExplain {
+pub struct PeekStageExplainPlan {
     validity: PlanValidity,
     select_id: GlobalId,
     finishing: RowSetFinishing,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
 pub enum CreateIndexStage {
-    Validate(CreateIndexValidate),
     Optimize(CreateIndexOptimize),
     Finish(CreateIndexFinish),
     Explain(CreateIndexExplain),
-}
-
-impl CreateIndexStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-            Self::Explain(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateIndexValidate {
-    plan: plan::CreateIndexPlan,
-    resolved_ids: ResolvedIds,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -566,7 +532,7 @@ pub struct CreateIndexOptimize {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -585,30 +551,13 @@ pub struct CreateIndexExplain {
     exported_index_id: GlobalId,
     plan: plan::CreateIndexPlan,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
 pub enum CreateViewStage {
-    Validate(CreateViewValidate),
     Optimize(CreateViewOptimize),
     Finish(CreateViewFinish),
-}
-
-impl CreateViewStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateViewValidate {
-    plan: plan::CreateViewPlan,
-    resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug)]
@@ -628,7 +577,30 @@ pub struct CreateViewFinish {
 }
 
 #[derive(Debug)]
-pub struct ExplainContext {
+pub enum ExplainContext {
+    /// The ordinary, non-explain variant of the statement.
+    None,
+    /// The `EXPLAIN <level> PLAN FOR <explainee>` version of the statement.
+    Plan(ExplainPlanContext),
+}
+
+impl ExplainContext {
+    /// If available for this context, wrap the [`OptimizerTrace`] into a
+    /// [`tracing::Dispatch`] and set it as default, returning the resulting
+    /// guard in a `Some(guard)` option.
+    fn dispatch_guard(&self) -> Option<tracing::subscriber::DefaultGuard> {
+        match self {
+            ExplainContext::Plan(explain_ctx) => {
+                let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
+                Some(tracing::dispatcher::set_default(&dispatch))
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ExplainPlanContext {
     pub broken: bool,
     pub config: ExplainConfig,
     pub format: ExplainFormat,
@@ -640,30 +612,9 @@ pub struct ExplainContext {
 
 #[derive(Debug)]
 pub enum CreateMaterializedViewStage {
-    Validate(CreateMaterializedViewValidate),
     Optimize(CreateMaterializedViewOptimize),
     Finish(CreateMaterializedViewFinish),
     Explain(CreateMaterializedViewExplain),
-}
-
-impl CreateMaterializedViewStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-            Self::Explain(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateMaterializedViewValidate {
-    plan: plan::CreateMaterializedViewPlan,
-    resolved_ids: ResolvedIds,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -673,7 +624,7 @@ pub struct CreateMaterializedViewOptimize {
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPALIN for this statement.
-    explain_ctx: Option<ExplainContext>,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -693,34 +644,14 @@ pub struct CreateMaterializedViewExplain {
     exported_sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainContext,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
 pub enum SubscribeStage {
-    Validate(SubscribeValidate),
     OptimizeMir(SubscribeOptimizeMir),
-    Timestamp(SubscribeTimestamp),
-    OptimizeLir(SubscribeOptimizeLir),
+    TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
     Finish(SubscribeFinish),
-}
-
-impl SubscribeStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::OptimizeMir(stage) => Some(&mut stage.validity),
-            Self::Timestamp(stage) => Some(&mut stage.validity),
-            Self::OptimizeLir(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct SubscribeValidate {
-    plan: plan::SubscribePlan,
-    target_cluster: TargetCluster,
 }
 
 #[derive(Debug)]
@@ -731,20 +662,12 @@ pub struct SubscribeOptimizeMir {
 }
 
 #[derive(Debug)]
-pub struct SubscribeTimestamp {
+pub struct SubscribeTimestampOptimizeLir {
     validity: PlanValidity,
     plan: plan::SubscribePlan,
     timeline: TimelineContext,
     optimizer: optimize::subscribe::Optimizer,
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
-}
-
-#[derive(Debug)]
-pub struct SubscribeOptimizeLir {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    optimizer: optimize::subscribe::Optimizer,
-    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Resolved>,
 }
 
 #[derive(Debug)]
@@ -851,6 +774,30 @@ impl PlanValidity {
     }
 }
 
+/// Result types for each stage of a sequence.
+pub(crate) enum StageResult<T> {
+    /// A task was spawned that will return the next stage.
+    Handle(JoinHandle<Result<T, AdapterError>>),
+    /// The finaly stage was executed and is ready to respond to the client.
+    Response(ExecuteResponse),
+}
+
+/// Common functionality for [Coordinator::sequence_staged].
+#[async_trait::async_trait(?Send)]
+pub(crate) trait Staged: Send {
+    fn validity(&mut self) -> &mut PlanValidity;
+
+    /// Returns the next stage or final result.
+    async fn stage(
+        self,
+        coord: &mut Coordinator,
+        ctx: &mut ExecuteContext,
+    ) -> Result<StageResult<Box<Self>>, AdapterError>;
+
+    /// Prepares a message for the Coordinator.
+    fn message(self, ctx: ExecuteContext, span: Span) -> Message;
+}
+
 /// Configures a coordinator.
 pub struct Config {
     pub controller_config: ControllerConfig,
@@ -895,13 +842,6 @@ pub struct ReplicaMetadata {
 /// Metadata about an active connection.
 #[derive(Debug)]
 pub struct ConnMeta {
-    /// A watch channel shared with the client to inform the client of
-    /// cancellation requests. The coordinator sets the contained value to
-    /// `Canceled::Canceled` whenever it receives a cancellation request that
-    /// targets this connection. It is the client's responsibility to check this
-    /// value when appropriate and to reset the value to
-    /// `Canceled::NotCanceled` before starting a new operation.
-    cancel_tx: Arc<watch::Sender<Canceled>>,
     /// Pgwire specifies that every connection have a 32-bit secret associated
     /// with it, that is known to both the client and the server. Cancellation
     /// requests are required to authenticate with the secret of the connection
@@ -916,7 +856,7 @@ pub struct ConnMeta {
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
-    drop_sinks: Vec<ComputeSinkId>,
+    drop_sinks: BTreeSet<GlobalId>,
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
@@ -1317,7 +1257,9 @@ pub struct Coordinator {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
+    ///
+    /// We use a Vec because `ReadHolds` doesn't have a way of tracking multiplicity.
+    txn_read_holds: BTreeMap<ConnectionId, Vec<read_policy::ReadHolds<Timestamp>>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
@@ -1332,8 +1274,8 @@ pub struct Coordinator {
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
 
-    /// A map from active subscribes to the subscribe description.
-    active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
+    /// A map from the compute sink ID to it's state description.
+    active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
 
@@ -1994,10 +1936,12 @@ impl Coordinator {
                         Some((id, collection_desc))
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        let collection_desc = CollectionDescription::from_desc(
-                            mv.desc.clone(),
-                            DataSourceOther::Compute,
-                        );
+                        let collection_desc = CollectionDescription {
+                            desc: mv.desc.clone(),
+                            data_source: DataSource::Other(DataSourceOther::Compute),
+                            since: mv.initial_as_of.clone(),
+                            status_collection_id: None,
+                        };
                         Some((id, collection_desc))
                     }
                     _ => None,
@@ -2553,10 +2497,13 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
                     timer = idle_rx.recv() => {
                         timer.expect("does not drop").observe_duration();
+                        self.metrics.messages_processed.inc();
+                        self.metrics.watchdog_messages_processed.inc();
                         continue;
                     }
                 };
 
+                self.metrics.messages_processed.inc();
                 // All message processing functions trace. Start a parent span
                 // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
@@ -2848,7 +2795,7 @@ pub fn serve(
 
         let pg_timestamp_oracle_config = timestamp_oracle_url
             .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
-        let initial_timestamps =
+        let mut initial_timestamps =
             get_initial_oracle_timestamps(&mut storage, &pg_timestamp_oracle_config).await?;
 
         // A candidate for the boot_ts. Catalog::open will further advance this,
@@ -2857,6 +2804,38 @@ pub fn serve(
             .get(&Timeline::EpochMilliseconds)
             .expect("missing EpochMillisseconds timestamp")
             .clone();
+
+        // Choose a time at which to boot. This is used, for example, to prune
+        // old storage usage data. Crucially, it is _not_ linearizable, we do
+        // not persist this timestamp before using it. Think hard about this
+        // fact if you ever feel the need to use this for something that needs
+        // to be linearizable.
+        //
+        // This time is usually the current system time, but with protection
+        // against backwards time jumps, even across restarts.
+        let boot_ts_not_linearizable = {
+            // SUBTLE: This method will block if/when `max(now, previous_ts)` is
+            // larger than some upper bound, depending on how far that maximum
+            // is beyond the upper bound. This gives some measure of protection
+            // about the chosen boot_ts advancing beyond what was previously
+            // known, which could in turn make us delete storage usage records
+            // that we are not meant to delete.
+            let boot_ts = catalog_oracle::monotonic_now(now.clone(), previous_ts);
+            info!(%previous_ts, %boot_ts, "determining boot_ts");
+
+            boot_ts
+        };
+
+        // We need to patch up the EpochMilliseconds timestamp, which will in
+        // turn make sure that we initialize timestamp oracles at the `boot_ts`,
+        // which in turn will make sure that the next `boot_ts` is beyond the
+        // current boot_ts.
+        initial_timestamps
+            .entry(Timeline::EpochMilliseconds)
+            .and_modify(|ts| {
+                *ts = std::cmp::max(*ts, boot_ts_not_linearizable);
+            })
+            .or_insert(boot_ts_not_linearizable);
 
         info!("coordinator init: opening catalog");
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
@@ -2885,7 +2864,7 @@ pub fn serve(
                         http_host_name,
                     },
                 },
-                previous_ts,
+                boot_ts_not_linearizable,
             )
             .await?;
         let session_id = catalog.config().session_id;
@@ -2969,7 +2948,7 @@ pub fn serve(
                     client_pending_peeks: BTreeMap::new(),
                     pending_real_time_recency_timestamp: BTreeMap::new(),
                     pending_linearize_read_txns: BTreeMap::new(),
-                    active_subscribes: BTreeMap::new(),
+                    active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),

@@ -1362,7 +1362,7 @@ static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
 
 pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("default_idle_arrangement_merge_effort"),
-    value: 1000,
+    value: 0,
     description:
         "The default value to use for the `IDLE ARRANGEMENT MERGE EFFORT` cluster/replica option.",
     internal: true,
@@ -1473,13 +1473,6 @@ pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
     value: true,
     description: "consolidation after Unions that have a Negated input (Materialize).",
     internal: false,
-};
-
-pub const ENABLE_SPECIALIZED_ARRANGEMENTS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_specialized_arrangements"),
-    value: false,
-    description: "type-specialization for arrangements in compute rendering",
-    internal: true,
 };
 
 pub const MIN_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
@@ -1782,13 +1775,6 @@ feature_flags!(
     {
         name: enable_create_source_denylist_with_options,
         desc: "CREATE SOURCE with unsafe options",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_create_source_from_testscript,
-        desc: "CREATE SOURCE ... FROM TEST SCRIPT",
         default: false,
         internal: true,
         enable_for_item_parsing: true,
@@ -2954,7 +2940,6 @@ impl SystemVars {
             .with_var(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
-            .with_var(&ENABLE_SPECIALIZED_ARRANGEMENTS)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
             .with_var(&MIN_TIMESTAMP_INTERVAL)
             .with_var(&MAX_TIMESTAMP_INTERVAL)
@@ -3723,10 +3708,6 @@ impl SystemVars {
 
     pub fn enable_consolidate_after_union_negate(&self) -> bool {
         *self.expect_value(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
-    }
-
-    pub fn enable_specialized_arrangements(&self) -> bool {
-        *self.expect_value(&ENABLE_SPECIALIZED_ARRANGEMENTS)
     }
 
     /// Returns the `enable_default_connection_validation` configuration parameter.
@@ -5523,7 +5504,6 @@ impl SystemVars {
             || name == LINEAR_JOIN_YIELDING.name()
             || name == ENABLE_MZ_JOIN_CORE.name()
             || name == ENABLE_JEMALLOC_PROFILING.name()
-            || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
             || self.is_persist_config_var(name)
             || is_tracing_var(name)

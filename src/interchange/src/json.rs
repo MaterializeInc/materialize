@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
@@ -178,22 +179,31 @@ impl ToJson for TypedDatum<'_> {
             }
             ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
             ScalarType::Uuid => json!(datum.unwrap_uuid()),
-            ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
-                let list = match typ.scalar_type {
-                    ScalarType::Array(_) | ScalarType::Int2Vector => {
-                        datum.unwrap_array().elements()
-                    }
-                    ScalarType::List { .. } => datum.unwrap_list(),
-                    _ => unreachable!(),
-                };
-                let values = list
+            ty @ (ScalarType::Array(..) | ScalarType::Int2Vector) => {
+                let array = datum.unwrap_array();
+                let dims = array.dims().into_iter().collect::<Vec<_>>();
+                let mut datums = array.elements().iter();
+                encode_array(&mut datums, &dims, &mut |datum| {
+                    TypedDatum::new(
+                        datum,
+                        &ColumnType {
+                            nullable: true,
+                            scalar_type: ty.unwrap_collection_element_type().clone(),
+                        },
+                    )
+                    .json(number_policy)
+                })
+            }
+            ScalarType::List { element_type, .. } => {
+                let values = datum
+                    .unwrap_list()
                     .into_iter()
                     .map(|datum| {
                         TypedDatum::new(
                             datum,
                             &ColumnType {
                                 nullable: true,
-                                scalar_type: ty.unwrap_collection_element_type().clone(),
+                                scalar_type: (**element_type).clone(),
                             },
                         )
                         .json(number_policy)
@@ -252,6 +262,20 @@ impl ToJson for TypedDatum<'_> {
             (JsonNumberPolicy::ConvertNumberToString, value) => value,
         }
     }
+}
+
+fn encode_array<'a>(
+    elems: &mut impl Iterator<Item = Datum<'a>>,
+    dims: &[ArrayDimension],
+    elem_encoder: &mut impl FnMut(Datum<'_>) -> serde_json::Value,
+) -> serde_json::Value {
+    serde_json::Value::Array(match dims {
+        [] => vec![],
+        [dim] => elems.take(dim.length).map(elem_encoder).collect(),
+        [dim, rest @ ..] => (0..dim.length)
+            .map(|_| encode_array(elems, rest, elem_encoder))
+            .collect(),
+    })
 }
 
 fn build_row_schema_field_type(

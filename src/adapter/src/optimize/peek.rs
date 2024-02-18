@@ -22,7 +22,7 @@ use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::{Optimizer as TransformOptimizer, StatisticsOracle};
+use mz_transform::StatisticsOracle;
 use timely::progress::Antichain;
 use tracing::{debug_span, warn};
 
@@ -33,7 +33,8 @@ use crate::optimize::dataflows::{
     ExprPrepStyle,
 };
 use crate::optimize::{
-    trace_plan, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
+    optimize_mir_local, trace_plan, MirDataflowDescription, Optimize, OptimizeMode,
+    OptimizerConfig, OptimizerError,
 };
 use crate::session::Session;
 use crate::TimestampContext;
@@ -101,12 +102,12 @@ impl Debug for Optimizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OptimizePeek")
             .field("config", &self.config)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
-/// Marker type for [`LocalMirPlan`] and [`GlobalMirPlan`] structs representing
-/// an optimization result without context.
+/// Marker type for [`LocalMirPlan`] representing an optimization result without
+/// context.
 pub struct Unresolved;
 
 /// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation
@@ -119,46 +120,22 @@ pub struct LocalMirPlan<T = Unresolved> {
 
 /// Marker type for [`LocalMirPlan`] structs representing an optimization result
 /// with attached environment context required for the next optimization stage.
-pub struct ResolvedLocal<'s> {
+pub struct Resolved<'s> {
+    timestamp_ctx: TimestampContext<Timestamp>,
     stats: Box<dyn StatisticsOracle>,
     session: &'s Session,
 }
 
-/// The (sealed intermediate) result after:
+/// The (final) result after
 ///
-/// 1. embedding a [`LocalMirPlan`] into a [`MirDataflowDescription`],
-/// 2. transitively inlining referenced views, and
-/// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
-#[derive(Clone)]
-pub struct GlobalMirPlan<T = Unresolved> {
-    df_desc: MirDataflowDescription,
-    df_meta: DataflowMetainfo,
-    typ: RelationType, // TODO: read this from the index_exports.
-    context: T,
-}
-
-impl Debug for GlobalMirPlan<Unresolved> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GlobalMirPlan")
-            .field("df_desc", &self.df_desc)
-            .field("df_meta", &self.df_meta)
-            .field("typ", &self.typ)
-            .finish()
-    }
-}
-
-/// Marker type for [`GlobalMirPlan`] structs representing an optimization
-/// result with with a resolved timestamp and attached environment context
-/// required for the next optimization stage.
+/// 1. embedding a [`LocalMirPlan`] into a `DataflowDescription`,
+/// 2. transitively inlining referenced views,
+/// 3. timestamp resolution,
+/// 4. optimizing the resulting `DataflowDescription` with `MIR` plans.
+/// 5. MIR ⇒ LIR lowering, and
+/// 6. optimizing the resulting `DataflowDescription` with `LIR` plans.
 ///
-/// The actual timestamp value is set in the [`MirDataflowDescription`] of the
-/// surrounding [`GlobalMirPlan`] when we call `resolve()`.
-#[derive(Clone)]
-pub struct ResolvedGlobal<'s> {
-    session: &'s Session,
-}
-
-/// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
+///  MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
 #[derive(Debug)]
 pub struct GlobalLirPlan {
@@ -178,16 +155,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        let expr = debug_span!(target: "optimizer", "local").in_scope(|| {
-            #[allow(deprecated)]
-            let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
-            let expr = optimizer.optimize(expr)?.into_inner();
-
-            // Trace the result of this phase.
-            trace_plan(&expr);
-
-            Ok::<_, OptimizerError>(expr)
-        })?;
+        let expr = optimize_mir_local(expr, &self.typecheck_ctx)?.into_inner();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
@@ -198,30 +166,37 @@ impl Optimize<HirRelationExpr> for Optimizer {
 }
 
 impl LocalMirPlan<Unresolved> {
-    /// Produces the [`LocalMirPlan`] with [`ResolvedLocal`] contextual
-    /// information required for the next stage.
+    /// Produces the [`LocalMirPlan`] with [`Resolved`] contextual information
+    /// required for the next stage.
     pub fn resolve(
         self,
+        timestamp_ctx: TimestampContext<Timestamp>,
         session: &Session,
         stats: Box<dyn StatisticsOracle>,
-    ) -> LocalMirPlan<ResolvedLocal> {
+    ) -> LocalMirPlan<Resolved> {
         LocalMirPlan {
             expr: self.expr,
-            context: ResolvedLocal { session, stats },
+            context: Resolved {
+                timestamp_ctx,
+                session,
+                stats,
+            },
         }
     }
 }
 
-impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
-    type To = GlobalMirPlan<Unresolved>;
+impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
+    type To = GlobalLirPlan;
 
-    fn optimize(
-        &mut self,
-        plan: LocalMirPlan<ResolvedLocal<'s>>,
-    ) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, plan: LocalMirPlan<Resolved<'s>>) -> Result<Self::To, OptimizerError> {
         let LocalMirPlan {
             expr,
-            context: ResolvedLocal { stats, session },
+            context:
+                Resolved {
+                    timestamp_ctx,
+                    stats,
+                    session,
+                },
         } = plan;
 
         let expr = OptimizedMirRelationExpr(expr);
@@ -275,6 +250,24 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
             );
         }
 
+        // Set the `as_of` and `until` timestamps for the dataflow.
+        df_desc.set_as_of(timestamp_ctx.antichain());
+
+        // Use the the opportunity to name an `until` frontier that will prevent
+        // work we needn't perform. By default, `until` will be
+        // `Antichain::new()`, which prevents no updates and is safe.
+        //
+        // If `timestamp_ctx.antichain()` is empty, `timestamp_ctx.timestamp()`
+        // will return `None` and we use the default (empty) `until`. Otherwise,
+        // we expect to be able to set `until = as_of + 1` without an overflow.
+        if let Some(as_of) = timestamp_ctx.timestamp() {
+            if let Some(until) = as_of.checked_add(1) {
+                df_desc.until = Antichain::from_elem(until);
+            } else {
+                warn!(as_of = %as_of, "as_of + 1 overflow");
+            }
+        }
+
         let df_meta = mz_transform::optimize_dataflow(
             &mut df_desc,
             &df_builder,
@@ -286,69 +279,6 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
             // Collect the list of indexes used by the dataflow at this point.
             trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
         }
-
-        // Return the (sealed) plan at the end of this optimization step.
-        Ok(GlobalMirPlan {
-            df_desc,
-            df_meta,
-            typ,
-            context: Unresolved,
-        })
-    }
-}
-
-impl GlobalMirPlan<Unresolved> {
-    /// Produces the [`GlobalMirPlan`] with [`ResolvedGlobal`] contextual
-    /// information required for the next stage.
-    ///
-    /// We need to resolve timestamps before the `GlobalMirPlan ⇒ GlobalLirPlan`
-    /// optimization stage in order to profit from possible single-time
-    /// optimizations in the `Plan::finalize_dataflow` call.
-    pub fn resolve(
-        mut self,
-        timestamp_ctx: TimestampContext<Timestamp>,
-        session: &Session,
-    ) -> GlobalMirPlan<ResolvedGlobal> {
-        // Set the `as_of` and `until` timestamps for the dataflow.
-        self.df_desc.set_as_of(timestamp_ctx.antichain());
-
-        // Use the the opportunity to name an `until` frontier that will prevent
-        // work we needn't perform. By default, `until` will be
-        // `Antichain::new()`, which prevents no updates and is safe.
-        //
-        // If `timestamp_ctx.antichain()` is empty, `timestamp_ctx.timestamp()`
-        // will return `None` and we use the default (empty) `until`. Otherwise,
-        // we expect to be able to set `until = as_of + 1` without an overflow.
-        if let Some(as_of) = timestamp_ctx.timestamp() {
-            if let Some(until) = as_of.checked_add(1) {
-                self.df_desc.until = Antichain::from_elem(until);
-            } else {
-                warn!(as_of = %as_of, "as_of + 1 overflow");
-            }
-        }
-
-        GlobalMirPlan {
-            df_desc: self.df_desc,
-            df_meta: self.df_meta,
-            typ: self.typ,
-            context: ResolvedGlobal { session },
-        }
-    }
-}
-
-impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
-    type To = GlobalLirPlan;
-
-    fn optimize(
-        &mut self,
-        plan: GlobalMirPlan<ResolvedGlobal<'s>>,
-    ) -> Result<Self::To, OptimizerError> {
-        let GlobalMirPlan {
-            mut df_desc,
-            df_meta,
-            typ,
-            context: ResolvedGlobal { session },
-        } = plan;
 
         // Get the single timestamp representing the `as_of` time.
         let as_of = df_desc
@@ -418,7 +348,6 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
                 let df_desc = Plan::finalize_dataflow(
                     df_desc,
                     self.config.enable_consolidate_after_union_negate,
-                    self.config.enable_specialized_arrangements,
                     self.config.enable_reduce_mfp_fusion,
                 )
                 .map_err(OptimizerError::Internal)?;

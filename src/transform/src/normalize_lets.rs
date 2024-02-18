@@ -546,7 +546,7 @@ mod let_motion {
             // Bindings to lower.
             let mut lowered = BTreeMap::<LocalId, MirRelationExpr>::new();
 
-            let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
+            let rec_ids = MirRelationExpr::recursive_ids(ids, values);
 
             while ids.last().map(|id| !rec_ids.contains(id)).unwrap_or(false) {
                 let id = ids.pop().expect("non-empty ids");
@@ -740,7 +740,7 @@ mod inlining {
                         match stripped_value {
                             // TODO: One could imagine CSEing multiple occurrences of a global Get
                             // to make us read from Persist only once.
-                            // https://github.com/MaterializeInc/materialize/issues/21145
+                            // See <https://github.com/MaterializeInc/materialize/issues/21145>
                             MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
                             _ => false,
                         }

@@ -56,7 +56,7 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
-use itertools::Itertools;
+use itertools::{EitherOrBoth, Itertools};
 use mysql_async::Row as MySqlRow;
 use mysql_common::value::convert::from_value;
 use mysql_common::Value;
@@ -85,6 +85,7 @@ use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod replication;
+mod schemas;
 mod snapshot;
 
 impl SourceRender for MySqlSourceConnection {
@@ -204,6 +205,8 @@ pub enum ReplicationError {
 /// A transient error that never ends up in the collection of a specific table.
 #[derive(Debug, thiserror::Error)]
 pub enum TransientError {
+    #[error("issue when decoding")]
+    DecodeError(String),
     #[error("couldn't decode binlog row")]
     BinlogRowDecodeError(#[from] mysql_async::binlog::row::BinlogRowToRowError),
     #[error("stream ended prematurely")]
@@ -225,6 +228,12 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
+    #[error("table was truncated: {0}")]
+    TableTruncated(String),
+    #[error("table was dropped: {0}")]
+    TableDropped(String),
+    #[error("incompatible schema change: {0}")]
+    IncompatibleSchema(String),
     #[error("received a gtid set from the server that violates our requirements: {0}")]
     UnsupportedGtidState(String),
     #[error("received out of order gtids for source {0} at transaction-id {1}")]
@@ -274,9 +283,29 @@ pub(crate) fn pack_mysql_row(
     let mut packer = row_container.packer();
     let mut temp_bytes = vec![];
     let mut temp_strs = vec![];
-    let values = row.unwrap();
+    let row_values = row.unwrap();
 
-    for (col_desc, value) in table_desc.columns.iter().zip_eq(values) {
+    for values in table_desc.columns.iter().zip_longest(row_values) {
+        let (col_desc, value) = match values {
+            EitherOrBoth::Both(col_desc, value) => (col_desc, value),
+            EitherOrBoth::Left(col_desc) => {
+                tracing::error!(
+                    "mysql: extra column description {col_desc:?} for table {}",
+                    table_desc.name
+                );
+                Err(TransientError::DecodeError(format!(
+                    "extra column description {col_desc:?} for table {}",
+                    table_desc.name
+                )))?
+            }
+            EitherOrBoth::Right(value) => {
+                tracing::error!("mysql: extra value {value:?} for table {}", table_desc.name);
+                Err(TransientError::DecodeError(format!(
+                    "extra value found: {value:?} for table {}",
+                    table_desc.name
+                )))?
+            }
+        };
         let datum = match value {
             Value::NULL => {
                 if col_desc.column_type.nullable {
@@ -326,119 +355,6 @@ pub(crate) fn pack_mysql_row(
     }
 
     Ok(Ok(row_container.clone()))
-}
-
-/// Holds the active and future GTID partitions that represent the complete
-/// UUID range of all possible GTID source-ids from a MySQL server.
-/// The active partitions are all singleton partitions representing a single
-/// source-id timestamp, and the future partitions represent the missing
-/// UUID ranges that we have not yet seen and are held at timestamp GtidState::Absent.
-///
-/// This is used to keep track of all partitions and is updated as we receive
-/// new GTID updates from the server, and is used to create a full 'frontier'
-/// representing the current state of all GTID partitions that we can use
-/// to downgrade capabilities for the source.
-///
-/// We could instead mint capabilities for each individual partition
-/// and advance each partition as a frontier separately using its own capabilities,
-/// but since this is used inside a fallible operator if we ever hit any errors
-/// then all newly minted capabilities would be dropped by the async runtime
-/// and we might lose the ability to send any more data.
-/// However if we just use the main capabilities provided to the operator, the
-/// capabilities externally will be preserved even in the case of an error in
-/// the operator, which is why we just manage a single frontier and capability set.
-struct GtidReplicationPartitions {
-    active: BTreeMap<Uuid, GtidPartition>,
-    future: Vec<GtidPartition>,
-}
-
-impl From<Antichain<GtidPartition>> for GtidReplicationPartitions {
-    fn from(frontier: Antichain<GtidPartition>) -> Self {
-        let mut active = BTreeMap::new();
-        let mut future = Vec::new();
-        for part in frontier.iter() {
-            if part.timestamp() == &GtidState::Absent {
-                future.push(part.clone());
-            } else {
-                let source_id = part.interval().singleton().unwrap().clone();
-                active.insert(source_id, part.clone());
-            }
-        }
-        Self { active, future }
-    }
-}
-
-impl GtidReplicationPartitions {
-    /// Return an Antichain for the frontier composed of all the
-    /// active and future GTID partitions.
-    fn frontier(&self) -> Antichain<GtidPartition> {
-        Antichain::from_iter(
-            self.active
-                .values()
-                .cloned()
-                .chain(self.future.iter().cloned()),
-        )
-    }
-
-    /// Given a singleton GTID partition, update the timestamp of the existing
-    /// active partition with the same UUID
-    /// or split the future partitions to remove this new partition and then
-    /// insert the new 'active' partition.
-    ///
-    /// This is used whenever we receive a GTID update from the server and
-    /// need to update our state keeping track
-    /// of all the active and future GTID partition timestamps.
-    /// This call should usually be followed up by downgrading capabilities
-    /// using the frontier returned by `self.frontier()`
-    fn update(&mut self, new_part: GtidPartition) -> Result<(), DefiniteError> {
-        let source_id = new_part.interval().singleton().unwrap();
-        // Check if we have an active partition for the GTID UUID
-        match self.active.get_mut(source_id) {
-            Some(active_part) => {
-                // Since we start replication at a specific upper, we
-                // should only see GTID transaction-ids
-                // in a monotonic order for each source, starting at that upper.
-                if active_part.timestamp() > &new_part.timestamp() {
-                    let err = DefiniteError::BinlogGtidMonotonicityViolation(
-                        source_id.to_string(),
-                        new_part.timestamp().clone(),
-                    );
-                    return Err(err);
-                }
-
-                // replace this active partition with the new one
-                *active_part = new_part;
-            }
-            // We've received a GTID for a UUID we don't yet know about
-            None => {
-                // Extract the future partition whose range encompasses this UUID
-                // TODO: Replace with Vec::extract_if() once it's stabilized
-                let mut i = 0;
-                let mut contained_part = None;
-                while i < self.future.len() {
-                    if self.future[i].interval().contains(source_id) {
-                        contained_part = Some(self.future.remove(i));
-                        break;
-                    } else {
-                        i += 1;
-                    }
-                }
-                let contained_part =
-                    contained_part.expect("expected a future partition to contain the UUID");
-
-                // Split the future partition into partitions for before and after this UUID
-                // and add back to the future partitions.
-                let (before_range, after_range) = contained_part.split(source_id);
-                self.future
-                    .extend(before_range.into_iter().chain(after_range.into_iter()));
-
-                // Store the new part in our active partitions
-                self.active.insert(source_id.clone(), new_part);
-            }
-        };
-
-        Ok(())
-    }
 }
 
 async fn return_definite_error(

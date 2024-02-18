@@ -21,6 +21,7 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use once_cell::sync::Lazy;
 use serde::Serialize;
+use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -986,6 +987,11 @@ impl CatalogState {
                     typ.column_types[i].nullable = false;
                 }
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
+
+                let initial_as_of = materialized_view
+                    .as_of
+                    .map(|time| Antichain::from_elem(time.into()));
+
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     raw_expr,
@@ -996,6 +1002,7 @@ impl CatalogState {
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,
                     refresh_schedule: materialized_view.refresh_schedule,
+                    initial_as_of,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {

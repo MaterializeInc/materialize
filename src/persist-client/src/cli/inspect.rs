@@ -329,7 +329,7 @@ pub async fn blob_batch_part(
 ) -> Result<impl serde::Serialize, anyhow::Error> {
     let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-    let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
+    let blob = make_blob(&cfg, blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
 
     let key = PartialBatchKey(partial_key).complete(&shard_id);
     let part = blob
@@ -337,7 +337,7 @@ pub async fn blob_batch_part(
         .await
         .expect("blob exists")
         .expect("part exists");
-    let part = BlobTraceBatchPart::<u64>::decode(&part).expect("decodable");
+    let part = BlobTraceBatchPart::<u64>::decode(&part, &metrics.columnar).expect("decodable");
     let desc = part.desc.clone();
 
     let encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
@@ -572,7 +572,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     let consensus =
         make_consensus(&cfg, &args.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, &args.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-    let isolated_runtime = Arc::new(IsolatedRuntime::new());
+    let isolated_runtime = Arc::new(IsolatedRuntime::default());
     let state_cache = Arc::new(StateCache::new(
         &cfg,
         Arc::clone(&metrics),

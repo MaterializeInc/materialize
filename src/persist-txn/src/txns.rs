@@ -396,8 +396,10 @@ where
                 }
             }
 
-            self.datas.data_write.remove(&data_id);
+            // Note: Ordering here matters, we want to generate the Tidy work _before_ removing the
+            // handle because the work will create a handle to the shard.
             let tidy = self.apply_le(&forget_ts).await;
+            self.datas.data_write.remove(&data_id);
 
             Ok(tidy)
         })

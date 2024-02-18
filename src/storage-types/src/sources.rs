@@ -17,10 +17,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use bytes::BufMut;
-
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
-
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
@@ -28,17 +26,14 @@ use mz_persist_types::dyn_struct::{DynStruct, DynStructCfg, ValidityMut, Validit
 use mz_persist_types::stats::StatsFn;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-
 use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, RelationDesc, Row, RowDecoder,
     RowEncoder,
 };
-
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
@@ -47,11 +42,9 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-
 use crate::controller::{CollectionMetadata, StorageError};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
-
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use crate::AlterCompatible;
 
@@ -61,24 +54,20 @@ pub mod kafka;
 pub mod load_generator;
 pub mod mysql;
 pub mod postgres;
-pub mod testscript;
 
 pub use crate::sources::envelope::SourceEnvelope;
 pub use crate::sources::kafka::KafkaSourceConnection;
 pub use crate::sources::load_generator::LoadGeneratorSourceConnection;
 pub use crate::sources::mysql::MySqlSourceConnection;
 pub use crate::sources::postgres::PostgresSourceConnection;
-pub use crate::sources::testscript::TestScriptSourceConnection;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
 /// A description of a source ingestion
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection> {
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
     /// The source description
     pub desc: SourceDesc<C>,
-    /// Source collections made available to this ingestion.
-    pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
@@ -88,6 +77,9 @@ pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection>
     ///
     /// Note that this does _not_ include the remap collection, which is tracked
     /// in its own field.
+    #[proptest(
+        strategy = "proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 0..4)"
+    )]
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
@@ -102,7 +94,6 @@ impl<S> IngestionDescription<S> {
         // increase the likelihood of developers seeing this function.
         let IngestionDescription {
             desc: _,
-            source_imports: _,
             ingestion_metadata: _,
             source_exports,
             instance_id: _,
@@ -129,7 +120,6 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
         }
         let IngestionDescription {
             desc,
-            source_imports,
             ingestion_metadata,
             source_exports,
             instance_id,
@@ -138,7 +128,6 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
 
         let compatibility_checks = [
             (self.desc.alter_compatible(id, desc).is_ok(), "desc"),
-            (source_imports == &other.source_imports, "source_imports"),
             (
                 ingestion_metadata == &other.ingestion_metadata,
                 "ingestion_metadata",
@@ -202,7 +191,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
     fn into_inline_connection(self, r: R) -> IngestionDescription {
         let IngestionDescription {
             desc,
-            source_imports,
             ingestion_metadata,
             source_exports,
             instance_id,
@@ -211,7 +199,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 
         IngestionDescription {
             desc: desc.into_inline_connection(r),
-            source_imports,
             ingestion_metadata,
             source_exports,
             instance_id,
@@ -220,7 +207,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceExport<S = ()> {
     /// The index of the exported output stream
     pub output_index: usize,
@@ -228,48 +215,9 @@ pub struct SourceExport<S = ()> {
     pub storage_metadata: S,
 }
 
-impl<S> Arbitrary for IngestionDescription<S>
-where
-    S: Arbitrary + 'static,
-{
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<SourceDesc>().boxed(),
-            proptest::collection::btree_map(any::<GlobalId>(), any::<S>(), 1..4).boxed(),
-            proptest::collection::btree_map(any::<GlobalId>(), any::<SourceExport<S>>(), 1..4)
-                .boxed(),
-            any::<S>().boxed(),
-            any::<StorageInstanceId>().boxed(),
-            any::<GlobalId>(),
-        )
-            .prop_map(
-                |(
-                    desc,
-                    source_imports,
-                    source_exports,
-                    ingestion_metadata,
-                    instance_id,
-                    remap_collection_id,
-                )| Self {
-                    desc,
-                    source_imports,
-                    source_exports,
-                    ingestion_metadata,
-                    instance_id,
-                    remap_collection_id,
-                },
-            )
-            .boxed()
-    }
-}
-
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
     fn into_proto(&self) -> ProtoIngestionDescription {
         ProtoIngestionDescription {
-            source_imports: self.source_imports.into_proto(),
             source_exports: self.source_exports.into_proto(),
             ingestion_metadata: Some(self.ingestion_metadata.into_proto()),
             desc: Some(self.desc.into_proto()),
@@ -280,7 +228,6 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
 
     fn from_proto(proto: ProtoIngestionDescription) -> Result<Self, TryFromProtoError> {
         Ok(IngestionDescription {
-            source_imports: proto.source_imports.into_rust()?,
             source_exports: proto.source_exports.into_rust()?,
             desc: proto
                 .desc
@@ -334,23 +281,6 @@ impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceEx
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
             },
         ))
-    }
-}
-
-impl<S> Arbitrary for SourceExport<S>
-where
-    S: Arbitrary + 'static,
-{
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (any::<usize>(), any::<S>())
-            .prop_map(|(output_index, storage_metadata)| Self {
-                output_index,
-                storage_metadata,
-            })
-            .boxed()
     }
 }
 
@@ -639,6 +569,18 @@ pub trait SourceConnection: Debug + Clone + PartialEq + crate::AlterCompatible {
     /// The name of the resource in the external system (e.g kafka topic) if any
     fn upstream_name(&self) -> Option<&str>;
 
+    /// The schema of this connection's key rows.
+    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
+    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
+    // pipeline.
+    fn key_desc(&self) -> RelationDesc;
+
+    /// The schema of this connection's value rows.
+    // This is mostly setting the stage for the subsequent PRs that will attempt to compute and
+    // typecheck subsequent stages of the pipeline using the types of the earlier stages of the
+    // pipeline.
+    fn value_desc(&self) -> RelationDesc;
+
     /// The schema of this connection's timestamp type. This will also be the schema of the
     /// progress relation.
     fn timestamp_desc(&self) -> RelationDesc;
@@ -684,10 +626,10 @@ impl RustType<ProtoCompression> for Compression {
 }
 
 /// An external source of updates for a relational collection.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
-    pub encoding: encoding::SourceDataEncoding<C>,
+    pub encoding: Option<encoding::SourceDataEncoding<C>>,
     pub envelope: SourceEnvelope,
     pub timestamp_interval: Duration,
 }
@@ -705,33 +647,10 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            encoding: encoding.into_inline_connection(r),
+            encoding: encoding.map(|e| e.into_inline_connection(r)),
             envelope,
             timestamp_interval,
         }
-    }
-}
-
-impl Arbitrary for SourceDesc {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<GenericSourceConnection>(),
-            any::<encoding::SourceDataEncoding>(),
-            any::<SourceEnvelope>(),
-            any::<Duration>(),
-        )
-            .prop_map(
-                |(connection, encoding, envelope, timestamp_interval)| Self {
-                    connection,
-                    encoding,
-                    envelope,
-                    timestamp_interval,
-                },
-            )
-            .boxed()
     }
 }
 
@@ -739,7 +658,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
-            encoding: Some(self.encoding.into_proto()),
+            encoding: self.encoding.into_proto(),
             envelope: Some(self.envelope.into_proto()),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
@@ -750,9 +669,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
-            encoding: proto
-                .encoding
-                .into_rust_if_some("ProtoSourceDesc::encoding")?,
+            encoding: proto.encoding.into_rust()?,
             envelope: proto
                 .envelope
                 .into_rust_if_some("ProtoSourceDesc::envelope")?,
@@ -795,8 +712,7 @@ impl<C: ConnectionAccess> SourceDesc<C> {
             // Other combinations may produce retractions.
             SourceDesc {
                 envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
-                connection:
-                    GenericSourceConnection::Kafka(_) | GenericSourceConnection::TestScript(_),
+                connection: GenericSourceConnection::Kafka(_),
                 ..
             } => false,
         }
@@ -857,7 +773,6 @@ pub enum GenericSourceConnection<C: ConnectionAccess = InlinedConnection> {
     Postgres(PostgresSourceConnection<C>),
     MySql(MySqlSourceConnection<C>),
     LoadGenerator(LoadGeneratorSourceConnection),
-    TestScript(TestScriptSourceConnection),
 }
 
 impl<C: ConnectionAccess> From<KafkaSourceConnection<C>> for GenericSourceConnection<C> {
@@ -884,12 +799,6 @@ impl<C: ConnectionAccess> From<LoadGeneratorSourceConnection> for GenericSourceC
     }
 }
 
-impl<C: ConnectionAccess> From<TestScriptSourceConnection> for GenericSourceConnection<C> {
-    fn from(conn: TestScriptSourceConnection) -> Self {
-        Self::TestScript(conn)
-    }
-}
-
 impl<R: ConnectionResolver> IntoInlineConnection<GenericSourceConnection, R>
     for GenericSourceConnection<ReferencedConnection>
 {
@@ -907,7 +816,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<GenericSourceConnection, R>
             GenericSourceConnection::LoadGenerator(lg) => {
                 GenericSourceConnection::LoadGenerator(lg)
             }
-            GenericSourceConnection::TestScript(ts) => GenericSourceConnection::TestScript(ts),
         }
     }
 }
@@ -919,7 +827,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.name(),
             Self::MySql(conn) => conn.name(),
             Self::LoadGenerator(conn) => conn.name(),
-            Self::TestScript(conn) => conn.name(),
         }
     }
 
@@ -929,7 +836,24 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.upstream_name(),
             Self::MySql(conn) => conn.upstream_name(),
             Self::LoadGenerator(conn) => conn.upstream_name(),
-            Self::TestScript(conn) => conn.upstream_name(),
+        }
+    }
+
+    fn key_desc(&self) -> RelationDesc {
+        match self {
+            Self::Kafka(conn) => conn.key_desc(),
+            Self::Postgres(conn) => conn.key_desc(),
+            Self::MySql(conn) => conn.key_desc(),
+            Self::LoadGenerator(conn) => conn.key_desc(),
+        }
+    }
+
+    fn value_desc(&self) -> RelationDesc {
+        match self {
+            Self::Kafka(conn) => conn.value_desc(),
+            Self::Postgres(conn) => conn.value_desc(),
+            Self::MySql(conn) => conn.value_desc(),
+            Self::LoadGenerator(conn) => conn.value_desc(),
         }
     }
 
@@ -939,7 +863,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.timestamp_desc(),
             Self::MySql(conn) => conn.timestamp_desc(),
             Self::LoadGenerator(conn) => conn.timestamp_desc(),
-            Self::TestScript(conn) => conn.timestamp_desc(),
         }
     }
 
@@ -949,7 +872,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.connection_id(),
             Self::MySql(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
-            Self::TestScript(conn) => conn.connection_id(),
         }
     }
 
@@ -959,7 +881,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.metadata_columns(),
             Self::MySql(conn) => conn.metadata_columns(),
             Self::LoadGenerator(conn) => conn.metadata_columns(),
-            Self::TestScript(conn) => conn.metadata_columns(),
         }
     }
 }
@@ -975,7 +896,6 @@ impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> 
             (Self::LoadGenerator(conn), Self::LoadGenerator(other)) => {
                 conn.alter_compatible(id, other)
             }
-            (Self::TestScript(conn), Self::TestScript(other)) => conn.alter_compatible(id, other),
             _ => Err(StorageError::InvalidAlter { id }),
         };
 
@@ -1004,9 +924,6 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
                 GenericSourceConnection::LoadGenerator(loadgen) => {
                     Kind::Loadgen(loadgen.into_proto())
                 }
-                GenericSourceConnection::TestScript(testscript) => {
-                    Kind::Testscript(testscript.into_proto())
-                }
             }),
         }
     }
@@ -1021,9 +938,6 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
             Kind::Postgres(postgres) => GenericSourceConnection::Postgres(postgres.into_rust()?),
             Kind::Mysql(mysql) => GenericSourceConnection::MySql(mysql.into_rust()?),
             Kind::Loadgen(loadgen) => GenericSourceConnection::LoadGenerator(loadgen.into_rust()?),
-            Kind::Testscript(testscript) => {
-                GenericSourceConnection::TestScript(testscript.into_rust()?)
-            }
         })
     }
 }

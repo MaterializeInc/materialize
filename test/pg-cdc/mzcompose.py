@@ -21,6 +21,7 @@ SERVICES = [
     Postgres(extra_command=["-c", "max_slot_wal_keep_size=10"]),
 ]
 
+
 # Test that ceased statuses persist across restart
 def workflow_ceased_status(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(Testdrive(no_reset=True)):
@@ -64,7 +65,7 @@ def workflow_replication_disabled(
         c.run_testdrive_files("override/replication-disabled.td")
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",
         nargs="*",
@@ -94,3 +95,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         *args.filter,
     )
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    for name in c.workflows:
+        # clear postgres to avoid issues with special arguments conflicting with existing state
+        c.kill("postgres")
+        c.rm("postgres")
+
+        if name == "default":
+            continue
+
+        if name == "ceased-status":
+            # TODO: https://github.com/MaterializeInc/materialize/issues/25198
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)

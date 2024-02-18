@@ -15,38 +15,70 @@
 //! snapshot and performs a simple `SELECT * FROM table` on them in order to get a snapshot.
 //! There are a few subtle points about this operation, described below.
 //!
-//! ## Locking for a consistent GTID Set at the snapshot point
+//! It is crucial for correctness that we always perform the snapshot of all tables at a specific
+//! point in time. This must be true even in the presence of restarts or partially committed
+//! snapshots. The consistent point that the snapshot must happen at is discovered and durably
+//! recorded during planning of the source and is exposed to this ingestion dataflow via the
+//! `initial_gtid_set` field in `MySqlSourceDetails`.
 //!
-//! Given that all our ingestion is based on correctly timestamping updates with the GTID of the
-//! transaction that produced them, it is important that we snapshot the tables at a consistent
-//! "GTID Set" (the full set of all transactions committed on the MySQL server at that point) that
-//! is relatable to the GTID Set frontier we track when reading the replication stream.
+//! Unfortunately MySQL does not provide an API to perform a transaction at a specific point in
+//! time. Instead, MySQL allows us to perform a snapshot of a table and let us know at which point
+//! in time the snapshot was taken. Using this information we can take a snapshot at an arbitrary
+//! point in time and then rewind it to the desired `initial_gtid_set` by "rewinding" it. These two
+//! phases are described in the following section.
 //!
-//! To achieve this we must ensure that all workers snapshot the tables at the same GTID Set. We
-//! designate a snapshot leader worker that starts by acquiring a table lock on all tables to be
-//! snapshot and then reading the @@gtid_executed "GTID Set" at that point. Once the GTID Set is
-//! read, the leader sends a signal to all workers to start their transactions.
+//! ## Producing a snapshot at a known point in time.
 //!
-//! Each worker starts a new transaction with 'REPEATABLE READ' and 'CONSISTENT SNAPSHOT' semantics
-//! so that they can read a consistent snapshot of the table at the specific GTID Set the
-//! transaction was started from.
+//! Ideally we would like to start a transaction and ask MySQL to tell us the point in time this
+//! transaction is running at. As far as we know there isn't such API so we achieve this using
+//! table locks instead.
 //!
-//! Once all workers have started their transactions, they send a signal back to the leader to
-//! release the table locks. This ensures that all workers see a consistent view of the tables
-//! starting from the same GTID. The workers then read the snapshot data and publish it downstream.
+//! The full set of tables that are meant to be snapshotted are partitioned among the workers. Each
+//! worker initiates a connection to the server and acquires a table lock on all the tables that
+//! have been assigned to it. By doing so we establish a moment in time where we know no writes are
+//! happening to the tables we are interested in. After the locks are taken each worker reads the
+//! current upper frontier (`snapshot_upper`) using the `@@gtid_executed` system variable. This
+//! frontier establishes an upper bound on any possible write to the tables of interest until the
+//! lock is released.
+//!
+//! Each worker now starts a transaction via a new connection with 'REPEATABLE READ' and
+//! 'CONSISTENT SNAPSHOT' semantics. Due to linearizability we know that this transaction's view of
+//! the database must some time `t_snapshot` such that `snapshot_upper <= t_snapshot`. We don't
+//! actually know the exact value of `t_snapshot` and it might be strictly greater than
+//! `snapshot_upper`. However, because this transaction will only be used to read the locked tables
+//! and we know that `snapshot_upper` is an upper bound on all the writes that have happened to
+//! them we can safely pretend that the transaction's `t_snapshot` is *equal* to `snapshot_upper`.
+//! We have therefore succeeded in starting a transaction at a known point in time!
+//!
+//! At this point it is safe for each worker to unlock the tables, since the transaction has
+//! established a point in time, and close the initial connection. Each worker can then read the
+//! snapshot of the tables it is responsible for and publish it downstream.
 //!
 //! TODO: Other software products hold the table lock for the duration of the snapshot, and some do
 //! not. We should figure out why and if we need to hold the lock longer. This may be because of a
 //! difference in how REPEATABLE READ works in some MySQL-compatible systems (e.g. Aurora MySQL).
 //!
-//! ## Snapshot rewinding
+//! ## Rewinding the snapshot to a specific point in time.
 //!
-//! The snapshot reader also produces a stream of `RewindRequest` messages that are used to rewind
-//! the replication stream to the point in time of the snapshot. This is necessary because the point
-//! in time of the snapshot is not necessarily the same as the point in time of the start of the
-//! replication stream. The replication stream may be started from an earlier point in time, and
-//! the updates that occurred between the start of the replication stream and the snapshot must be
-//! negated to avoid double-counting them.
+//! Having obtained a snapshot of a table at some `snapshot_upper` we are now tasked with
+//! transforming this snapshot into one at `initial_gtid_set`. In other words we have produced a
+//! snapshot containing all updates that happened at `t: !(snapshot_upper <= t)` but what we
+//! actually want is a snapshot containing all updates that happened at `t: !(initial_gtid <= t)`.
+//!
+//! If we assume that `initial_gtid_set <= snapshot_upper`, which is a fair assumption since the
+//! former is obtained before the latter, then we can observe that the snapshot we produced
+//! contains all updates at `t: !(initial_gtid <= t)` (i.e the snapshot we want) and some additional
+//! unwanted updates at `t: initial_gtid <= t && !(snapshot_upper <= t)`. We happen to know exactly
+//! what those additional unwanted updates are because those will be obtained by reading the
+//! replication stream in the replication operator and so all we need to do to "rewind" our
+//! `snapshot_upper` snapshot to `initial_gtid` is to ask the replication operator to "undo" any
+//! updates that falls in the undesirable region.
+//!
+//! This is exactly what `RewindRequest` is about. It informs the replication operator that a
+//! particular table has been snapshotted at `snapshot_upper` and would like all the updates
+//! discovered during replication that happen at `t: initial_gtid <= t && !(snapshot_upper <= t)`.
+//! to be cancelled. In Differential Dataflow this is as simple as flipping the sign of the diff
+//! field.
 //!
 //! The snapshot reader emits updates at the minimum timestamp (by convention) to allow the
 //! updates to be potentially negated by the replication operator, which will emit negated
@@ -58,17 +90,15 @@ use std::rc::Rc;
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, IsolationLevel, Row as MySqlRow, TxOpts};
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Map};
+use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
+use mz_timely_util::antichain::AntichainExt;
+use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{trace, warn};
 
-use mz_mysql_util::{query_sys_var, SchemaRequest};
-use mz_mysql_util::{schema_info, MySqlTableDesc};
-use mz_ore::cast::CastFrom;
+use mz_mysql_util::MySqlTableDesc;
+use mz_mysql_util::{query_sys_var, ER_NO_SUCH_TABLE};
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
@@ -76,13 +106,12 @@ use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
-use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
-};
+use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::metrics::mysql::MySqlSnapshotMetrics;
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
+use super::schemas::verify_schemas;
 use super::{
     pack_mysql_row, return_definite_error, validate_mysql_repl_settings, DefiniteError,
     ReplicationError, RewindRequest, TransientError,
@@ -90,7 +119,7 @@ use super::{
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
 pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
-    mut scope: G,
+    scope: G,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
@@ -105,33 +134,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut builder =
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
-    let snapshot_leader_id = config.responsible_worker("snapshot_leader");
-    let is_snapshot_leader = config.worker_id == snapshot_leader_id;
-    let snapshot_leader_id = u64::cast_from(snapshot_leader_id);
-
     let (mut raw_handle, raw_data) = builder.new_output();
     let (mut rewinds_handle, rewinds) = builder.new_output();
+    // Captures DefiniteErrors that affect the entire source, including all subsources
     let (mut definite_error_handle, definite_errors) = builder.new_output();
-
-    // Broadcast a signal from the snapshot leader worker to the other workers when the table
-    // lock is in place. Upon receiving the first message the workers should start a transaction
-    // that guarantees they all see a consistent view from the same GTID.
-    let (mut lock_start_handle, lock_start) = builder.new_output();
-    let (ls_feedback_handle, ls_feedback_data) = scope.feedback(Default::default());
-    let mut lock_start_input = builder.new_disconnected_input(&ls_feedback_data, Pipeline);
-    lock_start.broadcast().connect_loop(ls_feedback_handle);
-
-    // Broadcast a signal from the all workers that they have begun a transaction and that the
-    // table lock held by the snapshot leader can be released
-    let (_, transaction_start) = builder.new_output();
-    let (ts_feedback_handle, ts_feedback_data) = scope.feedback(Default::default());
-    let mut transaction_start_input = builder.new_disconnected_input(
-        &ts_feedback_data,
-        Exchange::new(move |_: &()| snapshot_leader_id),
-    );
-    transaction_start
-        .broadcast()
-        .connect_loop(ts_feedback_handle);
 
     // A global view of all exports that need to be snapshot by all workers. Note that this affects
     // `reader_snapshot_table_info` but must be kept separate from it because each worker needs to
@@ -149,7 +155,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         })
         .collect();
 
-    let mut all_table_names = vec![];
     let mut all_outputs = vec![];
     // A map containing only the table infos that this worker should snapshot.
     let mut reader_snapshot_table_info = BTreeMap::new();
@@ -162,7 +167,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         if !export_indexes_to_snapshot.contains(&val.0) {
             continue;
         }
-        all_table_names.push(table.clone());
         all_outputs.push(val.0);
         if config.responsible_for(&table) {
             reader_snapshot_table_info.insert(table, val);
@@ -172,25 +176,21 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let (button, transient_errors): (_, Stream<G, Rc<TransientError>>) =
         builder.build_fallible(move |caps| {
             Box::pin(async move {
+                let [data_cap_set, rewind_cap_set, definite_error_cap_set]: &mut [_; 3] =
+                    caps.try_into().unwrap();
+
                 let id = config.id;
                 let worker_id = config.worker_id;
 
-                let [
-                    data_cap_set,
-                    rewind_cap_set,
-                    definite_error_cap_set,
-                    lock_start_cap_set,
-                    transaction_start_cap_set
-                ]: &mut [_; 5] = caps.try_into().unwrap();
-
-                trace!(%id, "timely-{worker_id} initializing table reader \
-                             with {} tables to snapshot",
-                       reader_snapshot_table_info.len());
-
-                // Nothing needs to be snapshot.
-                if all_table_names.is_empty() {
-                    trace!(%id, "no exports to snapshot");
+                // If this worker has no tables to snapshot then there is nothing to do.
+                if reader_snapshot_table_info.is_empty() {
+                    trace!(%id, "timely-{worker_id} initializing table reader \
+                                 with no tables to snapshot, exiting");
                     return Ok(());
+                } else {
+                    trace!(%id, "timely-{worker_id} initializing table reader \
+                                 with {} tables to snapshot",
+                           reader_snapshot_table_info.len());
                 }
 
                 let connection_config = connection
@@ -202,84 +202,68 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .await?;
                 let task_name = format!("timely-{worker_id} MySQL snapshotter");
 
-                // The snapshot leader is responsible for ensuring a consistent snapshot of
-                // all tables that need to be snapshot. The leader will create a new 'lock connection'
-                // that takes a table lock on all tables to be snapshot and then read the active GTID
-                // at that time.
-                //
-                // Once this lock is acquired, the leader is responsible for sending a signal to all
-                // workers that they should start their own transactions. The workers will then start a
-                // transaction with REPEATABLE READ and 'CONSISTENT SNAPSHOT' semantics.
-                // Once each worker has started their transaction, they will send a signal to the
-                // leader that the table lock can be released. This will allow further writes to the
-                // tables by other clients to occur, while ensuring that the snapshot workers all see
-                // a consistent view of the tables starting from the same GTID.
-                let mut lock_conn = None;
-                if is_snapshot_leader {
-                    let lock_clauses = all_table_names
-                        .iter()
-                        .map(|t| format!("{} READ", t.to_ast_string()))
-                        .collect::<Vec<String>>()
-                        .join(", ");
-                    let leader_task_name = format!("{} leader", task_name);
-                    lock_conn = Some(Box::new(
-                        connection_config
-                            .connect(
-                                &leader_task_name,
-                                &config.config.connection_context.ssh_tunnel_manager,
-                            )
-                            .await?,
-                    ));
-
-                    trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
-                    lock_conn
-                        .as_mut()
-                        .expect("lock_conn just created")
-                        .query_drop(format!("LOCK TABLES {lock_clauses}"))
-                        .await?;
-
-                    // Record the frontier of future GTIDs based on the executed GTID set at the start of the snapshot
-                    let snapshot_gtid_set = query_sys_var(
-                        lock_conn.as_mut().expect("lock_conn just created"),
-                        "global.gtid_executed",
+                let lock_clauses = reader_snapshot_table_info
+                    .keys()
+                    .map(|t| format!("{} READ", t.to_ast_string()))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                let mut lock_conn = connection_config
+                    .connect(
+                        &task_name,
+                        &config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
-                    let snapshot_gtid_frontier = match gtid_set_frontier(snapshot_gtid_set.as_str())
-                    {
-                        Ok(frontier) => frontier,
-                        Err(err) => {
-                            let err = DefiniteError::UnsupportedGtidState(err.to_string());
-                            // If we received a GTID Set with non-consecutive intervals this breaks all our assumptions, so there is nothing else we can do.
-                            return Ok(return_definite_error(
-                                err,
-                                &all_outputs,
-                                &mut raw_handle,
-                                data_cap_set,
-                                &mut definite_error_handle,
-                                definite_error_cap_set,
-                            )
-                            .await);
-                        }
-                    };
 
-                    trace!(%id, "timely-{worker_id} acquired table locks at \
-                                 start gtid set: {snapshot_gtid_set:?}");
+                trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
+                match lock_conn
+                    .query_drop(format!("LOCK TABLES {lock_clauses}"))
+                    .await
+                {
+                    // Handle the case where a table we are snapshotting has been dropped or renamed.
+                    Err(mysql_async::Error::Server(mysql_async::ServerError {
+                        code,
+                        message,
+                        ..
+                    })) if code == ER_NO_SUCH_TABLE => {
+                        let err = DefiniteError::TableDropped(message);
+                        return Ok(return_definite_error(
+                            err,
+                            &all_outputs,
+                            &mut raw_handle,
+                            data_cap_set,
+                            &mut definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await);
+                    }
+                    e => e?,
+                };
 
-                    // TODO(roshan): Insert metric for how long it took to acquire the locks
+                // Record the frontier of future GTIDs based on the executed GTID set at the start
+                // of the snapshot
+                let snapshot_gtid_set =
+                    query_sys_var(&mut lock_conn, "global.gtid_executed").await?;
+                let snapshot_gtid_frontier = match gtid_set_frontier(&snapshot_gtid_set) {
+                    Ok(frontier) => frontier,
+                    Err(err) => {
+                        let err = DefiniteError::UnsupportedGtidState(err.to_string());
+                        // If we received a GTID Set with non-consecutive intervals this breaks all
+                        // our assumptions, so there is nothing else we can do.
+                        return Ok(return_definite_error(
+                            err,
+                            &all_outputs,
+                            &mut raw_handle,
+                            data_cap_set,
+                            &mut definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await);
+                    }
+                };
 
-                    // Send a signal to all workers that they should start their transactions
-                    lock_start_handle
-                        .give(&lock_start_cap_set[0], snapshot_gtid_frontier)
-                        .await;
-                }
-                *lock_start_cap_set = CapabilitySet::new();
-
-                // This non-leader worker has no tables to snapshot.
-                if !is_snapshot_leader && reader_snapshot_table_info.is_empty() {
-                    // Drop the capability to indicate to the leader that we are okay with releasing the table locks
-                    *transaction_start_cap_set = CapabilitySet::new();
-                    return Ok(());
-                }
+                // TODO(roshan): Insert metric for how long it took to acquire the locks
+                trace!(%id, "timely-{worker_id} acquired table locks at: {}",
+                       snapshot_gtid_frontier.pretty());
 
                 let mut conn = connection_config
                     .connect(
@@ -301,20 +285,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .await);
                 }
 
-                // Wait for the start_gtids from the leader, which indicate that the table locks have
-                // been acquired and we should start a transaction.
-                let snapshot_gtid_frontier = loop {
-                    match lock_start_input.next().await {
-                        Some(AsyncEvent::Data(_, mut data)) => {
-                            break data.pop().expect("Sent above")
-                        }
-                        Some(AsyncEvent::Progress(_)) => (),
-                        None => panic!("lock_start_input closed unexpectedly"),
-                    }
-                };
-
                 trace!(%id, "timely-{worker_id} starting transaction with \
-                             consistent snapshot at frontier: {snapshot_gtid_frontier:?}");
+                             consistent snapshot at: {}", snapshot_gtid_frontier.pretty());
 
                 // Start a transaction with REPEATABLE READ and 'CONSISTENT SNAPSHOT' semantics
                 // so we can read a consistent snapshot of the table at the specific GTID we read.
@@ -323,43 +295,52 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .with_isolation_level(IsolationLevel::RepeatableRead)
                     .with_consistent_snapshot(true)
                     .with_readonly(true);
-                conn.start_transaction(tx_opts).await?;
+                let mut tx = conn.start_transaction(tx_opts).await?;
                 // Set the session time zone to UTC so that we can read TIMESTAMP columns as UTC
                 // From https://dev.mysql.com/doc/refman/8.0/en/datetime.html: "MySQL converts TIMESTAMP values
                 // from the current time zone to UTC for storage, and back from UTC to the current time zone
                 // for retrieval. (This does not occur for other types such as DATETIME.)"
-                conn.query_drop("set @@session.time_zone = '+00:00'")
-                    .await?;
+                tx.query_drop("set @@session.time_zone = '+00:00'").await?;
 
-                // Drop the capability to indicate to the leader that we have started our transaction
-                *transaction_start_cap_set = CapabilitySet::new();
+                // We have started our transaction so we can unlock the tables.
+                lock_conn.query_drop("UNLOCK TABLES").await?;
+                lock_conn.disconnect().await?;
 
                 trace!(%id, "timely-{worker_id} started transaction");
 
-                if is_snapshot_leader {
-                    // Wait for all workers to start their transactions so we can release the table locks
-                    loop {
-                        match transaction_start_input.next().await {
-                            Some(AsyncEvent::Data(_, _)) => (),
-                            Some(AsyncEvent::Progress(frontier)) => {
-                                if frontier.is_empty() {
-                                    break;
-                                }
-                            }
-                            None => panic!("transaction_start_input closed unexpectedly"),
-                        }
-                    }
-
-                    // TODO(roshan): Figure out how to add a test-case that ensures we do release this lock
-                    trace!(%id, "timely-{worker_id} releasing table locks");
-                    let mut lock_conn = lock_conn
-                        .expect("lock_conn should have been created for the snapshot leader");
-                    lock_conn.query_drop("UNLOCK TABLES").await?;
-                    lock_conn.disconnect().await?;
-                    // This worker has nothing else to do
-                    if reader_snapshot_table_info.is_empty() {
-                        return Ok(());
-                    }
+                // Verify the schemas of the tables we are snapshotting
+                let errored_tables = verify_schemas(
+                    &mut tx,
+                    &reader_snapshot_table_info
+                        .iter()
+                        .map(|(table, (_, desc))| (table, desc))
+                        .collect::<Vec<_>>(),
+                )
+                .await?;
+                let mut removed_tables = vec![];
+                for (table, err) in errored_tables {
+                    let (output_index, _) = reader_snapshot_table_info.get(table).unwrap();
+                    // Publish the error for this table and stop ingesting it
+                    raw_handle
+                        .give(
+                            &data_cap_set[0],
+                            (
+                                (*output_index, Err(err.clone())),
+                                GtidPartition::minimum(),
+                                1,
+                            ),
+                        )
+                        .await;
+                    trace!(%id, "timely-{worker_id} stopping snapshot of table {table} \
+                                    due to schema mismatch");
+                    removed_tables.push(table.clone());
+                }
+                for table in removed_tables {
+                    reader_snapshot_table_info.remove(&table);
+                }
+                // This worker has nothing else to do
+                if reader_snapshot_table_info.is_empty() {
+                    return Ok(());
                 }
 
                 // We have established a snapshot frontier so we can broadcast the rewind requests
@@ -373,21 +354,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 }
                 *rewind_cap_set = CapabilitySet::new();
 
-                // Read the schemas of the tables we are snapshotting
-                // TODO: verify the schema matches the expected schema
-                let _ = schema_info(
-                    &mut conn,
-                    &SchemaRequest::Tables(
-                        reader_snapshot_table_info
-                            .keys()
-                            .map(|f| (f.0[0].as_str(), f.0[1].as_str()))
-                            .collect(),
-                    ),
-                )
-                .await?;
-
                 record_table_sizes(
-                    &mut conn,
+                    &mut tx,
                     metrics,
                     reader_snapshot_table_info
                         .values()
@@ -408,7 +376,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     let query = format!("SELECT * FROM {}", table.to_ast_string());
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
-                    let mut results = conn.exec_stream(query, ()).await?;
+                    let mut results = tx.exec_stream(query, ()).await?;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
                         match pack_mysql_row(&mut final_row, row, &table_desc)? {
@@ -458,12 +426,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 }
 
 /// Record the sizes of the tables being snapshotted in `MySqlSnapshotMetrics`.
-async fn record_table_sizes(
-    conn: &mut Conn,
+async fn record_table_sizes<Q>(
+    conn: &mut Q,
     metrics: MySqlSnapshotMetrics,
     // Tables and their schemas.
     tables: Vec<(String, String)>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), anyhow::Error>
+where
+    Q: Queryable,
+{
     for (table, schema) in tables {
         let stats = collect_table_statistics(conn, &table, &schema).await?;
         if let Some(estimate) = stats.estimate_count {
@@ -494,11 +465,14 @@ struct TableStatistics {
     estimate_count: Option<u64>,
 }
 
-async fn collect_table_statistics(
-    conn: &mut Conn,
+async fn collect_table_statistics<Q>(
+    conn: &mut Q,
     table: &str,
     schema: &str,
-) -> Result<TableStatistics, anyhow::Error> {
+) -> Result<TableStatistics, anyhow::Error>
+where
+    Q: Queryable,
+{
     let mut stats = TableStatistics::default();
 
     let estimate_row: Option<u64> = conn

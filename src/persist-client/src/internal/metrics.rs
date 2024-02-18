@@ -30,7 +30,7 @@ use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
     VersionedData,
 };
-use mz_persist::metrics::S3BlobMetrics;
+use mz_persist::metrics::{ColumnarMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use mz_postgres_client::metrics::PostgresClientMetrics;
@@ -93,6 +93,8 @@ pub struct Metrics {
     pub blob_cache_mem: BlobMemCache,
     /// Metrics for tokio tasks.
     pub tasks: TasksMetrics,
+    /// Metrics for columnar data encoding and decoding.
+    pub columnar: ColumnarMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -125,6 +127,9 @@ impl Metrics {
             ),
             move || start.elapsed().as_secs_f64(),
         );
+        let s3_blob = S3BlobMetrics::new(registry);
+        let columnar =
+            ColumnarMetrics::new(&s3_blob.lgbytes, cfg.configs.clone(), cfg.is_cc_active);
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -146,8 +151,9 @@ impl Metrics {
             consolidation: ConsolidationMetrics::new(registry),
             blob_cache_mem: BlobMemCache::new(registry),
             tasks: TasksMetrics::new(registry),
+            columnar,
             sink: SinkMetrics::new(registry),
-            s3_blob: S3BlobMetrics::new(registry),
+            s3_blob,
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             _vecs: vecs,
             _uptime: uptime,

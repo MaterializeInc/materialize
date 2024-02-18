@@ -51,6 +51,12 @@ pub mod hint;
 pub mod id_gen;
 pub mod iter;
 pub mod lex;
+#[cfg_attr(
+    nightly_doc_features,
+    doc(cfg(all(feature = "bytes_", feature = "region")))
+)]
+#[cfg(all(feature = "bytes_", feature = "region"))]
+pub mod lgbytes;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
 pub mod metrics;

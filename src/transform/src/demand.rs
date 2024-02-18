@@ -138,7 +138,7 @@ impl Demand {
                     limits: _,
                     body,
                 } => {
-                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values)?
+                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values)
                         .iter()
                         .map(|id| Id::Local(*id))
                         .collect::<BTreeSet<_>>();

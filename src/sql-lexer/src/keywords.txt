@@ -331,7 +331,6 @@ Sasl
 Scale
 Schema
 Schemas
-Script
 Second
 Seconds
 Secret
@@ -377,7 +376,6 @@ Tables
 Tail
 Temp
 Temporary
-Test
 Text
 Then
 Tick

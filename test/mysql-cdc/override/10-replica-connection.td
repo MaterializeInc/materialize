@@ -20,8 +20,14 @@ $ mysql-connect name=mysql-replica url=mysql://root@mysql-replica password=${arg
 
 #
 # Create some data on the primary
+# and use RESET MASTER to clear any previous state
+# from the binlogs that may slow down the replication
+# process on the replica and cause us to be in an unknown
+# state when we create our source.
 #
 $ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+RESET MASTER;
 CREATE DATABASE public;
 USE public;
 CREATE TABLE t1 (f1 INTEGER);

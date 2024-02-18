@@ -17,6 +17,15 @@
   );
 
 > CREATE CLUSTER simple_view_sink_cluster SIZE '${arg.default-storage-size}';
+
+! CREATE SINK simple_view_sink
+  IN CLUSTER simple_view_sink_cluster
+  FROM simple_view
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-cols-sink-${testdrive.seed}')
+  FORMAT JSON ARRAY
+  ENVELOPE DEBEZIUM
+contains:JSON ARRAY format in sinks not yet supported
+
 > CREATE SINK simple_view_sink
   IN CLUSTER simple_view_sink_cluster
   FROM simple_view
@@ -117,7 +126,19 @@ contains:column "a" specified more than once
 
 > CREATE TYPE int4_map_map AS MAP (KEY TYPE = text, VALUE TYPE = int4_map);
 
-> CREATE MATERIALIZED VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
+# We do this dance here to work around #25282
+$ set-from-sql var=int4_id
+SELECT id FROM mz_objects WHERE name = '_int4';
+$ set-from-sql var=text_id
+SELECT id FROM mz_objects WHERE name = '_text';
+
+> CREATE MATERIALIZED VIEW complex_type_view AS
+  SELECT
+    '{{1,2},{3,4}}'::int4_list_list c1,
+    '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2,
+    ARRAY[ARRAY[1, 2], ARRAY[3, 4], ARRAY[5, 6]]::[${int4_id} AS "pg_catalog"."_int4"] c3,
+    ARRAY[]::[${int4_id} AS "pg_catalog"."_int4"] c4,
+    ARRAY[ARRAY[ARRAY['a'], ARRAY['b']], ARRAY[ARRAY['c'], ARRAY['d']]]::[${text_id} AS "pg_catalog"."_text"] c5;
 
 > CREATE CLUSTER complex_type_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK complex_type_sink
@@ -128,7 +149,7 @@ contains:column "a" specified more than once
   ENVELOPE DEBEZIUM
 
 $ kafka-verify-data format=json sink=materialize.public.complex_type_sink key=false
-{"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}}}
+{"before": null, "after": {"c1": [[1,2],[3,4]], "c2": {"a":{"b":1, "c":2}, "d": {"e":3, "f":4}}, "c3": [[1, 2], [3, 4], [5,6]], "c4": [], "c5": [[["a"], ["b"]], [["c"], ["d"]]]}}
 
 # testdrive will not automatically clean up types, so we need to do that ourselves
 

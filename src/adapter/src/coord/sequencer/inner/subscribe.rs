@@ -7,96 +7,81 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_sql::plan::{self, QueryWhen};
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
+use tracing::{instrument, Span};
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::{
-    Coordinator, Message, PlanValidity, SubscribeFinish, SubscribeOptimizeLir,
-    SubscribeOptimizeMir, SubscribeStage, SubscribeTimestamp, SubscribeValidate, TargetCluster,
+    Coordinator, Message, PlanValidity, StageResult, Staged, SubscribeFinish, SubscribeOptimizeMir,
+    SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::subscribe::ActiveSubscribe;
-use crate::util::{ComputeSinkId, ResultExt};
+use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
-impl Coordinator {
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn sequence_subscribe(
-        &mut self,
-        ctx: ExecuteContext,
-        plan: plan::SubscribePlan,
-        target_cluster: TargetCluster,
-    ) {
-        self.sequence_subscribe_stage(
-            ctx,
-            SubscribeStage::Validate(SubscribeValidate {
-                plan,
-                target_cluster,
-            }),
-            OpenTelemetryContext::obtain(),
-        )
-        .await;
-    }
-
-    /// Processes as many `subscribe` stages as possible.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn sequence_subscribe_stage(
-        &mut self,
-        mut ctx: ExecuteContext,
-        mut stage: SubscribeStage,
-        otel_ctx: OpenTelemetryContext,
-    ) {
-        use SubscribeStage::*;
-
-        // Process the current stage and allow for processing the next.
-        loop {
-            // Always verify plan validity. This is cheap, and prevents programming errors
-            // if we move any stages off thread.
-            if let Some(validity) = stage.validity() {
-                return_if_err!(validity.check(self.catalog()), ctx);
-            }
-
-            (ctx, stage) = match stage {
-                Validate(stage) => {
-                    let next =
-                        return_if_err!(self.subscribe_validate(ctx.session_mut(), stage), ctx);
-                    (ctx, SubscribeStage::OptimizeMir(next))
-                }
-                OptimizeMir(stage) => {
-                    self.subscribe_optimize_mir(ctx, stage, otel_ctx);
-                    return;
-                }
-                Timestamp(stage) => {
-                    let next = return_if_err!(self.subscribe_timestamp(&mut ctx, stage).await, ctx);
-                    (ctx, SubscribeStage::OptimizeLir(next))
-                }
-                OptimizeLir(stage) => {
-                    self.subscribe_optimize_lir(ctx, stage, otel_ctx);
-                    return;
-                }
-                Finish(stage) => {
-                    let result = self.subscribe_finish(&mut ctx, stage).await;
-                    ctx.retire(result);
-                    return;
-                }
-            }
+#[async_trait::async_trait(?Send)]
+impl Staged for SubscribeStage {
+    fn validity(&mut self) -> &mut PlanValidity {
+        match self {
+            SubscribeStage::OptimizeMir(stage) => &mut stage.validity,
+            SubscribeStage::TimestampOptimizeLir(stage) => &mut stage.validity,
+            SubscribeStage::Finish(stage) => &mut stage.validity,
         }
     }
 
+    async fn stage(
+        self,
+        coord: &mut Coordinator,
+        ctx: &mut ExecuteContext,
+    ) -> Result<StageResult<Box<Self>>, AdapterError> {
+        match self {
+            SubscribeStage::OptimizeMir(stage) => {
+                coord.subscribe_optimize_mir(ctx.session(), stage)
+            }
+            SubscribeStage::TimestampOptimizeLir(stage) => {
+                coord.subscribe_timestamp_optimize_lir(ctx, stage).await
+            }
+            SubscribeStage::Finish(stage) => coord.subscribe_finish(ctx, stage).await,
+        }
+    }
+
+    fn message(self, ctx: ExecuteContext, span: Span) -> Message {
+        Message::SubscribeStageReady {
+            ctx,
+            span,
+            stage: self,
+        }
+    }
+}
+
+impl Coordinator {
+    #[instrument(skip_all)]
+    pub(crate) async fn sequence_subscribe(
+        &mut self,
+        mut ctx: ExecuteContext,
+        plan: plan::SubscribePlan,
+        target_cluster: TargetCluster,
+    ) {
+        let stage = return_if_err!(
+            self.subscribe_validate(ctx.session_mut(), plan, target_cluster),
+            ctx
+        );
+        self.sequence_staged(ctx, Span::current(), stage).await;
+    }
+
+    #[instrument(skip_all)]
     fn subscribe_validate(
         &mut self,
         session: &mut Session,
-        SubscribeValidate {
-            plan,
-            target_cluster,
-        }: SubscribeValidate,
-    ) -> Result<SubscribeOptimizeMir, AdapterError> {
+        plan: plan::SubscribePlan,
+        target_cluster: TargetCluster,
+    ) -> Result<SubscribeStage, AdapterError> {
         let plan::SubscribePlan { from, when, .. } = &plan;
 
         let cluster = self
@@ -153,50 +138,39 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        Ok(SubscribeOptimizeMir {
+        Ok(SubscribeStage::OptimizeMir(SubscribeOptimizeMir {
             validity,
             plan,
             timeline,
-        })
+        }))
     }
 
+    #[instrument(skip_all)]
     fn subscribe_optimize_mir(
         &mut self,
-        mut ctx: ExecuteContext,
+        session: &Session,
         SubscribeOptimizeMir {
             validity,
             plan,
             timeline,
         }: SubscribeOptimizeMir,
-        otel_ctx: OpenTelemetryContext,
-    ) {
+    ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan {
             with_snapshot,
             up_to,
             ..
         } = &plan;
 
-        // Generate data structures that can be moved to another task where we will perform possibly
-        // expensive optimizations.
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-
         // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(validity.cluster_id.expect("cluser_id"))
             .expect("compute instance does not exist");
-        let id = return_if_err!(self.allocate_transient_id(), ctx);
-        let conn_id = ctx.session().conn_id().clone();
-        let up_to = return_if_err!(
-            up_to
-                .as_ref()
-                .map(|expr| Coordinator::evaluate_when(
-                    self.catalog().state(),
-                    expr.clone(),
-                    ctx.session_mut()
-                ))
-                .transpose(),
-            ctx
-        );
+        let id = self.allocate_transient_id()?;
+        let conn_id = session.conn_id().clone();
+        let up_to = up_to
+            .as_ref()
+            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr.clone(), session))
+            .transpose()?;
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this SUBSCRIBE.
@@ -210,50 +184,45 @@ impl Coordinator {
             optimizer_config,
         );
 
-        let span = tracing::debug_span!("optimize subscribe task (mir)");
-
-        mz_ore::task::spawn_blocking(
+        let span = Span::current();
+        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize subscribe (mir)",
             move || {
-                let _guard = span.enter();
+                span.in_scope(|| {
+                    // MIR ⇒ MIR optimization (global)
+                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
 
-                // MIR ⇒ MIR optimization (global)
-                let global_mir_plan =
-                    return_if_err!(optimizer.catch_unwind_optimize(plan.from.clone()), ctx);
-
-                let stage = SubscribeStage::Timestamp(SubscribeTimestamp {
-                    validity,
-                    plan,
-                    timeline,
-                    optimizer,
-                    global_mir_plan,
-                });
-
-                let _ = internal_cmd_tx.send(Message::SubscribeStageReady {
-                    ctx,
-                    otel_ctx,
-                    stage,
-                });
+                    let stage =
+                        SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
+                            validity,
+                            plan,
+                            timeline,
+                            optimizer,
+                            global_mir_plan,
+                        });
+                    Ok(Box::new(stage))
+                })
             },
-        );
+        )))
     }
 
-    async fn subscribe_timestamp(
+    #[instrument(skip_all)]
+    async fn subscribe_timestamp_optimize_lir(
         &mut self,
-        ctx: &mut ExecuteContext,
-        SubscribeTimestamp {
+        ctx: &ExecuteContext,
+        SubscribeTimestampOptimizeLir {
             validity,
             plan,
             timeline,
-            optimizer,
+            mut optimizer,
             global_mir_plan,
-        }: SubscribeTimestamp,
-    ) -> Result<SubscribeOptimizeLir, AdapterError> {
+        }: SubscribeTimestampOptimizeLir,
+    ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let plan::SubscribePlan { when, .. } = &plan;
 
         // Timestamp selection
-        let oracle_read_ts = self.oracle_read_ts(&ctx.session, &timeline, when).await;
-        let as_of = match self
+        let oracle_read_ts = self.oracle_read_ts(ctx.session(), &timeline, when).await;
+        let as_of = self
             .determine_timestamp(
                 ctx.session(),
                 &global_mir_plan.id_bundle(optimizer.cluster_id()),
@@ -263,75 +232,45 @@ impl Coordinator {
                 oracle_read_ts,
                 None,
             )
-            .await
-        {
-            Ok(v) => v.timestamp_context.timestamp_or_default(),
-            Err(e) => return Err(e),
-        };
+            .await?
+            .timestamp_context
+            .timestamp_or_default();
         if let Some(id) = ctx.extra().contents() {
             self.set_statement_execution_timestamp(id, as_of);
         }
         if let Some(up_to) = optimizer.up_to() {
             if as_of == up_to {
-                ctx.session_mut()
+                ctx.session()
                     .add_notice(AdapterNotice::EqualSubscribeBounds { bound: up_to });
             } else if as_of > up_to {
                 return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
             }
         }
+        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
-        Ok(SubscribeOptimizeLir {
-            validity,
-            plan,
-            optimizer,
-            global_mir_plan: global_mir_plan.resolve(Antichain::from_elem(as_of)),
-        })
-    }
-
-    fn subscribe_optimize_lir(
-        &mut self,
-        ctx: ExecuteContext,
-        SubscribeOptimizeLir {
-            validity,
-            plan,
-            mut optimizer,
-            global_mir_plan,
-        }: SubscribeOptimizeLir,
-        otel_ctx: OpenTelemetryContext,
-    ) {
-        // Generate data structures that can be moved to another task where we will perform possibly
-        // expensive optimizations.
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-
-        let span = tracing::debug_span!("optimize subscribe task (lir)");
-
-        mz_ore::task::spawn_blocking(
+        // Optimize LIR
+        let span = Span::current();
+        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize subscribe (lir)",
             move || {
-                let _guard = span.enter();
+                span.in_scope(|| {
+                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                    let global_lir_plan =
+                        optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                let global_lir_plan = return_if_err!(
-                    optimizer.catch_unwind_optimize(global_mir_plan.clone()),
-                    ctx
-                );
-
-                let stage = SubscribeStage::Finish(SubscribeFinish {
-                    validity,
-                    cluster_id: optimizer.cluster_id(),
-                    plan,
-                    global_lir_plan,
-                });
-
-                let _ = internal_cmd_tx.send(Message::SubscribeStageReady {
-                    ctx,
-                    otel_ctx,
-                    stage,
-                });
+                    let stage = SubscribeStage::Finish(SubscribeFinish {
+                        validity,
+                        cluster_id: optimizer.cluster_id(),
+                        plan,
+                        global_lir_plan,
+                    });
+                    Ok(Box::new(stage))
+                })
             },
-        );
+        )))
     }
 
+    #[instrument(skip_all)]
     async fn subscribe_finish(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -347,7 +286,7 @@ impl Coordinator {
                 },
             global_lir_plan,
         }: SubscribeFinish,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let sink_id = global_lir_plan.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -363,7 +302,6 @@ impl Coordinator {
             cluster_id,
             depends_on: validity.dependency_ids,
             start_time: self.now(),
-            dropping: false,
             output,
         };
         active_subscribe.initialize();
@@ -373,7 +311,9 @@ impl Coordinator {
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
         // Add metadata for the new SUBSCRIBE.
-        let write_notify_fut = self.add_active_subscribe(sink_id, active_subscribe).await;
+        let write_notify_fut = self
+            .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+            .await;
         // Ship dataflow.
         let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
 
@@ -388,25 +328,17 @@ impl Coordinator {
                 .unwrap_or_terminate("cannot fail to set subscribe target replica");
         }
 
-        self.active_conns
-            .get_mut(ctx.session().conn_id())
-            .expect("must exist for active sessions")
-            .drop_sinks
-            .push(ComputeSinkId {
-                cluster_id,
-                global_id: sink_id,
-            });
-
         let resp = ExecuteResponse::Subscribing {
             rx,
             ctx_extra: std::mem::take(ctx.extra_mut()),
         };
-        match copy_to {
-            None => Ok(resp),
-            Some(format) => Ok(ExecuteResponse::CopyTo {
+        let resp = match copy_to {
+            None => resp,
+            Some(format) => ExecuteResponse::CopyTo {
                 format,
                 resp: Box::new(resp),
-            }),
-        }
+            },
+        };
+        Ok(StageResult::Response(resp))
     }
 }

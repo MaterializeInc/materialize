@@ -21,7 +21,7 @@ use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::TimestampManipulation;
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::client::PackableStats;
+use mz_storage_client::statistics::PackableStats;
 use timely::progress::ChangeBatch;
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
@@ -59,14 +59,13 @@ pub(super) fn spawn_statistics_scraper<Stats, T>(
     statistics_collection_id: GlobalId,
     collection_mgmt: CollectionManager<T>,
     shared_stats: Arc<Mutex<BTreeMap<GlobalId, StatsInitState<Stats>>>>,
+    // TODO(guswynn): make this dynamic?
+    interval: Duration,
 ) -> Box<dyn Any + Send + Sync>
 where
     Stats: PackableStats + Debug + Send + 'static,
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
-    // TODO(guswynn): Should this be configurable? Maybe via LaunchDarkly?
-    const STATISTICS_INTERVAL: Duration = Duration::from_secs(60);
-
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
     mz_ore::task::spawn(|| "statistics_scraper", async move {
@@ -77,7 +76,7 @@ where
         // We assume that `shared_stats` is kept up-to-date by the controller.
         let mut current_metrics = ChangeBatch::new();
 
-        let mut interval = tokio::time::interval(STATISTICS_INTERVAL);
+        let mut interval = tokio::time::interval(interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {

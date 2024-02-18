@@ -19,23 +19,20 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeS
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
-use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::plan::SubscribeFrom;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::Optimizer as TransformOptimizer;
 use timely::progress::Antichain;
-use tracing::debug_span;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
 use crate::optimize::{
-    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
-    OptimizerConfig, OptimizerError,
+    optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
+    OptimizeMode, OptimizerConfig, OptimizerError,
 };
 use crate::CollectionIdBundle;
 
@@ -67,7 +64,7 @@ impl std::fmt::Debug for Optimizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Optimizer")
             .field("config", &self.config)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -212,16 +209,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
-                let expr = debug_span!(target: "optimizer", "local").in_scope(|| {
-                    #[allow(deprecated)]
-                    let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
-                    let expr = optimizer.optimize(expr)?;
-
-                    // Trace the result of this phase.
-                    trace_plan(&expr);
-
-                    Ok::<_, OptimizerError>(expr)
-                })?;
+                let expr = optimize_mir_local(expr, &self.typecheck_ctx)?;
 
                 let from_desc = RelationDesc::new(expr.typ(), desc.iter_names());
                 let from_id = self.transient_id;
@@ -325,7 +313,6 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
         let df_desc = Plan::finalize_dataflow(
             df_desc,
             self.config.enable_consolidate_after_union_negate,
-            self.config.enable_specialized_arrangements,
             self.config.enable_reduce_mfp_fusion,
         )
         .map_err(OptimizerError::Internal)?;

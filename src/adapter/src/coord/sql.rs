@@ -18,11 +18,11 @@ use mz_sql::plan::{Params, StatementDesc};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement, StatementKind};
 
+use crate::active_compute_sink::{ActiveComputeSink, ComputeSinkRemovalReason};
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
-use crate::subscribe::ActiveSubscribe;
 use crate::util::describe;
 use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
 
@@ -190,69 +190,125 @@ impl Coordinator {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    pub(crate) fn clear_transaction(
+    pub(crate) async fn clear_transaction(
         &mut self,
         session: &mut Session,
     ) -> TransactionStatus<mz_repr::Timestamp> {
-        self.clear_connection(session.conn_id());
+        self.clear_connection(session.conn_id()).await;
         session.clear_transaction()
     }
 
     /// Clears coordinator state for a connection.
-    pub(crate) fn clear_connection(&mut self, conn_id: &ConnectionId) {
-        let conn_meta = self
-            .active_conns
-            .get_mut(conn_id)
-            .expect("must exist for active session");
-        let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
-        self.drop_compute_sinks(drop_sinks);
+    pub(crate) async fn clear_connection(&mut self, conn_id: &ConnectionId) {
+        self.remove_active_compute_sinks(conn_id, ComputeSinkRemovalReason::Finished)
+            .await;
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_read_holds.remove(conn_id) {
-            self.release_read_hold(&txn_reads);
+            self.release_read_holds(txn_reads);
         }
     }
 
-    /// Handle adding metadata associated with a SUBSCRIBE query, returning a notify that resolves
-    /// when our builtin table updates are complete.
-    pub(crate) async fn add_active_subscribe(
+    pub(crate) async fn add_active_compute_sink(
         &mut self,
         id: GlobalId,
-        active_subscribe: ActiveSubscribe,
+        active_sink: ActiveComputeSink,
     ) -> BuiltinTableAppendNotify {
-        let update = self
-            .catalog()
-            .state()
-            .pack_subscribe_update(id, &active_subscribe, 1);
-        let builtin_update_notify = self.builtin_table_update().execute(vec![update]).await;
+        let session_type = metrics::session_type_label_value(active_sink.user());
 
-        let session_type = metrics::session_type_label_value(&active_subscribe.user);
-        self.metrics
-            .active_subscribes
-            .with_label_values(&[session_type])
-            .inc();
+        self.active_conns
+            .get_mut(active_sink.connection_id())
+            .expect("must exist for active sessions")
+            .drop_sinks
+            .insert(id);
 
-        self.active_subscribes.insert(id, active_subscribe);
+        let ret_fut = match &active_sink {
+            ActiveComputeSink::Subscribe(active_subscribe) => {
+                let update = self
+                    .catalog()
+                    .state()
+                    .pack_subscribe_update(id, active_subscribe, 1);
 
-        builtin_update_notify
+                self.metrics
+                    .active_subscribes
+                    .with_label_values(&[session_type])
+                    .inc();
+
+                self.builtin_table_update().execute(vec![update]).await
+            }
+            ActiveComputeSink::CopyTo(_) => {
+                self.metrics
+                    .active_copy_tos
+                    .with_label_values(&[session_type])
+                    .inc();
+                Box::pin(std::future::ready(()))
+            }
+        };
+        self.active_compute_sinks.insert(id, active_sink);
+        ret_fut
     }
 
-    /// Handle removing metadata associated with a SUBSCRIBE query.
+    /// Cancel all outstanding subscribes for the identified connection.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_active_subscribe(&mut self, id: GlobalId) {
-        if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
-            let update = self
-                .catalog()
-                .state()
-                .pack_subscribe_update(id, &active_subscribe, -1);
-            self.builtin_table_update().blocking(vec![update]).await;
+    pub(crate) async fn cancel_active_compute_sinks(&mut self, conn_id: &ConnectionId) {
+        self.remove_active_compute_sinks(conn_id, ComputeSinkRemovalReason::Canceled)
+            .await
+    }
 
-            let session_type = metrics::session_type_label_value(&active_subscribe.user);
-            self.metrics
-                .active_subscribes
-                .with_label_values(&[session_type])
-                .dec();
+    /// Remove all outstanding subscribes for the identified connection with
+    /// the specified reason.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn remove_active_compute_sinks(
+        &mut self,
+        conn_id: &ConnectionId,
+        reason: ComputeSinkRemovalReason,
+    ) {
+        let drop_sinks = self
+            .active_conns
+            .get_mut(conn_id)
+            .expect("must exist for active session")
+            .drop_sinks
+            .iter()
+            .map(|sink_id| (*sink_id, reason.clone()))
+            .collect::<Vec<_>>();
+        self.drop_compute_sinks_with_reason(drop_sinks).await;
+    }
+
+    /// Handle removing metadata associated with a SUBSCRIBE or a COPY TO query.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn remove_active_sink(&mut self, id: GlobalId) -> Option<ActiveComputeSink> {
+        if let Some(sink) = self.active_compute_sinks.remove(&id) {
+            let session_type = metrics::session_type_label_value(sink.user());
+
+            self.active_conns
+                .get_mut(sink.connection_id())
+                .expect("must exist for active compute sink")
+                .drop_sinks
+                .remove(&id);
+
+            match &sink {
+                ActiveComputeSink::Subscribe(active_subscribe) => {
+                    let update =
+                        self.catalog()
+                            .state()
+                            .pack_subscribe_update(id, active_subscribe, -1);
+                    self.builtin_table_update().blocking(vec![update]).await;
+
+                    self.metrics
+                        .active_subscribes
+                        .with_label_values(&[session_type])
+                        .dec();
+                }
+                ActiveComputeSink::CopyTo(_) => {
+                    self.metrics
+                        .active_copy_tos
+                        .with_label_values(&[session_type])
+                        .dec();
+                }
+            }
+            Some(sink)
+        } else {
+            None
         }
-        // Note: Drop sinks are removed at commit time.
     }
 }

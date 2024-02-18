@@ -21,7 +21,6 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
-use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
@@ -40,6 +39,7 @@ use tonic::{Request, Status as TonicStatus, Streaming};
 
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::metrics::RehydratingStorageClientMetrics;
+use crate::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.client.rs"));
 
@@ -287,73 +287,6 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     }
 }
 
-// These structure represents a full set up updates for the `mz_source_statistics_per_worker`
-// and `mz_sink_statistics_per_worker` tables for a specific source-worker/sink-worker pair.
-// They are structured like this for simplicity
-// and efficiency: Each storage worker can individually collect and consolidate metrics,
-// then control how much `StorageResponse` traffic is produced when sending updates
-// back to the controller to be written.
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SourceStatisticsUpdate {
-    pub id: GlobalId,
-    pub worker_id: usize,
-    pub snapshot_committed: bool,
-    pub messages_received: u64,
-    pub bytes_received: u64,
-    pub updates_staged: u64,
-    pub updates_committed: u64,
-    pub envelope_state_bytes: u64,
-    pub envelope_state_records: u64,
-    pub rehydration_latency_ms: Option<i64>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SinkStatisticsUpdate {
-    pub id: GlobalId,
-    pub worker_id: usize,
-    pub messages_staged: u64,
-    pub messages_committed: u64,
-    pub bytes_staged: u64,
-    pub bytes_committed: u64,
-}
-
-/// A trait that abstracts over user-facing statistics objects, used
-/// by `spawn_statistics_scraper`.
-pub trait PackableStats {
-    /// Pack `self` into the `Row`.
-    fn pack(&self, packer: mz_repr::RowPacker<'_>);
-}
-impl PackableStats for SourceStatisticsUpdate {
-    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
-        use mz_repr::Datum;
-        packer.push(Datum::from(self.id.to_string().as_str()));
-        packer.push(Datum::from(u64::cast_from(self.worker_id)));
-        packer.push(Datum::from(self.snapshot_committed));
-        packer.push(Datum::from(self.messages_received));
-        packer.push(Datum::from(self.bytes_received));
-        packer.push(Datum::from(self.updates_staged));
-        packer.push(Datum::from(self.updates_committed));
-        packer.push(Datum::from(self.envelope_state_bytes));
-        packer.push(Datum::from(self.envelope_state_records));
-        packer.push(Datum::from(
-            self.rehydration_latency_ms
-                .map(chrono::Duration::milliseconds),
-        ));
-    }
-}
-impl PackableStats for SinkStatisticsUpdate {
-    fn pack(&self, mut packer: mz_repr::RowPacker<'_>) {
-        use mz_repr::Datum;
-        packer.push(Datum::from(self.id.to_string().as_str()));
-        packer.push(Datum::from(u64::cast_from(self.worker_id)));
-        packer.push(Datum::from(self.messages_staged));
-        packer.push(Datum::from(self.messages_committed));
-        packer.push(Datum::from(self.bytes_staged));
-        packer.push(Datum::from(self.bytes_committed));
-    }
-}
-
 /// A "kind" enum for statuses tracked by the health operator
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Status {
@@ -567,10 +500,7 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::{
-            ProtoDroppedIds, ProtoSinkStatisticsUpdate, ProtoSourceStatisticsUpdate,
-            ProtoStatisticsUpdates, ProtoStatusUpdates,
-        };
+        use proto_storage_response::{ProtoDroppedIds, ProtoStatisticsUpdates, ProtoStatusUpdates};
         ProtoStorageResponse {
             kind: Some(match self {
                 StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
@@ -581,29 +511,11 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                     Stats(ProtoStatisticsUpdates {
                         source_updates: source_stats
                             .iter()
-                            .map(|update| ProtoSourceStatisticsUpdate {
-                                id: Some(update.id.into_proto()),
-                                worker_id: u64::cast_from(update.worker_id),
-                                snapshot_committed: update.snapshot_committed,
-                                messages_received: update.messages_received,
-                                bytes_received: update.bytes_received,
-                                updates_staged: update.updates_staged,
-                                updates_committed: update.updates_committed,
-                                envelope_state_bytes: update.envelope_state_bytes,
-                                envelope_state_records: update.envelope_state_records,
-                                rehydration_latency_ms: update.rehydration_latency_ms,
-                            })
+                            .map(|update| update.into_proto())
                             .collect(),
                         sink_updates: sink_stats
                             .iter()
-                            .map(|update| ProtoSinkStatisticsUpdate {
-                                id: Some(update.id.into_proto()),
-                                worker_id: u64::cast_from(update.worker_id),
-                                messages_staged: update.messages_staged,
-                                messages_committed: update.messages_committed,
-                                bytes_staged: update.bytes_staged,
-                                bytes_committed: update.bytes_committed,
-                            })
+                            .map(|update| update.into_proto())
                             .collect(),
                     })
                 }
@@ -628,38 +540,12 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                 stats
                     .source_updates
                     .into_iter()
-                    .map(|update| {
-                        Ok(SourceStatisticsUpdate {
-                            id: update.id.into_rust_if_some(
-                                "ProtoStorageResponse::stats::source_updates::id",
-                            )?,
-                            worker_id: usize::cast_from(update.worker_id),
-                            snapshot_committed: update.snapshot_committed,
-                            messages_received: update.messages_received,
-                            updates_staged: update.updates_staged,
-                            updates_committed: update.updates_committed,
-                            bytes_received: update.bytes_received,
-                            envelope_state_bytes: update.envelope_state_bytes,
-                            envelope_state_records: update.envelope_state_records,
-                            rehydration_latency_ms: update.rehydration_latency_ms,
-                        })
-                    })
+                    .map(|update| update.into_rust())
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
                 stats
                     .sink_updates
                     .into_iter()
-                    .map(|update| {
-                        Ok(SinkStatisticsUpdate {
-                            id: update.id.into_rust_if_some(
-                                "ProtoStorageResponse::stats::sink_updates::id",
-                            )?,
-                            worker_id: usize::cast_from(update.worker_id),
-                            messages_staged: update.messages_staged,
-                            messages_committed: update.messages_committed,
-                            bytes_staged: update.bytes_staged,
-                            bytes_committed: update.bytes_committed,
-                        })
-                    })
+                    .map(|update| update.into_rust())
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
             Some(StatusUpdates(ProtoStatusUpdates { updates })) => {

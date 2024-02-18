@@ -12,6 +12,7 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{PartDecoder, PartEncoder};
 use mz_persist_types::part::{Part, PartBuilder};
@@ -255,7 +256,7 @@ fn encode_legacy(rows: &[Row]) -> ColumnarRecords {
         row.encode(&mut key_buf);
         assert!(buf.push(((&key_buf, &[]), 1i64.to_le_bytes(), 1i64.to_le_bytes())));
     }
-    buf.finish()
+    buf.finish(&ColumnarMetrics::disconnected())
 }
 
 fn decode_legacy(part: &ColumnarRecords) -> Vec<Row> {

@@ -71,7 +71,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     complexity = Complexity(args.complexity)
 
     if scenario in (Scenario.Kill, Scenario.BackupRestore, Scenario.TogglePersistTxn):
-        catalog_store = "stash"
+        catalog_store = "persist"
         sanity_restart = False
     else:
         catalog_store = "shadow"

@@ -342,7 +342,7 @@ impl UnopenedPersistCatalogState {
     async fn open_inner(
         mut self,
         mode: Mode,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
@@ -434,7 +434,7 @@ impl UnopenedPersistCatalogState {
                 catalog.snapshot
             );
             let mut txn = catalog.transaction().await?;
-            initialize::initialize(&mut txn, bootstrap_args, boot_ts, deploy_generation).await?;
+            initialize::initialize(&mut txn, bootstrap_args, initial_ts, deploy_generation).await?;
             txn
         };
 
@@ -664,14 +664,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[tracing::instrument(level = "info", skip(self))]
     async fn open_savepoint(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(
             Mode::Savepoint,
-            boot_ts,
+            initial_ts,
             bootstrap_args,
             deploy_generation,
             epoch_lower_bound,
@@ -683,10 +683,9 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[tracing::instrument(level = "info", skip(self))]
     async fn open_read_only(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, boot_ts, bootstrap_args, None, None)
+        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args, None, None)
             .boxed()
             .await
     }
@@ -694,14 +693,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[tracing::instrument(level = "info", skip(self))]
     async fn open(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(
             Mode::Writable,
-            boot_ts,
+            initial_ts,
             bootstrap_args,
             deploy_generation,
             epoch_lower_bound,

@@ -56,7 +56,6 @@ class ManyRows(Check):
                 """
                 > CREATE TABLE many_rows (f1 TEXT);
                 > CREATE DEFAULT INDEX ON many_rows;
-                > SET statement_timeout = '120s';
                 > INSERT INTO many_rows SELECT 'a' || generate_series FROM generate_series(1, 1000000);
                 """
             )
@@ -67,11 +66,9 @@ class ManyRows(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > SET statement_timeout = '120s';
                 > INSERT INTO many_rows SELECT 'b' || generate_series FROM generate_series(1, 1000000);
                 """,
                 """
-                > SET statement_timeout = '120s';
                 > INSERT INTO many_rows SELECT * FROM many_rows;
                 """,
             ]

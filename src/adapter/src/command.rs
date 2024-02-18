@@ -28,7 +28,7 @@ use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, Var};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -54,7 +54,6 @@ pub enum Command {
     },
 
     Startup {
-        cancel_tx: Arc<watch::Sender<Canceled>>,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
         user: User,
         conn_id: ConnectionId,
@@ -260,8 +259,6 @@ pub enum ExecuteResponse {
     AlteredRole,
     /// The system configuration was altered.
     AlteredSystemConfiguration,
-    /// The query was canceled.
-    Canceled,
     /// The requested cursor was closed.
     ClosedCursor,
     /// The provided comment was created.
@@ -447,7 +444,6 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::AlteredSystemConfiguration => {
                 Ok(ExecuteResponse::AlteredSystemConfiguration)
             }
-            ExecuteResponseKind::Canceled => Ok(ExecuteResponse::Canceled),
             ExecuteResponseKind::ClosedCursor => Ok(ExecuteResponse::ClosedCursor),
             ExecuteResponseKind::Comment => Ok(ExecuteResponse::Comment),
             ExecuteResponseKind::Copied => Err(()),
@@ -511,7 +507,6 @@ impl ExecuteResponse {
             AlteredIndexLogicalCompaction => Some("ALTER INDEX".into()),
             AlteredRole => Some("ALTER ROLE".into()),
             AlteredSystemConfiguration => Some("ALTER SYSTEM".into()),
-            Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
             Comment => Some("COMMENT".into()),
             Copied(n) => Some(format!("COPY {}", n)),
@@ -659,7 +654,7 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => vec![Subscribing, ExecuteResponseKind::CopyTo],
             StartTransaction => vec![StartedTransaction],
-            SideEffectingFunc => vec![SendingRowsImmediate],
+            SideEffectingFunc => vec![SendingRows, SendingRowsImmediate],
             ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
         }
     }
@@ -673,14 +668,4 @@ impl Transmittable for ExecuteResponse {
     fn to_allowed(&self) -> Self::Allowed {
         ExecuteResponseKind::from(self)
     }
-}
-
-/// The state of a cancellation request.
-#[derive(Debug, Clone, Copy)]
-pub enum Canceled {
-    /// A cancellation request has occurred.
-    Canceled,
-    /// No cancellation request has yet occurred, or a previous request has been
-    /// cleared.
-    NotCanceled,
 }

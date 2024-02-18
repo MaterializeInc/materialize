@@ -99,7 +99,7 @@ async fn test_upgrade_shard() {
     .await
     .expect("failed to create persist catalog");
     let _persist_state = Box::new(persist_openable_state)
-        .open_read_only(NOW_ZERO(), &test_bootstrap_args())
+        .open_read_only(&test_bootstrap_args())
         .await
         .expect("failed to open readonly persist catalog");
 

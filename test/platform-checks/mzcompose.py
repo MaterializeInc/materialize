@@ -94,10 +94,11 @@ SERVICES = [
         external_minio=True,
         sanity_restart=False,
         volumes_extra=["secrets:/share/secrets"],
-        catalog_store="stash",
+        catalog_store="persist",
     ),
     TestdriveService(
         default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
+        materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
         no_reset=True,
         seed=1,
         entrypoint_extra=[

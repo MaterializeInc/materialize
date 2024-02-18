@@ -74,7 +74,12 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
     /// [#16275]: https://github.com/MaterializeInc/materialize/issues/16275
-    FrontierUpper { id: GlobalId, upper: Antichain<T> },
+    FrontierUpper {
+        /// TODO(#25239): Add documentation.
+        id: GlobalId,
+        /// TODO(#25239): Add documentation.
+        upper: Antichain<T>,
+    },
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
     /// a `Uuid` that matches the command's [`Peek::uuid`].
@@ -127,6 +132,16 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
+    /// `CopyToResponse` reports the completion of an S3-oneshot sink.
+    ///
+    /// The replica must send exactly one `CopyToResponse` for every S3-oneshot sink previously
+    /// created by a [`CreateDataflow` command].
+    ///
+    /// The replica must not send `CopyToResponse`s for S3-oneshot sinks that were not previously
+    /// created by a [`CreateDataflow` command].
+    ///
+    /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
+    CopyToResponse(GlobalId, CopyToResponse),
 }
 
 impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
@@ -152,6 +167,12 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                         resp: Some(resp.into_proto()),
                     })
                 }
+                ComputeResponse::CopyToResponse(id, resp) => {
+                    CopyToResponse(ProtoCopyToResponseKind {
+                        id: Some(id.into_proto()),
+                        resp: Some(resp.into_proto()),
+                    })
+                }
             }),
         }
     }
@@ -173,6 +194,11 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                     .into_rust_if_some("ProtoSubscribeResponseKind::id")?,
                 resp.resp
                     .into_rust_if_some("ProtoSubscribeResponseKind::resp")?,
+            )),
+            Some(CopyToResponse(resp)) => Ok(ComputeResponse::CopyToResponse(
+                resp.id.into_rust_if_some("ProtoCopyToResponseKind::id")?,
+                resp.resp
+                    .into_rust_if_some("ProtoCopyToResponseKind::resp")?,
             )),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeResponse::kind",
@@ -217,6 +243,7 @@ pub enum PeekResponse {
 }
 
 impl PeekResponse {
+    /// TODO(#25239): Add documentation.
     pub fn unwrap_rows(self) -> Vec<(Row, NonZeroUsize)> {
         match self {
             PeekResponse::Rows(rows) => rows,
@@ -290,6 +317,42 @@ impl Arbitrary for PeekResponse {
     }
 }
 
+/// Various responses that can be communicated after a COPY TO command.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CopyToResponse {
+    /// Returned number of rows for a successful COPY TO.
+    RowCount(u64),
+    /// Error of an unsuccessful COPY TO.
+    Error(String),
+    /// The COPY TO sink dataflow was dropped.
+    Dropped,
+}
+
+impl RustType<ProtoCopyToResponse> for CopyToResponse {
+    fn into_proto(&self) -> ProtoCopyToResponse {
+        use proto_copy_to_response::Kind::*;
+        ProtoCopyToResponse {
+            kind: Some(match self {
+                CopyToResponse::RowCount(rows) => Rows(*rows),
+                CopyToResponse::Error(error) => Error(error.clone()),
+                CopyToResponse::Dropped => Dropped(()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoCopyToResponse) -> Result<Self, TryFromProtoError> {
+        use proto_copy_to_response::Kind::*;
+        match proto.kind {
+            Some(Rows(rows)) => Ok(CopyToResponse::RowCount(rows)),
+            Some(Error(error)) => Ok(CopyToResponse::Error(error)),
+            Some(Dropped(())) => Ok(CopyToResponse::Dropped),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoCopyToResponse::kind",
+            )),
+        }
+    }
+}
+
 /// Various responses that can be communicated about the progress of a SUBSCRIBE command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SubscribeResponse<T = mz_repr::Timestamp> {
@@ -351,7 +414,7 @@ impl Arbitrary for SubscribeResponse<mz_repr::Timestamp> {
 
 /// A batch of updates for the interval `[lower, upper)`.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SubscribeBatch<T> {
+pub struct SubscribeBatch<T = mz_repr::Timestamp> {
     /// The lower frontier of the batch of updates.
     pub lower: Antichain<T>,
     /// The upper frontier of the batch of updates.

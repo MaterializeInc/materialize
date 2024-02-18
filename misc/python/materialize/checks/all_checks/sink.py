@@ -222,7 +222,6 @@ class SinkTables(Check):
                 > CREATE TABLE sink_large_transaction_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
                 > CREATE DEFAULT INDEX ON sink_large_transaction_table;
 
-                > SET statement_timeout = '120s';
                 > INSERT INTO sink_large_transaction_table SELECT generate_series, REPEAT('x', 1024) FROM generate_series(1, 100000);
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
@@ -288,8 +287,6 @@ class SinkTables(Check):
                     SELECT (before).f2, -COUNT(*) AS c  FROM sink_large_transaction_source GROUP BY (before).f2
                   )
                   GROUP BY f2
-
-                > SET statement_timeout = '120s'
 
                 > SELECT * FROM sink_large_transaction_view2
                 500000 200000 100000 0 99999

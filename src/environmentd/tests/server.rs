@@ -1314,25 +1314,26 @@ fn test_storage_usage_collection_interval_timestamps() {
 
     // Retry because it may take some time for the initial snapshot to be taken.
     let rows = Retry::default()
-            .max_duration(Duration::from_secs(10))
-            .retry(|_| {
-                let rows = client
-                    .query(
-                        "SELECT EXTRACT(EPOCH FROM collection_timestamp)::integer, ARRAY_AGG(object_id) \
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let rows = client
+                .query(
+                    "SELECT EXTRACT(EPOCH FROM collection_timestamp), ARRAY_AGG(object_id) \
                 FROM mz_catalog.mz_storage_usage \
                 GROUP BY collection_timestamp \
                 ORDER BY collection_timestamp ASC;",
-                        &[],
-                    )
-                    .map_err(|e| e.to_string()).unwrap();
+                    &[],
+                )
+                .map_err(|e| e.to_string())
+                .unwrap();
 
-                if rows.is_empty() {
-                    Err("expected some timestamp, instead found None".to_string())
-                } else {
-                    Ok(rows)
-                }
-            })
-            .unwrap();
+            if rows.is_empty() {
+                Err("expected some timestamp, instead found None".to_string())
+            } else {
+                Ok(rows)
+            }
+        })
+        .unwrap();
 
     // The timestamp is selected after the storage usage is collected, so depending on how long
     // each collection takes, the timestamps can be arbitrarily close together or far apart. If
@@ -1389,15 +1390,15 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 
         // Wait for initial storage usage collection, to be sure records are present.
         let initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
-            client
+                client
                     .query_one(
-                        "SELECT EXTRACT(EPOCH FROM MAX(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        "SELECT (EXTRACT(EPOCH FROM MAX(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
                         &[],
                     )
                     .map_err(|e| e.to_string()).unwrap()
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
-        }).expect("Could not fetch initial timestamp");
+            }).expect("Could not fetch initial timestamp");
 
         let initial_server_usage_records = client
             .query_one(
@@ -1422,7 +1423,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
         .expect("negative timestamps are impossible")
         + u64::try_from(retention_period.as_millis()).expect("known to fit")
-        + 200;
+        + 1;
 
     {
         let server = harness.start_blocking();
@@ -1432,15 +1433,15 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
             u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
 
         let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
-            client
-                .query_one(
-                    "SELECT EXTRACT(EPOCH FROM MIN(collection_timestamp))::integer FROM mz_internal.mz_storage_usage_by_shard;",
-                    &[],
-                )
-                .map_err(|e| e.to_string()).unwrap()
-                .try_get::<_, i32>(0)
-                .map_err(|e| e.to_string())
-        }).expect("Could not fetch initial timestamp");
+                client
+                    .query_one(
+                        "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        &[],
+                    )
+                    .map_err(|e| e.to_string()).unwrap()
+                    .try_get::<_, i32>(0)
+                    .map_err(|e| e.to_string())
+            }).expect("Could not fetch initial timestamp");
 
         info!(%subsequent_initial_timestamp);
         assert!(
@@ -2002,7 +2003,7 @@ fn test_internal_console_proxy() {
         .unwrap()
         .get(
             Url::parse(&format!(
-                "http://{}/internal-console/styles.css",
+                "http://{}/internal-console/",
                 server.inner().internal_http_local_addr()
             ))
             .unwrap(),
@@ -2013,7 +2014,7 @@ fn test_internal_console_proxy() {
     assert_eq!(res.status().is_success(), true);
     assert_contains!(
         res.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap(),
-        "text/css"
+        "text/html"
     );
 }
 

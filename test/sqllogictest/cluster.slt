@@ -805,4 +805,33 @@ DROP CLUSTER REPLICA t1.r1;
 statement ok
 DROP CLUSTER t1
 
+# Test unmanaged clusters with internal/billed as.
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER t1 (REPLICAS (r1 (SIZE '1', INTERNAL, BILLED AS 'free')));
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', INTERNAL, BILLED AS 'free')));
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', BILLED AS 'free')));
+
+statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', INTERNAL)));
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', BILLED AS 'free')));
+----
+db error: ERROR: must specify INTERNAL when specifying BILLED AS
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', INTERNAL, BILLED AS 'free')));
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER t1
+----
+COMPLETE 0
+
 reset-server

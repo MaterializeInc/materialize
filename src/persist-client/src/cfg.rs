@@ -95,6 +95,8 @@ pub struct PersistConfig {
     pub build_version: Version,
     /// Hostname of this persist user. Stored in state and used for debugging.
     pub hostname: String,
+    /// Whether this persist instance is running in a "cc" sized cluster.
+    pub is_cc_active: bool,
     /// A clock to use for all leasing and other non-debugging use.
     pub now: NowFn,
     /// Persist [Config]s that can change value dynamically within the lifetime
@@ -141,6 +143,9 @@ pub struct PersistConfig {
     pub pubsub_state_cache_shard_ref_channel_size: usize,
     /// Backoff after an established connection to Persist PubSub service fails.
     pub pubsub_reconnect_backoff: Duration,
+    /// Number of worker threads to create for the [`crate::IsolatedRuntime`], defaults to the
+    /// number of threads.
+    pub isolated_runtime_worker_threads: usize,
 }
 
 // Impl Deref to ConfigSet for convenience of accessing the dynamic configs.
@@ -165,6 +170,7 @@ impl PersistConfig {
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         Self {
             build_version: build_info.semver_version(),
+            is_cc_active: false,
             now,
             configs,
             dynamic: Arc::new(DynamicConfig {
@@ -195,6 +201,7 @@ impl PersistConfig {
             pubsub_server_connection_channel_size: 25,
             pubsub_state_cache_shard_ref_channel_size: 25,
             pubsub_reconnect_backoff: Duration::from_secs(5),
+            isolated_runtime_worker_threads: num_cpus::get(),
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is
@@ -270,7 +277,7 @@ pub(crate) const MiB: usize = 1024 * 1024;
 /// something like the `ctor` or `inventory` crate. This would involve managing
 /// the footgun of a Config being linked into one binary but not the other.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
-    configs
+    mz_persist::cfg::all_dyn_configs(configs)
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::batch::BLOB_TARGET_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
@@ -537,6 +544,10 @@ impl BlobKnobs for PersistConfig {
 
     fn read_timeout(&self) -> Duration {
         Duration::from_secs(10)
+    }
+
+    fn is_cc_active(&self) -> bool {
+        self.is_cc_active
     }
 }
 

@@ -38,13 +38,13 @@ macro_rules! coord_bail {
     }
 }
 
+mod active_compute_sink;
 mod command;
 mod coord;
 mod error;
 mod explain;
 mod notice;
 mod optimize;
-mod subscribe;
 mod util;
 
 pub mod catalog;
@@ -58,9 +58,7 @@ pub mod telemetry;
 pub mod webhook;
 
 pub use crate::client::{Client, Handle, SessionClient};
-pub use crate::command::{
-    Canceled, ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupResponse,
-};
+pub use crate::command::{ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupResponse};
 pub use crate::coord::id_bundle::CollectionIdBundle;
 pub use crate::coord::peek::PeekResponseUnary;
 pub use crate::coord::timeline::TimelineContext;

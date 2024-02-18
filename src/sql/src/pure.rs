@@ -72,7 +72,6 @@ use crate::{kafka_util, normalize};
 use self::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
-    TestScriptSourcePurificationError,
 };
 
 pub(crate) mod error;
@@ -531,9 +530,6 @@ async fn purify_create_source(
         CreateSourceConnection::LoadGenerator { .. } => {
             &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
         }
-        CreateSourceConnection::TestScript { .. } => {
-            &mz_storage_types::sources::testscript::TEST_SCRIPT_PROGRESS_DESC
-        }
     };
 
     match connection {
@@ -646,14 +642,6 @@ async fn purify_create_source(
                     });
                 }
             }
-        }
-        CreateSourceConnection::TestScript { desc_json: _ } => {
-            if let Some(referenced_subsources) = referenced_subsources {
-                Err(TestScriptSourcePurificationError::ReferencedSubsources(
-                    referenced_subsources.clone(),
-                ))?;
-            }
-            // TODO: verify valid json and valid schema
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -986,7 +974,7 @@ async fn purify_create_source(
             };
 
             // Retrieve schemas for all requested tables
-            let tables = mz_mysql_util::schema_info(&mut conn, &table_schema_request)
+            let tables = mz_mysql_util::schema_info(&mut *conn, &table_schema_request)
                 .await
                 .map_err(|err| match err {
                     // TODO: Refactor schema_info to return all unsupported columns rather than
@@ -1083,10 +1071,19 @@ async fn purify_create_source(
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
             subsources.extend(new_subsources);
 
+            // Retrieve the current @gtid_executed value of the server to mark as the effective
+            // initial snapshot point such that we can ensure consistency if the initial source
+            // snapshot is broken up over multiple points in time.
+            let initial_gtid_set =
+                mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
+
             // Remove any old detail references
             options
                 .retain(|MySqlConfigOption { name, .. }| name != &MySqlConfigOptionName::Details);
-            let details = MySqlSourceDetails { tables };
+            let details = MySqlSourceDetails {
+                tables,
+                initial_gtid_set,
+            };
             options.push(MySqlConfigOption {
                 name: MySqlConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
@@ -1295,7 +1292,7 @@ async fn purify_alter_source(
         match desc.connection {
             GenericSourceConnection::Postgres(pg_connection) => pg_connection,
             _ => sql_bail!(
-                "{} is a {} source, which does not support ALTER TABLE...ADD SUBSOURCES",
+                "{} is a {} source, which does not support ALTER SOURCE...ADD SUBSOURCES",
                 scx.catalog.minimal_qualification(item.name()),
                 desc.connection.name()
             ),
@@ -1505,24 +1502,20 @@ async fn purify_alter_source(
 
 async fn purify_source_format(
     catalog: &dyn SessionCatalog,
-    format: &mut CreateSourceFormat<Aug>,
+    format: &mut Option<CreateSourceFormat<Aug>>,
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
-    if matches!(format, CreateSourceFormat::KeyValue { .. })
-        && !matches!(
-            connection,
-            CreateSourceConnection::Kafka { .. } | CreateSourceConnection::TestScript { .. }
-        )
+    if matches!(format, Some(CreateSourceFormat::KeyValue { .. }))
+        && !matches!(connection, CreateSourceConnection::Kafka { .. })
     {
-        // We don't mention `TestScript` to users here
         sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
 
-    match format {
-        CreateSourceFormat::None => {}
-        CreateSourceFormat::Bare(format) => {
+    match format.as_mut() {
+        None => {}
+        Some(CreateSourceFormat::Bare(format)) => {
             purify_source_format_single(
                 catalog,
                 format,
@@ -1533,7 +1526,7 @@ async fn purify_source_format(
             .await?;
         }
 
-        CreateSourceFormat::KeyValue { key, value: val } => {
+        Some(CreateSourceFormat::KeyValue { key, value: val }) => {
             purify_source_format_single(catalog, key, connection, envelope, storage_configuration)
                 .await?;
             purify_source_format_single(catalog, val, connection, envelope, storage_configuration)

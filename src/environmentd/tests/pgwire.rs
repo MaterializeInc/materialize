@@ -29,16 +29,19 @@ use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
 #[mz_ore::test]
-#[ignore]
 fn test_bind_params() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
+    server.enable_feature_flags(&["enable_expressions_in_limit_syntax"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
-        Err(err) => assert!(err.to_string().contains("no overload")),
+        Err(err) => assert!(
+            err.to_string().contains("operator does not exist"),
+            "unexpected error: {err}"
+        ),
     }
 
     assert!(client
@@ -76,6 +79,32 @@ fn test_bind_params() {
             .unwrap();
         let val: Numeric = client.query_one(&stmt, &[&num]).unwrap().get(0);
         assert_eq!(val.to_string(), "3.57");
+    }
+
+    // Ensure that parameters in a `SELECT .. LIMIT` clause are supported.
+    {
+        let stmt = client
+            .prepare("SELECT generate_series(1, 3) LIMIT $1")
+            .unwrap();
+        let vals = client
+            .query(&stmt, &[&2_i64])
+            .unwrap()
+            .iter()
+            .map(|r| r.get(0))
+            .collect::<Vec<i32>>();
+        assert_eq!(vals, &[1, 2]);
+    }
+
+    // Ensure that parameters in a `VALUES .. LIMIT` clause are supported.
+    {
+        let stmt = client.prepare("VALUES (1), (2), (3) LIMIT $1").unwrap();
+        let vals = client
+            .query(&stmt, &[&2_i64])
+            .unwrap()
+            .iter()
+            .map(|r| r.get(0))
+            .collect::<Vec<i32>>();
+        assert_eq!(vals, &[1, 2]);
     }
 
     // A `CREATE` statement with parameters should be rejected.
@@ -508,6 +537,9 @@ fn test_pgtest_mz() {
             "enable_raise_statement",
             "enable_unmanaged_cluster_replicas",
             "enable_unsafe_functions",
+            // The following flags are required to test out the COPY TO s3 feature
+            "enable_aws_connection",
+            "enable_copy_to_expr",
         ],
     );
 }

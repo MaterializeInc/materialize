@@ -14,6 +14,57 @@ SELECT '-0'::float::text
 ----
 -0
 
+query T
+SELECT '+0'::float::text
+----
+0
+
+query T
+SELECT '000000.00000'::float::text
+----
+0
+
+query T
+SELECT '0.0e10'::float::text
+----
+0
+
+query T
+SELECT '0.'::float::text
+----
+0
+
+query T
+SELECT '.0'::float::text
+----
+0
+
+query T
+SELECT '-.0'::float::text
+----
+-0
+
+query T
+SELECT '+.0'::float::text
+----
+0
+
+query T
+SELECT '+0.'::float::text
+----
+0
+
+query T
+SELECT '-0.'::float::text
+----
+-0
+
+query error invalid input syntax
+SELECT '++0'::float::text
+
+query error invalid input syntax
+SELECT '--0'::float::text
+
 query TTTTT
 SELECT 'Inf'::float::text, 'Infinity'::float::text, 'inFinIty'::float::text, '+inf'::float::text, '+infinity'::float::text
 ----
@@ -106,3 +157,12 @@ query T
 SELECT MIN(f1+f2)-SUM(f1) FROM t1
 ----
 20282409603651670423947251286016.000
+
+query error invalid input syntax
+SELECT ''::float::text
+
+query error invalid input syntax
+SELECT 'e'::float::text
+
+query error invalid input syntax
+SELECT 'e10'::float::text

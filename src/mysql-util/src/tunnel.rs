@@ -9,8 +9,6 @@
 
 use std::ops::{Deref, DerefMut};
 
-use anyhow::anyhow;
-
 use mysql_async::{Conn, Opts, OptsBuilder};
 use tracing::{info, warn};
 
@@ -146,49 +144,53 @@ impl Config {
                     .map_err(MySqlError::Ssh)?;
 
                 let tunnel_addr = tunnel.local_addr();
-                let opts: Opts = OptsBuilder::from_opts(self.inner.clone())
+                // Override the connection host and port for the actual TCP connection to point to
+                // the local tunnel instead.
+                let mut opts_builder = OptsBuilder::from_opts(self.inner.clone())
                     .ip_or_hostname(tunnel_addr.ip().to_string())
-                    .tcp_port(tunnel_addr.port())
-                    .into();
+                    .tcp_port(tunnel_addr.port());
 
-                // TODO: Implement proper host verification when using an SSH tunnel. This
-                // requires a way to modify the TLS configuration created within mysql_async
-                // to set the TLS host different from the connection host.
-                if let Some(ssl_opts) = opts.ssl_opts() {
+                if let Some(ssl_opts) = self.inner.ssl_opts() {
                     if !ssl_opts.skip_domain_validation() {
-                        return Err(anyhow!(
-                            "VERIFY_IDENTITY SSL MODE is not currently supported with SSH tunnels"
-                        )
-                        .into());
+                        // If the TLS configuration will validate the hostname, we need to set
+                        // the TLS hostname back to the actual upstream host and not the hostname
+                        // of the local SSH tunnel
+                        opts_builder = opts_builder.ssl_opts(Some(
+                            ssl_opts.clone().with_tls_hostname_override(Some(
+                                self.inner.ip_or_hostname().to_string(),
+                            )),
+                        ));
                     }
                 }
 
                 Ok(MySqlConn {
-                    conn: Conn::new(opts).await.map_err(MySqlError::from)?,
+                    conn: Conn::new(opts_builder).await.map_err(MySqlError::from)?,
                     _ssh_tunnel_handle: Some(tunnel),
                 })
             }
             TunnelConfig::AwsPrivatelink { connection_id } => {
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
 
-                let opts: Opts = OptsBuilder::from_opts(self.inner.clone())
-                    .ip_or_hostname(privatelink_host)
-                    .into();
+                // Override the connection host for the actual TCP connection to point to
+                // the privatelink hostname instead.
+                let mut opts_builder =
+                    OptsBuilder::from_opts(self.inner.clone()).ip_or_hostname(privatelink_host);
 
-                // TODO: Implement proper host verification when using a PrivateLink tunnel. This
-                // requires a way to modify the TLS configuration created within mysql_async
-                // to set the TLS host different from the connection host.
-                if let Some(ssl_opts) = opts.ssl_opts() {
+                if let Some(ssl_opts) = self.inner.ssl_opts() {
                     if !ssl_opts.skip_domain_validation() {
-                        return Err(anyhow!(
-                            "VERIFY_IDENTITY SSL MODE is not currently supported with PrivateLink"
-                        )
-                        .into());
+                        // If the TLS configuration will validate the hostname, we need to set
+                        // the TLS hostname back to the actual upstream host and not the
+                        // privatelink hostname.
+                        opts_builder = opts_builder.ssl_opts(Some(
+                            ssl_opts.clone().with_tls_hostname_override(Some(
+                                self.inner.ip_or_hostname().to_string(),
+                            )),
+                        ));
                     }
                 }
 
                 Ok(MySqlConn {
-                    conn: Conn::new(opts).await.map_err(MySqlError::from)?,
+                    conn: Conn::new(opts_builder).await.map_err(MySqlError::from)?,
                     _ssh_tunnel_handle: None,
                 })
             }

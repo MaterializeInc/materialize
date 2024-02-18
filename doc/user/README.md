@@ -19,38 +19,87 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Tasks
 
-### (Temporary) Updating LTS Docs
+### Making changes
 
-As we start to break apart the binary, we have to work through a temporary phase where users of `v0.26 LTS` (or lower) shouldn't be exposed to documentation changes related to the new features landing in `main`, to avoid confusion. #11795 updated the docs deployment process to use two different branches:
+Shipping changes to the user-facing documentation is designed to be as
+lightweight and painless as possible to encourage contributions.
 
-* `lts-docs`: capturing the state of the docs at `v0.26 LTS`, deploying to `https://materialize.com/docs/`
-* `main`: ongoing development branch, deploying to `https://materialize.com/docs/unstable/`
+Merging to the `main` branch will immediately deploy the updated documentation
+to https://materialize.com/docs.
 
-#### Shipping updates to Unstable Docs
+### Adjusting documentation for existing features
 
-PRs to `materialize/main` will trigger new builds of materialize.com/docs/unstable/. Deploy docs updates to unstable if:
+If you're correcting errors or adding documentation for features that are
+already deployed to production, put up a PR with your changes and wait for a
+review. The changes will (correctly) go live as soon as your PR is merged.
 
-1. The change applies to both LTS and Unstable _(e.g. if you're correcting a typo on the Postgres source page)_
-2. The change only applies to Unstable
+### Adding documentation for new features
 
-#### Shipping updates to LTS Docs
+If documenting a *new* feature of Materialize that has not yet rolled out to
+production, use the `warn-if-unreleased` shortcode to indicate in what version
+the feature will become available:
 
-To update `materialize.com/docs`, you need to merge a PR to the `lts-docs` branch (typically, following a PR to `main`) to backport the changes, in which case the process is:
+```
+{{< warn-if-unreleased v0.86 >}}
+```
 
-1. Create a new branch on your fork that references `lts-docs`.
-   ```
-   git checkout -b my-branch-name lts-docs
-   ```
-2. Cherry-pick the commit from `main` with the changes you need, or just make the necessary changes as you would normally.
-   ```
-   git cherry-pick COMMIT-SHA-FROM-MAIN
-   ```
-4. Push your branch.
-   ```
-   git push
-   ```
-5. Open a PR - if this was a cherry-picked commit that has already been reviewed, approved and merged to `main`, you can just merge it once CI turns green. If it has conflicts or it is a unique PR for `lts-docs`, then you'll need a review.
+This will add a large warning that indicates to users that the change is not
+yet available:
 
+<img src="https://github.com/MaterializeInc/materialize/assets/882976/97b33d8d-de45-4fd4-ac1c-3080c4c07773">
+
+The warning will automatically disappear when the version is deployed to
+production.
+
+You can use the `warn-if-unreleased-inline` shortcode for a smaller warning that
+can appear inline in a paragraph, table, or list:
+
+```
+{{< warn-if-unreleased-inline v0.86 >}}
+```
+
+For new SQL functions, add a `version-added` field to the function's definition:
+
+```yml:
+    - signature: 'my_new_function() -> int'
+      description: A new function shipping in the next release.
+      version-added: v0.86
+```
+
+This will render the same warning next to the function's description until the
+version containing the function is deployed to production.
+
+#### Rationale
+
+Using these shortcodes allows developers to merge the documentation for a change
+in the same PR that adds the implementation of the change. This greatly improves
+the odds that developers will adjust the docs when making a change.
+
+In the past, we instead asked developers to open a separate docs PR for each
+change, then wait to merge the docs PR until that change was deployed to
+production. This was enough overhead that they would often skip writing docs
+entirely.
+
+#### Special cases
+
+If necessary, you can use `if-released` and `if-unreleased` to render
+different content depending on whether a given release:
+
+```
+{{< if-released v0.86 >}}
+This block is shown only if v0.86 is released.
+{{< /if-released >}}
+
+{{< if-unreleased v0.86 >}}
+This block is shown only if v0.86 is *not* released.
+{{< /if-unreleased >}}
+```
+
+Exercise caution with these shortcodes! It is easy to have typos or rendering
+glitches in an `if-released` block that slip through review because they are not
+visible when the PR is previewed during review. To preview an `if-released`
+block while developing the docs locally, toggle the `released` parameter in
+/releases/vX.Y.md.
 
 ### Updating CSS
 

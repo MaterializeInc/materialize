@@ -29,17 +29,7 @@ SERVICES = [
     Postgres(),
     TestCerts(),
     Redpanda(),
-    MySql(
-        additional_args=[
-            "--log-bin=mysql-bin",
-            "--gtid_mode=ON",
-            "--enforce_gtid_consistency=ON",
-            "--binlog-format=row",
-            "--log-slave-updates",
-            "--binlog-row-image=full",
-            "--server-id=1",
-        ]
-    ),
+    MySql(),
 ]
 
 
@@ -160,13 +150,30 @@ def workflow_mysql(c: Composition) -> None:
         "mysql-source-after-ssh-restart.td",
     )
 
-    # TODO(roshan): Enable this when TLS/SSL options for MySQL are supported
+    # MySQL generates self-signed certificates for SSL connections on startup,
+    # for both the server and client:
+    # https://dev.mysql.com/doc/refman/8.3/en/creating-ssl-rsa-files-using-mysql.html
+    # Grab the correct Server CA and Client Key and Cert from the MySQL container
+    # (and strip the trailing null byte):
+    ssl_ca = c.exec("mysql", "cat", "/var/lib/mysql/ca.pem", capture=True).stdout.split(
+        "\x00", 1
+    )[0]
+    ssl_client_cert = c.exec(
+        "mysql", "cat", "/var/lib/mysql/client-cert.pem", capture=True
+    ).stdout.split("\x00", 1)[0]
+    ssl_client_key = c.exec(
+        "mysql", "cat", "/var/lib/mysql/client-key.pem", capture=True
+    ).stdout.split("\x00", 1)[0]
+
     # Validate SSL/TLS connections over SSH tunnel
-    # c.run_testdrive_files(
-    #     "--no-reset",
-    #     f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-    #     "mysql-source-ssl.td",
-    # )
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=ssl-ca={ssl_ca}",
+        f"--var=ssl-client-cert={ssl_client_cert}",
+        f"--var=ssl-client-key={ssl_client_key}",
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        "mysql-source-ssl.td",
+    )
 
 
 def workflow_kafka(c: Composition, redpanda: bool = False) -> None:

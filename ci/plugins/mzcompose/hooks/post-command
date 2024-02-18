@@ -9,8 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# -x to debug mysterious failures without any logging
-set -euxo pipefail
+set -euo pipefail
 
 . misc/shlib/shlib.bash
 
@@ -53,9 +52,7 @@ find cores -name 'core.*' | while read -r core; do
     if grep -q "Program terminated with signal SIGABRT, Aborted." "$core".txt; then
         echo "SIGABRT found in \"$core.txt\", ignoring core file"
     else
-        zstd --rm "$core"
         buildkite-agent artifact upload "$core".txt
-        buildkite-agent artifact upload "$core".zst
     fi
 done
 # can be huge, clean up

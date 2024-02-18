@@ -17,6 +17,7 @@ use std::mem::size_of;
 
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec64;
 
 /// A configurable data generator for benchmarking.
@@ -224,7 +225,7 @@ impl DataGenerator {
                 "generator exceeded batch size; smaller batches needed"
             );
         }
-        Some(batch.finish())
+        Some(batch.finish(&ColumnarMetrics::disconnected()))
     }
 
     fn gen_record(&mut self, record_idx: usize) -> ((&[u8], &[u8]), u64, i64) {

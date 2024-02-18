@@ -79,26 +79,30 @@ function expandObject(object, parents, columns) {
 
         let cast = "";
         let wrapping_function = "";
-        switch (typeof value) {
-            case "boolean":
+        let isNull = value === null;
+        switch (true) {
+            case isNull:
+                cast = "";
+                break;
+            case typeof value === "boolean":
                 cast = "::bool";
                 break;
-            case "number":
+            case typeof value === "number":
                 cast = "::numeric";
                 break;
-            case "string":
+            case typeof value === "string":
                 if (Date.parse(value)) {
-                    wrapping_function = "try_parse_monotonic_iso8601_timestamp"
+                    wrapping_function = "try_parse_monotonic_iso8601_timestamp";
                 }
                 break;
-            case "object":
+            case typeof value === "object":
                 parents.push(name);
-                expandObject(value, parents, columns)
-                parents.pop()
+                expandObject(value, parents, columns);
+                parents.pop();
                 continue;
         }
 
-        columns.push([name, wrapping_function, cast, _.clone(parents)]);
+        columns.push([name, wrapping_function, cast, _.clone(parents), isNull]);
     }
 }
 

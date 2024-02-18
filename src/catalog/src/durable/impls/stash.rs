@@ -207,38 +207,37 @@ impl OpenableDurableCatalogState for OpenableConnection {
     #[tracing::instrument(name = "storage::open_check", level = "info", skip_all)]
     async fn open_savepoint(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_stash_savepoint(epoch_lower_bound).await?;
         let stash = self.stash.take().expect("opened above");
-        retry_open(stash, boot_ts, bootstrap_args, deploy_generation).await
+        retry_open(stash, initial_ts, bootstrap_args, deploy_generation).await
     }
 
     #[tracing::instrument(name = "storage::open_read_only", level = "info", skip_all)]
     async fn open_read_only(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_stash_read_only().await?;
         let stash = self.stash.take().expect("opened above");
-        retry_open(stash, boot_ts, bootstrap_args, None).await
+        retry_open(stash, EpochMillis::MIN, bootstrap_args, None).await
     }
 
     #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
     async fn open(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_stash(epoch_lower_bound).await?;
         let stash = self.stash.take().expect("opened above");
-        retry_open(stash, boot_ts, bootstrap_args, deploy_generation).await
+        retry_open(stash, initial_ts, bootstrap_args, deploy_generation).await
     }
 
     #[tracing::instrument(name = "storage::open_debug", level = "info", skip_all)]
@@ -451,7 +450,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
 /// If the inner stash has not been opened.
 async fn retry_open(
     mut stash: Stash,
-    boot_ts: EpochMillis,
+    initial_ts: EpochMillis,
     bootstrap_args: &BootstrapArgs,
     deploy_generation: Option<u64>,
 ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
@@ -462,7 +461,7 @@ async fn retry_open(
     let mut retry = pin::pin!(retry);
 
     loop {
-        match open_inner(stash, boot_ts.clone(), bootstrap_args, deploy_generation).await {
+        match open_inner(stash, initial_ts.clone(), bootstrap_args, deploy_generation).await {
             Ok(conn) => {
                 return Ok(conn);
             }
@@ -480,7 +479,7 @@ async fn retry_open(
 #[tracing::instrument(name = "storage::open_inner", level = "info", skip_all)]
 async fn open_inner(
     mut stash: Stash,
-    boot_ts: EpochMillis,
+    initial_ts: EpochMillis,
     bootstrap_args: &BootstrapArgs,
     deploy_generation: Option<u64>,
 ) -> Result<Box<Connection>, (Stash, CatalogError)> {
@@ -499,7 +498,7 @@ async fn open_inner(
             Ok(txn) => txn,
             Err(e) => return Err((conn.stash, e)),
         };
-        match initialize::initialize(&mut tx, &args, boot_ts, deploy_generation).await {
+        match initialize::initialize(&mut tx, &args, initial_ts, deploy_generation).await {
             Ok(()) => {}
             Err(e) => return Err((conn.stash, e)),
         }
@@ -1198,7 +1197,12 @@ impl DurableCatalogState for Connection {
             })
             .await??;
         if let Some(prev) = prev {
-            assert!(next >= prev, "global timestamp must always go up");
+            assert!(
+                next >= prev,
+                "global timestamp must always go up; prev = {:?}, next = {:?}",
+                prev,
+                next
+            );
         }
         Ok(())
     }
@@ -1313,14 +1317,14 @@ impl TestOpenableConnection<'_> {
 impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
     async fn open_savepoint(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.openable_connection
             .open_savepoint(
-                boot_ts,
+                initial_ts,
                 bootstrap_args,
                 deploy_generation,
                 epoch_lower_bound,
@@ -1330,24 +1334,23 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn open_read_only(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.openable_connection
-            .open_read_only(boot_ts, bootstrap_args)
+            .open_read_only(bootstrap_args)
             .await
     }
 
     async fn open(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.openable_connection
             .open(
-                boot_ts,
+                initial_ts,
                 bootstrap_args,
                 deploy_generation,
                 epoch_lower_bound,

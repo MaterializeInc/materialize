@@ -10,13 +10,10 @@
 //! Optimizer implementation for `CREATE VIEW` statements.
 
 use mz_expr::OptimizedMirRelationExpr;
-use mz_repr::explain::trace_plan;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::Optimizer as TransformOptimizer;
-use tracing::{span, Level};
 
-use crate::optimize::{Optimize, OptimizerConfig, OptimizerError};
+use crate::optimize::{optimize_mir_local, Optimize, OptimizerConfig, OptimizerError};
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -42,16 +39,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
-            #[allow(deprecated)]
-            let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
-            let expr = optimizer.optimize(expr)?;
-
-            // Trace the result of this phase.
-            trace_plan(expr.as_inner());
-
-            Ok::<_, OptimizerError>(expr)
-        })?;
+        let expr = optimize_mir_local(expr, &self.typecheck_ctx)?;
 
         // Return the resulting OptimizedMirRelationExpr.
         Ok(expr)

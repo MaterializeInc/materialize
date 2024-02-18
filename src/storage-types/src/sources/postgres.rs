@@ -9,15 +9,18 @@
 
 //! Types related to postgres sources
 
+use std::collections::BTreeMap;
+
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_expr::MirScalarExpr;
+use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest::prelude::any;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
@@ -31,12 +34,15 @@ include!(concat!(
     "/mz_storage_types.sources.postgres.rs"
 ));
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
     pub connection: C::Pg,
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types, keyed by their position in the source.
+    #[proptest(
+        strategy = "proptest::collection::btree_map(any::<usize>(), proptest::collection::vec(any::<MirScalarExpr>(), 0..4), 0..4)"
+    )]
     pub table_casts: BTreeMap<usize, Vec<MirScalarExpr>>,
     pub publication: String,
     pub publication_details: PostgresSourcePublicationDetails,
@@ -64,35 +70,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
     }
 }
 
-impl<C: ConnectionAccess> Arbitrary for PostgresSourceConnection<C> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<C::Pg>(),
-            any::<GlobalId>(),
-            proptest::collection::btree_map(
-                any::<usize>(),
-                proptest::collection::vec(any::<MirScalarExpr>(), 1..4),
-                1..4,
-            ),
-            any::<String>(),
-            any::<PostgresSourcePublicationDetails>(),
-        )
-            .prop_map(
-                |(connection, connection_id, table_casts, publication, details)| Self {
-                    connection,
-                    connection_id,
-                    table_casts,
-                    publication,
-                    publication_details: details,
-                },
-            )
-            .boxed()
-    }
-}
-
 pub static PG_PROGRESS_DESC: Lazy<RelationDesc> =
     Lazy::new(|| RelationDesc::empty().with_column("lsn", ScalarType::UInt64.nullable(true)));
 
@@ -103,6 +80,16 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
 
     fn upstream_name(&self) -> Option<&str> {
         None
+    }
+
+    fn key_desc(&self) -> RelationDesc {
+        RelationDesc::empty()
+    }
+
+    fn value_desc(&self) -> RelationDesc {
+        // The postgres source only outputs data to its subsources. The catalog object
+        // representing the source itself is just an empty relation with no columns
+        RelationDesc::empty()
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
@@ -238,33 +225,15 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresSourcePublicationDetails {
-    pub tables: Vec<mz_postgres_util::desc::PostgresTableDesc>,
+    #[proptest(strategy = "proptest::collection::vec(any::<PostgresTableDesc>(), 0..4)")]
+    pub tables: Vec<PostgresTableDesc>,
     pub slot: String,
     /// The active timeline_id when this source was created
     /// The None value indicates an unknown timeline, to account for sources that existed
     /// prior to this field being introduced
     pub timeline_id: Option<u64>,
-}
-
-impl Arbitrary for PostgresSourcePublicationDetails {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        (
-            proptest::collection::vec(any::<mz_postgres_util::desc::PostgresTableDesc>(), 1..4),
-            any::<String>(),
-            any::<Option<u64>>(),
-        )
-            .prop_map(|(tables, slot, timeline_id)| Self {
-                tables,
-                slot,
-                timeline_id,
-            })
-            .boxed()
-    }
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
@@ -281,7 +250,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
             tables: proto
                 .tables
                 .into_iter()
-                .map(mz_postgres_util::desc::PostgresTableDesc::from_proto)
+                .map(PostgresTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
             slot: proto.slot,
             timeline_id: proto.timeline_id,

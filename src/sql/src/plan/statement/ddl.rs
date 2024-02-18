@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_controller_types::{
+    is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
+};
 use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
@@ -32,7 +34,9 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_repr::{
+    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
+};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
@@ -70,8 +74,8 @@ use mz_storage_types::sinks::{
     KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
-    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
-    ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
+    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
+    RegexEncoding, SourceDataEncoding,
 };
 use mz_storage_types::sources::envelope::{
     KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
@@ -85,7 +89,6 @@ use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
 };
-use mz_storage_types::sources::testscript::TestScriptSourceConnection;
 use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
 use prost::Message;
 
@@ -631,7 +634,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (mut external_connection, encoding, available_subsources) = match connection {
+    let (mut external_connection, available_subsources) = match connection {
         CreateSourceConnection::Kafka {
             connection: connection_name,
             options,
@@ -674,8 +677,6 @@ pub fn plan_create_source(
                 // would result in a runtime error for the source.
                 sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
             }
-
-            let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
 
             if !include_metadata.is_empty()
                 && !matches!(
@@ -750,7 +751,7 @@ pub fn plan_create_source(
 
             let connection = GenericSourceConnection::Kafka(connection);
 
-            (connection, encoding, None)
+            (connection, None)
         }
         CreateSourceConnection::Postgres {
             connection,
@@ -977,12 +978,8 @@ pub fn plan_create_source(
                     publication: publication.expect("validated exists during purification"),
                     publication_details,
                 });
-            // The postgres source only outputs data to its subsources. The catalog object
-            // representing the source itself is just an empty relation with no columns
-            let encoding = SourceDataEncoding::Single(DataEncoding::new(
-                DataEncodingInner::RowCodec(RelationDesc::empty()),
-            ));
-            (connection, encoding, Some(available_subsources))
+
+            (connection, Some(available_subsources))
         }
         CreateSourceConnection::MySql {
             connection,
@@ -1029,12 +1026,7 @@ pub fn plan_create_source(
                     details,
                 });
 
-            // The MySQL source only outputs data to its subsources. The catalog object
-            // representing the source itself is just an empty relation with no columns
-            let encoding = SourceDataEncoding::Single(DataEncoding::new(
-                DataEncodingInner::RowCodec(RelationDesc::empty()),
-            ));
-            (connection, encoding, Some(available_subsources))
+            (connection, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let (load_generator, available_subsources) =
@@ -1048,23 +1040,12 @@ pub fn plan_create_source(
                 None => None,
             };
 
-            let encoding = load_generator.data_encoding();
-
             let connection = GenericSourceConnection::from(LoadGeneratorSourceConnection {
                 load_generator,
                 tick_micros,
             });
 
-            (connection, encoding, available_subsources)
-        }
-        CreateSourceConnection::TestScript { desc_json } => {
-            scx.require_feature_flag(&vars::ENABLE_CREATE_SOURCE_FROM_TESTSCRIPT)?;
-            let connection = GenericSourceConnection::from(TestScriptSourceConnection {
-                desc_json: desc_json.clone(),
-            });
-            // we just use the encoding from the format and envelope
-            let encoding = get_encoding(scx, format, &envelope, None)?;
-            (connection, encoding, None)
+            (connection, available_subsources)
         }
     };
 
@@ -1151,9 +1132,53 @@ pub fn plan_create_source(
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let (key_desc, value_desc) = encoding.desc()?;
+    let encoding = match format {
+        Some(format) => Some(get_encoding(scx, format, &envelope)?),
+        None => None,
+    };
 
-    let mut key_envelope = get_key_envelope(include_metadata, &encoding)?;
+    let (key_desc, value_desc) = match &encoding {
+        Some(encoding) => {
+            // If we are applying an encoding we need to ensure that the incoming value_desc is a
+            // single column of type bytes.
+            match external_connection.value_desc().typ().columns() {
+                [typ] => match typ.scalar_type {
+                    ScalarType::Bytes => {}
+                    _ => sql_bail!(
+                        "The schema produced by the source is incompatible with format decoding"
+                    ),
+                },
+                _ => sql_bail!(
+                    "The schema produced by the source is incompatible with format decoding"
+                ),
+            }
+
+            let (key_desc, value_desc) = encoding.desc()?;
+
+            // TODO(petrosagg): This piece of code seems to be making a statement about the
+            // nullability of the NONE envelope when the source is Kafka. As written, the code
+            // misses opportunities to mark columns as not nullable and is over conservative. For
+            // example in the case of `FORMAT BYTES ENVELOPE NONE` the output is indeed
+            // non-nullable but we will mark it as nullable anyway. This kind of crude reasoning
+            // should be replaced with precise type-level reasoning.
+            let key_desc = key_desc.map(|desc| {
+                let is_kafka = matches!(connection, CreateSourceConnection::Kafka { .. });
+                let is_envelope_none = matches!(envelope, ast::SourceEnvelope::None);
+                if is_kafka && is_envelope_none {
+                    RelationDesc::from_names_and_types(
+                        desc.into_iter()
+                            .map(|(name, typ)| (name, typ.nullable(true))),
+                    )
+                } else {
+                    desc
+                }
+            });
+            (key_desc, value_desc)
+        }
+        None => (None, external_connection.value_desc()),
+    };
+
+    let mut key_envelope = get_key_envelope(include_metadata, encoding.as_ref())?;
 
     match (&envelope, &key_envelope) {
         (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
@@ -1178,8 +1203,8 @@ pub fn plan_create_source(
             //TODO check that key envelope is not set
             let after_idx = match typecheck_debezium(&value_desc) {
                 Ok((_before_idx, after_idx)) => Ok(after_idx),
-                Err(type_err) => match encoding.value_ref().inner {
-                    DataEncodingInner::Avro(_) => Err(type_err),
+                Err(type_err) => match encoding.as_ref().map(|e| &e.value) {
+                    Some(DataEncoding::Avro(_)) => Err(type_err),
                     _ => Err(sql_err!(
                         "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
                     )),
@@ -1191,7 +1216,7 @@ pub fn plan_create_source(
             }
         }
         ast::SourceEnvelope::Upsert => {
-            let key_encoding = match encoding.key_ref() {
+            let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
                 None => {
                     bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
                 }
@@ -1210,7 +1235,7 @@ pub fn plan_create_source(
             scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
-                CreateSourceFormat::Bare(Format::Avro(_)) => {}
+                Some(CreateSourceFormat::Bare(Format::Avro(_))) => {}
                 _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
             UnplannedSourceEnvelope::CdcV2
@@ -1363,8 +1388,6 @@ pub fn plan_create_source(
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
             desc: source_desc,
-            // Currently no source reads from another source
-            source_imports: BTreeSet::new(),
             subsource_exports,
             progress_subsource,
         }),
@@ -1657,33 +1680,24 @@ fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
     envelope: &ast::SourceEnvelope,
-    connection: Option<&CreateSourceConnection<Aug>>,
 ) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
     let encoding = match format {
-        CreateSourceFormat::None => sql_bail!("Source format must be specified"),
         CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
         CreateSourceFormat::KeyValue { key, value } => {
-            let key = match get_encoding_inner(scx, key)? {
-                SourceDataEncodingInner::Single(key) => key,
-                SourceDataEncodingInner::KeyValue { key, .. } => key,
+            let key = {
+                let encoding = get_encoding_inner(scx, key)?;
+                Some(encoding.key.unwrap_or(encoding.value))
             };
-            let value = match get_encoding_inner(scx, value)? {
-                SourceDataEncodingInner::Single(value) => value,
-                SourceDataEncodingInner::KeyValue { value, .. } => value,
-            };
-            SourceDataEncodingInner::KeyValue { key, value }
+            let value = get_encoding_inner(scx, value)?.value;
+            SourceDataEncoding { key, value }
         }
     };
-
-    let force_nullable_keys = matches!(connection, Some(CreateSourceConnection::Kafka { .. }))
-        && matches!(envelope, ast::SourceEnvelope::None);
-    let encoding = encoding.into_source_data_encoding(force_nullable_keys);
 
     let requires_keyvalue = matches!(
         envelope,
         ast::SourceEnvelope::Debezium | ast::SourceEnvelope::Upsert
     );
-    let is_keyvalue = matches!(encoding, SourceDataEncoding::KeyValue { .. });
+    let is_keyvalue = encoding.key.is_some();
     if requires_keyvalue && !is_keyvalue {
         sql_bail!("ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified");
     };
@@ -1733,10 +1747,9 @@ pub struct Schema {
 fn get_encoding_inner(
     scx: &StatementContext,
     format: &Format<Aug>,
-) -> Result<SourceDataEncodingInner<ReferencedConnection>, PlanError> {
-    // Avro/CSR can return a `SourceDataEncoding::KeyValue`
-    Ok(SourceDataEncodingInner::Single(match format {
-        Format::Bytes => DataEncodingInner::Bytes,
+) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
+    let value = match format {
+        Format::Bytes => DataEncoding::Bytes,
         Format::Avro(schema) => {
             let Schema {
                 key_schema,
@@ -1799,20 +1812,20 @@ fn get_encoding_inner(
             };
 
             if let Some(key_schema) = key_schema {
-                return Ok(SourceDataEncodingInner::KeyValue {
-                    key: DataEncodingInner::Avro(AvroEncoding {
+                return Ok(SourceDataEncoding {
+                    key: Some(DataEncoding::Avro(AvroEncoding {
                         schema: key_schema,
                         csr_connection: csr_connection.clone(),
                         confluent_wire_format,
-                    }),
-                    value: DataEncodingInner::Avro(AvroEncoding {
+                    })),
+                    value: DataEncoding::Avro(AvroEncoding {
                         schema: value_schema,
                         csr_connection,
                         confluent_wire_format,
                     }),
                 });
             } else {
-                DataEncodingInner::Avro(AvroEncoding {
+                DataEncoding::Avro(AvroEncoding {
                     schema: value_schema,
                     csr_connection,
                     confluent_wire_format,
@@ -1850,18 +1863,18 @@ fn get_encoding_inner(
                         sql_bail!("Protobuf CSR connections do not support any options");
                     }
 
-                    let value = DataEncodingInner::Protobuf(ProtobufEncoding {
+                    let value = DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
                         message_name: value.message_name.clone(),
                         confluent_wire_format: true,
                     });
                     if let Some(key) = key {
-                        return Ok(SourceDataEncodingInner::KeyValue {
-                            key: DataEncodingInner::Protobuf(ProtobufEncoding {
+                        return Ok(SourceDataEncoding {
+                            key: Some(DataEncoding::Protobuf(ProtobufEncoding {
                                 descriptors: strconv::parse_bytes(&key.schema)?,
                                 message_name: key.message_name.clone(),
                                 confluent_wire_format: true,
-                            }),
+                            })),
                             value,
                         });
                     }
@@ -1876,14 +1889,14 @@ fn get_encoding_inner(
             } => {
                 let descriptors = strconv::parse_bytes(schema)?;
 
-                DataEncodingInner::Protobuf(ProtobufEncoding {
+                DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
                     message_name: message_name.to_owned(),
                     confluent_wire_format: false,
                 })
             }
         },
-        Format::Regex(regex) => DataEncodingInner::Regex(RegexEncoding {
+        Format::Regex(regex) => DataEncoding::Regex(RegexEncoding {
             regex: mz_repr::adt::regex::Regex::new(regex.clone(), false)
                 .map_err(|e| sql_err!("parsing regex: {e}"))?,
         }),
@@ -1899,32 +1912,32 @@ fn get_encoding_inner(
                 }
                 CsvColumns::Count(n) => ColumnSpec::Count(usize::cast_from(*n)),
             };
-            DataEncodingInner::Csv(CsvEncoding {
+            DataEncoding::Csv(CsvEncoding {
                 columns,
                 delimiter: u8::try_from(*delimiter)
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json { .. } => DataEncodingInner::Json,
-        Format::Text => DataEncodingInner::Text,
-    }))
+        Format::Json { array: false } => DataEncoding::Json,
+        Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sources"),
+        Format::Text => DataEncoding::Text,
+    };
+    Ok(SourceDataEncoding { key: None, value })
 }
 
 /// Extract the key envelope, if it is requested
 fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
-    encoding: &SourceDataEncoding<ReferencedConnection>,
+    encoding: Option<&SourceDataEncoding<ReferencedConnection>>,
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
         .find(|i| matches!(i, SourceIncludeMetadata::Key { .. }));
     if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
-        match (alias, encoding) {
-            (Some(name), SourceDataEncoding::KeyValue { .. }) => {
-                Ok(KeyEnvelope::Named(name.as_str().to_string()))
-            }
-            (None, SourceDataEncoding::KeyValue { key, .. }) => get_unnamed_key_envelope(key),
-            (_, SourceDataEncoding::Single(_)) => {
+        match (alias, encoding.and_then(|e| e.key.as_ref())) {
+            (Some(name), Some(_)) => Ok(KeyEnvelope::Named(name.as_str().to_string())),
+            (None, Some(key)) => get_unnamed_key_envelope(key),
+            (_, None) => {
                 // `kd.alias` == `None` means `INCLUDE KEY`
                 // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
                 // These both make sense with the same error message
@@ -1947,15 +1960,12 @@ fn get_unnamed_key_envelope(
     // If the key is requested but comes from an unnamed type then it gets the name "key"
     //
     // Otherwise it gets the names of the columns in the type
-    let is_composite = match key.inner {
-        DataEncodingInner::RowCodec(_) => {
-            sql_bail!("{} sources cannot use INCLUDE KEY", key.op_name())
-        }
-        DataEncodingInner::Bytes | DataEncodingInner::Json | DataEncodingInner::Text => false,
-        DataEncodingInner::Avro(_)
-        | DataEncodingInner::Csv(_)
-        | DataEncodingInner::Protobuf(_)
-        | DataEncodingInner::Regex { .. } => true,
+    let is_composite = match key {
+        DataEncoding::Bytes | DataEncoding::Json | DataEncoding::Text => false,
+        DataEncoding::Avro(_)
+        | DataEncoding::Csv(_)
+        | DataEncoding::Protobuf(_)
+        | DataEncoding::Regex { .. } => true,
     };
 
     if is_composite {
@@ -2276,6 +2286,8 @@ pub fn plan_create_materialized_view(
         }
     };
 
+    let as_of = stmt.as_of.map(Timestamp::from);
+
     if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
     }
@@ -2381,6 +2393,7 @@ pub fn plan_create_materialized_view(
             non_null_assertions,
             compaction_window,
             refresh_schedule,
+            as_of,
         },
         replace,
         drop_ids,
@@ -2833,7 +2846,8 @@ fn kafka_sink_builder(
                 csr_connection,
             }
         }
-        Some(Format::Json { .. }) => KafkaSinkFormat::Json,
+        Some(Format::Json { array: false }) => KafkaSinkFormat::Json,
+        Some(Format::Json { array: true }) => bail_unsupported!("JSON ARRAY format in sinks"),
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
         None => bail_unsupported!("sink without format"),
     };
@@ -5682,8 +5696,4 @@ fn ensure_cluster_is_not_managed(
     } else {
         Ok(())
     }
-}
-
-fn is_cluster_size_v2(size: &str) -> bool {
-    size.ends_with("cc") || size.ends_with('C')
 }

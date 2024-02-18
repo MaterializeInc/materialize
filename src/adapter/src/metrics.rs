@@ -20,7 +20,10 @@ pub struct Metrics {
     pub query_total: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
+    pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: HistogramVec,
+    pub messages_processed: IntCounter,
+    pub watchdog_messages_processed: IntCounter,
     pub determine_timestamp: IntCounterVec,
     pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
     pub commands: IntCounterVec,
@@ -56,10 +59,23 @@ impl Metrics {
                 help: "The number of active SUBSCRIBE queries.",
                 var_labels: ["session_type"],
             )),
+            active_copy_tos: registry.register(metric!(
+                name: "mz_active_copy_tos",
+                help: "The number of active COPY TO queries.",
+                var_labels: ["session_type"],
+            )),
             queue_busy_seconds: registry.register(metric!(
                 name: "mz_coord_queue_busy_seconds",
                 help: "The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.",
                 buckets: histogram_seconds_buckets(0.000_128, 32.0)
+            )),
+            messages_processed: registry.register(metric!(
+                name: "mz_coord_messages_processed",
+                help: "The total number of messages processed by the coord.",
+            )),
+            watchdog_messages_processed: registry.register(metric!(
+                name: "mz_coord_watchdog_messages_processed",
+                help: "The total number of watchdog messages processed by the coord.",
             )),
             determine_timestamp: registry.register(metric!(
                 name: "mz_determine_timestamp",

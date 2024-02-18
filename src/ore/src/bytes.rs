@@ -26,6 +26,8 @@ use bytes::{Buf, Bytes};
 use internal::SegmentedReader;
 use smallvec::SmallVec;
 
+use crate::lgbytes::LgBytes;
+
 /// A cheaply clonable collection of possibly non-contiguous bytes.
 ///
 /// `Vec<u8>` or `Bytes` are contiguous chunks of memory, which are fast (e.g. better cache
@@ -41,9 +43,79 @@ use smallvec::SmallVec;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentedBytes<const N: usize = 1> {
     /// Collection of non-contiguous segments.
-    segments: SmallVec<[Bytes; N]>,
+    segments: SmallVec<[MaybeLgBytes; N]>,
     /// Pre-computed length of all the segments.
     len: usize,
+}
+
+/// A [Bytes] or an [LgBytes].
+///
+/// TODO: Once we've validated the persist s3 usage of LgBytes, change the CYA
+/// fallback path to be a heap allocated LgBytes. Then we can make this not pub.
+#[derive(Clone, Debug)]
+pub enum MaybeLgBytes {
+    /// A [Bytes], always heap allocated, untracked by metrics.
+    Bytes(Bytes),
+    /// An [LgBytes], possibly heap allocated, but always tracked by metrics.
+    LgBytes(LgBytes),
+}
+
+impl PartialEq for MaybeLgBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl Eq for MaybeLgBytes {}
+
+impl AsRef<[u8]> for MaybeLgBytes {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            MaybeLgBytes::Bytes(x) => x.as_ref(),
+            MaybeLgBytes::LgBytes(x) => x.as_ref(),
+        }
+    }
+}
+
+impl MaybeLgBytes {
+    /// Returns the number of bytes contained in this `MaybeLgBytes`.
+    pub fn len(&self) -> usize {
+        match self {
+            MaybeLgBytes::Bytes(x) => x.len(),
+            MaybeLgBytes::LgBytes(x) => x.len(),
+        }
+    }
+
+    /// Returns true if the `MaybeLgBytes` has a length of 0.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            MaybeLgBytes::Bytes(x) => x.is_empty(),
+            MaybeLgBytes::LgBytes(x) => x.is_empty(),
+        }
+    }
+}
+
+impl Buf for MaybeLgBytes {
+    fn remaining(&self) -> usize {
+        match self {
+            MaybeLgBytes::Bytes(x) => x.remaining(),
+            MaybeLgBytes::LgBytes(x) => x.remaining(),
+        }
+    }
+
+    fn chunk(&self) -> &[u8] {
+        match self {
+            MaybeLgBytes::Bytes(x) => x.chunk(),
+            MaybeLgBytes::LgBytes(x) => x.chunk(),
+        }
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        match self {
+            MaybeLgBytes::Bytes(x) => x.advance(cnt),
+            MaybeLgBytes::LgBytes(x) => x.advance(cnt),
+        }
+    }
 }
 
 impl Default for SegmentedBytes {
@@ -80,7 +152,7 @@ impl<const N: usize> SegmentedBytes<N> {
 
     /// Consumes `self` returning an [`Iterator`] over all of the non-contiguous segments
     /// that make up this buffer.
-    pub fn into_segments(self) -> impl Iterator<Item = Bytes> {
+    pub fn into_segments(self) -> impl Iterator<Item = MaybeLgBytes> {
         self.segments.into_iter()
     }
 
@@ -92,7 +164,7 @@ impl<const N: usize> SegmentedBytes<N> {
     /// Extends the buffer by one more segment of [`Bytes`]
     pub fn push(&mut self, b: Bytes) {
         self.len += b.len();
-        self.segments.push(b);
+        self.segments.push(MaybeLgBytes::Bytes(b));
     }
 
     /// Consumes `self` returning a type that implements [`io::Read`] and [`io::Seek`].
@@ -146,14 +218,24 @@ impl From<Bytes> for SegmentedBytes {
     fn from(value: Bytes) -> Self {
         let len = value.len();
         let mut segments = SmallVec::new();
+        segments.push(MaybeLgBytes::Bytes(value));
+
+        SegmentedBytes { segments, len }
+    }
+}
+
+impl From<MaybeLgBytes> for SegmentedBytes {
+    fn from(value: MaybeLgBytes) -> Self {
+        let len = value.len();
+        let mut segments = SmallVec::new();
         segments.push(value);
 
         SegmentedBytes { segments, len }
     }
 }
 
-impl From<Vec<Bytes>> for SegmentedBytes {
-    fn from(value: Vec<Bytes>) -> Self {
+impl From<Vec<MaybeLgBytes>> for SegmentedBytes {
+    fn from(value: Vec<MaybeLgBytes>) -> Self {
         let mut len = 0;
         let mut segments = SmallVec::with_capacity(value.len());
 
@@ -168,8 +250,7 @@ impl From<Vec<Bytes>> for SegmentedBytes {
 
 impl From<Vec<u8>> for SegmentedBytes {
     fn from(value: Vec<u8>) -> Self {
-        let bytes = Bytes::from(value);
-        SegmentedBytes::from(bytes)
+        SegmentedBytes::from(MaybeLgBytes::Bytes(Bytes::from(value)))
     }
 }
 
@@ -180,7 +261,7 @@ impl<const N: usize> FromIterator<Bytes> for SegmentedBytes<N> {
 
         for segment in iter {
             len += segment.len();
-            segments.push(segment);
+            segments.push(MaybeLgBytes::Bytes(segment));
         }
 
         SegmentedBytes { segments, len }
@@ -198,20 +279,19 @@ mod internal {
     use std::io;
     use std::ops::Bound;
 
-    use bytes::Bytes;
-
+    use crate::bytes::MaybeLgBytes;
     use crate::cast::CastFrom;
 
     /// Provides efficient reading and seeking across a collection of segmented bytes.
     #[derive(Debug)]
     pub struct SegmentedReader {
-        segments: BTreeMap<usize, Bytes>,
+        segments: BTreeMap<usize, MaybeLgBytes>,
         len: usize,
         pointer: u64,
     }
 
     impl SegmentedReader {
-        pub fn new(segments: impl IntoIterator<Item = Bytes>) -> Self {
+        pub fn new(segments: impl IntoIterator<Item = MaybeLgBytes>) -> Self {
             let mut map = BTreeMap::new();
             let mut total_len = 0;
 
@@ -264,7 +344,11 @@ mod internal {
                 // How many bytes we'll read.
                 let len = core::cmp::min(remaining_len, buf.len());
                 // Copy bytes from the current segment into the buffer.
-                buf[..len].copy_from_slice(&segment[segment_pos..segment_pos + len]);
+                let segment_buf = match segment {
+                    MaybeLgBytes::Bytes(x) => x.as_ref(),
+                    MaybeLgBytes::LgBytes(x) => x.as_ref(),
+                };
+                buf[..len].copy_from_slice(&segment_buf[segment_pos..segment_pos + len]);
                 // Advance our pointer.
                 self.pointer += u64::cast_from(len);
 

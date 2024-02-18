@@ -291,6 +291,15 @@ impl Coordinator {
                     internal,
                     size,
                 } => {
+                    // Only internal users have access to INTERNAL and BILLED AS
+                    if !session.user().is_internal() && (internal || billed_as.is_some()) {
+                        coord_bail!("cannot specify INTERNAL or BILLED AS as non-internal user")
+                    }
+                    // BILLED AS implies the INTERNAL flag.
+                    if billed_as.is_some() && !internal {
+                        coord_bail!("must specify INTERNAL when specifying BILLED AS");
+                    }
+
                     let location = mz_catalog::durable::ReplicaLocation::Managed {
                         availability_zone,
                         billed_as,

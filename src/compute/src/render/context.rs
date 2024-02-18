@@ -81,7 +81,6 @@ where
     pub(super) shutdown_token: ShutdownToken,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
-    pub(super) enable_specialized_arrangements: bool,
 }
 
 impl<S: Scope> Context<S>
@@ -109,7 +108,6 @@ where
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
             linear_join_spec: Default::default(),
-            enable_specialized_arrangements: Default::default(),
         }
     }
 }
@@ -970,7 +968,6 @@ where
         input_key: Option<Vec<MirScalarExpr>>,
         input_mfp: MapFilterProject,
         until: Antichain<mz_repr::Timestamp>,
-        enable_specialized_arrangements: bool,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -998,24 +995,15 @@ where
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
 
-                let key_val_types = if enable_specialized_arrangements {
-                    derive_key_val_types(&key, &thinning, collections.types.as_ref())
-                } else {
-                    None
-                };
+                let key_val_types =
+                    derive_key_val_types(&key, &thinning, collections.types.as_ref());
 
                 let (oks, errs) = self
                     .collection
                     .clone()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed) = Self::specialized_arrange(
-                    &name,
-                    oks,
-                    &key,
-                    &thinning,
-                    key_val_types,
-                    enable_specialized_arrangements,
-                );
+                let (oks, errs_keyed) =
+                    Self::specialized_arrange(&name, oks, &key, &thinning, key_val_types);
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
                 let errs = errs.mz_arrange::<ErrSpine<_, _>>(&format!("{}-errors", name));
                 self.arranged
@@ -1034,29 +1022,22 @@ where
         key: &Vec<MirScalarExpr>,
         thinning: &Vec<usize>,
         key_val_types: Option<(Vec<ColumnType>, Vec<ColumnType>)>,
-        enable_specialized_arrangements: bool,
     ) -> (SpecializedArrangement<S>, Collection<S, DataflowError, i64>) {
-        if enable_specialized_arrangements {
-            // We must have captured types if the flag is on. However, if the flag value
-            // and the available types fell out-of-sync, we will just skip specialization
-            // and use the RowRow catch-all below.
-            if let Some((_key_types, val_types)) = key_val_types {
-                if val_types.is_empty() {
-                    // Emtpy value specialization.
-                    let (oks, errs) = oks.map_fallible(
-                        "FormArrangementKey [val: empty]",
-                        specialized_arrangement_key(
-                            key.clone(),
-                            thinning.clone(),
-                            None,
-                            Some(vec![]),
-                        ),
-                    );
-                    let name = &format!("{} [val: empty]", name);
-                    let oks = oks.mz_arrange::<RowSpine<_, _>>(name);
-                    return (SpecializedArrangement::RowUnit(oks), errs);
-                }
+        if let Some((_key_types, val_types)) = key_val_types {
+            if val_types.is_empty() {
+                // Emtpy value specialization.
+                let (oks, errs) = oks.map_fallible(
+                    "FormArrangementKey [val: empty]",
+                    specialized_arrangement_key(key.clone(), thinning.clone(), None, Some(vec![])),
+                );
+                let name = &format!("{} [val: empty]", name);
+                let oks = oks.mz_arrange::<RowSpine<_, _>>(name);
+                return (SpecializedArrangement::RowUnit(oks), errs);
             }
+        } else {
+            // We expect to always have type information for arrangements, do getting here is
+            // likely a bug.
+            tracing::error!(%name, "missing types for arrangement");
         }
 
         // Catch-all: Just use RowRow.

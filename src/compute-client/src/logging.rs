@@ -101,12 +101,16 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoIndexLog {
     }
 }
 
+/// TODO(#25239): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum LogVariant {
+    /// TODO(#25239): Add documentation.
     Timely(TimelyLog),
+    /// TODO(#25239): Add documentation.
     Differential(DifferentialLog),
+    /// TODO(#25239): Add documentation.
     Compute(ComputeLog),
 }
 
@@ -151,20 +155,32 @@ impl RustType<ProtoLogVariant> for LogVariant {
     }
 }
 
+/// TODO(#25239): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum TimelyLog {
+    /// TODO(#25239): Add documentation.
     Operates,
+    /// TODO(#25239): Add documentation.
     Channels,
+    /// TODO(#25239): Add documentation.
     Elapsed,
+    /// TODO(#25239): Add documentation.
     Histogram,
+    /// TODO(#25239): Add documentation.
     Addresses,
+    /// TODO(#25239): Add documentation.
     Parks,
+    /// TODO(#25239): Add documentation.
     MessagesSent,
+    /// TODO(#25239): Add documentation.
     MessagesReceived,
+    /// TODO(#25239): Add documentation.
     Reachability,
+    /// TODO(#25239): Add documentation.
     BatchesSent,
+    /// TODO(#25239): Add documentation.
     BatchesReceived,
 }
 
@@ -207,16 +223,24 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
     }
 }
 
+/// TODO(#25239): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum DifferentialLog {
+    /// TODO(#25239): Add documentation.
     ArrangementBatches,
+    /// TODO(#25239): Add documentation.
     ArrangementRecords,
+    /// TODO(#25239): Add documentation.
     Sharing,
+    /// TODO(#25239): Add documentation.
     BatcherRecords,
+    /// TODO(#25239): Add documentation.
     BatcherSize,
+    /// TODO(#25239): Add documentation.
     BatcherCapacity,
+    /// TODO(#25239): Add documentation.
     BatcherAllocations,
 }
 
@@ -253,20 +277,32 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
     }
 }
 
+/// TODO(#25239): Add documentation.
 #[derive(
     Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
 )]
 pub enum ComputeLog {
+    /// TODO(#25239): Add documentation.
     DataflowCurrent,
+    /// TODO(#25239): Add documentation.
     FrontierCurrent,
+    /// TODO(#25239): Add documentation.
     PeekCurrent,
+    /// TODO(#25239): Add documentation.
     PeekDuration,
+    /// TODO(#25239): Add documentation.
     FrontierDelay,
+    /// TODO(#25239): Add documentation.
     ImportFrontierCurrent,
+    /// TODO(#25239): Add documentation.
     ArrangementHeapSize,
+    /// TODO(#25239): Add documentation.
     ArrangementHeapCapacity,
+    /// TODO(#25239): Add documentation.
     ArrangementHeapAllocations,
+    /// TODO(#25239): Add documentation.
     ShutdownDuration,
+    /// TODO(#25239): Add documentation.
     ErrorCount,
 }
 
@@ -309,6 +345,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
     }
 }
 
+/// TODO(#25239): Add documentation.
 pub static DEFAULT_LOG_VARIANTS: Lazy<Vec<LogVariant>> = Lazy::new(|| {
     let default_logs = vec![
         LogVariant::Timely(TimelyLog::Operates),
@@ -350,6 +387,7 @@ impl LogVariant {
             .unwrap_or_else(|| (0..arity).collect())
     }
 
+    /// TODO(#25239): Add documentation.
     pub fn desc(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()

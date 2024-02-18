@@ -479,6 +479,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
+                compute_state.process_copy_tos();
             }
 
             self.metrics

@@ -16,10 +16,10 @@ use std::ops::{Deref, DerefMut};
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_storage_types::sources::encoding::SourceDataEncoding;
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{
@@ -409,12 +409,6 @@ impl DataSourceDesc {
         ingestion: PlanIngestion,
         instance_id: ClusterId,
     ) -> DataSourceDesc {
-        let source_imports = ingestion
-            .source_imports
-            .iter()
-            .map(|id| (*id, ()))
-            .collect();
-
         let source_exports = ingestion
             .subsource_exports
             .iter()
@@ -432,7 +426,6 @@ impl DataSourceDesc {
         DataSourceDesc::Ingestion(IngestionDescription {
             desc: ingestion.desc.clone(),
             ingestion_metadata: (),
-            source_imports,
             source_exports,
             instance_id,
             remap_collection_id: ingestion.progress_subsource,
@@ -544,8 +537,11 @@ impl Source {
     pub fn formats(&self) -> (Option<&str>, Option<&str>) {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.encoding {
-                SourceDataEncoding::Single(encoding) => (None, encoding.type_()),
-                SourceDataEncoding::KeyValue { key, value } => (key.type_(), value.type_()),
+                Some(encoding) => match &encoding.key {
+                    Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                    None => (None, Some(encoding.value.type_())),
+                },
+                None => (None, None),
             },
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
@@ -695,6 +691,7 @@ pub struct MaterializedView {
     pub non_null_assertions: Vec<usize>,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
+    pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

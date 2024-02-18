@@ -33,7 +33,8 @@ use uuid::Uuid;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{
-    ComputeResponse, PeekResponse, ProtoComputeResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, PeekResponse, ProtoComputeResponse, SubscribeBatch,
+    SubscribeResponse,
 };
 use crate::service::proto_compute_server::ProtoCompute;
 
@@ -57,6 +58,7 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     }
 }
 
+/// TODO(#25239): Add documentation.
 #[derive(Debug, Clone)]
 pub enum ComputeProtoServiceTypes {}
 
@@ -67,6 +69,7 @@ impl ProtoServiceTypes for ComputeProtoServiceTypes {
     const URL: &'static str = "/mz_compute_client.service.ProtoCompute/CommandResponseStream";
 }
 
+/// TODO(#25239): Add documentation.
 pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
 
 #[async_trait]
@@ -139,6 +142,16 @@ pub struct PartitionedComputeState<T> {
     /// property ensures that a) we can eventually drop the tracking state maintained for a peek
     /// and b) we won't re-initialize tracking for a peek we have already served.
     peek_responses: BTreeMap<Uuid, BTreeMap<usize, PeekResponse>>,
+    /// Pending responses for a copy to; returnable once all are available.
+    ///
+    /// Tracking of responses for a COPY TO is initialized when the first `CopyResponse` for that command
+    /// is received. Once all shards have provided a `CopyResponse`, a unified copy response is
+    /// emitted and the copy_to tracking state is dropped again.
+    ///
+    /// The compute protocol requires that exactly one response is emitted for each COPY TO command. This
+    /// property ensures that a) we can eventually drop the tracking state maintained for a copy
+    /// and b) we won't re-initialize tracking for a copy we have already served.
+    copy_to_responses: BTreeMap<GlobalId, BTreeMap<usize, CopyToResponse>>,
     /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding back until their
     /// timestamps are complete.
     ///
@@ -179,6 +192,7 @@ where
             uppers: BTreeMap::new(),
             peek_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
+            copy_to_responses: BTreeMap::new(),
         }
     }
 }
@@ -194,10 +208,12 @@ where
             uppers,
             peek_responses,
             pending_subscribes,
+            copy_to_responses,
         } = self;
         uppers.clear();
         peek_responses.clear();
         pending_subscribes.clear();
+        copy_to_responses.clear();
     }
 
     /// Observes commands that move past, and prepares state for responses.
@@ -453,6 +469,36 @@ where
                 }
 
                 emit_response
+            }
+            ComputeResponse::CopyToResponse(id, response) => {
+                // Incorporate new copy to responses; awaiting all responses.
+                let entry = self
+                    .copy_to_responses
+                    .entry(id)
+                    .or_insert_with(Default::default);
+                let novel = entry.insert(shard_id, response);
+                assert!(novel.is_none(), "Duplicate copy to response");
+                // We may be ready to respond.
+                if entry.len() == self.parts {
+                    let mut response = CopyToResponse::RowCount(0);
+                    for (_part, r) in std::mem::take(entry).into_iter() {
+                        response = match (response, r) {
+                            // It's important that we receive all the `Dropped` messages as well
+                            // so that the `copy_to_responses` state can be cleared.
+                            (_, CopyToResponse::Dropped) => CopyToResponse::Dropped,
+                            (CopyToResponse::Dropped, _) => CopyToResponse::Dropped,
+                            (_, CopyToResponse::Error(e)) => CopyToResponse::Error(e),
+                            (CopyToResponse::Error(e), _) => CopyToResponse::Error(e),
+                            (CopyToResponse::RowCount(r1), CopyToResponse::RowCount(r2)) => {
+                                CopyToResponse::RowCount(r1 + r2)
+                            }
+                        };
+                    }
+                    self.copy_to_responses.remove(&id);
+                    Some(Ok(ComputeResponse::CopyToResponse(id, response)))
+                } else {
+                    None
+                }
             }
         }
     }

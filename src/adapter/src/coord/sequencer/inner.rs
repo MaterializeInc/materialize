@@ -23,6 +23,7 @@ use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::task::spawn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_or_log, task};
@@ -72,7 +73,7 @@ use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizer
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, OwnedMutexGuard};
-use tracing::{instrument, warn, Span};
+use tracing::{instrument, warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
@@ -82,7 +83,7 @@ use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource}
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, ExecuteContext,
     Message, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    RealTimeRecencyContext, TargetCluster,
+    RealTimeRecencyContext, StageResult, Staged, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
@@ -129,6 +130,45 @@ struct CreateSourceInner {
 }
 
 impl Coordinator {
+    /// Sequences the next staged of a [Staged] plan. This is designed for use with plans that
+    /// execute both on and off of the coordinator thread. Stages can either produce another stage
+    /// to execute or a final response. An explicit [Span] is passed to allow for convenient
+    /// tracing.
+    pub(crate) async fn sequence_staged<S: Staged + 'static>(
+        &mut self,
+        mut ctx: ExecuteContext,
+        parent_span: Span,
+        mut stage: S,
+    ) {
+        return_if_err!(stage.validity().check(self.catalog()), ctx);
+        let next = stage
+            .stage(self, &mut ctx)
+            .instrument(parent_span.clone())
+            .await;
+        let stage = return_if_err!(next, ctx);
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        match stage {
+            StageResult::Handle(handle) => {
+                spawn(|| "sequence_staged", async move {
+                    let next = match handle.await {
+                        Ok(next) => return_if_err!(next, ctx),
+                        Err(err) => {
+                            tracing::error!("sequence_staged join error {err}");
+                            ctx.retire(Err(AdapterError::Internal(
+                                "sequence_staged join error".into(),
+                            )));
+                            return;
+                        }
+                    };
+                    let _ = internal_cmd_tx.send(next.message(ctx, parent_span));
+                });
+            }
+            StageResult::Response(resp) => {
+                ctx.retire(Ok(resp));
+            }
+        }
+    }
+
     async fn create_source_inner(
         &mut self,
         session: &Session,
@@ -1241,10 +1281,11 @@ impl Coordinator {
                                 // problem, so we don't want a notice.
                                 !ids_set.contains(&ObjectId::Item(**dependant_id))
                             })
-                            .map(|dependant_id| {
-                                humanizer
-                                    .humanize_id(*dependant_id)
-                                    .unwrap_or(id.to_string())
+                            .flat_map(|dependant_id| {
+                                // If we are not able to find a name for this ID it probably means
+                                // we have already dropped the compute collection, in which case we
+                                // can ignore it.
+                                humanizer.humanize_id(*dependant_id)
                             })
                             .collect_vec();
                         if !dependants.is_empty() {
@@ -1718,7 +1759,7 @@ impl Coordinator {
         ),
         AdapterError,
     > {
-        let txn = self.clear_transaction(session);
+        let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
@@ -1760,22 +1801,31 @@ impl Coordinator {
         Ok((None, None))
     }
 
-    pub(super) fn sequence_side_effecting_func(
+    pub(super) async fn sequence_side_effecting_func(
         &mut self,
+        ctx: ExecuteContext,
         plan: SideEffectingFunc,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         match plan {
             SideEffectingFunc::PgCancelBackend { connection_id } => {
+                if ctx.session().conn_id().unhandled() == connection_id {
+                    // As a special case, if we're canceling ourselves, we send
+                    // back a canceled resposne to the client issuing the query,
+                    // and so we need to do no further processing of the cancel.
+                    ctx.retire(Err(AdapterError::Canceled));
+                    return;
+                }
+
                 let res = if let Some((id_handle, _conn_meta)) =
                     self.active_conns.get_key_value(&connection_id)
                 {
                     // check_plan already verified role membership.
-                    self.handle_privileged_cancel(id_handle.clone());
+                    self.handle_privileged_cancel(id_handle.clone()).await;
                     Datum::True
                 } else {
                     Datum::False
                 };
-                Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[res])]))
+                ctx.retire(Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[res])])));
             }
         }
     }
@@ -2492,7 +2542,7 @@ impl Coordinator {
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
                             // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
-                            let result = internal_cmd_tx.send(Message::RemovePendingPeeks {
+                            let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
                                 conn_id: ctx.session().conn_id().clone(),
                             });
                             if let Err(e) = result {
@@ -2503,10 +2553,6 @@ impl Coordinator {
                     }
                 }
                 ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
-                resp @ ExecuteResponse::Canceled => {
-                    ctx.retire(Ok(resp));
-                    return;
-                }
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),

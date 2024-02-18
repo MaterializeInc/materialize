@@ -36,7 +36,7 @@ use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
     ActiveComputeController, ComputeController, ComputeControllerResponse,
 };
-use mz_compute_client::protocol::response::{PeekResponse, SubscribeResponse};
+use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
 use mz_ore::metrics::MetricsRegistry;
@@ -110,7 +110,9 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// done in compute!
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
-    SubscribeResponse(GlobalId, SubscribeResponse<T>),
+    SubscribeResponse(GlobalId, SubscribeBatch<T>),
+    /// The worker's next response to a specified copy to.
+    CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
     WatchSetFinished(Vec<Box<dyn Any>>),
@@ -207,7 +209,7 @@ impl<T: Timestamp> Controller<T> {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice,
+    T: TimestampManipulation,
     ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn update_orchestrator_scheduling_config(
@@ -321,6 +323,9 @@ where
                     ComputeControllerResponse::SubscribeResponse(id, tail) => {
                         Some(ControllerResponse::SubscribeResponse(id, tail))
                     }
+                    ComputeControllerResponse::CopyToResponse(id, tail) => {
+                        Some(ControllerResponse::CopyToResponse(id, tail))
+                    }
                     ComputeControllerResponse::FrontierUpper { id, upper } => {
                         self.handle_frontier_updates(&[(id, upper)])
                     }
@@ -350,6 +355,7 @@ where
     ) -> Option<ControllerResponse<T>> {
         let mut finished = vec![];
         for (id, antichain) in updates {
+            let mut remove = None;
             if let Some(x) = self.watch_sets.get_mut(id) {
                 let mut i = 0;
                 while i < x.len() {
@@ -361,6 +367,12 @@ where
                         i += 1;
                     }
                 }
+                if x.is_empty() {
+                    remove = Some(id);
+                }
+            }
+            if let Some(id) = remove {
+                self.watch_sets.remove(id);
             }
         }
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))

@@ -22,7 +22,7 @@ use mz_compute_client::controller::{ComputeReplicaConfig, ComputeReplicaLogging}
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_compute_types::ComputeInstanceId;
-use mz_controller_types::{ClusterId, ReplicaId};
+use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
 use mz_orchestrator::{
     CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
@@ -662,6 +662,9 @@ where
                         }
                         if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                             args.push("--worker-core-affinity".into());
+                        }
+                        if is_cluster_size_v2(&location.size) {
+                            args.push("--is-cluster-size-v2".into());
                         }
 
                         args.extend(secrets_args.clone());

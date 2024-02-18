@@ -9,10 +9,14 @@
 
 from textwrap import dedent
 
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
+from materialize.version_list import get_published_minor_mz_versions
+
+mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
     Materialized(catalog_store="stash"),
@@ -401,3 +405,43 @@ def check_objects(c: Composition, i: int):
     """
         )
     )
+
+
+def workflow_test_version_skips(c: Composition) -> None:
+    """
+    Test that skipping versions when upgrading will fail.
+    """
+
+    # If the current version is `v0.X.0-dev`, we want to start with `v0.X-2.Y`.
+    # `tested_versions` will look like `[v0.X-1.Y1, v0.X-2.Y2]`, where Y1 and Y2 are the most
+    # recent patch versions for their respective minor versions.
+    tested_versions = get_published_minor_mz_versions(newest_first=True, limit=2)
+    from_version: MzVersion = tested_versions[-1]
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            image=f"materialize/materialized:{from_version}",
+            options=[
+                opt
+                for start_version, opt in mz_options.items()
+                if from_version >= start_version
+            ],
+            catalog_store="persist",
+        )
+    ):
+        c.up("materialized")
+        c.kill("materialized")
+
+    try:
+        # This will bring up version `0.X.0-dev`.
+        with c.override(Materialized(catalog_store="persist")):
+            # Note: We actually want to retry this 0 times, but we need to retry at least once so a
+            # UIError is raised instead of an AssertionError
+            c.up("materialized", max_tries=1)
+            assert False, "skipping versions should fail"
+    except UIError:
+        # Noting useful in the error message to assert. Ideally we'd check that the error is due to
+        # skipping versions.
+        pass

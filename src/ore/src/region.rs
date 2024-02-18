@@ -16,6 +16,8 @@
 //! Region-allocated data utilities.
 
 use std::fmt::{Debug, Formatter};
+use std::mem::ManuallyDrop;
+use std::ops::{Deref, DerefMut};
 
 /// A region allocator which holds items at stable memory locations.
 ///
@@ -28,9 +30,9 @@ use std::fmt::{Debug, Formatter};
 /// fixed memory locations.
 pub struct LgAllocRegion<T> {
     /// The active allocation into which we are writing.
-    local: lgalloc::Region<T>,
+    local: Region<T>,
     /// All previously active allocations.
-    stash: Vec<lgalloc::Region<T>>,
+    stash: Vec<Region<T>>,
     /// The maximum allocation size
     limit: usize,
 }
@@ -110,7 +112,7 @@ impl<T> LgAllocRegion<T> {
             let mut next_len = (self.local.capacity() + 1).next_power_of_two();
             next_len = std::cmp::min(next_len, self.limit);
             next_len = std::cmp::max(count, next_len);
-            let new_local = lgalloc::Region::new_auto(next_len);
+            let new_local = Region::new_auto(next_len);
             if !self.local.is_empty() {
                 self.stash.push(std::mem::take(&mut self.local));
             }
@@ -146,5 +148,242 @@ impl<T> LgAllocRegion<T> {
         for stash in &self.stash {
             callback(stash.len() * size_of_t, stash.capacity() * size_of_t);
         }
+    }
+}
+
+/// An abstraction over different kinds of allocated regions.
+///
+/// # WARNING
+///
+/// The implementation does not drop its elements, but forgets them instead. Do not use where
+/// this is not intended, i.e., outside `Copy` types or columnation regions.
+///
+/// NOTE: We plan to deprecate this type soon. Users should switch to different types or the raw
+/// `lgalloc` API instead.
+#[derive(Debug)]
+pub enum Region<T> {
+    /// A possibly empty heap-allocated region, represented as a vector.
+    Heap(Vec<T>),
+    /// A mmaped region, represented by a vector and its backing memory mapping.
+    MMap(MMapRegion<T>),
+}
+
+/// Type encapsulating private data for memory-mapped regions.
+pub struct MMapRegion<T> {
+    /// Vector-representation of the underlying memory. Must not be dropped.
+    inner: ManuallyDrop<Vec<T>>,
+    /// Opaque handle to lgalloc.
+    handle: Option<lgalloc::Handle>,
+}
+
+impl<T> MMapRegion<T> {
+    /// Clear the contents of this region without dropping elements.
+    unsafe fn clear(&mut self) {
+        self.inner.set_len(0);
+    }
+}
+
+impl<T: Debug> Debug for MMapRegion<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MMapRegion")
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> Deref for MMapRegion<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T> Default for Region<T> {
+    #[inline]
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
+impl<T> Region<T> {
+    /// Create a new empty region.
+    #[inline]
+    #[must_use]
+    pub fn new_empty() -> Region<T> {
+        Region::Heap(Vec::new())
+    }
+
+    /// Create a new heap-allocated region of a specific capacity.
+    #[inline]
+    #[must_use]
+    pub fn new_heap(capacity: usize) -> Region<T> {
+        Region::Heap(Vec::with_capacity(capacity))
+    }
+
+    /// Create a new file-based mapped region of a specific capacity. The capacity of the
+    /// returned region can be larger than requested to accommodate page sizes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the memory allocation fails.
+    #[inline(always)]
+    pub fn new_mmap(capacity: usize) -> Result<Region<T>, lgalloc::AllocError> {
+        lgalloc::allocate(capacity).map(|(ptr, capacity, handle)| {
+            // SAFETY: `ptr` points to suitable memory.
+            // It is UB to call `from_raw_parts` with a pointer not allocated from the global
+            // allocator, but we accept this here because we promise never to reallocate the vector.
+            let inner =
+                ManuallyDrop::new(unsafe { Vec::from_raw_parts(ptr.as_ptr(), 0, capacity) });
+            let handle = Some(handle);
+            Region::MMap(MMapRegion { inner, handle })
+        })
+    }
+
+    /// Create a region depending on the capacity.
+    ///
+    /// The capacity of the returned region must be at least as large as the requested capacity,
+    /// but can be larger if the implementation requires it.
+    ///
+    /// Returns a [`Region::MMap`] if possible, and falls back to [`Region::Heap`] otherwise.
+    #[must_use]
+    pub fn new_auto(capacity: usize) -> Region<T> {
+        match Region::new_mmap(capacity) {
+            Ok(r) => return r,
+            Err(lgalloc::AllocError::Disabled) | Err(lgalloc::AllocError::InvalidSizeClass(_)) => {}
+            Err(e) => {
+                eprintln!("lgalloc error: {e}, falling back to heap");
+            }
+        }
+        // Fall-through
+        Region::new_heap(capacity)
+    }
+
+    /// Clears the contents of the region, without dropping its elements.
+    ///
+    /// # Safety
+    ///
+    /// Discards all contends. Elements are not dropped.
+    #[inline]
+    pub unsafe fn clear(&mut self) {
+        match self {
+            Region::Heap(vec) => vec.set_len(0),
+            Region::MMap(inner) => inner.clear(),
+        }
+    }
+
+    /// Returns the capacity of the underlying allocation.
+    #[inline]
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        match self {
+            Region::Heap(vec) => vec.capacity(),
+            Region::MMap(inner) => inner.inner.capacity(),
+        }
+    }
+
+    /// Returns the number of elements in the allocation.
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match self {
+            Region::Heap(vec) => vec.len(),
+            Region::MMap(inner) => inner.len(),
+        }
+    }
+
+    /// Returns true if the region does not contain any elements.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Region::Heap(vec) => vec.is_empty(),
+            Region::MMap(inner) => inner.is_empty(),
+        }
+    }
+
+    /// Dereference to the contained vector
+    #[inline]
+    #[must_use]
+    pub fn as_vec(&self) -> &Vec<T> {
+        match self {
+            Region::Heap(vec) => vec,
+            Region::MMap(inner) => &inner.inner,
+        }
+    }
+
+    /// Extend the underlying region from the iterator.
+    ///
+    /// Care must be taken to not re-allocate the inner vector representation.
+    #[inline]
+    pub fn extend<I: IntoIterator<Item = T> + ExactSizeIterator>(&mut self, iter: I) {
+        assert!(self.capacity() - self.len() >= iter.len());
+        // SAFETY: We just asserted that we have sufficient capacity.
+        unsafe { self.as_mut_vec().extend(iter) };
+    }
+
+    /// Obtain a mutable reference to the inner vector representation.
+    ///
+    /// Unsafe because the caller has to make sure that the vector will not reallocate.
+    /// Otherwise, the vector representation could try to reallocate the underlying memory
+    /// using the global allocator, which would cause problems because the memory might not
+    /// have originated from it. This is undefined behavior.
+    #[inline]
+    unsafe fn as_mut_vec(&mut self) -> &mut Vec<T> {
+        match self {
+            Region::Heap(vec) => vec,
+            Region::MMap(inner) => &mut inner.inner,
+        }
+    }
+}
+
+impl<T: Clone> Region<T> {
+    /// Extend the region from a slice.
+    ///
+    /// Panics if the region does not have sufficient capacity.
+    #[inline]
+    pub fn extend_from_slice(&mut self, slice: &[T]) {
+        assert!(self.capacity() - self.len() >= slice.len());
+        // SAFETY: We just asserted that we have enough capacity.
+        unsafe { self.as_mut_vec() }.extend_from_slice(slice);
+    }
+}
+
+impl<T> Deref for Region<T> {
+    type Target = [T];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_vec()
+    }
+}
+
+impl<T> DerefMut for Region<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: We're dereferencing to `&mut [T]`, which does not allow reallocating the
+        // underlying allocation, which makes it safe.
+        unsafe { self.as_mut_vec().as_mut_slice() }
+    }
+}
+
+impl<T> Drop for Region<T> {
+    #[inline]
+    fn drop(&mut self) {
+        match self {
+            Region::Heap(vec) => {
+                // SAFETY: Don't drop the elements, drop the vec, in line with the documentation
+                // of the `Region` type.
+                unsafe { vec.set_len(0) }
+            }
+            Region::MMap(_) => {}
+        }
+    }
+}
+
+impl<T> Drop for MMapRegion<T> {
+    fn drop(&mut self) {
+        // Similar to dropping Region: Drop the allocation, don't drop the `inner` vector.
+        lgalloc::deallocate(self.handle.take().unwrap());
     }
 }

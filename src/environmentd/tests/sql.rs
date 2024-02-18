@@ -13,6 +13,7 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
+use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -46,7 +47,7 @@ use regex::Regex;
 use serde_json::json;
 use timely::order::PartialOrder;
 use tokio::sync::{mpsc, oneshot};
-use tokio_postgres::error::{DbError, SqlState};
+use tokio_postgres::error::SqlState;
 use tracing::{debug, info};
 
 /// An HTTP server whose responses can be controlled from another thread.
@@ -2544,18 +2545,12 @@ fn test_subscribe_on_dropped_source() {
         server: &TestServerWithRuntime,
         tables: Vec<&'static str>,
         subscribe: &'static str,
-        assertion: impl FnOnce(
-                Result<(), tokio_postgres::error::Error>,
-                futures::channel::mpsc::UnboundedReceiver<DbError>,
-            ) + Send
-            + 'static,
+        assertion: impl FnOnce(Result<(), tokio_postgres::error::Error>) + Send + 'static,
     ) {
         assert!(
             subscribe.to_lowercase().contains("subscribe"),
             "test only works with subscribe queries, query: {subscribe}"
         );
-
-        let (tx, rx) = futures::channel::mpsc::unbounded();
 
         let mut client = server.connect(postgres::NoTls).unwrap();
         for table in &tables {
@@ -2567,14 +2562,10 @@ fn test_subscribe_on_dropped_source() {
                 .unwrap();
         }
 
-        let mut query_client = server
-            .pg_config()
-            .notice_callback(move |notice| tx.unbounded_send(notice).unwrap())
-            .connect(postgres::NoTls)
-            .unwrap();
+        let mut query_client = server.pg_config().connect(postgres::NoTls).unwrap();
         let query_thread = std::thread::spawn(move || {
             let res = query_client.batch_execute(subscribe);
-            assertion(res, rx);
+            assertion(res);
         });
 
         Retry::default()
@@ -2616,38 +2607,27 @@ fn test_subscribe_on_dropped_source() {
             .unwrap();
     }
 
-    fn assert_subscribe_notice(mut rx: futures::channel::mpsc::UnboundedReceiver<DbError>) {
-        Retry::default()
-            .max_duration(Duration::from_secs(10))
-            .retry(|_| {
-                let Some(e) = rx.try_next().unwrap() else {
-                    return Err("No notice received");
-                };
-                if e.message()
-                    .contains("subscribe has been terminated because underlying relation")
-                {
-                    Ok(())
-                } else {
-                    Err("wrong notice")
-                }
-            })
-            .unwrap();
+    fn assert_subscribe_error(res: Result<(), tokio_postgres::error::Error>) {
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_db_error()
+            .message()
+            .contains("subscribe has been terminated because underlying relation"));
     }
 
     let server = test_util::TestHarness::default().start_blocking();
 
-    test_subscribe_on_dropped_source_inner(&server, vec!["t"], "SUBSCRIBE t", |res, rx| {
-        res.unwrap();
-        assert_subscribe_notice(rx);
-    });
+    test_subscribe_on_dropped_source_inner(
+        &server,
+        vec!["t"],
+        "SUBSCRIBE t",
+        assert_subscribe_error,
+    );
     test_subscribe_on_dropped_source_inner(
         &server,
         vec!["t1", "t2"],
         "SUBSCRIBE (SELECT * FROM t1, t2)",
-        |res, rx| {
-            res.unwrap();
-            assert_subscribe_notice(rx);
-        },
+        assert_subscribe_error,
     );
 }
 
@@ -2655,21 +2635,13 @@ fn test_subscribe_on_dropped_source() {
 fn test_dont_drop_sinks_twice() {
     let server = test_util::TestHarness::default().start_blocking();
 
-    let (notice_tx, mut notice_rx) = futures::channel::mpsc::unbounded();
-
-    let mut client_a = server
-        .pg_config()
-        .notice_callback(move |notice| {
-            notice_tx.unbounded_send(notice).unwrap();
-        })
-        .connect(postgres::NoTls)
-        .unwrap();
+    let mut client_a = server.pg_config().connect(postgres::NoTls).unwrap();
 
     client_a.batch_execute("CREATE TABLE t1 (a INT)").unwrap();
     client_a.batch_execute("CREATE TABLE t2 (a INT)").unwrap();
     let client_a_token = client_a.cancel_token();
 
-    let _out = client_a
+    let mut out = client_a
         .copy_out("COPY (SUBSCRIBE (SELECT * FROM t1,t2)) TO STDOUT")
         .unwrap();
 
@@ -2692,20 +2664,11 @@ fn test_dont_drop_sinks_twice() {
     client_a_token
         .cancel_query(postgres::NoTls)
         .expect("failed to cancel subscribe");
-    drop(_out);
+    let err = out.read_to_end(&mut vec![]).unwrap_err();
+    assert!(err.to_string().contains("subscribe has been terminated"));
+
+    drop(out);
     client_a.close().expect("failed to drop client");
-
-    // Assert we only got one message.
-    let mut msgs = vec![];
-    while let Ok(Some(msg)) = notice_rx.try_next() {
-        msgs.push(msg);
-    }
-    assert!(matches!(notice_rx.try_next(), Ok(None)));
-    assert_eq!(msgs.len(), 1);
-
-    // Assert the message it the one we expect
-    let msg = msgs.pop().unwrap();
-    assert!(msg.message().starts_with("subscribe has been terminated"));
 }
 
 #[mz_ore::test]

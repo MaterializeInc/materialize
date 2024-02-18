@@ -618,15 +618,20 @@ To see the available workflows, run:
             with composition.test_case(f"workflow-{args.workflow}"):
                 composition.workflow(args.workflow, *args.unknown_subargs[1:])
 
-            junit_suite = self.generate_junit_suite(composition)
-            junit_xml_file_path = self.write_junit_report_to_file(junit_suite)
-            ci_util.upload_junit_report("mzcompose", junit_xml_file_path)
+            if self.shall_generate_junit_report(args.find):
+                junit_suite = self.generate_junit_suite(composition)
+                junit_xml_file_path = self.write_junit_report_to_file(junit_suite)
+                ci_util.upload_junit_report("mzcompose", junit_xml_file_path)
 
             if any(
                 not result.is_successful()
                 for result in composition.test_results.values()
             ):
                 raise UIError("at least one test case failed")
+
+    def shall_generate_junit_report(self, composition: str | None) -> bool:
+        # sqllogictest already generates a proper junit.xml file
+        return composition != "sqllogictest"
 
     def generate_junit_suite(self, composition: Composition) -> junit_xml.TestSuite:
         buildkite_step_name = os.getenv("BUILDKITE_LABEL")

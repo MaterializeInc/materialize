@@ -66,7 +66,7 @@ log = { version = "0.4.17", default-features = false, features = ["std"] }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
-mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "ecc4908e7c98ce1050fc536739c41ec444d03349", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.31.0", default-features = false, features = ["binlog"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
@@ -181,7 +181,7 @@ log = { version = "0.4.17", default-features = false, features = ["std"] }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
-mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "ecc4908e7c98ce1050fc536739c41ec444d03349", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.31.0", default-features = false, features = ["binlog"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }

@@ -27,6 +27,10 @@ class RootScenario:
         self._n: int = int(10**scale)
         self._default_size = default_size
 
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        return True
+
     def shared(self) -> Action | list[Action] | None:
         return None
 

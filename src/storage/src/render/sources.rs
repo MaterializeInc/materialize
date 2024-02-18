@@ -26,7 +26,6 @@ use mz_storage_types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
-use mz_storage_types::sources::encoding::*;
 use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle};
 use mz_storage_types::sources::*;
 use mz_timely_util::builder_async::PressOnDropButton;
@@ -100,7 +99,6 @@ where
         timestamp_interval: description.desc.timestamp_interval,
         worker_id: scope.index(),
         worker_count: scope.peers(),
-        encoding: description.desc.encoding.clone(),
         now: storage_state.now.clone(),
         metrics: storage_state.metrics.clone(),
         as_of: as_of.clone(),
@@ -109,8 +107,8 @@ where
         storage_metadata: description.ingestion_metadata.clone(),
         persist_clients: Arc::clone(&storage_state.persist_clients),
         source_statistics: storage_state
-            .source_statistics
-            .get(&id)
+            .aggregated_statistics
+            .get_source(&id)
             .expect("statistics initialized")
             .clone(),
         shared_remap_upper: Rc::clone(
@@ -200,259 +198,227 @@ where
         connection: _,
         timestamp_interval: _,
     } = description.desc;
-    let (stream, errors, health) = {
-        let (key_encoding, value_encoding) = match encoding {
-            SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
-            SourceDataEncoding::Single(value) => (None, value),
-        };
-        // CDCv2 can't quite be slotted in to the below code, since it determines
-        // its own diffs/timestamps as part of decoding.
-        //
-        // `render_decode_cdcv2` accomplishes what decoding and envelope-processing
-        // below do for other `SourceEnvelope`s
-        if let SourceEnvelope::CdcV2 = &envelope {
-            let AvroEncoding {
-                schema,
-                csr_connection,
-                confluent_wire_format,
-            } = match value_encoding.inner {
-                DataEncodingInner::Avro(enc) => enc,
-                _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
-            };
 
-            // TODO(petrosagg): this should move to the envelope section below and
-            // made to work with a stream of Rows instead of decoding Avro directly
-            let config = storage_state.storage_configuration.clone();
-            let (oks, token) = render_decode_cdcv2(
-                &ok_source,
-                schema,
-                config,
-                csr_connection,
-                confluent_wire_format,
-            );
-            needed_tokens.push(token);
-            (oks, None, empty(scope))
-        } else {
-            let (decoded_stream, decode_health) = match (key_encoding, value_encoding) {
-                // TODO(petrosagg): encoding should become an optional field in the description
-                // struct that is only `Some(_)` when an encoding step is to be performed. We
-                // shouldn't have `RowCodec` as an option at all
-                (
-                    None,
-                    DataEncoding {
-                        inner: DataEncodingInner::RowCodec(_),
-                        ..
-                    },
-                ) => (
-                    ok_source.map(|r| DecodeResult {
-                        key: None,
-                        value: Some(Ok(r.value)),
-                        metadata: Row::default(),
-                        from_time: r.from_time,
-                    }),
-                    empty(scope),
-                ),
-                (key_encoding, value_encoding) => render_decode_delimited(
-                    &ok_source,
-                    key_encoding,
-                    value_encoding,
-                    dataflow_debug_name.clone(),
-                    storage_state.metrics.decode_defs.clone(),
-                    storage_state.storage_configuration.clone(),
-                ),
-            };
+    let (decoded_stream, decode_health) = match encoding {
+        None => (
+            ok_source.map(|r| DecodeResult {
+                key: None,
+                value: Some(Ok(r.value)),
+                metadata: Row::default(),
+                from_time: r.from_time,
+            }),
+            empty(scope),
+        ),
+        Some(encoding) => render_decode_delimited(
+            &ok_source,
+            encoding.key,
+            encoding.value,
+            dataflow_debug_name.clone(),
+            storage_state.metrics.decode_defs.clone(),
+            storage_state.storage_configuration.clone(),
+        ),
+    };
 
-            // render envelopes
-            let (envelope_ok, envelope_err, envelope_health) = match &envelope {
-                SourceEnvelope::Upsert(upsert_envelope) => {
-                    let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
+    // render envelopes
+    let (envelope_ok, envelope_err, envelope_health) = match &envelope {
+        SourceEnvelope::Upsert(upsert_envelope) => {
+            let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 
-                    let persist_clients = Arc::clone(&storage_state.persist_clients);
-                    // TODO: Get this to work with the as_of.
-                    let resume_upper = base_source_config.resume_uppers[&id].clone();
+            let persist_clients = Arc::clone(&storage_state.persist_clients);
+            // TODO: Get this to work with the as_of.
+            let resume_upper = base_source_config.resume_uppers[&id].clone();
 
-                    let upper_ts = resume_upper
-                        .as_option()
-                        .expect("resuming an already finished ingestion")
-                        .clone();
-                    let (upsert, health_update) = scope.scoped(
-                        &format!("upsert_rehydration_backpressure({})", id),
-                        |scope| {
-                            let (previous, previous_token, feedback_handle, backpressure_metrics) =
-                                if mz_repr::Timestamp::minimum() < upper_ts {
-                                    let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+            let upper_ts = resume_upper
+                .as_option()
+                .expect("resuming an already finished ingestion")
+                .clone();
+            let (upsert, health_update) = scope.scoped(
+                &format!("upsert_rehydration_backpressure({})", id),
+                |scope| {
+                    let (previous, previous_token, feedback_handle, backpressure_metrics) =
+                        if mz_repr::Timestamp::minimum() < upper_ts {
+                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
-                                    let backpressure_max_inflight_bytes =
-                                        get_backpressure_max_inflight_bytes(
-                                            &storage_state
-                                                .storage_configuration
-                                                .parameters
-                                                .storage_dataflow_max_inflight_bytes_config,
-                                            &storage_state.instance_context.cluster_memory_limit,
+                            let backpressure_max_inflight_bytes =
+                                get_backpressure_max_inflight_bytes(
+                                    &storage_state
+                                        .storage_configuration
+                                        .parameters
+                                        .storage_dataflow_max_inflight_bytes_config,
+                                    &storage_state.instance_context.cluster_memory_limit,
+                                );
+
+                            let (feedback_handle, flow_control, backpressure_metrics) =
+                                if let Some(storage_dataflow_max_inflight_bytes) =
+                                    backpressure_max_inflight_bytes
+                                {
+                                    tracing::info!(
+                                        ?backpressure_max_inflight_bytes,
+                                        "timely-{} using backpressure in upsert for source {}",
+                                        base_source_config.worker_id,
+                                        id
+                                    );
+                                    if !storage_state
+                                        .storage_configuration
+                                        .parameters
+                                        .storage_dataflow_max_inflight_bytes_config
+                                        .disk_only
+                                        || storage_state
+                                            .instance_context
+                                            .scratch_directory
+                                            .is_some()
+                                    {
+                                        let (feedback_handle, feedback_data) =
+                                            scope.feedback(Default::default());
+
+                                        // TODO(guswynn): cleanup
+                                        let backpressure_metrics = Some(
+                                            base_source_config
+                                                .metrics
+                                                .get_backpressure_metrics(id, scope.index()),
                                         );
 
-                                    let (feedback_handle, flow_control, backpressure_metrics) =
-                                        if let Some(storage_dataflow_max_inflight_bytes) =
-                                            backpressure_max_inflight_bytes
-                                        {
-                                            tracing::info!(
-                                                ?backpressure_max_inflight_bytes,
-                                                "timely-{} using backpressure in upsert for source {}",
-                                                base_source_config.worker_id,
-                                                id
-                                            );
-                                            if !storage_state
-                                                .storage_configuration
-                                                .parameters
-                                                .storage_dataflow_max_inflight_bytes_config
-                                                .disk_only
-                                                || storage_state
-                                                    .instance_context
-                                                    .scratch_directory
-                                                    .is_some()
-                                            {
-                                                let (feedback_handle, feedback_data) =
-                                                    scope.feedback(Default::default());
-
-                                                // TODO(guswynn): cleanup
-                                                let backpressure_metrics = Some(
-                                                    base_source_config.metrics.get_backpressure_metrics(
-                                                        id,
-                                                        scope.index(),
-                                                    ),
-                                                );
-
-                                                (
-                                                    Some(feedback_handle),
-                                                    Some(persist_source::FlowControl {
-                                                        progress_stream: feedback_data,
-                                                        max_inflight_bytes:
-                                                            storage_dataflow_max_inflight_bytes,
-                                                        summary: (Default::default(), Subtime::least_summary()),
-                                                        metrics: backpressure_metrics.clone(),
-                                                    }),
-                                                    backpressure_metrics,
-                                                )
-                                            } else {
-                                                (None, None, None)
-                                            }
-                                        } else {
-                                            (None, None, None)
-                                        };
-                                    let (stream, tok) = persist_source::persist_source_core(
-                                        scope,
-                                        id,
-                                        persist_clients,
-                                        description.ingestion_metadata,
-                                        Some(as_of),
-                                        SnapshotMode::Include,
-                                        Antichain::new(),
-                                        None,
-                                        flow_control,
-                                        false.then_some(|| unreachable!()),
-                                    );
-                                    (
-                                        stream.as_collection(),
-                                        Some(tok),
-                                        feedback_handle,
-                                        backpressure_metrics,
-                                    )
+                                        (
+                                            Some(feedback_handle),
+                                            Some(persist_source::FlowControl {
+                                                progress_stream: feedback_data,
+                                                max_inflight_bytes:
+                                                    storage_dataflow_max_inflight_bytes,
+                                                summary: (
+                                                    Default::default(),
+                                                    Subtime::least_summary(),
+                                                ),
+                                                metrics: backpressure_metrics.clone(),
+                                            }),
+                                            backpressure_metrics,
+                                        )
+                                    } else {
+                                        (None, None, None)
+                                    }
                                 } else {
-                                    (Collection::new(empty(scope)), None, None, None)
+                                    (None, None, None)
                                 };
-                            let (upsert, health_update, upsert_token) = crate::render::upsert::upsert(
-                                &upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous,
-                                previous_token,
-                                base_source_config.clone(),
-                                &storage_state.instance_context,
-                                &storage_state.storage_configuration,
-                                &storage_state.dataflow_parameters,
+                            let (stream, tok) = persist_source::persist_source_core(
+                                scope,
+                                id,
+                                persist_clients,
+                                description.ingestion_metadata,
+                                Some(as_of),
+                                SnapshotMode::Include,
+                                Antichain::new(),
+                                None,
+                                flow_control,
+                                false.then_some(|| unreachable!()),
+                            );
+                            (
+                                stream.as_collection(),
+                                Some(tok),
+                                feedback_handle,
                                 backpressure_metrics,
-                            );
-
-                            // Even though we register the `persist_sink` token at a top-level,
-                            // which will stop any data from being committed, we also register
-                            // a token for the `upsert` operator which may be in the middle of
-                            // rehydration processing the `persist_source` input above.
-                            needed_tokens.push(upsert_token);
-
-                            use mz_timely_util::probe::ProbeNotify;
-                            let handle = mz_timely_util::probe::Handle::default();
-                            let upsert = upsert.inner.probe_notify_with(vec![handle.clone()]);
-                            let probe = mz_timely_util::probe::source(
-                                scope.clone(),
-                                format!("upsert_probe({id})"),
-                                handle,
-                            );
-
-                            // If configured, delay raw sources until we rehydrate the upsert
-                            // source. Otherwise, drop the token, unblocking the sources at the
-                            // end rendering.
-                            if storage_state
-                                .storage_configuration
-                                .parameters
-                                .delay_sources_past_rehydration
-                            {
-                                crate::render::upsert::rehydration_finished(
-                                    scope.clone(),
-                                    &base_source_config,
-                                    rehydrated_token,
-                                    refine_antichain(&resume_upper),
-                                    &probe,
-                                );
-                            } else {
-                                drop(rehydrated_token)
-                            };
-
-                            // If backpressure is enabled, we probe the upsert operator's
-                            // output, which is the easiest way to extract frontier information.
-                            let upsert = match feedback_handle {
-                                Some(feedback_handle) => {
-                                    probe.connect_loop(feedback_handle);
-                                    upsert.as_collection()
-                                }
-                                None => upsert.as_collection(),
-                            };
-
-                            (upsert.leave(), health_update.map(|(index, update)| HealthStatusMessage {
-                                index,
-                                namespace: StatusNamespace::Upsert,
-                                update
-                            }).leave())
-                        },
+                            )
+                        } else {
+                            (Collection::new(empty(scope)), None, None, None)
+                        };
+                    let (upsert, health_update, upsert_token) = crate::render::upsert::upsert(
+                        &upsert_input.enter(scope),
+                        upsert_envelope.clone(),
+                        refine_antichain(&resume_upper),
+                        previous,
+                        previous_token,
+                        base_source_config.clone(),
+                        &storage_state.instance_context,
+                        &storage_state.storage_configuration,
+                        &storage_state.dataflow_parameters,
+                        backpressure_metrics,
                     );
 
-                    let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
+                    // Even though we register the `persist_sink` token at a top-level,
+                    // which will stop any data from being committed, we also register
+                    // a token for the `upsert` operator which may be in the middle of
+                    // rehydration processing the `persist_source` input above.
+                    needed_tokens.push(upsert_token);
+
+                    use mz_timely_util::probe::ProbeNotify;
+                    let handle = mz_timely_util::probe::Handle::default();
+                    let upsert = upsert.inner.probe_notify_with(vec![handle.clone()]);
+                    let probe = mz_timely_util::probe::source(
+                        scope.clone(),
+                        format!("upsert_probe({id})"),
+                        handle,
+                    );
+
+                    // If configured, delay raw sources until we rehydrate the upsert
+                    // source. Otherwise, drop the token, unblocking the sources at the
+                    // end rendering.
+                    if storage_state
+                        .storage_configuration
+                        .parameters
+                        .delay_sources_past_rehydration
+                    {
+                        crate::render::upsert::rehydration_finished(
+                            scope.clone(),
+                            &base_source_config,
+                            rehydrated_token,
+                            refine_antichain(&resume_upper),
+                            &probe,
+                        );
+                    } else {
+                        drop(rehydrated_token)
+                    };
+
+                    // If backpressure is enabled, we probe the upsert operator's
+                    // output, which is the easiest way to extract frontier information.
+                    let upsert = match feedback_handle {
+                        Some(feedback_handle) => {
+                            probe.connect_loop(feedback_handle);
+                            upsert.as_collection()
+                        }
+                        None => upsert.as_collection(),
+                    };
 
                     (
-                        upsert_ok.as_collection(),
-                        Some(upsert_err.as_collection()),
-                        health_update,
+                        upsert.leave(),
+                        health_update
+                            .map(|(index, update)| HealthStatusMessage {
+                                index,
+                                namespace: StatusNamespace::Upsert,
+                                update,
+                            })
+                            .leave(),
                     )
-                }
-                SourceEnvelope::None(none_envelope) => {
-                    let results = append_metadata_to_value(decoded_stream);
+                },
+            );
 
-                    let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
-
-                    let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
-
-                    let errors = errors.as_collection();
-                    (stream.as_collection(), Some(errors), empty(scope))
-                }
-                SourceEnvelope::CdcV2 => unreachable!(),
-            };
+            let (upsert_ok, upsert_err) = upsert.inner.ok_err(split_ok_err);
 
             (
-                envelope_ok,
-                envelope_err,
-                decode_health.concat(&envelope_health),
+                upsert_ok.as_collection(),
+                Some(upsert_err.as_collection()),
+                health_update,
             )
         }
+        SourceEnvelope::None(none_envelope) => {
+            let results = append_metadata_to_value(decoded_stream);
+
+            let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
+
+            let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
+
+            let errors = errors.as_collection();
+            (stream.as_collection(), Some(errors), empty(scope))
+        }
+        SourceEnvelope::CdcV2 => {
+            let (oks, token) = render_decode_cdcv2(&decoded_stream);
+            needed_tokens.push(token);
+            (oks, None, empty(scope))
+        }
     };
+
+    let (stream, errors, health) = (
+        envelope_ok,
+        envelope_err,
+        decode_health.concat(&envelope_health),
+    );
 
     if let Some(errors) = errors {
         error_collections.push(errors);

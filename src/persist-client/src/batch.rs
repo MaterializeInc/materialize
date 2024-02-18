@@ -710,7 +710,10 @@ where
         if updates.is_empty() {
             self.key_buf.clear();
             self.val_buf.clear();
-            return (vec![], ColumnarRecordsBuilder::default().finish());
+            return (
+                vec![],
+                ColumnarRecordsBuilder::default().finish(&self.metrics.columnar),
+            );
         }
 
         let ((mut key_lower, _), _, _) = &updates[0];
@@ -737,7 +740,7 @@ where
         }
         let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
             .expect("lower bound always exists");
-        let columnar = builder.finish();
+        let columnar = builder.finish(&self.metrics.columnar);
 
         self.batch_write_metrics
             .step_columnar_encoding

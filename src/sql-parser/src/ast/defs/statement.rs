@@ -944,7 +944,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub col_names: Vec<Ident>,
     pub connection: CreateSourceConnection<T>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
-    pub format: CreateSourceFormat<T>,
+    pub format: Option<CreateSourceFormat<T>>,
     pub envelope: Option<SourceEnvelope>,
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
@@ -979,7 +979,9 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         }
         f.write_str(" FROM ");
         f.write_node(&self.connection);
-        f.write_node(&self.format);
+        if let Some(format) = &self.format {
+            f.write_node(format);
+        }
         if !self.include_metadata.is_empty() {
             f.write_str(" INCLUDE ");
             f.write_node(&display::comma_separated(&self.include_metadata));
@@ -1270,6 +1272,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
+    pub as_of: Option<u64>,
     pub with_options: Vec<MaterializedViewOption<T>>,
 }
 
@@ -1308,6 +1311,11 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
 
         f.write_str(" AS ");
         f.write_node(&self.query);
+
+        if let Some(time) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_str(time);
+        }
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);

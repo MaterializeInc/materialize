@@ -452,10 +452,6 @@ impl Usage {
                 )
                 .await?;
 
-            // Used as a lower boundary of the boot_ts, but it's ok to use now() for
-            // debugging/testing/inspecting.
-            let previous_ts = now().into();
-
             match Catalog::initialize_state(
                 StateConfig {
                     unsafe_mode: true,
@@ -478,12 +474,11 @@ impl Usage {
                     )),
                     active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
                 },
-                previous_ts,
                 &mut storage,
             )
             .await
             {
-                Ok((_, _, _, last_catalog_version)) => {
+                Ok((_, _, last_catalog_version)) => {
                     storage.expire().await;
                     return Ok(format!(
                         "catalog upgrade from {} to {} would succeed",

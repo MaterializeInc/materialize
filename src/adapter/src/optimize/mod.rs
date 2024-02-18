@@ -64,13 +64,27 @@ use std::panic::AssertUnwindSafe;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_expr::{EvalError, OptimizedMirRelationExpr, UnmaterializableFunc};
+use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
+use mz_transform::typecheck::SharedContext as TypecheckContext;
 use mz_transform::TransformError;
+
+// Alias types
+// -----------
+
+/// A type for a [`DataflowDescription`] backed by `Mir~` plans. Used internally
+/// by the optimizer implementations.
+type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
+/// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
+/// by the optimizer implementations.
+type LirDataflowDescription = DataflowDescription<Plan>;
+
+// Core API
+// --------
 
 /// A trait that represents an optimization stage.
 ///
@@ -101,6 +115,7 @@ where
     /// Like [`Self::optimize`], but additionally ensures that panics occurring
     /// in the [`Self::optimize`] call are caught and demoted to an
     /// [`OptimizerError::Internal`] error.
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
             Ok(result) => {
@@ -133,6 +148,9 @@ where
     }
 }
 
+// Optimizer configuration
+// -----------------------
+
 // Feature flags for the optimizer.
 #[derive(Clone, Debug)]
 pub struct OptimizerConfig {
@@ -149,11 +167,6 @@ pub struct OptimizerConfig {
     ///
     /// The refinement happens in the LIR ⇒ LIR phase.
     pub enable_consolidate_after_union_negate: bool,
-    /// Enable collecting type information so that rendering can type-specialize
-    /// arrangements.
-    ///
-    /// The collection of type information happens in MIR ⇒ LIR lowering.
-    pub enable_specialized_arrangements: bool,
     /// An exclusive upper bound on the number of results we may return from a
     /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
     /// [`peek::Optimizer`].
@@ -181,7 +194,6 @@ impl From<&SystemVars> for OptimizerConfig {
             replan: None,
             enable_fast_path: true, // Always enable fast path if available.
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
-            enable_specialized_arrangements: vars.enable_specialized_arrangements(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
@@ -197,22 +209,13 @@ pub trait OverrideFrom<T> {
     fn override_from(self, layer: &T) -> Self;
 }
 
-/// Blanket implementation for optional layers.
-impl<S, T> OverrideFrom<Option<T>> for S
-where
-    S: OverrideFrom<T>,
-{
-    fn override_from(self, layer: &Option<T>) -> Self {
-        match layer.as_ref() {
-            Some(layer) => self.override_from(layer),
-            None => self,
-        }
-    }
-}
-
 /// [`OptimizerConfig`] overrides coming from an [`ExplainContext`].
 impl OverrideFrom<ExplainContext> for OptimizerConfig {
     fn override_from(mut self, ctx: &ExplainContext) -> Self {
+        let ExplainContext::Plan(ctx) = ctx else {
+            return self; // Return immediately for all other contexts.
+        };
+
         // Override general parameters.
         self.mode = OptimizeMode::Explain;
         self.replan = ctx.replan;
@@ -239,12 +242,8 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
     }
 }
 
-/// A type for a [`DataflowDescription`] backed by `Mir~` plans. Used internally
-/// by the optimizer implementations.
-type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
-/// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
-/// by the optimizer implementations.
-type LirDataflowDescription = DataflowDescription<Plan>;
+// OptimizerError
+// ===============
 
 /// Error types that can be generated during optimization.
 #[derive(Debug, thiserror::Error)]
@@ -298,6 +297,24 @@ impl From<anyhow::Error> for OptimizerError {
     fn from(value: anyhow::Error) -> Self {
         OptimizerError::Internal(value.to_string())
     }
+}
+
+// Tracing helpers
+// ---------------
+
+#[tracing::instrument(target = "optimizer", level = "debug", name = "local", skip_all)]
+fn optimize_mir_local(
+    expr: MirRelationExpr,
+    typecheck_ctx: &TypecheckContext,
+) -> Result<OptimizedMirRelationExpr, OptimizerError> {
+    #[allow(deprecated)]
+    let optimizer = mz_transform::Optimizer::logical_optimizer(typecheck_ctx);
+    let expr = optimizer.optimize(expr)?;
+
+    // Trace the result of this phase.
+    mz_repr::explain::trace_plan(expr.as_inner());
+
+    Ok::<_, OptimizerError>(expr)
 }
 
 macro_rules! trace_plan {

@@ -163,8 +163,8 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             storage_state.storage_configuration.clone(),
             sink.as_of.clone(),
             storage_state
-                .sink_statistics
-                .get(&sink_id)
+                .aggregated_statistics
+                .get_sink(&sink_id)
                 .expect("statistics initialized")
                 .clone(),
             write_frontier,

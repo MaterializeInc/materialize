@@ -4,9 +4,9 @@
 
 {% block content %}
 {% if ever_symbolized %}
-<strong>Note.</strong> This page has been used during the lifetime of the process, so RAM usage will be permanently increased by about 500MiB - 1GiB.
+<strong>Note.</strong> This page has been used during the lifetime of the process, so RAM usage will be permanently increased.
 {% else %}
-<strong style="color:Red">Warning.</strong> Using this page will cause a one-time permanent increase in RAM usage of about 500MiB - 1GiB.
+<strong style="color:Red">Warning.</strong> Using this page will cause a one-time permanent increase in RAM usage. The amount is unknown, but has, as of February 2024, been observed to range up to a few gigabytes.
 {% endif %}
 <h2>Memory Profiling</h2>
 {% match mem_prof %}

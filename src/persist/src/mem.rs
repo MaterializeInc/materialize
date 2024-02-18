@@ -101,11 +101,11 @@ struct MemBlobCore {
 }
 
 impl MemBlobCore {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+    fn get(&self, key: &str) -> Result<Option<Bytes>, ExternalError> {
         Ok(self
             .dataz
             .get(key)
-            .and_then(|(x, exists)| exists.then(|| x.to_vec())))
+            .and_then(|(x, exists)| exists.then(|| Bytes::clone(x))))
     }
 
     fn set(&mut self, key: &str, value: Bytes) -> Result<(), ExternalError> {

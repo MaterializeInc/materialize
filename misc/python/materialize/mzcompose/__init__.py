@@ -50,6 +50,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_next_listen_batch_retryer_fixed_sleep": "1200ms",
     # -----
     # Persist internals changes: advance coverage
+    "persist_enable_arrow_lgalloc_noncc_sizes": "true",
+    "persist_enable_s3_lgalloc_noncc_sizes": "true",
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
     # -----
@@ -69,11 +71,11 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_jemalloc_profiling": "true",
     "enable_logical_compaction_window": "true",
     "enable_multi_worker_storage_persist_sink": "true",
+    "enable_mysql_source": "true",
     "enable_rbac_checks": "true",
     "enable_reduce_mfp_fusion": "true",
     "enable_refresh_every_mvs": "true",
     "enable_sink_doc_on_option": "true",
-    "enable_specialized_arrangements": "true",
     "enable_statement_lifecycle_logging": "true",
     "enable_table_keys": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",

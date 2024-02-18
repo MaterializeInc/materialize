@@ -78,6 +78,12 @@ pub enum OpErrorKind {
     Unsupported(String),
     #[error("invalid identifier: {0:?}")]
     IdentError(#[from] mz_sql_parser::ast::IdentError),
+    #[error("unknown table: {database}.{schema}.{table}")]
+    UnknownTable {
+        database: String,
+        schema: String,
+        table: String,
+    },
     #[error("unknown request: {0}")]
     UnknownRequest(String),
 }
@@ -138,6 +144,7 @@ impl OpErrorKind {
             | Crypto(_)
             | Unsupported(_)
             | IdentError(_)
+            | UnknownTable { .. }
             | UnknownRequest(_) => false,
         }
     }

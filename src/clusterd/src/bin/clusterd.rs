@@ -141,6 +141,10 @@ struct Args {
     #[clap(long)]
     announce_memory_limit: Option<usize>,
 
+    /// Whether the cluster is using a v2 (cc/C) size or not.
+    #[clap(long)]
+    is_cluster_size_v2: bool,
+
     /// Set core affinity for Timely workers.
     ///
     /// This flag should only be set if the process is provided with exclusive access to its
@@ -262,7 +266,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         configs = mz_persist_txn::all_dyn_configs(configs);
         configs
     }
-    let persist_cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), all_dyn_configs());
+    let mut persist_cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), all_dyn_configs());
+    persist_cfg.is_cc_active = args.is_cluster_size_v2;
     let persist_clients = Arc::new(PersistClientCache::new(
         persist_cfg,
         &metrics_registry,

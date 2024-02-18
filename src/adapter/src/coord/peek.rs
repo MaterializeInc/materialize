@@ -658,9 +658,7 @@ impl crate::coord::Coordinator {
 
     /// Cancel and remove all pending peeks that were initiated by the client with `conn_id`.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) fn cancel_pending_peeks(&mut self, conn_id: &ConnectionId) -> Vec<PendingPeek> {
-        // The peek is present on some specific compute instance.
-        // Allow dataflow to cancel any pending peeks.
+    pub(crate) fn cancel_pending_peeks(&mut self, conn_id: &ConnectionId) {
         if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
             self.metrics
                 .canceled_peeks
@@ -682,17 +680,14 @@ impl crate::coord::Coordinator {
                 }
             }
 
-            let mut ret = uuids
+            let peeks = uuids
                 .iter()
                 .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
                 .collect::<Vec<_>>();
-            for peek in &mut ret {
-                let ctx_extra = std::mem::take(&mut peek.ctx_extra);
-                self.retire_execution(StatementEndedExecutionReason::Canceled, ctx_extra);
+            for peek in peeks {
+                self.retire_execution(StatementEndedExecutionReason::Canceled, peek.ctx_extra);
+                let _ = peek.sender.send(PeekResponse::Canceled);
             }
-            ret
-        } else {
-            Vec::new()
         }
     }
 

@@ -1,0 +1,29 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+steps:
+  - id: build-aarch64
+    label: Build aarch64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-linux-aarch64
+
+  - id: qa-canary-load
+    label: "QA Canary Environment Base Load"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 1440 # 24 hours
+    concurrency: 1
+    concurrency_group: 'qa-canary-load'
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: canary-load
+          args: ["--runtime=82800"] # 23 hours
+    agents:
+      queue: linux-aarch64-small

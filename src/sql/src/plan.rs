@@ -42,7 +42,7 @@ use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
@@ -1258,7 +1258,6 @@ pub enum DataSourceDesc {
 #[derive(Clone, Debug)]
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
-    pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
 }
@@ -1402,6 +1401,7 @@ pub struct MaterializedView {
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
+    pub as_of: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug)]

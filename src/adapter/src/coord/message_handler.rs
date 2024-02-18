@@ -18,6 +18,7 @@ use futures::FutureExt;
 use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
@@ -30,6 +31,7 @@ use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::active_compute_sink::{ActiveComputeSink, ComputeSinkRemovalReason};
 use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
@@ -40,8 +42,8 @@ use crate::coord::{
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::util::{ComputeSinkId, ResultExt};
-use crate::{catalog, AdapterNotice, TimestampContext};
+use crate::util::ResultExt;
+use crate::{catalog, AdapterError, AdapterNotice, ExecuteResponse, TimestampContext};
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -103,10 +105,7 @@ impl Coordinator {
                     self.advance_timelines().await;
                 }
                 Message::ClusterEvent(event) => self.message_cluster_event(event).await,
-                // Processing this message DOES NOT send a response to the client;
-                // in any situation where you use it, you must also have a code
-                // path that responds to the client (e.g. reporting an error).
-                Message::RemovePendingPeeks { conn_id } => {
+                Message::CancelPendingPeeks { conn_id } => {
                     self.cancel_pending_peeks(&conn_id);
                 }
                 Message::LinearizeReads => {
@@ -158,36 +157,31 @@ impl Coordinator {
                 }
                 Message::CreateIndexStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.execute_create_index_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::CreateViewStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_create_view_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::CreateMaterializedViewStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.execute_create_materialized_view_stage(ctx, stage, otel_ctx)
-                        .await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::SubscribeStageReady {
                     ctx,
-                    otel_ctx,
+                    span,
                     stage,
                 } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_subscribe_stage(ctx, stage, otel_ctx).await;
+                    self.sequence_staged(ctx, span, stage).await;
                 }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
@@ -351,18 +345,35 @@ impl Coordinator {
                 self.send_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
-                // We use an `if let` here because the peek could have been canceled already.
-                // We can also potentially receive multiple `Complete` responses, followed by
-                // a `Dropped` response.
-                if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
-                    let remove = active_subscribe.process_response(response);
-                    if remove {
-                        let csid = ComputeSinkId {
-                            cluster_id: active_subscribe.cluster_id,
-                            global_id: sink_id,
+                match self.active_compute_sinks.get_mut(&sink_id) {
+                    Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
+                        let finished = active_subscribe.process_response(response);
+                        if finished {
+                            self.drop_compute_sinks_with_reason([(
+                                sink_id,
+                                ComputeSinkRemovalReason::Finished,
+                            )])
+                            .await;
+                        }
+                    }
+                    _ => {
+                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
+                    }
+                }
+            }
+            ControllerResponse::CopyToResponse(sink_id, response) => {
+                match self.remove_active_sink(sink_id).await {
+                    Some(ActiveComputeSink::CopyTo(active_copy_to)) => {
+                        let response = match response {
+                            Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
+                            Err(error) => Err(AdapterError::Unstructured(error)),
                         };
-                        self.drop_compute_sinks([csid]);
-                        self.remove_active_subscribe(sink_id).await;
+                        let sink_and_cluster_id = (sink_id, active_copy_to.cluster_id);
+                        active_copy_to.process_response(response);
+                        self.drop_compute_sinks([sink_and_cluster_id]);
+                    }
+                    _ => {
+                        tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");
                     }
                 }
             }

@@ -215,7 +215,7 @@ impl RedundantJoin {
                         // Update the column offsets in the binding expressions to catch
                         // up with the removal of `remove_input_idx`.
                         for expr in bindings.iter_mut() {
-                            expr.visit_mut_post(&mut |e| {
+                            expr.visit_pre_mut(|e| {
                                 if let MirScalarExpr::Column(c) = e {
                                     let (_local_col, input_relation) =
                                         old_input_mapper.map_column_to_local(*c);
@@ -223,7 +223,7 @@ impl RedundantJoin {
                                         *c -= old_input_mapper.input_arity(remove_input_idx);
                                     }
                                 }
-                            })?;
+                            });
                         }
 
                         // Replace column references from `remove_input_idx` with the corresponding

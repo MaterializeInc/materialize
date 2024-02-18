@@ -34,18 +34,12 @@ pub(super) struct Context {
     next_node_id: NodeId,
     /// Information to print along with error messages.
     debug_info: LirDebugInfo,
-    /// Whether to enable type-specialization for arrangements.
-    enable_specialized_arrangements: bool,
     /// Whether to enable fusion of MFPs in reductions.
     enable_reduce_mfp_fusion: bool,
 }
 
 impl Context {
-    pub fn new(
-        debug_name: String,
-        enable_specialized_arrangements: bool,
-        enable_reduce_mfp_fusion: bool,
-    ) -> Self {
+    pub fn new(debug_name: String, enable_reduce_mfp_fusion: bool) -> Self {
         Self {
             arrangements: Default::default(),
             next_node_id: 0,
@@ -53,7 +47,6 @@ impl Context {
                 debug_name,
                 id: GlobalId::Transient(0),
             },
-            enable_specialized_arrangements,
             enable_reduce_mfp_fusion,
         }
     }
@@ -94,11 +87,7 @@ impl Context {
                 .entry(Id::Global(index_desc.on_id))
                 .or_insert_with(AvailableCollections::default);
             index_keys.arranged.push((key, permutation, thinning));
-            index_keys.types = if self.enable_specialized_arrangements {
-                Some(typ.column_types.clone())
-            } else {
-                Default::default()
-            };
+            index_keys.types = Some(typ.column_types.clone());
         }
         for id in desc.source_imports.keys() {
             self.arrangements
@@ -693,11 +682,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .iter()
                     .any(|(key, _, _)| key == &required_arrangement.0)
                 {
-                    types = if self.enable_specialized_arrangements {
-                        Some(input.typ().column_types)
-                    } else {
-                        None
-                    };
+                    types = Some(input.typ().column_types);
                     self.arrange_by(
                         plan,
                         AvailableCollections::new_arranged(
@@ -753,11 +738,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
-                let types = if self.enable_specialized_arrangements {
-                    Some(input.typ().column_types)
-                } else {
-                    None
-                };
+                let types = Some(input.typ().column_types);
                 let (input, mut input_keys) = self.lower_mir_expr(input)?;
                 input_keys.types = types;
 

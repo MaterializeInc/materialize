@@ -129,6 +129,7 @@ class FetchAction(Action):
             result.extend(
                 [
                     "does not exist",
+                    "subscribe has been terminated because underlying relation",
                 ]
             )
         return result
@@ -316,7 +317,7 @@ class InsertAction(Action):
 
     def run(self, exe: Executor) -> bool:
         table = None
-        if exe.insert_table != None:
+        if exe.insert_table is not None:
             for t in exe.db.tables:
                 if t.table_id == exe.insert_table:
                     table = t
@@ -393,7 +394,7 @@ class UpdateAction(Action):
 
     def run(self, exe: Executor) -> bool:
         table = None
-        if exe.insert_table != None:
+        if exe.insert_table is not None:
             for t in exe.db.tables:
                 if t.table_id == exe.insert_table:
                     table = t

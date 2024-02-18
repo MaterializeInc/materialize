@@ -10,16 +10,17 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
-from materialize import MZ_ROOT
 from materialize.buildkite_insights.util import buildkite_api
 from materialize.buildkite_insights.util.data_io import (
+    ensure_temp_dir_exists,
+    exists_file_with_recent_data,
+    get_file_path,
     read_results_from_file,
     write_results_to_file,
 )
@@ -27,6 +28,10 @@ from materialize.buildkite_insights.util.data_io import (
 OUTPUT_TYPE_TXT = "txt"
 OUTPUT_TYPE_TXT_SHORT = "txt-short"
 OUTPUT_TYPE_CSV = "csv"
+
+FETCH_MODE_NO = "no"
+FETCH_MODE_YES = "yes"
+FETCH_MODE_AUTO = "auto"
 
 BUILDKITE_BUILD_STATES = [
     "running",
@@ -58,8 +63,6 @@ MZ_PIPELINES = [
     "www",
 ]
 
-PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
-
 
 @dataclass
 class StepData:
@@ -68,37 +71,38 @@ class StepData:
     created_at: datetime
     duration_in_min: float | None
     passed: bool
-
-
-def get_file_name(pipeline_slug: str) -> str:
-    return f"{PATH_TO_TEMP_DIR}/{pipeline_slug}_builds.json"
-
-
-def ensure_temp_dir_exists() -> None:
-    subprocess.run(
-        [
-            "mkdir",
-            "-p",
-            f"{PATH_TO_TEMP_DIR}",
-        ],
-        check=True,
-    )
+    exit_status: int | None
+    retry_count: int
 
 
 def get_data(
     pipeline_slug: str,
-    no_fetch: bool,
-    max_fetches: int | None,
+    fetch_mode: str,
+    max_fetches: int,
     branch: str | None,
     build_state: str | None,
+    items_per_page: int = 50,
 ) -> list[Any]:
     ensure_temp_dir_exists()
 
+    file_path = get_file_path(
+        pipeline_slug=pipeline_slug,
+        branch=branch,
+        build_state=build_state,
+        max_fetches=max_fetches,
+        items_per_page=items_per_page,
+    )
+    no_fetch = fetch_mode == FETCH_MODE_NO
+
+    if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(file_path):
+        no_fetch = True
+
     if no_fetch:
-        return read_results_from_file(get_file_name(pipeline_slug))
+        print(f"Using existing data: {file_path}")
+        return read_results_from_file(file_path)
 
     request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
-    params = {"include_retried_jobs": "true", "per_page": "100"}
+    params = {"include_retried_jobs": "true", "per_page": str(items_per_page)}
 
     if branch is not None:
         params["branch"] = branch
@@ -107,7 +111,7 @@ def get_data(
         params["state"] = build_state
 
     result = buildkite_api.get(request_path, params, max_fetches=max_fetches)
-    write_results_to_file(result, get_file_name(pipeline_slug))
+    write_results_to_file(result, file_path)
     return result
 
 
@@ -136,13 +140,21 @@ def get_step_infos_from_build(build: Any, build_step_keys: list[str]) -> list[St
             duration_in_min = None
 
         job_passed = job["state"] == "passed"
+        exit_status = job["exit_status"]
+        retry_count = job["retries_count"] or 0
 
         assert (
             not job_passed or duration_in_min is not None
         ), "Duration must be available for passed step"
 
         step_data = StepData(
-            build_step_key, build_number, created_at, duration_in_min, job_passed
+            build_step_key,
+            build_number,
+            created_at,
+            duration_in_min,
+            job_passed,
+            exit_status=exit_status,
+            retry_count=retry_count,
         )
         collected_steps.append(step_data)
 
@@ -168,7 +180,9 @@ def print_data(
     output_type: str,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
-        print("step_key,build_number,created_at,duration_in_min,passed")
+        print(
+            "step_key,build_number,created_at,duration_in_min,passed,exit_status,retry_count"
+        )
 
     for entry in step_infos:
         if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
@@ -183,11 +197,11 @@ def print_data(
                 else f"https://buildkite.com/materialize/{pipeline_slug}/builds/{entry.build_number}, "
             )
             print(
-                f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}"
+                f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
             )
         elif output_type == OUTPUT_TYPE_CSV:
             print(
-                f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min}, {1 if entry.passed else 0}"
+                f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min},{1 if entry.passed else 0},{entry.exit_status},{entry.retry_count}"
             )
 
     if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
@@ -232,13 +246,13 @@ def print_stats(
 def main(
     pipeline_slug: str,
     build_step_keys: list[str],
-    no_fetch: bool,
-    max_fetches: int | None,
+    fetch_mode: str,
+    max_fetches: int,
     branch: str | None,
     build_state: str | None,
     output_type: str,
 ) -> None:
-    data = get_data(pipeline_slug, no_fetch, max_fetches, branch, build_state)
+    data = get_data(pipeline_slug, fetch_mode, max_fetches, branch, build_state)
     step_infos = collect_data(data, build_step_keys)
     print_data(step_infos, pipeline_slug, build_step_keys, output_type)
 
@@ -252,11 +266,13 @@ if __name__ == "__main__":
     parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
     parser.add_argument("--build-step-key", action="append", type=str)
     parser.add_argument(
-        "--no-fetch",
-        action="store_true",
-        help="The data of a previous fetch of the specified pipeline will be used. Note that filters such as 'branch' and 'build-state' are applied at fetch-time.",
+        "--fetch",
+        choices=[FETCH_MODE_AUTO, FETCH_MODE_NO, FETCH_MODE_YES],
+        default=FETCH_MODE_AUTO,
+        type=str,
+        help="Whether to fetch new data from Buildkite or reuse previously fetched, matching data.",
     )
-    parser.add_argument("--max-fetches", default=2, type=int)
+    parser.add_argument("--max-fetches", default=3, type=int)
     parser.add_argument(
         "--branch", default="main", type=str, help="Use '*' for all branches"
     )
@@ -277,7 +293,7 @@ if __name__ == "__main__":
     main(
         args.pipeline,
         args.build_step_key,
-        args.no_fetch,
+        args.fetch,
         args.max_fetches,
         args.branch if args.branch != "*" else None,
         args.build_state,

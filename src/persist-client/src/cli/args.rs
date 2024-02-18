@@ -147,8 +147,13 @@ pub(super) async fn make_blob(
     commit: bool,
     metrics: Arc<Metrics>,
 ) -> anyhow::Result<Arc<dyn Blob + Send + Sync>> {
-    let blob =
-        BlobConfig::try_from(blob_uri, Box::new(cfg.clone()), metrics.s3_blob.clone()).await?;
+    let blob = BlobConfig::try_from(
+        blob_uri,
+        Box::new(cfg.clone()),
+        metrics.s3_blob.clone(),
+        cfg.configs.clone(),
+    )
+    .await?;
     let blob = blob.clone().open().await?;
     let blob = if commit {
         blob

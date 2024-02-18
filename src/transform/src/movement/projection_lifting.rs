@@ -104,7 +104,7 @@ impl ProjectionLifting {
                     limits: _,
                     body,
                 } => {
-                    let recursive_ids = MirRelationExpr::recursive_ids(ids, values)?;
+                    let recursive_ids = MirRelationExpr::recursive_ids(ids, values);
 
                     for (local_id, value) in zip_eq(ids.iter(), values.iter_mut()) {
                         self.action(value, gets)?;

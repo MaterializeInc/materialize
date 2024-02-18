@@ -40,7 +40,7 @@ use mz_proto::chrono::any_naive_datetime;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::interval::Interval;
+use mz_repr::adt::interval::{Interval, RoundBehavior};
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
@@ -1826,8 +1826,10 @@ fn date_trunc_interval<'a>(a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
         .map_err(|_| EvalError::UnknownUnits(units.to_owned()))?;
 
     interval
-        .truncate_low_fields(dtf, Some(0))
-        .expect("truncate_low_fields should not fail with max_precision 0");
+        .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)
+        .expect(
+            "truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate",
+        );
     Ok(interval.into())
 }
 

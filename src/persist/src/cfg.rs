@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use mz_dyncfg::ConfigSet;
 use tracing::warn;
 use url::Url;
 
@@ -26,6 +27,15 @@ use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
+
+/// Adds the full set of all mz_persist `Config`s.
+pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
+    configs
+        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_CC_SIZES)
+        .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
+        .add(&crate::s3::ENABLE_S3_LGALLOC_CC_SIZES)
+        .add(&crate::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
+}
 
 /// Config for an implementation of [Blob].
 #[derive(Debug, Clone)]
@@ -49,6 +59,8 @@ pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
     fn connect_timeout(&self) -> Duration;
     /// Maximum time to wait to read the first byte of a response, including connection time.
     fn read_timeout(&self) -> Duration;
+    /// Whether this is running in a "cc" sized cluster.
+    fn is_cc_active(&self) -> bool;
 }
 
 impl BlobConfig {
@@ -68,6 +80,7 @@ impl BlobConfig {
         value: &str,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
+        cfg: ConfigSet,
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value)
             .map_err(|err| anyhow!("failed to parse blob location {} as a url: {}", &value, err))?;
@@ -109,6 +122,7 @@ impl BlobConfig {
                     credentials,
                     knobs,
                     metrics,
+                    cfg,
                 )
                 .await?;
 

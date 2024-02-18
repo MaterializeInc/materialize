@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# When updating this file, make sure that the number of arrangements doesn't
+# increase unexpectedly. This is to prevent issues like this:
+# https://github.com/MaterializeInc/materialize/issues/20179
+
 # Run the majority of this test on its own cluster to ensure it doesn't
 # interfere with any other tests.
 > CREATE CLUSTER arrangement_sharing REPLICAS (r1 (SIZE '${arg.default-replica-size}'))

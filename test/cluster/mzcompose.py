@@ -52,7 +52,7 @@ SERVICES = [
         propagate_crashes=False,
         external_cockroach=True,
         # Kills make the shadow catalog not work properly
-        catalog_store="stash",
+        catalog_store="persist",
     ),
     Redpanda(),
     Toxiproxy(),
@@ -1119,95 +1119,6 @@ def workflow_test_github_19610(c: Composition) -> None:
             > FETCH ALL cur;
             1 2
             > COMMIT;
-            """
-            )
-        )
-
-
-def workflow_test_github_22778(c: Composition) -> None:
-    """
-    Regression test to ensure that a panic is not triggered if type capture in
-    environmentd falls out-of-sync with type usage for specialization in clusterd.
-    """
-
-    c.down(destroy_volumes=True)
-    with c.override(
-        Testdrive(no_reset=True),
-    ):
-        c.up("materialized")
-        c.up("clusterd1")
-        c.up("testdrive", persistent=True)
-
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            "ALTER SYSTEM SET enable_specialized_arrangements = false;",
-            port=6877,
-            user="mz_system",
-        )
-
-        # Set up scenario where empty-value specialization kicks in.
-        c.sql(
-            """
-            CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
-            ));
-            SET cluster = cluster1;
-            -- table for fast-path peeks
-            CREATE TABLE t (a int);
-            CREATE VIEW v AS SELECT a + 1 AS a FROM t;
-            CREATE INDEX i ON v (a);
-            """
-        )
-
-        # Change the flag and cycle clusterd.
-        c.sql(
-            "ALTER SYSTEM SET enable_specialized_arrangements = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.kill("clusterd1")
-        c.up("clusterd1")
-
-        # Verify that no arrangement specialization took place.
-        c.testdrive(
-            dedent(
-                """
-            > SET cluster = cluster1;
-
-            > SELECT name
-              FROM mz_internal.mz_arrangement_sizes
-                   JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
-              WHERE name LIKE '%ArrangeBy%]';
-            ArrangeBy[[Column(0)]]
-            """
-            )
-        )
-
-        # Now, cycle environmentd.
-        c.kill("materialized")
-        c.up("materialized")
-
-        # Verify that arrangement specialization now took place.
-        c.testdrive(
-            dedent(
-                """
-            > SET cluster = cluster1;
-
-            > SELECT name
-              FROM mz_internal.mz_arrangement_sizes
-                   JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
-              WHERE name LIKE '%ArrangeBy%]';
-            "ArrangeBy[[Column(0)]] [val: empty]"
             """
             )
         )
@@ -2425,6 +2336,9 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
     mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
 
+    # Wait a bit to let the controller refresh its metrics.
+    time.sleep(2)
+
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
 
@@ -2994,7 +2908,8 @@ class PropagatingThread(Thread):
         super().join(timeout)
         if self.exc:
             raise self.exc
-        return self.ret
+        if hasattr(self, "ret"):
+            return self.ret
 
 
 def workflow_blue_green_deployment(
@@ -3040,6 +2955,7 @@ def workflow_blue_green_deployment(
         cursor = c.sql_cursor()
         while running:
             try:
+                cursor.execute("ROLLBACK")
                 cursor.execute("BEGIN")
                 cursor.execute(
                     "DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM prod.counter_mv)"
@@ -3047,10 +2963,12 @@ def workflow_blue_green_deployment(
                 cursor.execute("FETCH ALL subscribe WITH (timeout='15s')")
                 assert int(cursor.fetchall()[-1][2]) > 0
                 cursor.execute("CLOSE subscribe")
-                cursor.execute("ROLLBACK")
             except DatabaseError as e:
                 # Expected
-                if "cached plan must not change result type" in str(e):
+                msg = str(e)
+                if ("cached plan must not change result type" in msg) or (
+                    "subscribe has been terminated because underlying relation" in msg
+                ):
                     continue
                 raise e
 
@@ -3191,3 +3109,58 @@ def workflow_test_compute_aggressive_readhold_downgrades_disabled(
                 """
             )
         )
+
+
+def workflow_cluster_drop_concurrent(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that dropping a cluster will close already running queries against
+    that cluster, both SELECTs and SUBSCRIBEs.
+    """
+    c.down(destroy_volumes=True)
+
+    def select():
+        with c.sql_cursor() as cursor:
+            # This should hang instantly as the timestamp is far in the future,
+            # until the cluster is dropped
+            cursor.execute("SELECT * FROM counter AS OF 18446744073709551615")
+
+    def subscribe():
+        cursor = c.sql_cursor()
+        cursor.execute("BEGIN")
+        cursor.execute("DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM counter)")
+        # This should hang until the cluster is dropped
+        cursor.execute("FETCH ALL subscribe")
+
+    with c.override(
+        Testdrive(
+            no_reset=True,
+        ),
+        Clusterd(name="clusterd1"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.run_testdrive_files("cluster-drop-concurrent/setup.td")
+        threads = [
+            PropagatingThread(target=fn, name=name)
+            for fn, name in ((select, "select"), (subscribe, "subscribe"))
+        ]
+
+        for thread in threads:
+            thread.start()
+        time.sleep(2)  # some time to make sure the queries are in progress
+        try:
+            c.run_testdrive_files("cluster-drop-concurrent/run.td")
+        finally:
+            for thread in threads:
+                try:
+                    thread.join(timeout=10)
+                except ProgrammingError as e:
+                    assert (
+                        e.args[0]["M"]
+                        == 'query could not complete because relation "materialize.public.counter" was dropped'
+                    ), e
+            for thread in threads:
+                assert not thread.is_alive(), f"Thread {thread.name} is still running"
