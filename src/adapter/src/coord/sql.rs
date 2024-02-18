@@ -18,7 +18,7 @@ use mz_sql::plan::{Params, StatementDesc};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement, StatementKind};
 
-use crate::active_compute_sink::{ActiveComputeSink, ComputeSinkRemovalReason};
+use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
@@ -200,7 +200,7 @@ impl Coordinator {
 
     /// Clears coordinator state for a connection.
     pub(crate) async fn clear_connection(&mut self, conn_id: &ConnectionId) {
-        self.remove_active_compute_sinks(conn_id, ComputeSinkRemovalReason::Finished)
+        self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)
             .await;
 
         // Release this transaction's compaction hold on collections.
@@ -209,6 +209,10 @@ impl Coordinator {
         }
     }
 
+    /// Adds coordinator bookkeeping for an active compute sink.
+    ///
+    /// This is a low-level method. The caller is responsible for installing the
+    /// sink in the controller.
     pub(crate) async fn add_active_compute_sink(
         &mut self,
         id: GlobalId,
@@ -248,35 +252,16 @@ impl Coordinator {
         ret_fut
     }
 
-    /// Cancel all outstanding subscribes for the identified connection.
+    /// Removes coordinator bookkeeping for an active compute sink.
+    ///
+    /// This is a low-level method. The caller is responsible for dropping the
+    /// sink from the controller. Consider calling `drop_compute_sink` or
+    /// `retire_compute_sink` instead.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn cancel_active_compute_sinks(&mut self, conn_id: &ConnectionId) {
-        self.remove_active_compute_sinks(conn_id, ComputeSinkRemovalReason::Canceled)
-            .await
-    }
-
-    /// Remove all outstanding subscribes for the identified connection with
-    /// the specified reason.
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_active_compute_sinks(
+    pub(crate) async fn remove_active_compute_sink(
         &mut self,
-        conn_id: &ConnectionId,
-        reason: ComputeSinkRemovalReason,
-    ) {
-        let drop_sinks = self
-            .active_conns
-            .get_mut(conn_id)
-            .expect("must exist for active session")
-            .drop_sinks
-            .iter()
-            .map(|sink_id| (*sink_id, reason.clone()))
-            .collect::<Vec<_>>();
-        self.drop_compute_sinks_with_reason(drop_sinks).await;
-    }
-
-    /// Handle removing metadata associated with a SUBSCRIBE or a COPY TO query.
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_active_sink(&mut self, id: GlobalId) -> Option<ActiveComputeSink> {
+        id: GlobalId,
+    ) -> Option<ActiveComputeSink> {
         if let Some(sink) = self.active_compute_sinks.remove(&id) {
             let session_type = metrics::session_type_label_value(sink.user());
 

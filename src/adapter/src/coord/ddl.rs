@@ -50,7 +50,7 @@ use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, info_span, instrument, warn, Instrument, Level};
 
-use crate::active_compute_sink::ComputeSinkRemovalReason;
+use crate::active_compute_sink::ActiveComputeSinkRetireReason;
 use crate::catalog::{CatalogState, Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -420,7 +420,7 @@ impl Coordinator {
                     .to_string();
                 compute_sinks_to_drop.push((
                     *sink_id,
-                    ComputeSinkRemovalReason::DependencyDropped(format!(
+                    ActiveComputeSinkRetireReason::DependencyDropped(format!(
                         "relation {}",
                         name.quoted()
                     )),
@@ -429,7 +429,7 @@ impl Coordinator {
                 let name = self.catalog().get_cluster(cluster_id).name();
                 compute_sinks_to_drop.push((
                     *sink_id,
-                    ComputeSinkRemovalReason::DependencyDropped(format!(
+                    ActiveComputeSinkRetireReason::DependencyDropped(format!(
                         "cluster {}",
                         name.quoted()
                     )),
@@ -782,19 +782,45 @@ impl Coordinator {
     /// depending upon the reason.
     pub(crate) async fn drop_compute_sinks_with_reason(
         &mut self,
-        sinks: impl IntoIterator<Item = (GlobalId, ComputeSinkRemovalReason)>,
+        sinks: impl IntoIterator<Item = (GlobalId, ActiveComputeSinkRetireReason)>,
     ) {
         let mut sink_cluster_id_map = BTreeMap::new();
         for (sink_id, reason) in sinks {
-            if let Some(sink) = self.remove_active_sink(sink_id).await {
+            if let Some(sink) = self.remove_active_compute_sink(sink_id).await {
                 sink_cluster_id_map.insert(sink_id, sink.cluster_id());
-                sink.drop_with_reason(reason);
+                sink.retire(reason);
             } else {
                 tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
                 continue;
             }
         }
         self.drop_compute_sinks(sink_cluster_id_map.into_iter());
+    }
+
+    /// Cancels all active compute sinks for the identified connection.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
+        self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
+            .await
+    }
+
+    /// Retires all active compute sinks for the identified connection with the
+    /// specified reason.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn retire_compute_sinks_for_conn(
+        &mut self,
+        conn_id: &ConnectionId,
+        reason: ActiveComputeSinkRetireReason,
+    ) {
+        let drop_sinks = self
+            .active_conns
+            .get_mut(conn_id)
+            .expect("must exist for active session")
+            .drop_sinks
+            .iter()
+            .map(|sink_id| (*sink_id, reason.clone()))
+            .collect::<Vec<_>>();
+        self.drop_compute_sinks_with_reason(drop_sinks).await;
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {

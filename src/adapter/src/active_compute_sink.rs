@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Implementations around supporting the SUBSCRIBE protocol with the dataflow layer
+//! Coordinator bookkeeping for active compute sinks.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -19,6 +19,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
 use mz_expr::compare_columns;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
@@ -31,14 +32,16 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
 #[derive(Debug)]
-/// A description of an active compute sink from coord's perspective.
-/// This is either a subscribe sink or a copy to sink.
+/// A description of an active compute sink from the coordinator's perspective.
 pub enum ActiveComputeSink {
+    /// An active subscribe sink.
     Subscribe(ActiveSubscribe),
+    /// An active copy to sink.
     CopyTo(ActiveCopyTo),
 }
 
 impl ActiveComputeSink {
+    /// Reports the ID of the cluster on which the sink is running.
     pub fn cluster_id(&self) -> ClusterId {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.cluster_id,
@@ -46,6 +49,7 @@ impl ActiveComputeSink {
         }
     }
 
+    /// Reports the ID of the connection which created the sink.
     pub fn connection_id(&self) -> &ConnectionId {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.conn_id,
@@ -53,6 +57,7 @@ impl ActiveComputeSink {
         }
     }
 
+    /// Reports the user that created the sink.
     pub fn user(&self) -> &User {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.user,
@@ -60,6 +65,7 @@ impl ActiveComputeSink {
         }
     }
 
+    /// Reports the IDs of the objects on which the sink depends.
     pub fn depends_on(&self) -> &BTreeSet<GlobalId> {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.depends_on,
@@ -67,65 +73,64 @@ impl ActiveComputeSink {
         }
     }
 
-    /// Consumes the `ActiveComputeSink` and sends a response if required.
-    pub fn drop_with_reason(self, reason: ComputeSinkRemovalReason) {
+    /// Retires the sink with the specified reason.
+    ///
+    /// This method must be called on every sink before it is dropped. It
+    /// informs the end client that the sink is finished for the specified
+    /// reason.
+    pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
         match self {
-            ActiveComputeSink::Subscribe(subscribe) => {
-                let message = match reason {
-                    ComputeSinkRemovalReason::Finished => return,
-                    ComputeSinkRemovalReason::Canceled => PeekResponseUnary::Canceled,
-                    ComputeSinkRemovalReason::DependencyDropped(d) => PeekResponseUnary::Error(
-                        format!("subscribe has been terminated because underlying {d} was dropped"),
-                    ),
-                };
-                subscribe.send(message);
-            }
-            ActiveComputeSink::CopyTo(copy_to) => {
-                let message = match reason {
-                    ComputeSinkRemovalReason::Finished => return,
-                    ComputeSinkRemovalReason::Canceled => Err(AdapterError::Canceled),
-                    ComputeSinkRemovalReason::DependencyDropped(d) => {
-                        Err(AdapterError::Unstructured(anyhow!(
-                            "copy has been terminated because underlying {d} was dropped"
-                        )))
-                    }
-                };
-                copy_to.process_response(message);
-            }
+            ActiveComputeSink::Subscribe(subscribe) => subscribe.retire(reason),
+            ActiveComputeSink::CopyTo(copy_to) => copy_to.retire(reason),
         }
     }
+}
+
+/// The reason for removing an [`ActiveComputeSink`].
+#[derive(Debug, Clone)]
+pub enum ActiveComputeSinkRetireReason {
+    /// The compute sink completed successfully.
+    Finished,
+    /// The compute sink was canceled due to a user request.
+    Canceled,
+    /// The compute sink was forcibly terminated because an object it depended on
+    /// was dropped.
+    DependencyDropped(String),
 }
 
 /// A description of an active subscribe from coord's perspective
 #[derive(Debug)]
 pub struct ActiveSubscribe {
-    /// The user of the session that created the subscribe.
+    /// The user that created the subscribe.
     pub user: User,
-    /// The connection id of the session that created the subscribe.
+    /// The ID of the connection which created the subscribe.
     pub conn_id: ConnectionId,
-    /// Channel to send responses to the client.
-    ///
-    /// The responses have the form `PeekResponseUnary` but should perhaps
-    /// become `SubscribeResponse`.
+    /// Channel on which to send responses to the client.
+    // The responses have the form `PeekResponseUnary` but should perhaps
+    // become `SubscribeResponse`.
     pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
     /// Whether progress information should be emitted.
     pub emit_progress: bool,
-    /// As of of subscribe
+    /// The logical timestamp at which the subscribe began execution.
     pub as_of: Timestamp,
-    /// Number of columns in the output.
+    /// The number of columns in the relation that was subscribed to.
     pub arity: usize,
-    /// The cluster that the subscribe is running on.
+    /// The ID of the cluster on which the subscribe is running.
     pub cluster_id: ClusterId,
-    /// All `GlobalId`s that the subscribe's expression depends on.
+    /// The IDs of the objects on which the subscribe depends.
     pub depends_on: BTreeSet<GlobalId>,
-    /// The time when the subscribe was started.
+    /// The time when the subscribe started.
     pub start_time: EpochMillis,
-    /// How to modify output
+    /// How to present the subscribe's output.
     pub output: SubscribeOutput,
 }
 
 impl ActiveSubscribe {
-    pub(crate) fn initialize(&self) {
+    /// Initializes the subscription.
+    ///
+    /// This method must be called exactly once, after constructing an
+    /// `ActiveSubscribe` and before calling `process_response`.
+    pub fn initialize(&self) {
         // Always emit progress message indicating snapshot timestamp.
         self.send_progress_message(&Antichain::from_elem(self.as_of));
     }
@@ -158,10 +163,10 @@ impl ActiveSubscribe {
         }
     }
 
-    /// Process a subscribe response.
+    /// Processes a subscribe response from the controller.
     ///
     /// Returns `true` if the subscribe is finished.
-    pub(crate) fn process_response(&mut self, batch: SubscribeBatch) -> bool {
+    pub fn process_response(&mut self, batch: SubscribeBatch) -> bool {
         let mut row_buf = Row::default();
         match batch.updates {
             Ok(mut rows) => {
@@ -368,41 +373,72 @@ impl ActiveSubscribe {
         batch.upper.is_empty()
     }
 
+    /// Retires the subscribe with the specified reason.
+    ///
+    /// This method must be called on every subscribe before it is dropped. It
+    /// informs the end client that the subscribe is finished for the specified
+    /// reason.
+    pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
+        let message = match reason {
+            ActiveComputeSinkRetireReason::Finished => return,
+            ActiveComputeSinkRetireReason::Canceled => PeekResponseUnary::Canceled,
+            ActiveComputeSinkRetireReason::DependencyDropped(d) => PeekResponseUnary::Error(
+                format!("subscribe has been terminated because underlying {d} was dropped"),
+            ),
+        };
+        self.send(message);
+    }
+
     /// Sends a message to the client if the subscribe has not already completed
     /// and if the client has not already gone away.
-    pub fn send(&self, response: PeekResponseUnary) {
+    fn send(&self, response: PeekResponseUnary) {
         // TODO(benesch): the lack of backpressure here can result in
         // unbounded memory usage.
         let _ = self.channel.send(response);
     }
 }
 
-/// The reason for removing an [`ActiveComputeSink`].
-#[derive(Debug, Clone)]
-pub enum ComputeSinkRemovalReason {
-    /// The compute sink completed successfully.
-    Finished,
-    /// The compute sink was canceled due to a user request.
-    Canceled,
-    /// The compute sink was forcibly terminated because an object it depended on
-    /// was dropped.
-    DependencyDropped(String),
-}
-
-/// A description of an active copy to from coord's perspective.
+/// A description of an active copy to sink from the coordinator's perspective.
 #[derive(Debug)]
 pub struct ActiveCopyTo {
-    /// The context about the COPY TO statement getting executed.
-    /// Used to eventually call `ctx.retire` on.
+    /// The execution context for the `COPY ... TO` statement that created the
+    /// copy to sink.
     pub ctx: ExecuteContext,
-    /// The cluster that the copy to is running on.
+    /// The ID of the cluster on which the copy to is running.
     pub cluster_id: ClusterId,
-    /// All `GlobalId`s that the copy to's expression depends on.
+    /// The IDs of the objects on which the copy to depends.
     pub depends_on: BTreeSet<GlobalId>,
 }
 
 impl ActiveCopyTo {
-    pub(crate) fn process_response(self, response: Result<ExecuteResponse, AdapterError>) {
+    /// Retires the copy to with a response from the controller.
+    ///
+    /// Unlike subscribes, copy tos only expect a single response from the
+    /// controller, so `process_response` and `retire` are unified into a single
+    /// operation.
+    ///
+    /// Either this method or `retire` must be called on every copy to before it
+    /// is dropped.
+    pub fn retire_with_response(self, response: Result<u64, anyhow::Error>) {
+        let response = match response {
+            Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
+            Err(error) => Err(AdapterError::Unstructured(error)),
+        };
         let _ = self.ctx.retire(response);
+    }
+
+    /// Retires the copy to with the specified reason.
+    ///
+    /// Either this method or `retire_with_response` must be called on every
+    /// copy to before it is dropped.
+    pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
+        let message = match reason {
+            ActiveComputeSinkRetireReason::Finished => return,
+            ActiveComputeSinkRetireReason::Canceled => Err(AdapterError::Canceled),
+            ActiveComputeSinkRetireReason::DependencyDropped(d) => Err(AdapterError::Unstructured(
+                anyhow!("copy has been terminated because underlying {d} was dropped"),
+            )),
+        };
+        let _ = self.ctx.retire(message);
     }
 }
