@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro create_deployment_environment() %}
+{% macro create_deployment_environment(ignore_existing_objects=False) %}
 
 {% set current_target_name = target.name %}
 {% set deployment = var('deployment') %}
@@ -47,16 +47,34 @@
     {% if schema_exists(schema.prod_deploy) %}
         {{ log("Deployment schema " ~ schema.prod_deploy ~ " already exists", info=True)}}
         {% set schema_empty %}
-            SELECT *
+            SELECT count(*)
             FROM mz_objects
-           JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
+            JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
+            JOIN mz_databases ON mz_databases.id = mz_schemas.database_id
             WHERE mz_schemas.name = lower(trim('{{ schema.prod_deploy }}'))
                 AND mz_objects.id LIKE 'u%'
+                AND mz_databases.name = current_database()
         {% endset %}
 
-        {% if run_query(schema_empty)|length > 0 %}
-            {{ log("[Warning] Deployment schema " ~ schema.prod_deploy ~ " is not empty", info=True) }}
-            {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
+        {% set schema_object_count = run_query(schema_empty) %}
+        {% if execute %}
+            {% if schema_object_count and schema_object_count.columns[0] and schema_object_count.rows[0][0] > 0 %}
+                {% if ignore_existing_objects %}
+                    {{ log("[Warning] Deployment schema " ~ schema.prod_deploy ~ " is not empty", info=True) }}
+                    {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
+                {% else %}
+                    {{ exceptions.raise_compiler_error("""
+                        Deployment schema """ ~ schema.prod_deploy ~ """ already exists and is not empty.
+                        This is potentially dangerous as you may end up deploying objects to production you
+                        do not intend.
+
+                        If you are certain the objects in this schema are supposed to exist, you can ignore this
+                        error by setting ignore_existing_objects to True.
+
+                        dbt run-operation create_deployment_environment --args '{ignore_existing_objects: True}'
+                    """) }}
+                {% endif %}
+            {% endif %}
         {% endif %}
 
     {% else %}
@@ -100,14 +118,31 @@
                 WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
             )
 
-            SELECT *
+            SELECT count(*)
             FROM dataflows
             WHERE id LIKE 'u%'
         {% endset %}
 
-        {% if run_query(cluster_empty)|length > 0 %}
-            {{ log("[Warning] Deployment cluster " ~ cluster.prod_deploy ~ " is not empty", info=True) }}
-            {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
+
+        {% set cluster_object_count = run_query(cluster_empty) %}
+        {% if execute %}
+            {% if cluster_object_count and cluster_object_count.columns[0] and cluster_object_count.rows[0][0] > 0 %}
+                {% if ignore_existing_objects %}
+                    {{ log("[Warning] Deployment cluster " ~ cluster.prod_deploy ~ " is not empty", info=True) }}
+                    {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
+                {% else %}
+                    {{ exceptions.raise_compiler_error("""
+                        Deployment cluster """ ~ cluster.prod_deploy ~ """ already exists and is not empty.
+                        This is potentially dangerous as you may end up deploying objects to production you
+                        do not intend.
+
+                        If you are certain the objects in this cluster are supposed to exist, you can ignore this
+                        error by setting ignore_existing_objects to True.
+
+                        dbt run-operation create_deployment_environment --args '{ignore_existing_objects: True}'
+                    """) }}
+                {% endif %}
+            {% endif %}
         {% endif %}
 
     {% else %}
@@ -119,23 +154,26 @@
         {% endset %}
 
         {% set cluster_config_results = run_query(cluster_configuration) %}
-        {% set results = cluster_config_results.rows[0] %}
 
-        {% set managed = results[0] %}
-        {% set size = results[1] %}
-        {% set replication_factor = results[2] %}
+        {% if execute %}
+            {% set results = cluster_config_results.rows[0] %}
 
-        {% if not managed %}
-            {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " is not managed") }}
+            {% set managed = results[0] %}
+            {% set size = results[1] %}
+            {% set replication_factor = results[2] %}
+
+            {% if not managed %}
+                {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " is not managed") }}
+            {% endif %}
+
+            {% set create_cluster %}
+                CREATE CLUSTER {{ cluster.prod_deploy }} (
+                    SIZE = '{{ size }}',
+                    REPLICATION FACTOR = {{ replication_factor }}
+                );
+            {% endset %}
+            {{ run_query(create_cluster) }}
         {% endif %}
-
-        {% set create_cluster %}
-            CREATE CLUSTER {{ cluster.prod_deploy }} (
-                SIZE = '{{ size }}',
-                REPLICATION FACTOR = {{ replication_factor }}
-            );
-        {% endset %}
-        {{ run_query(create_cluster) }}
     {% endif %}
 {% endfor %}
 {% endmacro %}

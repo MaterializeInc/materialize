@@ -34,10 +34,12 @@
 
 {% set results = run_query(query) %}
 
-{% if results|length > 0 %}
-    {{ return(true) }}
-{% else %}
-    {{ return(false) }}
+{% if execute %}
+    {% if results|length > 0 %}
+        {{ return(true) }}
+    {% else %}
+        {{ return(false) }}
+    {% endif %}
 {% endif %}
 {% endmacro %}
 
@@ -59,9 +61,11 @@
 
 {% set results = run_query(query) %}
 
-{% if results|length > 0 %}
-    {{ return(true) }}
-{% else %}
-    {{ return(false) }}
+{% if execute %}
+    {% if results|length > 0 %}
+        {{ return(true) }}
+    {% else %}
+        {{ return(false) }}
+    {% endif %}
 {% endif %}
 {% endmacro %}

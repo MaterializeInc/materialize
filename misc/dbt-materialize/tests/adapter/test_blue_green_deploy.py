@@ -43,6 +43,13 @@ class TestTargetDeploy:
     def project_config_update(self):
         return project_deployment_configuration
 
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS blue CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS green CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS blue CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS green CASCADE")
+
     def test_dbt_deploy(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE CLUSTER green SIZE = '1'")
@@ -81,11 +88,6 @@ class TestTargetDeploy:
         assert before_clusters["green"] == after_clusters["blue"]
         assert before_schemas["blue"] == after_schemas["green"]
         assert before_schemas["blue"] == after_schemas["green"]
-
-        project.run_sql("DROP CLUSTER blue")
-        project.run_sql("DROP CLUSTER green")
-        project.run_sql("DROP SCHEMA blue")
-        project.run_sql("DROP SCHEMA green")
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
@@ -126,21 +128,12 @@ class TestTargetDeploy:
         assert before_schemas["blue"] == after_schemas["green"]
         assert before_schemas["blue"] == after_schemas["green"]
 
-        project.run_sql("DROP CLUSTER blue")
-        project.run_sql("DROP CLUSTER green")
-        project.run_sql("DROP SCHEMA blue")
-        project.run_sql("DROP SCHEMA green")
-
     def test_dbt_deploy_missing_deployment_cluster(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
         project.run_sql("CREATE SCHEMA green")
 
         run_dbt(["run-operation", "deploy"], expect_pass=False)
-
-        project.run_sql("DROP CLUSTER blue")
-        project.run_sql("DROP SCHEMA blue")
-        project.run_sql("DROP SCHEMA green")
 
     def test_dbt_deploy_missing_deployment_schema(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
@@ -149,18 +142,11 @@ class TestTargetDeploy:
 
         run_dbt(["run-operation", "deploy"], expect_pass=False)
 
-        project.run_sql("DROP CLUSTER blue")
-        project.run_sql("DROP CLUSTER green")
-        project.run_sql("DROP SCHEMA blue")
-
     def test_fails_on_unmanaged_cluster(self, project):
         project.run_sql("CREATE CLUSTER blue REPLICAS ()")
         project.run_sql("CREATE SCHEMA blue")
 
         run_dbt(["run-operation", "create_deployment_environment"], expect_pass=False)
-
-        project.run_sql("DROP CLUSTER blue")
-        project.run_sql("DROP SCHEMA blue")
 
     def test_dbt_create_and_destroy_deployment_environment(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
@@ -193,5 +179,38 @@ class TestTargetDeploy:
         )
         assert bool(result[0])
 
-        project.run_sql("DROP CLUSTER blue")
-        project.run_sql("DROP SCHEMA blue")
+    def test_cluster_contains_objects(self, project):
+        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
+        project.run_sql("CREATE SCHEMA blue")
+        project.run_sql("CREATE SCHEMA green")
+        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+
+        project.run_sql("CREATE MATERIALIZED VIEW mv IN CLUSTER green AS SELECT 1")
+
+        run_dbt(["run-operation", "create_deployment_environment"], expect_pass=False)
+        run_dbt(
+            [
+                "run-operation",
+                "create_deployment_environment",
+                "--args",
+                "{ignore_existing_objects: True}",
+            ]
+        )
+
+    def test_schema_contains_objects(self, project):
+        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
+        project.run_sql("CREATE SCHEMA blue")
+        project.run_sql("CREATE SCHEMA green")
+        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+
+        project.run_sql("CREATE VIEW green.view AS SELECT 1")
+
+        run_dbt(["run-operation", "create_deployment_environment"], expect_pass=False)
+        run_dbt(
+            [
+                "run-operation",
+                "create_deployment_environment",
+                "--args",
+                "{ignore_existing_objects: True}",
+            ]
+        )
