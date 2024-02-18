@@ -16,8 +16,7 @@ mod metrics;
 use std::path::PathBuf;
 
 pub use auth::{
-    Authentication, AuthenticationConfig, Claims, ExchangePasswordForTokenResponse,
-    ValidatedApiTokenResponse, REFRESH_SUFFIX,
+    Authentication, AuthenticationConfig, Claims, ExchangePasswordForTokenResponse, REFRESH_SUFFIX,
 };
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse, RefreshToken};
 pub use client::Client;

@@ -299,23 +299,6 @@ impl Authentication {
         Ok(result)
     }
 
-    /// Validates an API token response, returning a validated response
-    /// containing the validated claims.
-    ///
-    /// Like [`Authentication::validate_access_token`], but operates on an
-    /// [`ApiTokenResponse`] rather than a raw access token.
-    pub fn validate_api_token_response(
-        &self,
-        response: ApiTokenResponse,
-        expected_email: Option<&str>,
-    ) -> Result<ValidatedApiTokenResponse, Error> {
-        let claims = self.validate_access_token(&response.access_token, expected_email)?;
-        Ok(ValidatedApiTokenResponse {
-            claims,
-            refresh_token: response.refresh_token,
-        })
-    }
-
     /// Validates an access token, returning the validated claims.
     ///
     /// The following validations are always performed:
@@ -531,15 +514,6 @@ fn continuously_refresh(
     });
 
     id
-}
-
-/// An [`ApiTokenResponse`] that has been validated by
-/// [`Authentication::validate_api_token_response`].
-pub struct ValidatedApiTokenResponse {
-    /// The validated claims.
-    pub claims: ValidatedClaims,
-    /// The refresh token from the API response.
-    pub refresh_token: String,
 }
 
 // TODO: Do we care about the sub? Do we need to validate the sub or other
