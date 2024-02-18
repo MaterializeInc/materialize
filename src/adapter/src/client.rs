@@ -32,7 +32,7 @@ use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
-use mz_sql::session::user::{User, SUPPORT_USER};
+use mz_sql::session::user::SUPPORT_USER;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::StatementKind;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
@@ -50,7 +50,9 @@ use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::optimize::{self, Optimize};
-use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
+use crate::session::{
+    EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
+};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
@@ -137,11 +139,11 @@ impl Client {
     /// Creates a new session associated with this client for the given user.
     ///
     /// It is the caller's responsibility to have authenticated the user.
-    pub fn new_session(&self, conn_id: ConnectionId, user: User) -> Session {
+    pub fn new_session(&self, config: SessionConfig) -> Session {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
-        Session::new(self.build_info, conn_id, user)
+        Session::new(self.build_info, config)
     }
 
     /// Upgrades this client to a session client.
@@ -267,7 +269,11 @@ Issue a SQL query to get started. Need help?
     pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
-        let session = self.new_session(conn_id, SUPPORT_USER.clone());
+        let session = self.new_session(SessionConfig {
+            conn_id,
+            user: SUPPORT_USER.name.clone(),
+            external_metadata_rx: None,
+        });
         let mut session_client = self.startup(session).await?;
 
         // Parse the SQL statement.

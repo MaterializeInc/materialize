@@ -109,15 +109,23 @@ where
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
 }
 
+/// Configures a new [`Session`].
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    /// The connection ID for the session.
+    pub conn_id: ConnectionId,
+    /// The name of the user associated with the session.
+    pub user: String,
+    /// An optional receiver that the session will periodically check for
+    /// updates to a user's external metadata.
+    pub external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
+}
+
 impl<T: TimestampManipulation> Session<T> {
     /// Creates a new session for the specified connection ID.
-    pub(crate) fn new(
-        build_info: &'static BuildInfo,
-        conn_id: ConnectionId,
-        user: User,
-    ) -> Session<T> {
-        assert_ne!(conn_id, DUMMY_CONNECTION_ID);
-        Self::new_internal(build_info, conn_id, user)
+    pub(crate) fn new(build_info: &'static BuildInfo, config: SessionConfig) -> Session<T> {
+        assert_ne!(config.conn_id, DUMMY_CONNECTION_ID);
+        Self::new_internal(build_info, config)
     }
 
     /// Creates new statement logging metadata for a one-off
@@ -165,19 +173,34 @@ impl<T: TimestampManipulation> Session<T> {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session<T> {
-        let mut dummy =
-            Self::new_internal(&DUMMY_BUILD_INFO, DUMMY_CONNECTION_ID, SYSTEM_USER.clone());
+        let mut dummy = Self::new_internal(
+            &DUMMY_BUILD_INFO,
+            SessionConfig {
+                conn_id: DUMMY_CONNECTION_ID,
+                user: SYSTEM_USER.name.clone(),
+                external_metadata_rx: None,
+            },
+        );
         dummy.initialize_role_metadata(RoleId::User(0));
         dummy
     }
 
     fn new_internal(
         build_info: &'static BuildInfo,
-        conn_id: ConnectionId,
-        user: User,
+        SessionConfig {
+            conn_id,
+            user,
+            mut external_metadata_rx,
+        }: SessionConfig,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
-        let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user.name);
+        let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user);
+        let user = User {
+            name: user,
+            external_metadata: external_metadata_rx
+                .as_mut()
+                .map(|rx| rx.borrow_and_update().clone()),
+        };
         let mut vars = SessionVars::new_unchecked(build_info, user);
         if let Some(default_cluster) = default_cluster {
             vars.set_cluster(default_cluster.clone());
@@ -195,7 +218,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_rx,
             next_transaction_id: 0,
             secret_key: rand::thread_rng().gen(),
-            external_metadata_rx: None,
+            external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
         }
@@ -713,21 +736,6 @@ impl<T: TimestampManipulation> Session<T> {
     /// Returns whether the current session is a superuser.
     pub fn is_superuser(&self) -> bool {
         self.vars.is_superuser()
-    }
-
-    /// Register a receiver which pushes updates of [`ExternalUserMetadata`]. Errors if a receiver
-    /// was already registered.
-    pub fn register_external_metadata_transmitter(
-        &mut self,
-        rx: tokio::sync::watch::Receiver<ExternalUserMetadata>,
-    ) -> Result<(), ()> {
-        match self.external_metadata_rx {
-            Some(_) => Err(()),
-            None => {
-                self.external_metadata_rx = Some(rx);
-                Ok(())
-            }
-        }
     }
 
     /// Drains any external metadata updates and applies the changes from the latest update.

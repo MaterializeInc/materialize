@@ -88,11 +88,6 @@ impl User {
         self == &*SYSTEM_USER
     }
 
-    /// Returns whether we should limit this user's connections to max_connections
-    pub fn limit_max_connections(&self) -> bool {
-        !self.is_internal() && !self.is_external_admin()
-    }
-
     /// Returns the kind of user this is.
     pub fn kind(&self) -> UserKind {
         if self.is_external_admin() || self.is_system_user() {

@@ -104,7 +104,7 @@ use serde::Serialize;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
-use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};
+use crate::session::user::{User, INTERNAL_USER_NAMES, SUPPORT_USER, SYSTEM_USER};
 use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
 
 /// The action to take during end_transaction.
@@ -2733,10 +2733,10 @@ impl Drop for DropConnection {
 
 impl DropConnection {
     pub fn new_connection(
-        user: &User,
+        user: &str,
         active_connection_count: Arc<Mutex<ConnectionCounter>>,
     ) -> Result<Option<Self>, ConnectionError> {
-        Ok(if user.limit_max_connections() {
+        if !INTERNAL_USER_NAMES.contains(user) {
             {
                 let mut connections = active_connection_count.lock().expect("lock poisoned");
                 if connections.current >= connections.limit {
@@ -2747,12 +2747,12 @@ impl DropConnection {
                 }
                 connections.current += 1;
             }
-            Some(DropConnection {
+            Ok(Some(DropConnection {
                 active_connection_count,
-            })
+            }))
         } else {
-            None
-        })
+            Ok(None)
+        }
     }
 }
 
