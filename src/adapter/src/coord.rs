@@ -2497,10 +2497,13 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
                     timer = idle_rx.recv() => {
                         timer.expect("does not drop").observe_duration();
+                        self.metrics.messages_processed.inc();
+                        self.metrics.watchdog_messages_processed.inc();
                         continue;
                     }
                 };
 
+                self.metrics.messages_processed.inc();
                 // All message processing functions trace. Start a parent span
                 // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
