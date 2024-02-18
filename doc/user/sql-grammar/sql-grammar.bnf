@@ -116,6 +116,8 @@ create_connection_ssh_tunnel ::=
 create_connection_kafka_brokers ::= 'BROKERS' '(' kafka_broker (',' kafka_broker)* ')'
 create_connection_kafka_broker_aws_privatelink ::=
   "'host:port'" 'USING' 'AWS' 'PRIVATELINK' aws_connection ( '(' broker_option (',' broker_option)* ')' )?
+create_connection_kafka_default_aws_privatelink ::=
+  'AWS' 'PRIVATELINK' aws_connection ( '(' 'PORT' port ')' )?
 create_connection_kafka_broker_ssh_tunnel ::=
   "'host:port'" 'USING' 'SSH' 'TUNNEL' ssh_connection
 validate_connection ::=
