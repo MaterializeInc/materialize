@@ -24,7 +24,6 @@ use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::plan::SubscribeOutput;
-use mz_sql::session::user::User;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 
@@ -54,14 +53,6 @@ impl ActiveComputeSink {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.conn_id,
             ActiveComputeSink::CopyTo(copy_to) => copy_to.ctx.session().conn_id(),
-        }
-    }
-
-    /// Reports the user that created the sink.
-    pub fn user(&self) -> &User {
-        match &self {
-            ActiveComputeSink::Subscribe(subscribe) => &subscribe.user,
-            ActiveComputeSink::CopyTo(copy_to) => copy_to.ctx.session().user(),
         }
     }
 
@@ -101,10 +92,12 @@ pub enum ActiveComputeSinkRetireReason {
 /// A description of an active subscribe from coord's perspective
 #[derive(Debug)]
 pub struct ActiveSubscribe {
-    /// The user that created the subscribe.
-    pub user: User,
     /// The ID of the connection which created the subscribe.
     pub conn_id: ConnectionId,
+    /// The ID of the cluster on which the subscribe is running.
+    pub cluster_id: ClusterId,
+    /// The IDs of the objects on which the subscribe depends.
+    pub depends_on: BTreeSet<GlobalId>,
     /// Channel on which to send responses to the client.
     // The responses have the form `PeekResponseUnary` but should perhaps
     // become `SubscribeResponse`.
@@ -115,10 +108,6 @@ pub struct ActiveSubscribe {
     pub as_of: Timestamp,
     /// The number of columns in the relation that was subscribed to.
     pub arity: usize,
-    /// The ID of the cluster on which the subscribe is running.
-    pub cluster_id: ClusterId,
-    /// The IDs of the objects on which the subscribe depends.
-    pub depends_on: BTreeSet<GlobalId>,
     /// The time when the subscribe started.
     pub start_time: EpochMillis,
     /// How to present the subscribe's output.

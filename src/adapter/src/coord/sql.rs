@@ -218,7 +218,8 @@ impl Coordinator {
         id: GlobalId,
         active_sink: ActiveComputeSink,
     ) -> BuiltinTableAppendNotify {
-        let session_type = metrics::session_type_label_value(active_sink.user());
+        let user = self.active_conns()[active_sink.connection_id()].user();
+        let session_type = metrics::session_type_label_value(user);
 
         self.active_conns
             .get_mut(active_sink.connection_id())
@@ -263,7 +264,8 @@ impl Coordinator {
         id: GlobalId,
     ) -> Option<ActiveComputeSink> {
         if let Some(sink) = self.active_compute_sinks.remove(&id) {
-            let session_type = metrics::session_type_label_value(sink.user());
+            let user = self.active_conns()[sink.connection_id()].user();
+            let session_type = metrics::session_type_label_value(user);
 
             self.active_conns
                 .get_mut(sink.connection_id())

@@ -291,7 +291,6 @@ impl Coordinator {
 
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
-            user: ctx.session().user().clone(),
             conn_id: ctx.session().conn_id().clone(),
             channel: tx,
             emit_progress,
