@@ -1188,9 +1188,18 @@ where
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
     ) -> Result<(), ReadPolicyError> {
+        // Do error checking upfront, to avoid introducing inconsistencies between a collection's
+        // `implied_capability` and `read_capabilities`.
+        for (id, _policy) in &policies {
+            let collection = self.compute.collection(*id)?;
+            if collection.read_policy.is_none() {
+                return Err(ReadPolicyError::WriteOnlyCollection(*id));
+            }
+        }
+
         let mut read_capability_changes = BTreeMap::default();
-        for (id, new_policy) in policies.into_iter() {
-            let collection = self.compute.collection_mut(id)?;
+        for (id, new_policy) in policies {
+            let collection = self.compute.expect_collection_mut(id);
 
             let old_capability = &collection.implied_capability;
             let new_capability = new_policy.frontier(collection.write_frontier.borrow());
@@ -1203,11 +1212,7 @@ where
                 collection.implied_capability = new_capability;
             }
 
-            if let Some(read_policy) = &mut collection.read_policy {
-                *read_policy = new_policy;
-            } else {
-                return Err(ReadPolicyError::WriteOnlyCollection(id));
-            }
+            collection.read_policy = Some(new_policy);
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(read_capability_changes);
