@@ -190,7 +190,7 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 | `SSL CERTIFICATE`                         | secret or `text` | Your TLS certificate in PEM format for SSL client authentication. If unspecified, no client authentication is performed.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
 | `SSL KEY`                                 | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid when `SSL CERTIFICATE` is specified.
 | `SSH TUNNEL`                              | object name      | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
-| `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network all broker should be routed. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
+| `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) to route network traffic through. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
 | `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
 
 #### `WITH` options {#kafka-with-options}
@@ -314,7 +314,11 @@ connection through an AWS PrivateLink service or an SSH bastion host.
 
 {{< public-preview />}}
 
-##### Broker Syntax {#kafka-privatelink-syntax}
+Depending on the hosted service you are connecting to, you might need to specify
+a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax)
+(e.g. Amazon MSK), or a single [default PrivateLink connection](#kafka-privatelink-default) (e.g. Redpanda Cloud).
+
+##### Broker connection syntax {#kafka-privatelink-syntax}
 
 {{< warning >}}
 If your Kafka cluster advertises brokers that are not specified
@@ -337,7 +341,7 @@ broker via an AWS PrivateLink service. Brokers do not need to be configured the
 same way, but the clause must be individually attached to each broker that you
 want to connect to via the tunnel.
 
-##### Broker Connection options {#kafka-privatelink-options}
+##### Broker connection options {#kafka-privatelink-options}
 
 Field                                   | Value            | Required | Description
 ----------------------------------------|------------------|:--------:|-------------------------------
@@ -373,15 +377,19 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-##### Red Panda Connections
-When making a connection to Red Panda via privatelink it is not required to specify each broker.
-Instead, you may specify a privatelink connection and the port of the bootstrap server.
+##### Default connections {#kafka-privatelink-default}
 
-##### Connection Syntax {#kafka-privatelink-default-syntax}
+{{< private-preview />}}
+
+Some hosted services (like [Redpanda Cloud](/ingest-data/redpanda-cloud/)) do
+not require listing every broker individually. For such cases, you should
+specify a PrivateLink connection and the port of the bootstrap server instead.
+
+##### Default connection syntax {#kafka-privatelink-default-syntax}
 
 {{< diagram "create-connection-kafka-default-aws-privatelink.svg" >}}
 
-##### Default Connection options {#kafka-privatelink-default-options}
+##### Default connection options {#kafka-privatelink-default-options}
 
 Field                                   | Value            | Required | Description
 ----------------------------------------|------------------|:--------:|-------------------------------
@@ -408,10 +416,6 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 For step-by-step instructions on creating AWS PrivateLink connections and
 configuring an AWS PrivateLink service to accept connections from Materialize,
 check [this guide](/ops/network-security/privatelink/).
-
-{< /tabs >}}
-
-
 
 {{< /tab >}}
 {{< tab "SSH tunnel">}}

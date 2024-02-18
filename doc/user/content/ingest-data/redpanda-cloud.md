@@ -11,129 +11,167 @@ menu:
 ---
 
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
-with the Postgres ones. We should include spill to disk in the guidance then."
+with the Postgres ones."
 
-This guide goes through the required steps to connect Materialize to a Redpanda Cloud cluster.
+This guide goes through the required steps to connect Materialize to a Redpanda
+Cloud cluster. If you already have a Redpanda Cloud cluster up and running,
+skip straight to [Step 4. Download Redpanda Broker CA certificate](#step-4-download-the-broker-ca-certificate).
 
-If you already have a Redpanda Cloud cluster, you can skip steps 1 and 2 and directly move on to [Download Redpanda Broker CA certificate](#download-the-redpanda-broker-ca-certificate). You can also skip step 4 if you already have a Redpanda Cloud cluster up and running, and have created a topic that you want to create a source for.
+## Step 1. Create a Redpanda Cloud cluster
 
-The process to connect Materialize to Redpanda Cloud consists of the following steps:
-1. #### Create a Redpanda Cloud cluster
-    If you already have a Redpanda Cloud cluster set up, then you can skip this step.
+{{< note >}}
+Once created, provisioning a Redpanda Cloud cluster can take up to 15 minutes.
+{{</ note >}}
 
-    a. Sign in to the [Redpanda Cloud console](https://vectorized.cloud/)
+1. Sign in to the [Redpanda Cloud console](https://vectorized.cloud/).
 
-    b. Choose **Add cluster**
+1. Choose **Add cluster**.
 
-    c. Enter a cluster name, and specify the rest of the settings based on your needs
+1. Enter a cluster name, and specify the rest of the settings based on your
+needs.
 
-    d. Choose **Create cluster**
+1. Choose **Create cluster**.
 
-    **Note:** This creation can take about 15 minutes.
+## Step 2. Create a service account
 
-2. #### Create a Service Account
-    ##### Service Account
-    a. Navigate to the [Redpanda Cloud console](https://vectorized.cloud/)
+1. Navigate to the [Redpanda Cloud console](https://vectorized.cloud/).
 
-    b. Choose the Redpanda cluster you just created in Step 1
+1. Choose the Redpanda cluster you created in **Step 1**.
 
-    c. Click on the **Security** tab
+1. Click on the **Security** tab.
 
-    d. In the **Security** section, choose **Add service account**
+1. In the **Security** section, choose **Add service account**.
 
-    e. Specify a name for the service account and click **Create**
+1. Specify a name for the service account and click **Create**.
 
-    Take note of the name of the service account you just created, as well as the service account secret key; you'll need them later on. Keep in mind that the service account secret key contains sensitive information, and you should store it somewhere safe!
+Take note of the name of the service account you just created, as well as
+the service account secret key; you'll need them later on. Keep in mind
+that the service account secret key contains sensitive information, and you
+should store it somewhere safe!
 
-    ##### Create an Access Control List (ACL)
-    a. Next, while you're at the **Security** section, click on the **ACL** tab
+## Step 3. Create an Access Control List
 
-    b. Click **Add ACL**
+1. Next, still in the **Security** section, click on the **ACL** tab.
 
-    c. Choose the **Service Account** that you've just created
+1. Click **Add ACL**,
 
-    d. Choose the **Read** and **Write** permissions for the **Topics** section
+1. Choose the **Service Account** you just created.
 
-    e. You can grant access on a per-topic basis, but you can also choose to grant access to all topics by adding a `*` in the **Topics ID** input field.
+1. Choose the **Read** and **Write** permissions for the **Topics** section.
 
-    f. Click on **Create**
+1. You can grant access on a per-topic basis, but you can also choose to grant
+access to all topics by adding a `*` in the **Topics ID** input field.
 
-3. #### Download the Redpanda Broker CA certificate
-    a. Go to the [Redpanda Cloud console](https://vectorized.cloud/)
+1. Click **Create**.
 
-    b. Click on the **Overview** tab
+## Step 4. Download the broker CA certificate
 
-    c. Click on the **Download** button next to the **Kafka API TLS**
+1. Go to the [Redpanda Cloud console](https://vectorized.cloud/).
 
-    d. You'll need to `base64`-encode the certificate, and store it somewhere safe; you'll need this to securely connect to Materialize.
+1. Click on the **Overview** tab.
 
+1. Click on the **Download** button next to the **Kafka API TLS**.
 
-    One way of doing this is to open up a terminal and run the following command:
-    ```shell
+1. You'll need to `base64`-encode the certificate. One way to do this is to open
+up a terminal and run the following command:
+
+    ```bash
     cat <redpanda-broker-ca>.crt | base64
     ```
 
-4. #### Create a topic
-    To start using Materialize with Redpanda, you need to point it to an existing Redpanda topic you want to read data from.
+    Store the encoded certificate somewhere safe; you'll need it to securely
+    connect to Materialize.
 
-    If you already have a topic created, you can skip this step.
+## Step 5. Create a topic
 
-    Otherwise, you can install Redpanda on your client machine from the previous step and create a topic. You can find more information about how to do that [here](https://docs.redpanda.com/docs/reference/rpk-commands/#rpk-topic-create).
+To start using Materialize with Redpanda, you need to point it to an existing
+Redpanda topic you want to read data from. If the topic you want to ingest
+already exists, you can skip this step.
 
+Otherwise, you can install Redpanda Keeper (aka `rpk`) on the client machine
+from the previous step to create a topic. For guidance on how to use `rpk`,
+check the [Redpanda documentation](https://docs.redpanda.com/docs/reference/rpk-commands/#rpk-topic-create).
 
-5. #### Create a source in Materialize
-    a. Open the [Redpanda Cloud console](https://vectorized.cloud/) and select your cluster
+## Step 6. Start ingesting data
 
-    b. Click on **Overview**
+Now that you’ve configured your Redpanda cluster, you can start ingesting data
+into Materialize. The exact steps depend on your networking configuration, so
+start by selecting the relevant option.
 
-    c. Copy the URL under **Cluster hosts**. This will be your `<broker-url>` going forward
+{{< tabs >}}
+{{< tab "Public cluster">}}
 
-    d. From the _psql_ terminal, run the following command. Replace `<redpanda_cloud>` with whatever you want to name your source. The broker URL is what you copied in step c of this subsection. The `<topic-name>` is the name of the topic you created in Step 4. The `<your-username>` and `<your-password>` are from the _Create a Service Account_ step.
+1. Open the [Redpanda Cloud console](https://vectorized.cloud/) and select your cluster.
+
+1. Click on **Overview**
+
+1. Copy the URL under **Cluster hosts**. This will be your
+`<redpanda-broker-url>` going forward.
+
+1. [In the Materialize SQL shell](https://console.materialize.com/), or your
+preferred SQL client, create a connection with your Redpanda Cloud cluster
+access and authentication details using the [`CREATE CONNECTION`](/sql/create-connection/)
+command:
 
     ```sql
+      -- The credentials of your service account.
       CREATE SECRET redpanda_username AS '<your-username>';
       CREATE SECRET redpanda_password AS '<your-password>';
-      CREATE SECRET redpanda_ca_cert AS  decode('<redpanda-broker-ca-cert>', 'base64'); -- The base64 encoded certificate
+      -- The base64 encoded certificate from Step 4.
+      CREATE SECRET redpanda_ca_cert AS  decode('<redpanda-broker-ca-cert>', 'base64');
 
-      CREATE CONNECTION <redpanda_cloud> TO KAFKA (
+      CREATE CONNECTION rp_connection TO KAFKA (
           BROKER '<redpanda-broker-url>',
           SASL MECHANISMS = 'SCRAM-SHA-256',
           SASL USERNAME = SECRET redpanda_username,
           SASL PASSWORD = SECRET redpanda_password,
           SSL CERTIFICATE AUTHORITY = SECRET redpanda_ca_cert
       );
-
-      CREATE SOURCE <topic-name>
-        FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
-        FORMAT JSON;
     ```
 
-    e. If the command executes without an error and outputs _CREATE SOURCE_, it
+1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
+to your Redpanda Cloud cluster and start ingesting data from your target
+topic:
+
+    ```sql
+    CREATE SOURCE rp_source
+      -- The topic you want to read from.
+      FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
+      FORMAT JSON;
+    ```
+
+    If the command executes without an error and outputs _CREATE SOURCE_, it
     means that you have successfully connected Materialize to your Redpanda
     cluster.
 
-    **Note:** The example above walked through creating a source, which is a way
-    of connecting Materialize to an external data source. We created a
-    connection to Redpanda Cloud using SASL authentication and credentials
-    securely stored as secrets in Materialize's secret management system. For
-    input formats, we used `JSON`, but you can also ingest Kafka messages
-    formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
-    You can find more details about the various different supported formats and
-    possible configurations in the [reference documentation](/sql/create-source/kafka/).
+This example walked through creating a source, which is a way of connecting
+Materialize to an external data source. We created a connection to Redpanda
+Cloud using SASL authentication and credentials securely stored as secrets in
+Materialize's secret management system. For input formats, we used `JSON`, but
+you can also ingest Kafka messages formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
+You can find more details about the various different supported formats and
+possible configurations in the [reference documentation](/sql/create-source/kafka/).
 
-6. #### Connecting via AWS Privatelink
-    It is also possible to connect Redpanda and Materialize via AWS Privatelink.
-    This requires that you are using Redpanda Cloud, have deployed Redpanda in an region
-    supported by Materialize, and have the AWS Privatelink feature enabled on your
-    Redpanda cloud account.
+{{< /tab >}}
 
-    The following is an example of this setup in AWS us-east-1:
+{{< tab "Use AWS PrivateLink">}}
 
-    a. Alter your Redpanda cluster to enable privatelink with an empty `allowed_principals` field
-     using the following script template. Be sure to record the privatelink service name.
-    **Note:** This creation can take about 15 minutes. You can re-run this script, or just the GET request, periodically until it resolves.
+{{< private-preview />}}
 
-    Example script:
+[AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
+Materialize to your Redpanda Cloud instance without exposing traffic to the
+public internet. To use AWS PrivateLink, your Redpanda cluster must be deployed
+in a region supported by Materialize: `us-east-1`,`us-west-2`, or `eu-west-1`.
+
+1. **Enable PrivateLink in your Redpanda Cloud cluster.**
+
+    Alter your cluster to enable PrivateLink with an empty `allowed_principals`
+    field using the template script below. Make sure to record the PrivateLink
+    service name.
+
+    **Note:** This can take up to 15 minutes. You can re-run the script (or just
+      the `GET` request) periodically until it resolves.
+
     ```bash
     PUBLIC_API_ENDPOINT="https://api.cloud.redpanda.com"
     REGION=US-EAST-1
@@ -176,9 +214,11 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
         '.private_link'
     ```
 
-    b. Create a Privatelink connection in Materialize using the service name
-    recorded above. Be sure to specify all availability zones of your
-    Redpanda Cloud cluster.
+1. [In the Materialize SQL shell](https://console.materialize.com/), or your
+preferred SQL client, create a [PrivateLink connection](/ingest-data/network-security/privatelink/)
+using the service name from the previous step. Be sure to specify **all
+availability zones** of your Redpanda Cloud cluster.
+
     ```sql
     CREATE CONNECTION rp_privatelink TO AWS PRIVATELINK (
       SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-abcdefghijk',
@@ -186,15 +226,26 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
     );
     ```
 
-    c. Find the connection ARN created by Materialize for the privatelink connection.
-    ```
+1. Retrieve the AWS principal for the AWS PrivateLink connection you just
+created:
+
+    ```sql
     SELECT principal
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
     WHERE c.name = 'rp_privatelink';
     ```
+    <p></p>
 
-    d. Patch your Redpanda cluster to allow the Materialize connection ARN.
+    ```
+       id   |                                 principal
+    --------+---------------------------------------------------------------------------
+     u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+    ```
+
+1. Patch your Redpanda Cloud cluster to accept connections from the AWS
+principal:
+
     ```bash
     PUBLIC_API_ENDPOINT="https://api.cloud.redpanda.com"
     REGION=US-EAST-1
@@ -230,32 +281,52 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
        -d "$CLUSTER_PATCH_BODY" \
        $PUBLIC_API_ENDPOINT/v1beta1/clusters/$CLUSTER_ID
     ```
-    e. Wait for the Materialize AWS Privatelink connection to become valid.
-    **Note:** This could take several minutes and may report errors like:
-    `Error: Endpoint cannot be discovered` while the policies are being updated
-    and the endpoint resources are being re-evaluated. If the validation errors persist
-    for longer than 10 minutes, double check the ARNs and service names and reach out
-    to Materialize Support.
+
+1. In Materialize, validate the AWS PrivateLink connection you created using the
+[`VALIDATE CONNECTION`](/sql/validate-connection) command:
+
     ```sql
     VALIDATE CONNECTION rp_privatelink;
     ```
-    f. Finally, using the Materialize AWS Privatelink connectiopn you created above,
-    create a kafka connection to Redpanda and a source for your topics.
+
+    If no validation error is returned, move to the next step.
+
+    This can take several minutes, and report errors like `Error: Endpoint cannot be
+    discovered` while the policies are being updated and the endpoint resources are
+    being re-evaluated. If the validation errors persist for longer than 10
+    minutes, double-check the ARNs and service names and [contact our team](https://materialize.com/docs/support/).
+
+1. Finally, create a connection to your Redpanda Cloud cluster using the AWS
+Privatelink connection you created earlier:
 
     ```sql
+    -- The credentials of your service account.
     CREATE SECRET redpanda_username AS '<your-username>';
     CREATE SECRET redpanda_password AS '<your-password>';
-    CREATE SECRET redpanda_ca_cert AS  decode('<redpanda-broker-ca-cert>', 'base64'); -- The base64 encoded certificate
+    -- The base64 encoded certificate from Step 4.
+    CREATE SECRET redpanda_ca_cert AS  decode('<redpanda-broker-ca-cert>', 'base64');
 
-    CREATE CONNECTION <redpanda_cloud> TO KAFKA (
-        AWS PRIVATELINK rp_privatleink (PORT 30292)
+    CREATE CONNECTION rp_connection TO KAFKA (
+        AWS PRIVATELINK rp_privatelink (PORT 30292)
         SASL MECHANISMS = 'SCRAM-SHA-256',
         SASL USERNAME = SECRET redpanda_username,
         SASL PASSWORD = SECRET redpanda_password,
         SSL CERTIFICATE AUTHORITY = SECRET redpanda_ca_cert
     );
 
-    CREATE SOURCE <topic-name>
+    CREATE SOURCE rp_source
+      -- The topic you want to read from.
       FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
       FORMAT JSON;
     ```
+
+This example walked through creating a source, which is a way of connecting
+Materialize to an external data source. We created a connection to Redpanda
+Cloud using AWS PrivateLink and credentials securely stored as secrets in
+Materialize's secret management system. For input formats, we used `JSON`, but
+you can also ingest Redpanda messages formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
+You can find more details about the various different supported formats and
+possible configurations in the [reference documentation](/sql/create-source/kafka/).
+
+{{< /tab >}}
+{{< /tabs >}}

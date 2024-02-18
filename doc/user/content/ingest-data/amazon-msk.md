@@ -65,7 +65,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< /tab >}}
 
-{{< tab "Public Cluster">}}
+{{< tab "Public cluster">}}
 
 This section goes through the required steps to connect Materialize to an Amazon MSK cluster, including some of the more complicated bits around configuring security settings in Amazon MSK.
 
