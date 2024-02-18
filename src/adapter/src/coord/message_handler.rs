@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
@@ -348,10 +349,9 @@ impl Coordinator {
                     Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
                         let finished = active_subscribe.process_response(response);
                         if finished {
-                            self.drop_compute_sinks_with_reason([(
-                                sink_id,
-                                ActiveComputeSinkRetireReason::Finished,
-                            )])
+                            self.retire_compute_sinks(btreemap! {
+                                sink_id => ActiveComputeSinkRetireReason::Finished,
+                            })
                             .await;
                         }
                     }
@@ -361,11 +361,9 @@ impl Coordinator {
                 }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
-                match self.remove_active_compute_sink(sink_id).await {
+                match self.drop_compute_sink(sink_id).await {
                     Some(ActiveComputeSink::CopyTo(active_copy_to)) => {
-                        let sink_and_cluster_id = (sink_id, active_copy_to.cluster_id);
                         active_copy_to.retire_with_response(response);
-                        self.drop_compute_sinks([sink_and_cluster_id]);
                     }
                     _ => {
                         tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");
