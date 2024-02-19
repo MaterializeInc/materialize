@@ -14,11 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
 use mz_repr::adt::system::Oid;
-use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    DeferredItemName, Ident, WithOptionValue,
+    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
+    WithOptionValue,
 };
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
@@ -155,23 +154,19 @@ pub(super) fn generate_text_columns(
     Ok(text_cols_dict)
 }
 
-pub(crate) fn generate_targeted_subsources<F>(
+pub(crate) fn generate_targeted_subsources(
     scx: &StatementContext,
     source_name: Option<ResolvedItemName>,
     validated_requested_subsources: Vec<RequestedSubsource<'_, PostgresTableDesc>>,
     mut text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
-    mut get_transient_subsource_id: F,
     publication_tables: &[PostgresTableDesc],
 ) -> Result<
     (
         Vec<CreateSourceSubsource<Aug>>,
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        Vec<CreateSubsourceStatement<Aug>>,
     ),
     PlanError,
->
-where
-    F: FnMut() -> u64,
-{
+> {
     let mut targeted_subsources = vec![];
     let mut subsources = vec![];
 
@@ -257,13 +252,10 @@ where
         }
 
         // Create the targeted AST node for the original CREATE SOURCE statement
-        let transient_id = GlobalId::Transient(get_transient_subsource_id());
-
-        let subsource = scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
 
         targeted_subsources.push(CreateSourceSubsource {
             reference: upstream_name.clone(),
-            subsource: Some(DeferredItemName::Named(subsource)),
+            subsource: None,
         });
 
         // Create the subsource statement
@@ -286,7 +278,7 @@ where
                 value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
             }],
         };
-        subsources.push((transient_id, subsource));
+        subsources.push(subsource);
     }
 
     if !unsupported_cols.is_empty() {

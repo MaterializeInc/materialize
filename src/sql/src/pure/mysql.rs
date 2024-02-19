@@ -12,11 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_mysql_util::{MySqlTableDesc, QualifiedTableRef};
-use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    DeferredItemName, Ident, IdentError, Value, WithOptionValue,
+    ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
+    IdentError, Value, WithOptionValue,
 };
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 
@@ -60,20 +59,16 @@ pub(super) fn derive_catalog_from_tables<'a>(
     Ok(SubsourceCatalog(tables_by_name))
 }
 
-pub(super) fn generate_targeted_subsources<F>(
+pub(super) fn generate_targeted_subsources(
     scx: &StatementContext,
     validated_requested_subsources: Vec<RequestedSubsource<MySqlTableDesc>>,
-    mut get_transient_subsource_id: F,
 ) -> Result<
     (
         Vec<CreateSourceSubsource<Aug>>,
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        Vec<CreateSubsourceStatement<Aug>>,
     ),
     PlanError,
->
-where
-    F: FnMut() -> u64,
-{
+> {
     let mut targeted_subsources = vec![];
     let mut subsources = vec![];
 
@@ -135,13 +130,9 @@ where
         }
 
         // Create the targeted AST node for the original CREATE SOURCE statement
-        let transient_id = GlobalId::Transient(get_transient_subsource_id());
-
-        let subsource = scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
-
         targeted_subsources.push(CreateSourceSubsource {
             reference: upstream_name,
-            subsource: Some(DeferredItemName::Named(subsource)),
+            subsource: None,
         });
 
         // Create the subsource statement
@@ -156,7 +147,7 @@ where
                 value: Some(WithOptionValue::Value(Value::Boolean(true))),
             }],
         };
-        subsources.push((transient_id, subsource));
+        subsources.push(subsource);
     }
 
     targeted_subsources.sort();
