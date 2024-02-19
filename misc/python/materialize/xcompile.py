@@ -148,8 +148,8 @@ def cargo(
         "CFLAGS": os.getenv("CFLAGS", "") + " " + " ".join(cflags),
         "CXXFLAGS": os.getenv("CXXFLAGS", "") + " " + " ".join(cflags),
         "LDFLAGS": os.getenv("LDFLAGS", "") + " " + " ".join(cflags),
-        # "CC": "clang-17",
-        # "CXX": "clang++-17",
+        "CC": "clang",
+        "CXX": "clang++",
     }
 
     return [

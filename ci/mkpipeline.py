@@ -78,7 +78,7 @@ so it is executed.""",
 
     parser.add_argument("--coverage", action="store_true")
     parser.add_argument(
-        "--sanitizer", default="hwaddress", type=str
+        "--sanitizer", default="address", type=str
     )  # TODO: Set to none before submitting
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()

@@ -140,6 +140,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     + " "
                     + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
                 )
+                env["CC"] = "clang"
+                env["CXX"] = "clang++"
                 spawn.runv(
                     [
                         "bin/ci-builder",

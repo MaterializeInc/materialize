@@ -346,8 +346,8 @@ def _build(
             + " "
             + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
         )
-        # env["CC"] = "clang-17"
-        # env["CXX"] = "clang++-17"
+        env["CC"] = "clang"
+        env["CXX"] = "clang++"
     if args.features:
         features.extend(args.features.split(","))
     if features:
