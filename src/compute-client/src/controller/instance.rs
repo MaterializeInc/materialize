@@ -1277,6 +1277,10 @@ where
             }
         }
 
+        // Prune empty changes. We might end up with empty changes for dependencies that have been
+        // dropped already, which is fine but might be confusing if we reported them.
+        storage_read_capability_changes.retain(|_key, update| !update.is_empty());
+
         if !storage_read_capability_changes.is_empty() {
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_capability_changes);
