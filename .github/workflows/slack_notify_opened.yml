@@ -39,11 +39,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Push to Slack
         if: |
-          steps.is_organization_member.outputs.result == false
+          ${{ steps.is_organization_member.outputs.result == 'false' }}
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
-          channel: devex
+          channel: product
           custom_payload: |
             {
               "blocks": [
