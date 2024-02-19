@@ -28,9 +28,6 @@ steps:
       branches: "!v*.*"
       agents:
         queue: builder-linux-aarch64
-      # TODO(def-) Remove automatic retry when #24818 is fixed
-      retry:
-        automatic: true
 
   - wait: ~
 
