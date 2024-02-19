@@ -14,11 +14,10 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::sources::load_generator::{
-    Generator, LoadGenerator, LoadGeneratorSourceConnection,
+    Event, Generator, LoadGenerator, LoadGeneratorSourceConnection,
 };
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use timely::dataflow::operators::to_stream::Event;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;

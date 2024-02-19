@@ -217,8 +217,7 @@ where
 
 /// Data and progress events of a shard subscription.
 ///
-/// TODO: Unify this with [timely::dataflow::operators::to_stream::Event] or
-/// [timely::dataflow::operators::capture::event::Event].
+/// TODO: Unify this with [timely::dataflow::operators::capture::event::Event].
 #[derive(Debug, PartialEq)]
 pub enum ListenEvent<T, D> {
     /// Progress of the shard.

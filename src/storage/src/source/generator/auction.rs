@@ -12,12 +12,11 @@ use std::iter;
 
 use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::Generator;
+use mz_storage_types::sources::load_generator::{Event, Generator};
 use mz_storage_types::sources::MzOffset;
 use rand::prelude::{Rng, SmallRng};
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
-use timely::dataflow::operators::to_stream::Event;
 
 /// CREATE TABLE organizations
 ///   (
