@@ -51,9 +51,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ):
             c.up("testdrive", persistent=True)
 
-            try:
-                while time.time() - start_time < args.runtime:
-
+            while time.time() - start_time < args.runtime:
+                try:
                     c.testdrive(
                         dedent(
                             """
@@ -169,11 +168,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     cursor_mv.close()
                     conn2.close()
 
-            except InterfaceError as e:
-                if "network error" in str(e):
-                    print(
-                        "Network error received, probably a cloud downtime, retrying in 1 min"
-                    )
-                    time.sleep(60)
-                else:
-                    raise
+                except InterfaceError as e:
+                    if "network error" in str(e):
+                        print(
+                            "Network error received, probably a cloud downtime, retrying in 1 min"
+                        )
+                        time.sleep(60)
+                    else:
+                        raise
