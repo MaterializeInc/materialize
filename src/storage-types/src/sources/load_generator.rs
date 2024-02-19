@@ -17,7 +17,6 @@ use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use timely::dataflow::operators::to_stream::Event;
 
 use crate::sources::{MzOffset, SourceConnection};
 
@@ -25,6 +24,14 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.load_generator.rs"
 ));
+
+/// Data and progress events of the native stream.
+pub enum Event<F: IntoIterator, D> {
+    /// Indicates that timestamps have advanced to frontier F
+    Progress(F),
+    /// Indicates that event D happened at time T
+    Message(F::Item, D),
+}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LoadGeneratorSourceConnection {
