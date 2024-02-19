@@ -48,7 +48,7 @@ use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::kafka::KafkaPartitionMetrics;
+use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
@@ -92,7 +92,7 @@ pub struct KafkaSourceReader {
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
     _metadata_thread_handle: UnparkOnDropHandle<()>,
     /// A handle to the partition specific metrics
-    partition_metrics: KafkaPartitionMetrics,
+    partition_metrics: KafkaSourceMetrics,
     /// The metadata columns requested by the user
     metadata_columns: Vec<KafkaMetadataKind>,
     /// The latest status detected by the metadata refresh thread.
@@ -437,7 +437,7 @@ impl SourceRender for KafkaSourceConnection {
                     .map(|(_name, kind)| kind)
                     .collect(),
                 _metadata_thread_handle: metadata_thread_handle,
-                partition_metrics: config.metrics.get_kafka_partition_metrics(
+                partition_metrics: config.metrics.get_kafka_source_metrics(
                     partition_ids,
                     topic.clone(),
                     config.id,

@@ -20,11 +20,11 @@ use tracing::debug;
 
 /// Definitions for kafka-specific per-partition metrics.
 #[derive(Clone, Debug)]
-pub(crate) struct KafkaPartitionMetricDefs {
+pub(crate) struct KafkaSourceMetricDefs {
     pub(crate) partition_offset_max: IntGaugeVec,
 }
 
-impl KafkaPartitionMetricDefs {
+impl KafkaSourceMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             partition_offset_max: registry.register(metric!(
@@ -37,16 +37,16 @@ impl KafkaPartitionMetricDefs {
 }
 
 /// Kafka-specific per-partition metrics.
-pub(crate) struct KafkaPartitionMetrics {
+pub(crate) struct KafkaSourceMetrics {
     labels: Vec<String>,
-    defs: KafkaPartitionMetricDefs,
+    defs: KafkaSourceMetricDefs,
     partition_offset_map: BTreeMap<i32, DeleteOnDropGauge<'static, AtomicI64, Vec<String>>>,
 }
 
-impl KafkaPartitionMetrics {
-    /// Create a `KafkaPartitionMetrics` from the `KafkaPartitionMetricDefs`.
+impl KafkaSourceMetrics {
+    /// Create a `KafkaSourceMetrics` from the `KafkaSourceMetricDefs`.
     pub(crate) fn new(
-        defs: &KafkaPartitionMetricDefs,
+        defs: &KafkaSourceMetricDefs,
         ids: Vec<i32>,
         topic: String,
         source_id: GlobalId,

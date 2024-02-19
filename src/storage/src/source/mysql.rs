@@ -138,7 +138,7 @@ impl SourceRender for MySqlSourceConnection {
             );
         }
 
-        let metrics = config.metrics.get_mysql_metrics(config.id);
+        let metrics = config.metrics.get_mysql_source_metrics(config.id);
 
         let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
             scope.clone(),

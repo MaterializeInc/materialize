@@ -164,7 +164,7 @@ use tokio_postgres::types::{Oid, PgLsn};
 use tokio_postgres::Client;
 use tracing::{trace, warn};
 
-use crate::metrics::postgres::PgSnapshotMetrics;
+use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
 use crate::source::types::SourceReaderError;
