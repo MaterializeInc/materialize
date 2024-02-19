@@ -39,7 +39,7 @@ Relational Database Service (RDS).
 |-------------------------------------------|------------------|------------------------------
 | `ENDPOINT`                                | `text`           | *Advanced.* Override the default AWS endpoint URL. Allows targeting AWS-compatible services like MinIO.
 | `REGION`                                  | `text`           | The AWS region to connect to.
-| `ACCESS KEY ID`                           | secret or `text` | The access key ID to connect with. Triggers credentials-based authentication.
+| `ACCESS KEY ID`                           | secret or `text` | The access key ID to connect with. Triggers credentials-based authentication.<br><br><strong>Warning!</strong> Use of credentials-based authentication is deprecated. AWS strongly encourages the use of role assumption-based authentication instead.
 | `SECRET ACCESS KEY`                       | secret           | The secret access key corresponding to the specified access key ID.<br><br>Required and only valid when `ACCESS KEY ID` is specified.
 | `SESSION TOKEN`                           | secret or `text` | The session token corresponding to the specified access key ID.<br><br>Only valid when `ACCESS KEY ID` is specified.
 | `ASSUME ROLE ARN`                         | `text`           | The Amazon Resource Name (ARN) of the IAM role to assume. Triggers role assumption-based authentication.
@@ -106,18 +106,6 @@ SELECT id, external_id, example_trust_policy FROM mz_internal.mz_aws_connections
 #### Examples
 
 {{< tabs >}}
-{{< tab "Credentials">}}
-To create an AWS connection that uses static access key credentials:
-
-```sql
-CREATE SECRET aws_secret_access_key = '...';
-CREATE CONNECTION aws_credentials TO AWS (
-    ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
-    SECRET ACCESS KEY = SECRET aws_secret_access_key
-);
-```
-{{< /tab >}}
-
 {{< tab "Role assumption">}}
 
 In this example, we have created the following IAM role for Materialize to
@@ -165,6 +153,24 @@ CREATE CONNECTION aws_role_assumption TO AWS (
 );
 ```
 {{< /tab >}}
+
+{{< tab "Credentials">}}
+{{< warning >}}
+Use of credentials-based authentication is deprecated.  AWS strongly encourages
+the use of role assumption-based authentication instead.
+{{< /warning >}}
+
+To create an AWS connection that uses static access key credentials:
+
+```sql
+CREATE SECRET aws_secret_access_key = '...';
+CREATE CONNECTION aws_credentials TO AWS (
+    ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
+    SECRET ACCESS KEY = SECRET aws_secret_access_key
+);
+```
+{{< /tab >}}
+
 {{< /tabs >}}
 
 ### Kafka
