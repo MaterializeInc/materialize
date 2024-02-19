@@ -182,7 +182,7 @@ impl<T: Timestamp> ComputeController<T> {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
         let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
 
-        let mut maintenance_ticker = time::interval(Duration::from_secs(1));
+        let mut maintenance_ticker = time::interval(Duration::from_secs(10));
         maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         Self {
