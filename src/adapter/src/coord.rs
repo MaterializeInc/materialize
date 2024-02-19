@@ -336,10 +336,8 @@ pub struct BackgroundWorkResult<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
-pub type PurifiedStatementReady = BackgroundWorkResult<(
-    Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-    Statement<Aug>,
-)>;
+pub type PurifiedStatementReady =
+    BackgroundWorkResult<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>)>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]

@@ -23,9 +23,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::ShardsUsageReferenced;
-use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
-use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
@@ -438,7 +436,7 @@ impl Coordinator {
         &mut self,
         PurifiedStatementReady {
             ctx,
-            result,
+            result: _,
             params,
             resolved_ids,
             original_stmt,
@@ -466,99 +464,7 @@ impl Coordinator {
             return;
         }
 
-        let (subsource_stmts, stmt) = match result {
-            Ok(ok) => ok,
-            Err(e) => return ctx.retire(Err(e)),
-        };
-
-        let mut create_source_plans: Vec<CreateSourcePlans> = vec![];
-        let mut id_allocation = BTreeMap::new();
-
-        // First we'll allocate global ids for each subsource and plan them
-        for (transient_id, subsource_stmt) in subsource_stmts {
-            let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
-            let source_id = match self.catalog_mut().allocate_user_id().await {
-                Ok(id) => id,
-                Err(e) => return ctx.retire(Err(e.into())),
-            };
-            let plan = match self.plan_statement(
-                ctx.session(),
-                Statement::CreateSubsource(subsource_stmt),
-                &params,
-                &resolved_ids,
-            ) {
-                Ok(Plan::CreateSource(plan)) => plan,
-                Ok(_) => {
-                    unreachable!("planning CREATE SUBSOURCE must result in a Plan::CreateSource")
-                }
-                Err(e) => return ctx.retire(Err(e)),
-            };
-            id_allocation.insert(transient_id, source_id);
-            create_source_plans.push(CreateSourcePlans {
-                source_id,
-                plan,
-                resolved_ids,
-            });
-        }
-
-        // Then, we'll rewrite the source statement to point to the newly minted global ids and
-        // plan it too
-        let stmt = match mz_sql::names::resolve_transient_ids(&id_allocation, stmt) {
-            Ok(ok) => ok,
-            Err(e) => return ctx.retire(Err(e.into())),
-        };
-
-        let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
-
-        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
-            Ok(Plan::CreateSource(plan)) => {
-                let source_id = match self.catalog_mut().allocate_user_id().await {
-                    Ok(id) => id,
-                    Err(e) => return ctx.retire(Err(e.into())),
-                };
-
-                create_source_plans.push(CreateSourcePlans {
-                    source_id,
-                    plan,
-                    resolved_ids,
-                });
-
-                // Finally, sequence all plans in one go
-                self.sequence_plan(
-                    ctx,
-                    Plan::CreateSources(create_source_plans),
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
-            }
-            Ok(Plan::AlterSource(alter_source)) => {
-                self.sequence_plan(
-                    ctx,
-                    Plan::PurifiedAlterSource {
-                        alter_source,
-                        subsources: create_source_plans,
-                    },
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
-            }
-            Ok(plan @ Plan::AlterNoop(..)) => {
-                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                    .await
-            }
-            Ok(plan @ Plan::CreateSink(_)) => {
-                assert!(
-                    create_source_plans.is_empty(),
-                    "CREATE SINK does not generate source plans"
-                );
-
-                self.sequence_plan(ctx, plan, resolved_ids).await
-            }
-            Ok(p) => {
-                unreachable!("{:?} is not purified", p)
-            }
-            Err(e) => ctx.retire(Err(e)),
-        };
+        todo!("bankruptcy declared on sequencing purified statements")
     }
 
     #[mz_ore::instrument(level = "debug")]

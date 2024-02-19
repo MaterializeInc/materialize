@@ -26,7 +26,7 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
-use mz_repr::{strconv, GlobalId, Timestamp};
+use mz_repr::{strconv, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -231,13 +231,7 @@ pub async fn purify_statement(
     now: u64,
     stmt: Statement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<
-    (
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-        Statement<Aug>,
-    ),
-    PlanError,
-> {
+) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
     match stmt {
         Statement::CreateSource(stmt) => {
             purify_create_source(catalog, now, stmt, storage_configuration).await
@@ -480,13 +474,7 @@ async fn purify_create_source(
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<
-    (
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-        Statement<Aug>,
-    ),
-    PlanError,
-> {
+) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
     let CreateSourceStatement {
         name: source_name,
         connection,
@@ -510,12 +498,6 @@ async fn purify_create_source(
             named_subsource_err(subsource)?;
         }
     }
-
-    let mut subsource_id_counter = 0;
-    let mut get_transient_subsource_id = move || {
-        subsource_id_counter += 1;
-        subsource_id_counter
-    };
 
     let mut subsources = vec![];
 
@@ -850,7 +832,6 @@ async fn purify_create_source(
                 None,
                 validated_requested_subsources,
                 text_cols_dict,
-                get_transient_subsource_id,
                 &publication_tables,
             )?;
 
@@ -1112,11 +1093,8 @@ async fn purify_create_source(
             )
             .await?;
 
-            let (targeted_subsources, new_subsources) = mysql::generate_targeted_subsources(
-                &scx,
-                validated_requested_subsources,
-                get_transient_subsource_id,
-            )?;
+            let (targeted_subsources, new_subsources) =
+                mysql::generate_targeted_subsources(&scx, validated_requested_subsources)?;
 
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
             subsources.extend(new_subsources);
@@ -1180,15 +1158,9 @@ async fn purify_create_source(
             {
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
 
-                // Create the targeted AST node for the original CREATE SOURCE statement
-                let transient_id = GlobalId::Transient(get_transient_subsource_id());
-
-                let subsource =
-                    scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
-
                 targeted_subsources.push(CreateSourceSubsource {
                     reference: upstream_name.clone(),
-                    subsource: Some(DeferredItemName::Named(subsource)),
+                    subsource: None,
                 });
 
                 // Create the subsourcev2 statement
@@ -1207,7 +1179,7 @@ async fn purify_create_source(
                         value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
                     }],
                 };
-                subsources.push((transient_id, subsource));
+                subsources.push(subsource);
             }
             if available_subsources.is_some() {
                 *referenced_subsources =
@@ -1219,8 +1191,6 @@ async fn purify_create_source(
     // Generate progress subsource
 
     // Create the targeted AST node for the original CREATE SOURCE statement
-    let transient_id = GlobalId::Transient(subsource_id_counter);
-
     let scx = StatementContext::new(None, &catalog);
 
     // Take name from input or generate name
@@ -1266,7 +1236,7 @@ async fn purify_create_source(
             value: Some(WithOptionValue::Value(Value::Boolean(true))),
         }],
     };
-    subsources.push((transient_id, subsource));
+    subsources.push(subsource);
 
     purify_source_format(
         &catalog,
@@ -1290,13 +1260,7 @@ async fn purify_alter_source(
     catalog: impl SessionCatalog,
     mut stmt: AlterSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<
-    (
-        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-        Statement<Aug>,
-    ),
-    PlanError,
-> {
+) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
     let scx = StatementContext::new(None, &catalog);
     let AlterSourceStatement {
         source_name,
@@ -1495,11 +1459,6 @@ async fn purify_alter_source(
         &storage_configuration.connection_context.ssh_tunnel_manager,
     )
     .await?;
-    let mut subsource_id_counter = 0;
-    let get_transient_subsource_id = move || {
-        subsource_id_counter += 1;
-        subsource_id_counter
-    };
 
     let text_cols_dict = postgres::generate_text_columns(
         &publication_catalog,
@@ -1528,7 +1487,6 @@ async fn purify_alter_source(
         Some(source_name),
         validated_requested_subsources,
         text_cols_dict,
-        get_transient_subsource_id,
         &publication_tables,
     )?;
 

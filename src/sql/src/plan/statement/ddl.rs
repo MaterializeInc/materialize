@@ -1114,6 +1114,9 @@ pub fn plan_create_source(
                 let name = subsource.reference.clone();
 
                 let target = match &subsource.subsource {
+                    // migration: this only needs to be supported for one
+                    // version to allow booting old-style subsources.
+                    None => continue,
                     Some(DeferredItemName::Named(target)) => target.clone(),
                     _ => {
                         sql_bail!("[internal error] subsources must be named during purification")
