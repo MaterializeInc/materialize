@@ -33,7 +33,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, OpenableDurableCatalogState, StashConfig};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;

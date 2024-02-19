@@ -18,12 +18,14 @@ use std::time::Duration;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{body, Body, Request, Response, Server as HyperServer};
 use jsonwebtoken::EncodingKey;
-use mz_frontegg_auth::{ApiTokenArgs, ApiTokenResponse, Claims, RefreshToken, REFRESH_SUFFIX};
+use mz_frontegg_auth::{ApiTokenArgs, ApiTokenResponse, Claims};
 use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::task::JoinHandle;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
+
+const REFRESH_SUFFIX: &str = "/token/refresh";
 
 pub struct FronteggMockServer {
     pub url: String,
@@ -206,4 +208,10 @@ struct Context {
     refreshes: Arc<Mutex<u64>>,
     enable_refresh: Arc<AtomicBool>,
     auth_requests: Arc<Mutex<u64>>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RefreshToken<'a> {
+    refresh_token: &'a str,
 }

@@ -31,7 +31,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
-use mz_frontegg_auth::{Authentication, FronteggCliArgs};
+use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
@@ -633,7 +633,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure connections.
     let tls = args.tls.into_config()?;
-    let frontegg = Authentication::from_args(args.frontegg, &metrics_registry)?;
+    let frontegg = Authenticator::from_args(args.frontegg, &metrics_registry)?;
 
     // Configure CORS.
     let allowed_origins = if !args.cors_allowed_origin.is_empty() {

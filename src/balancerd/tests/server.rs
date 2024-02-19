@@ -20,7 +20,7 @@ use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca};
 use mz_frontegg_auth::{
-    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
+    Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
 };
 use mz_frontegg_mock::FronteggMockServer;
 use mz_ore::cast::CastFrom;

@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::Context;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
-use mz_frontegg_auth::{Authentication, AuthenticationConfig};
+use mz_frontegg_auth::{Authenticator, AuthenticatorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_server_core::TlsCliArgs;
 use tracing::warn;
@@ -87,8 +87,8 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     let resolver = match (args.static_resolver_addr, args.frontegg_resolver_template) {
         (None, Some(addr_template)) => {
-            let auth = Authentication::new(
-                AuthenticationConfig {
+            let auth = Authenticator::new(
+                AuthenticatorConfig {
                     admin_api_token_url: args.frontegg_api_token_url.expect("clap enforced"),
                     decoding_key: match (args.frontegg_jwk, args.frontegg_jwk_file) {
                         (None, Some(path)) => {

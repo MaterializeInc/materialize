@@ -28,7 +28,7 @@ use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
-    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig, Claims,
+    Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, Claims,
 };
 use mz_frontegg_mock::FronteggMockServer;
 use mz_ore::assert_contains;
