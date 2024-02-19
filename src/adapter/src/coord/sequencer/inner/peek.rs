@@ -336,7 +336,7 @@ impl Coordinator {
         let source_ids = plan.source.depends_on();
         let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && plan.source.contains_temporal()
+            && plan.source.contains_temporal()?
         {
             // If the source IDs are timestamp independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timestamp dependent. This is

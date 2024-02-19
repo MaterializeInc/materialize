@@ -212,3 +212,24 @@ ORDER BY day DESC;
 2023-12-03␠00:00:00  1  fy2023
 2023-12-02␠00:00:00  1  fy2023
 2023-12-01␠00:00:00  1  fy2023
+
+# Constant queries should have a timestamp near the current time (instead of, e.g., u64::MAX)
+query B
+select mz_now() < '3000-01-01';
+----
+true
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/25339
+query B
+with v as (select mz_now() < '3000-01-01') select * from v;
+----
+true
+
+# Make sure that we find temporal expressions also in referenced views.
+statement ok
+create view v as select mz_now() as x;
+
+query B
+select x < '3000-01-01' from v;
+----
+true
