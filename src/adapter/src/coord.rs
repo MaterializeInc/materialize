@@ -164,7 +164,6 @@ use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::{DurableCatalogState, OpenableDurableCatalogState};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -1659,11 +1658,7 @@ impl Coordinator {
                         .clone();
 
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(
-                        &df_desc,
-                        mview.cluster_id,
-                        &mview.refresh_schedule,
-                    );
+                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
                     df_desc.set_as_of(as_of);
 
                     // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
@@ -2191,11 +2186,16 @@ impl Coordinator {
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
         // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
         // might still be installed on replicas, but ideally not much farther as that would just
-        // increase the wait time until the index becomes readable. We advance the `as_of` to the
-        // meet of the `upper`s of all dependencies, as we know that no replica can have produced
-        // output for that time, so we can assume that no replica `as_of` has been adanced beyond
-        // this time either.
+        // increase the wait time until the index becomes readable, and would also prevent warmup.
+        // We advance the `as_of` to `least_valid_write` - 1. (`least_valid_write` is the meet of
+        // the `upper`s of all dependencies.) This works because we know that no replica could have
+        // produced output at `least_valid_write`, so their write frontiers can't be later. Also,
+        // subtracting 1 is still ok, because we can assume that the compaction window is at least
+        // 1.
+        let warmup_frontier = self.greatest_available_read(&id_bundle);
+
         let write_frontier = self.least_valid_write(&id_bundle);
+
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
         if write_frontier.is_empty() {
             tracing::info!(
@@ -2203,15 +2203,21 @@ impl Coordinator {
                 %cluster_id,
                 min_as_of = ?min_as_of.elements(),
                 write_frontier = ?write_frontier.elements(),
-                "selecting index `as_of` as {:?}",
+                "selecting index `as_of` as {:?} (`write_frontier` is empty)",
                 min_as_of.elements(),
             );
 
             return min_as_of;
         }
 
-        let time = write_frontier.clone().into_option().expect("checked above");
-        let max_compaction_frontier = Antichain::from_elem(compaction_window.lag_from(time));
+        // The compaction frontier might be earlier than the warmup frontier.
+        let write_frontier_time = write_frontier.clone().into_option().expect("checked above");
+        let max_compaction_frontier =
+            Antichain::from_elem(compaction_window.lag_from(write_frontier_time));
+        soft_assert_or_log!(
+            !max_compaction_frontier.is_empty(),
+            "`max_compaction_frontier` unexpectedly empty",
+        );
 
         // We must not select an `as_of` that is beyond any times that have not yet been written to
         // downstream materialized views. If we would, we might skip times in the output of these
@@ -2230,7 +2236,12 @@ impl Coordinator {
         }
 
         let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
-            min_as_of.join(&max_compaction_frontier).meet(&max_as_of)
+            // Take the earlier of `warmup_frontier` and `compaction_frontier`,
+            // and finally bound from below and above by `min_as_of` and `max_as_of`.
+            warmup_frontier
+                .meet(&max_compaction_frontier)
+                .join(&min_as_of)
+                .meet(&max_as_of)
         } else {
             // This should not happen. If we get here that means we _will_ skip times in some of
             // the dependent materialized views, which is a correctness bug. However, skipping
@@ -2259,6 +2270,7 @@ impl Coordinator {
             as_of = ?as_of.elements(),
             min_as_of = ?min_as_of.elements(),
             max_as_of = ?max_as_of.elements(),
+            warmup_frontier = ?warmup_frontier.elements(),
             write_frontier = ?write_frontier.elements(),
             ?compaction_window,
             max_compaction_frontier = ?max_compaction_frontier.elements(),
@@ -2273,51 +2285,45 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
-        refresh_schedule: &Option<RefreshSchedule>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
         let min_as_of = self.least_valid_read(&id_bundle);
 
-        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
-        // to advance the `as_of` as far as possible. If a storage collection for the MV already
-        // exists, we can advance to that collection's upper. This is the most we can advance the
-        // `as_of` without skipping times in the MV output.
         let sink_id = dataflow
             .sink_exports
             .keys()
             .exactly_one()
             .expect("MV dataflow must export a sink");
-        let write_frontier = self.storage_write_frontier(*sink_id);
+
+        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
+        // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
+        // might still be installed on replicas, but we don't want to advance it so far that it
+        // would prevent dataflow warmup. Similarly to `bootstrap_index_as_of`, we can use
+        // `greatest_available_read`, but for MVs there is an additional constraint: we should
+        // also make sure that we don't advance the `as_of` past the MV's storage collection's
+        // `upper`, because then we'd skip times in the MV output.
+        let warmup_frontier = self.greatest_available_read(&id_bundle);
+        let max_as_of = self.storage_write_frontier(*sink_id);
+        let candidate_as_of = warmup_frontier.meet(max_as_of);
 
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        let mut as_of = if write_frontier.is_empty() {
+        // (See https://github.com/MaterializeInc/materialize/pull/25353)
+        let as_of = if candidate_as_of.is_empty() {
             min_as_of.clone()
         } else {
-            min_as_of.join(write_frontier)
+            min_as_of.join(&candidate_as_of)
         };
-
-        // If we have a RefreshSchedule, then round up the `as_of` to the next refresh.
-        // Note that in many cases the `as_of` would already be at this refresh, because the `write_frontier` will be
-        // usually there. However, it can happen that we restart after the MV was created in the catalog but before
-        // its upper was initialized in persist.
-        if let Some(refresh_schedule) = &refresh_schedule {
-            if let Some(rounded_up_ts) =
-                refresh_schedule.round_up_timestamp(*as_of.as_option().expect("as_of is non-empty"))
-            {
-                as_of = Antichain::from_elem(rounded_up_ts);
-            } else {
-                // We are past the last refresh. Let's not move the as_of.
-            }
-        }
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
             %cluster_id,
             as_of = ?as_of.elements(),
             min_as_of = ?min_as_of.elements(),
-            write_frontier = ?write_frontier.elements(),
+            warmup_frontier = ?warmup_frontier.elements(),
+            max_as_of = ?max_as_of.elements(),
+            candidate_as_of = ?candidate_as_of.elements(),
             "bootstrapping materialized view `as_of`",
         );
 
