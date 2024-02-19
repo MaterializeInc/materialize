@@ -11,6 +11,7 @@
 
 use std::num::NonZeroUsize;
 
+use mz_compute_types::plan::NodeId;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
@@ -18,6 +19,7 @@ use mz_storage_client::client::ProtoTrace;
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
@@ -132,6 +134,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
+
     /// `CopyToResponse` reports the completion of an S3-oneshot sink.
     ///
     /// The replica must send exactly one `CopyToResponse` for every S3-oneshot sink previously
@@ -142,6 +145,20 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     ///
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     CopyToResponse(GlobalId, CopyToResponse),
+
+    /// `Status` reports status updates from replicas to the controller.
+    ///
+    /// `Status` responses are a way for replicas to stream back introspection data that the
+    /// controller can then announce to its clients. They have no effect on the lifecycles of
+    /// compute collections. Correct operation of the Compute layer must not rely on `Status`
+    /// responses being sent or received.
+    ///
+    /// `Status` responses that are specific to collections must only be sent for collections that
+    /// (a) have previously been created by a [`CreateDataflow` command] and (b) have not yet
+    /// been reported to have advanced to the empty frontier.
+    ///
+    /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
+    Status(StatusResponse),
 }
 
 impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
@@ -173,6 +190,7 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                         resp: Some(resp.into_proto()),
                     })
                 }
+                ComputeResponse::Status(resp) => Status(resp.into_proto()),
             }),
         }
     }
@@ -200,6 +218,7 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                 resp.resp
                     .into_rust_if_some("ProtoCopyToResponseKind::resp")?,
             )),
+            Some(Status(resp)) => Ok(ComputeResponse::Status(resp.into_rust()?)),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeResponse::kind",
             )),
@@ -223,6 +242,9 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
                 .boxed(),
             (any::<GlobalId>(), any::<SubscribeResponse>())
                 .prop_map(|(id, resp)| ComputeResponse::SubscribeResponse(id, resp))
+                .boxed(),
+            any::<StatusResponse>()
+                .prop_map(ComputeResponse::Status)
                 .boxed(),
         ])
     }
@@ -525,6 +547,72 @@ impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
                 updates: Ok(updates),
             })
             .boxed()
+    }
+}
+
+/// Status updates replicas can report to the controller.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub enum StatusResponse {
+    /// Reports the hydration status of dataflow operators.
+    OperatorHydration(OperatorHydrationStatus),
+}
+
+impl RustType<ProtoStatusResponse> for StatusResponse {
+    fn into_proto(&self) -> ProtoStatusResponse {
+        use proto_status_response::Kind;
+
+        let kind = match self {
+            Self::OperatorHydration(status) => Kind::OperatorHydration(status.into_proto()),
+        };
+        ProtoStatusResponse { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoStatusResponse) -> Result<Self, TryFromProtoError> {
+        use proto_status_response::Kind;
+
+        match proto.kind {
+            Some(Kind::OperatorHydration(status)) => {
+                Ok(Self::OperatorHydration(status.into_rust()?))
+            }
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoStatusResponse::kind",
+            )),
+        }
+    }
+}
+
+/// An update about the hydration status of a set of dataflow operators.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct OperatorHydrationStatus {
+    /// The ID of the compute collection exported by the dataflow.
+    pub collection_id: GlobalId,
+    /// The ID of the LIR node for which the hydration status changed.
+    pub lir_id: NodeId,
+    /// The ID of the worker for which the hydration status changed.
+    pub worker_id: usize,
+    /// Whether the node is hydrated on the worker.
+    pub hydrated: bool,
+}
+
+impl RustType<ProtoOperatorHydrationStatus> for OperatorHydrationStatus {
+    fn into_proto(&self) -> ProtoOperatorHydrationStatus {
+        ProtoOperatorHydrationStatus {
+            collection_id: Some(self.collection_id.into_proto()),
+            lir_id: self.lir_id.into_proto(),
+            worker_id: self.worker_id.into_proto(),
+            hydrated: self.hydrated.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoOperatorHydrationStatus) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            collection_id: proto
+                .collection_id
+                .into_rust_if_some("ProtoOperatorHydrationStatus::collection_id")?,
+            lir_id: proto.lir_id.into_rust()?,
+            worker_id: proto.worker_id.into_rust()?,
+            hydrated: proto.hydrated.into_rust()?,
+        })
     }
 }
 

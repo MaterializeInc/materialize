@@ -2166,6 +2166,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_compute_operator_hydration_status_logging,
+        desc: "log the hydration status of compute operators",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Returns a new ConfigSet containing every `Config` in Materialize.
@@ -5505,6 +5512,7 @@ impl SystemVars {
             || name == ENABLE_MZ_JOIN_CORE.name()
             || name == ENABLE_JEMALLOC_PROFILING.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
+            || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
             || self.is_persist_config_var(name)
             || is_tracing_var(name)
     }

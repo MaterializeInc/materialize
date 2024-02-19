@@ -1946,6 +1946,20 @@ pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinSource> = Lazy::new(|| Bui
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: Lazy<BuiltinSource> =
+    Lazy::new(|| BuiltinSource {
+        name: "mz_compute_operator_hydration_statuses_per_worker",
+        schema: MZ_INTERNAL_SCHEMA,
+        data_source: IntrospectionType::ComputeOperatorHydrationStatus,
+        desc: RelationDesc::empty()
+            .with_column("object_id", ScalarType::String.nullable(false))
+            .with_column("physical_plan_node_id", ScalarType::UInt64.nullable(false))
+            .with_column("replica_id", ScalarType::String.nullable(false))
+            .with_column("worker_id", ScalarType::UInt64.nullable(false))
+            .with_column("hydrated", ScalarType::Bool.nullable(false)),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    });
 
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
@@ -4175,6 +4189,21 @@ SELECT
 FROM mz_internal.mz_compute_error_counts_per_worker
 GROUP BY export_id
 HAVING pg_catalog.sum(count) != 0",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_compute_operator_hydration_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    object_id,
+    physical_plan_node_id,
+    replica_id,
+    bool_and(hydrated) AS hydrated
+FROM mz_internal.mz_compute_operator_hydration_statuses_per_worker
+GROUP BY object_id, physical_plan_node_id, replica_id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6711,10 +6740,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
+        Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
         Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
+        Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),

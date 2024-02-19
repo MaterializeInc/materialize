@@ -20,6 +20,7 @@ use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::NodeId;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
@@ -46,7 +47,8 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, PeekResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, OperatorHydrationStatus, PeekResponse, StatusResponse,
+    SubscribeBatch, SubscribeResponse,
 };
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -442,6 +444,34 @@ impl<T: Timestamp> Instance<T> {
         if PartialOrder::less_than(&collection.as_of, frontier) {
             collection.set_hydrated();
         }
+    }
+
+    /// Update the tracked hydration status for an operator according to a received status update.
+    fn update_operator_hydration_status(
+        &mut self,
+        replica_id: ReplicaId,
+        status: OperatorHydrationStatus,
+    ) {
+        let Some(replica) = self.replicas.get_mut(&replica_id) else {
+            tracing::error!(
+                %replica_id, ?status,
+                "status update for an unknown replica"
+            );
+            return;
+        };
+        let Some(collection) = replica.collections.get_mut(&status.collection_id) else {
+            tracing::error!(
+                %replica_id, ?status,
+                "status update for an unknown collection"
+            );
+            return;
+        };
+
+        collection.hydration_state.operator_hydrated(
+            status.lir_id,
+            status.worker_id,
+            status.hydrated,
+        );
     }
 
     /// Clean up collection state that is not needed anymore.
@@ -1500,6 +1530,10 @@ where
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
             }
+            ComputeResponse::Status(response) => {
+                self.handle_status_response(response, replica_id);
+                None
+            }
         }
     }
 
@@ -1689,6 +1723,14 @@ where
             }
         }
     }
+
+    fn handle_status_response(&mut self, response: StatusResponse, replica_id: ReplicaId) {
+        match response {
+            StatusResponse::OperatorHydration(status) => self
+                .compute
+                .update_operator_hydration_status(replica_id, status),
+        }
+    }
 }
 
 impl<'a, T> ActiveInstance<'a, T>
@@ -1854,12 +1896,12 @@ impl<T> ReplicaState<T> {
     /// Add a collection to the replica state.
     fn add_collection(&mut self, id: GlobalId, as_of: Antichain<T>) {
         let metrics = self.metrics.for_collection(id);
-        let hydration_flag = HydrationFlag::new(self.id, id, self.introspection_tx.clone());
+        let hydration_state = HydrationState::new(self.id, id, self.introspection_tx.clone());
         let mut state = ReplicaCollectionState {
             metrics,
             created_at: Instant::now(),
             as_of,
-            hydration_flag,
+            hydration_state,
         };
 
         // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
@@ -1897,14 +1939,14 @@ struct ReplicaCollectionState<T> {
     created_at: Instant,
     /// As-of frontier with which this collection was installed on the replica.
     as_of: Antichain<T>,
-    /// Tracks whether this collection is hydrated, i.e., it has produced some initial output.
-    hydration_flag: HydrationFlag,
+    /// Tracks hydration state for this collection.
+    hydration_state: HydrationState,
 }
 
 impl<T> ReplicaCollectionState<T> {
     /// Returns whether this collection is hydrated.
     fn hydrated(&self) -> bool {
-        self.hydration_flag.hydrated
+        self.hydration_state.hydrated
     }
 
     /// Marks the collection as hydrated and updates metrics and introspection accordingly.
@@ -1914,22 +1956,29 @@ impl<T> ReplicaCollectionState<T> {
             metrics.initial_output_duration_seconds.set(duration);
         }
 
-        self.hydration_flag.set();
+        self.hydration_state.collection_hydrated();
     }
 }
 
-/// A wrapper type that maintains hydration introspection for a given replica and collection, and
-/// ensures that reported introspection data is retracted when the flag is dropped.
+/// Maintains both global and operator-level hydration introspection for a given replica and
+/// collection, and ensures that reported introspection data is retracted when the flag is dropped.
 #[derive(Debug)]
-struct HydrationFlag {
+struct HydrationState {
+    /// The ID of the replica.
     replica_id: ReplicaId,
+    /// The ID of the compute collection.
     collection_id: GlobalId,
+    /// Whether the collection is hydrated.
     hydrated: bool,
+    /// Operator-level hydration state.
+    /// (lir_id, worker_id) -> hydrated
+    operators: BTreeMap<(NodeId, usize), bool>,
+    /// A channel through which introspection updates are delivered.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
 
-impl HydrationFlag {
-    /// Create a new unset `HydrationFlag` and update introspection.
+impl HydrationState {
+    /// Create a new `HydrationState` and initialize introspection.
     fn new(
         replica_id: ReplicaId,
         collection_id: GlobalId,
@@ -1939,29 +1988,55 @@ impl HydrationFlag {
             replica_id,
             collection_id,
             hydrated: false,
+            operators: Default::default(),
             introspection_tx,
         };
 
-        let insertion = self_.row();
-        self_.send(vec![(insertion, 1)]);
+        let insertion = self_.row_for_collection();
+        self_.send(
+            IntrospectionType::ComputeHydrationStatus,
+            vec![(insertion, 1)],
+        );
 
         self_
     }
 
-    /// Mark the collection as hydrated and update introspection.
-    fn set(&mut self) {
+    /// Update the collection as hydrated.
+    fn collection_hydrated(&mut self) {
         if self.hydrated {
             return; // nothing to do
         }
 
-        let retraction = self.row();
+        let retraction = self.row_for_collection();
         self.hydrated = true;
-        let insertion = self.row();
+        let insertion = self.row_for_collection();
 
-        self.send(vec![(retraction, -1), (insertion, 1)]);
+        self.send(
+            IntrospectionType::ComputeHydrationStatus,
+            vec![(retraction, -1), (insertion, 1)],
+        );
     }
 
-    fn row(&self) -> Row {
+    /// Update the given (lir_id, worker_id) pair as hydrated.
+    fn operator_hydrated(&mut self, lir_id: NodeId, worker_id: usize, hydrated: bool) {
+        let retraction = self.row_for_operator(lir_id, worker_id);
+        self.operators.insert((lir_id, worker_id), hydrated);
+        let insertion = self.row_for_operator(lir_id, worker_id);
+
+        if retraction == insertion {
+            return; // no change
+        }
+
+        let updates = retraction
+            .map(|r| (r, -1))
+            .into_iter()
+            .chain(insertion.map(|r| (r, 1)))
+            .collect();
+        self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
+    }
+
+    /// Return a `Row` reflecting the current collection hydration status.
+    fn row_for_collection(&self) -> Row {
         Row::pack_slice(&[
             Datum::String(&self.collection_id.to_string()),
             Datum::String(&self.replica_id.to_string()),
@@ -1969,25 +2044,54 @@ impl HydrationFlag {
         ])
     }
 
-    fn send(&self, updates: Vec<(Row, Diff)>) {
-        let result = self
-            .introspection_tx
-            .send((IntrospectionType::ComputeHydrationStatus, updates));
+    /// Return a `Row` reflecting the current hydration status of the identified operator.
+    ///
+    /// Returns `None` if the identified operator is not tracked.
+    fn row_for_operator(&self, lir_id: NodeId, worker_id: usize) -> Option<Row> {
+        self.operators.get(&(lir_id, worker_id)).map(|hydrated| {
+            Row::pack_slice(&[
+                Datum::String(&self.collection_id.to_string()),
+                Datum::UInt64(lir_id),
+                Datum::String(&self.replica_id.to_string()),
+                Datum::UInt64(u64::cast_from(worker_id)),
+                Datum::from(*hydrated),
+            ])
+        })
+    }
+
+    fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
+        let result = self.introspection_tx.send((introspection_type, updates));
 
         if result.is_err() {
             // The global controller holds on to the `introspection_rx`. So when we get here that
             // probably means that the controller was dropped and the process is shutting down, in
             // which case we don't care about introspection updates anymore.
             tracing::info!(
-                "discarding `ComputeHydrationStatus` update because the receiver disconnected"
+                ?introspection_type,
+                "discarding introspection update because the receiver disconnected"
             );
         }
     }
 }
 
-impl Drop for HydrationFlag {
+impl Drop for HydrationState {
     fn drop(&mut self) {
-        let retraction = self.row();
-        self.send(vec![(retraction, -1)]);
+        // Retract collection hydration status.
+        let retraction = self.row_for_collection();
+        self.send(
+            IntrospectionType::ComputeHydrationStatus,
+            vec![(retraction, -1)],
+        );
+
+        // Retract operator-level hydration status.
+        let operators: Vec<_> = self.operators.keys().collect();
+        let updates: Vec<_> = operators
+            .into_iter()
+            .flat_map(|(lir_id, worker_id)| self.row_for_operator(*lir_id, *worker_id))
+            .map(|r| (r, -1))
+            .collect();
+        if !updates.is_empty() {
+            self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates)
+        }
     }
 }

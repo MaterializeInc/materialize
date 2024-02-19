@@ -651,9 +651,11 @@ where
         }
 
         for (type_, updates) in updates_by_type {
-            self.storage
-                .record_introspection_updates(type_, updates)
-                .await;
+            if !updates.is_empty() {
+                self.storage
+                    .record_introspection_updates(type_, updates)
+                    .await;
+            }
         }
     }
 }
@@ -704,13 +706,17 @@ where
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn maintain(&mut self) {
-        // Record pending introspection updates.
-        self.record_introspection_updates().await;
-
         // Perform instance maintenance work.
         for instance in self.compute.instances.values_mut() {
             instance.activate(self.storage).maintain();
         }
+
+        // Record pending introspection updates.
+        //
+        // It's beneficial to do this as the last maintenance step because previous steps can cause
+        // dropping of state, which can can cause introspection retractions, which lower the volume
+        // of data we have to record.
+        self.record_introspection_updates().await;
     }
 }
 

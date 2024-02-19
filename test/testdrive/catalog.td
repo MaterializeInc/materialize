@@ -556,6 +556,7 @@ mz_compute_frontiers_per_worker              log   <null>   <null>
 mz_compute_hydration_statuses                source <null>  <null>
 mz_compute_import_frontiers_per_worker       log   <null>   <null>
 mz_compute_operator_durations_histogram_raw  log   <null>   <null>
+mz_compute_operator_hydration_statuses_per_worker source <null> <null>
 mz_dataflow_addresses_per_worker             log   <null>   <null>
 mz_dataflow_channels_per_worker              log   <null>   <null>
 mz_dataflow_operator_reachability_raw        log   <null>   <null>
@@ -620,6 +621,7 @@ mz_compute_frontiers
 mz_compute_import_frontiers
 mz_compute_operator_durations_histogram
 mz_compute_operator_durations_histogram_per_worker
+mz_compute_operator_hydration_statuses
 mz_dataflow_addresses
 mz_dataflow_arrangement_sizes
 mz_dataflow_channel_operators

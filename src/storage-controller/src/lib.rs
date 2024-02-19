@@ -823,7 +823,8 @@ where
                         // Truncate compute-maintained collections.
                         IntrospectionType::ComputeDependencies
                         | IntrospectionType::ComputeReplicaHeartbeats
-                        | IntrospectionType::ComputeHydrationStatus => {
+                        | IntrospectionType::ComputeHydrationStatus
+                        | IntrospectionType::ComputeOperatorHydrationStatus => {
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
 
