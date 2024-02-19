@@ -36,25 +36,25 @@ impl ProtobufDecoderState {
             events_error: 0,
         })
     }
-    pub fn get_value(&mut self, bytes: &[u8]) -> Option<Result<Row, DecodeErrorKind>> {
+    pub fn get_value(&mut self, bytes: &[u8]) -> Result<Row, DecodeErrorKind> {
         match self.decoder.decode(bytes) {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;
-                    Some(Ok(row))
+                    Ok(row)
                 } else {
                     self.events_error += 1;
-                    Some(Err(DecodeErrorKind::Text(
+                    Err(DecodeErrorKind::Text(
                         "protobuf deserialization returned None".to_string(),
-                    )))
+                    ))
                 }
             }
             Err(err) => {
                 self.events_error += 1;
-                Some(Err(DecodeErrorKind::Text(format!(
+                Err(DecodeErrorKind::Text(format!(
                     "protobuf deserialization error: {}",
                     err.display_with_causes()
-                ))))
+                )))
             }
         }
     }

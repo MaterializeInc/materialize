@@ -25,23 +25,31 @@ message ProtoSourceEnvelope {
 }
 
 message ProtoNoneEnvelope {
+    reserved 2;
     ProtoKeyEnvelope key_envelope = 1;
-    uint64 key_arity = 2;
+    bool flatten_value = 3;
 }
 
 message ProtoKeyEnvelope {
+    reserved 1, 2, 3;
+    message ProtoKeyEnvelopeFlattened {
+        uint64 key_arity = 1;
+    }
+    message ProtoKeyEnvelopeNamed {
+        string name = 1;
+        bool flatten = 2;
+    }
     oneof kind {
-        google.protobuf.Empty none = 1;
-        google.protobuf.Empty flattened = 2;
-        string named = 3;
+        ProtoKeyEnvelopeFlattened flattened = 4;
+        ProtoKeyEnvelopeNamed named = 5;
     }
 }
 
 message ProtoUpsertEnvelope {
+    reserved 3, 4;
     ProtoUpsertStyle style = 1;
     repeated uint64 key_indices = 2;
-    uint64 source_arity = 3;
-    reserved 4;
+    bool flatten_value = 5;
 }
 
 message ProtoUpsertStyle {

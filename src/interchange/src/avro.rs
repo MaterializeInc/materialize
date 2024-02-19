@@ -18,7 +18,7 @@ pub use crate::avro::encode::{
     encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
     AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions, DocTarget,
 };
-pub use crate::avro::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolver};
+pub use crate::avro::schema::{parse_schema, schema_to_scalartype, ConfluentAvroResolver};
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
     matches!(schema, SchemaPieceOrNamed::Piece(SchemaPiece::Null))
@@ -31,7 +31,7 @@ mod tests {
     use mz_repr::adt::date::Date;
     use mz_repr::adt::numeric::{self, NumericMaxScale};
     use mz_repr::adt::timestamp::CheckedTimestamp;
-    use mz_repr::{Datum, RelationDesc, ScalarType};
+    use mz_repr::{ColumnName, Datum, RelationDesc, ScalarType};
     use ordered_float::OrderedFloat;
 
     use super::*;
@@ -44,8 +44,12 @@ mod tests {
             "fields": []
         }"#;
 
-        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
-        assert_eq!(desc.arity(), 0, "empty record produced rows");
+        match schema_to_scalartype(parse_schema(schema)?)? {
+            ScalarType::Record { fields, .. } => {
+                assert_eq!(fields.len(), 0, "empty record produced columns");
+            }
+            typ => panic!("record produced non-record scalar type: {typ:?}"),
+        }
 
         Ok(())
     }
@@ -61,12 +65,17 @@ mod tests {
             ]
         }"#;
 
-        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
-        let expected_desc = RelationDesc::empty()
-            .with_column("f1", ScalarType::Int32.nullable(false))
-            .with_column("f2", ScalarType::String.nullable(false));
+        match schema_to_scalartype(parse_schema(schema)?)? {
+            ScalarType::Record { fields, .. } => {
+                let expected_fields = vec![
+                    (ColumnName::from("f1"), ScalarType::Int32.nullable(false)),
+                    (ColumnName::from("f2"), ScalarType::String.nullable(false)),
+                ];
+                assert_eq!(fields, expected_fields);
+            }
+            typ => panic!("record produced non-record scalar type: {typ:?}"),
+        }
 
-        assert_eq!(desc, expected_desc);
         Ok(())
     }
 

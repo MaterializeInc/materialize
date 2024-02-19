@@ -148,13 +148,16 @@ impl SourceStatisticsMetrics {
         worker_id: usize,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
-        envelope: SourceEnvelope,
+        envelope: Option<SourceEnvelope>,
     ) -> SourceStatisticsMetrics {
         let shard = shard_id.to_string();
         let envelope = match envelope {
-            SourceEnvelope::None(_) => "none",
-            SourceEnvelope::Upsert(_) => "upsert",
-            SourceEnvelope::CdcV2 => "cdcv2",
+            // TODO(petrosagg): what SQL calls NONE envelope actually does some things to the
+            // values like treating nulls specially so we should probably rename it.
+            None => "none",
+            Some(SourceEnvelope::None(_)) => "none",
+            Some(SourceEnvelope::Upsert(_)) => "upsert",
+            Some(SourceEnvelope::CdcV2) => "cdcv2",
         };
 
         SourceStatisticsMetrics {
@@ -514,7 +517,7 @@ impl SourceStatistics {
         metrics: &SourceStatisticsMetricDefs,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
-        envelope: SourceEnvelope,
+        envelope: Option<SourceEnvelope>,
         resume_upper: Antichain<Timestamp>,
     ) -> Self {
         Self {
