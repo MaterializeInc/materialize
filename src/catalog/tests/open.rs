@@ -10,12 +10,14 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use mz_catalog::durable::objects::serialization::proto;
+use mz_catalog::durable::objects::DurableType;
 use mz_catalog::durable::{
     shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
     test_persist_backed_catalog_state, test_persist_backed_catalog_state_with_version,
-    test_stash_backed_catalog_state, test_stash_config, CatalogError, DurableCatalogError,
-    DurableCatalogState, Epoch, OpenableDurableCatalogState,
+    test_stash_backed_catalog_state, test_stash_config, CatalogError, Database,
+    DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState, Schema,
 };
+use mz_ore::cast::usize_to_u64;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
@@ -222,18 +224,20 @@ async fn test_open_savepoint(
             CatalogError::Catalog(_) => panic!("unexpected catalog error"),
             CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
         }
+    }
 
-        // Initialize the catalog.
-        {
-            let mut state = Box::new(openable_state2)
-                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
-                .await
-                .unwrap();
-            assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
-            Box::new(state).expire().await;
-        }
+    // Initialize the catalog.
+    {
+        let mut state = Box::new(openable_state2)
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+            .await
+            .unwrap();
+        assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
+        Box::new(state).expire().await;
+    }
 
-        // Open catalog in check mode.
+    {
+        // Open catalog in savepoint mode.
         let mut state = Box::new(openable_state3)
             .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
@@ -241,20 +245,71 @@ async fn test_open_savepoint(
         // Savepoint catalogs do not increment the epoch.
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
 
-        // Perform write.
+        // Perform writes.
         let mut txn = state.transaction().await.unwrap();
-        txn.insert_user_database("db", RoleId::User(1), Vec::new())
-            .unwrap();
+        let mut ids = Vec::new();
+        let mut db_schemas = Vec::new();
+        for i in 0..10 {
+            let db_id = txn
+                .insert_user_database(&format!("db{i}"), RoleId::User(i), Vec::new())
+                .unwrap();
+            let schema_id = txn
+                .insert_user_schema(db_id, &format!("sc{i}"), RoleId::User(i), Vec::new())
+                .unwrap();
+            ids.push((db_id.clone(), schema_id.clone()));
+            db_schemas.push((
+                Database {
+                    id: db_id.clone(),
+                    name: format!("db{i}"),
+                    owner_id: RoleId::User(i),
+                    privileges: Vec::new(),
+                },
+                Schema {
+                    id: schema_id,
+                    name: format!("sc{i}"),
+                    database_id: Some(db_id),
+                    owner_id: RoleId::User(i),
+                    privileges: Vec::new(),
+                },
+            ));
+        }
         txn.commit().await.unwrap();
-        // Read back write.
-        let db = state
-            .snapshot()
-            .await
-            .unwrap()
-            .databases
-            .into_iter()
-            .find(|(_k, v)| v.name == "db");
-        assert!(db.is_some(), "database should exist");
+
+        // Read back writes.
+        let snapshot = state.snapshot().await.unwrap();
+        for (db, schema) in &db_schemas {
+            let (db_key, db_value) = db.clone().into_key_value();
+            let db_found = snapshot.databases.get(&db_key.into_proto()).unwrap();
+            assert_eq!(&db_value.into_proto(), db_found);
+            let (schema_key, schema_value) = schema.clone().into_key_value();
+            let schema_found = snapshot.schemas.get(&schema_key.into_proto()).unwrap();
+            assert_eq!(&schema_value.into_proto(), schema_found);
+        }
+
+        // Perform updates.
+        let mut txn = state.transaction().await.unwrap();
+        for (i, (db, schema)) in db_schemas.iter_mut().enumerate() {
+            db.name = format!("foo{i}");
+            db.owner_id = RoleId::User(usize_to_u64(i) + 100);
+            txn.update_database(db.id.clone().clone(), db.clone())
+                .unwrap();
+            schema.name = format!("bar{i}");
+            schema.owner_id = RoleId::User(usize_to_u64(i) + 100);
+            txn.update_schema(schema.id.clone(), schema.clone())
+                .unwrap();
+        }
+        txn.commit().await.unwrap();
+
+        // Read back updates.
+        let snapshot = state.snapshot().await.unwrap();
+        for (db, schema) in &db_schemas {
+            let (db_key, db_value) = db.clone().into_key_value();
+            let db_found = snapshot.databases.get(&db_key.into_proto()).unwrap();
+            assert_eq!(&db_value.into_proto(), db_found);
+            let (schema_key, schema_value) = schema.clone().into_key_value();
+            let schema_found = snapshot.schemas.get(&schema_key.into_proto()).unwrap();
+            assert_eq!(&schema_value.into_proto(), schema_found);
+        }
 
         Box::new(state).expire().await;
     }
