@@ -329,6 +329,9 @@ pub struct CatalogEntry {
     pub item: CatalogItem,
     #[serde(skip)]
     pub referenced_by: Vec<GlobalId>,
+    // TODO(#26794)––this should have an invariant tied to it that all
+    // dependents (i.e. entries in this field) have IDs greater than this
+    // entry's ID.
     #[serde(skip)]
     pub used_by: Vec<GlobalId>,
     pub id: GlobalId,

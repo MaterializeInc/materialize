@@ -1470,108 +1470,7 @@ impl Coordinator {
         debug!("coordinator init: initializing storage collections");
         self.bootstrap_storage_collections().await;
 
-        // Load catalog entries based on topological dependency sorting. We do
-        // this to reinforce that `GlobalId`'s `Ord` implementation does not
-        // express the entries' dependency graph.
-        let mut entries_awaiting_dependencies: BTreeMap<
-            GlobalId,
-            Vec<(CatalogEntry, Vec<GlobalId>)>,
-        > = BTreeMap::new();
-
-        let mut loaded_items = BTreeSet::new();
-
-        // Subsources must be created immediately before their primary source
-        // without any intermediary collections between them. This version of MZ
-        // needs this because it sets tighter bounds on collections' sinces.
-        // Without this, dependent collections can place read holds on the
-        // subsource, which can result in panics if we adjust the subsource's
-        // since.
-        //
-        // This can likely be removed in the next version of Materialize
-        // (v0.46).
-        let mut entries_awaiting_dependent: BTreeMap<GlobalId, Vec<CatalogEntry>> = BTreeMap::new();
-        let mut awaited_dependent_seen = BTreeSet::new();
-
-        let mut unsorted_entries: VecDeque<_> = self
-            .catalog()
-            .entries()
-            .cloned()
-            .map(|entry| {
-                let remaining_deps = entry.uses().into_iter().collect::<Vec<_>>();
-                (entry, remaining_deps)
-            })
-            .collect();
-        let mut entries = Vec::with_capacity(unsorted_entries.len());
-
-        while let Some((entry, mut remaining_deps)) = unsorted_entries.pop_front() {
-            let awaiting_this_dep = entries_awaiting_dependent.get(&entry.id());
-            remaining_deps.retain(|dep| {
-                // Consider dependency filled if item is loaded or if this
-                // dependency is waiting on this entry.
-                !loaded_items.contains(dep)
-                    && awaiting_this_dep
-                        .map(|awaiting| awaiting.iter().all(|e| e.id() != *dep))
-                        .unwrap_or(true)
-            });
-
-            // While you cannot assume anything about the ordering of
-            // dependencies based on their GlobalId, it is not secret knowledge
-            // that the most likely final dependency is that with the greatest
-            // ID.
-            match remaining_deps.last() {
-                Some(dep) => {
-                    entries_awaiting_dependencies
-                        .entry(*dep)
-                        .or_default()
-                        .push((entry, remaining_deps));
-                }
-                None => {
-                    let id = entry.id();
-
-                    if let Some(waiting_on_this_dep) = entries_awaiting_dependencies.remove(&id) {
-                        unsorted_entries.extend(waiting_on_this_dep);
-                    }
-
-                    if let Some(waiting_on_this_dependent) = entries_awaiting_dependent.remove(&id)
-                    {
-                        // Re-enqueue objects and continue.
-                        for entry in
-                            std::iter::once(entry).chain(waiting_on_this_dependent.into_iter())
-                        {
-                            awaited_dependent_seen.insert(entry.id());
-                            unsorted_entries.push_front((entry, vec![]));
-                        }
-                        continue;
-                    }
-
-                    // Subsources wait on their primary source before being
-                    // added.
-                    if entry.subsource_details().is_some() && !awaited_dependent_seen.contains(&id)
-                    {
-                        let min = entry
-                            .used_by()
-                            .into_iter()
-                            .min()
-                            .expect("subsource always used");
-
-                        entries_awaiting_dependent
-                            .entry(*min)
-                            .or_default()
-                            .push(entry);
-                        continue;
-                    }
-
-                    awaited_dependent_seen.remove(&id);
-                    loaded_items.insert(id);
-                    entries.push(entry);
-                }
-            }
-        }
-
-        assert!(
-            entries_awaiting_dependent.is_empty() && entries_awaiting_dependencies.is_empty(),
-            "items not cleared from queue {entries_awaiting_dependent:?}, {entries_awaiting_dependencies:?}"
-        );
+        let entries: Vec<_> = self.catalog().entries().cloned().collect();
 
         debug!("coordinator init: optimizing dataflow plans");
         self.bootstrap_dataflow_plans(&entries)?;
@@ -1590,6 +1489,18 @@ impl Coordinator {
         let local_read_ts_for_index_bootstrapping = self.get_local_read_ts().await;
 
         for entry in &entries {
+            // TODO(#26794): we should move this invariant into `CatalogEntry`.
+            mz_ore::soft_assert_or_log!(
+                entry
+                    .used_by()
+                    .iter()
+                    .all(|dependent_id| *dependent_id > entry.id),
+                "item dependencies should respect `GlobalId`'s PartialOrd \
+                but {:?} depends on {:?}",
+                entry.id,
+                entry.used_by()
+            );
+
             debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
