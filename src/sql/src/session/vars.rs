@@ -940,17 +940,6 @@ static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| 
     internal: true,
 });
 
-const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("coord_slow_message_reporting_threshold"),
-    // Default to recording all messages, but left here so we can dynamically increase if this
-    // causes unexpected problems.
-    value: Duration::from_millis(0),
-    description:
-        "Sets the threshold at which we will report the handling of a coordinator message \
-    for being slow.",
-    internal: true,
-};
-
 const COORD_SLOW_MESSAGE_WARN_THRESHOLD: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("coord_slow_message_warn_threshold"),
     // Note(parkmycar): This value was chosen arbitrarily.
@@ -2956,7 +2945,6 @@ impl SystemVars {
             .with_var(&OPENTELEMETRY_FILTER_DEFAULTS)
             .with_var(&SENTRY_FILTERS)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
-            .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
             .with_var(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
@@ -3753,10 +3741,6 @@ impl SystemVars {
 
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
-    }
-
-    pub fn coord_slow_message_reporting_threshold(&self) -> Duration {
-        *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
     }
 
     pub fn coord_slow_message_warn_threshold(&self) -> Duration {

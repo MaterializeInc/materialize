@@ -2407,10 +2407,6 @@ impl Coordinator {
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
-            let prometheus_threshold = self
-                .catalog
-                .system_config()
-                .coord_slow_message_reporting_threshold();
             let warn_threshold = self
                 .catalog()
                 .system_config()
@@ -2497,13 +2493,14 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
                     timer = idle_rx.recv() => {
                         timer.expect("does not drop").observe_duration();
-                        self.metrics.messages_processed.inc();
-                        self.metrics.watchdog_messages_processed.inc();
+                        self.metrics
+                            .message_handling
+                            .with_label_values(&["watchdog"])
+                            .observe(0.0);
                         continue;
                     }
                 };
 
-                self.metrics.messages_processed.inc();
                 // All message processing functions trace. Start a parent span
                 // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
@@ -2538,13 +2535,10 @@ impl Coordinator {
                 self.handle_message(span, msg).await;
                 let duration = start.elapsed();
 
-                // Report slow messages to Prometheus.
-                if duration > prometheus_threshold {
-                    self.metrics
-                        .slow_message_handling
-                        .with_label_values(&[msg_kind])
-                        .observe(duration.as_secs_f64());
-                }
+                self.metrics
+                    .message_handling
+                    .with_label_values(&[msg_kind])
+                    .observe(duration.as_secs_f64());
 
                 // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
                 if duration > warn_threshold {
