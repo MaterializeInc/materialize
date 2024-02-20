@@ -9,7 +9,7 @@
 
 //! Structured name types for SQL objects.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::str::FromStr;
 
@@ -1287,15 +1287,21 @@ impl<'a> NameResolver<'a> {
                     }
                 };
 
-                self.ids.insert(item.id());
-                self.ids.extend(
-                    item.type_details()
+                let mut queue = VecDeque::new();
+                queue.push_back(item);
+                while let Some(item) = queue.pop_front() {
+                    self.ids.insert(item.id());
+                    let references = item
+                        .type_details()
                         .expect("references type")
                         .typ
                         .references()
-                        .iter()
-                        .cloned(),
-                );
+                        .into_iter()
+                        .cloned()
+                        .filter(|id| !self.ids.contains(id))
+                        .map(|id| self.catalog.get_item(&id));
+                    queue.extend(references);
+                }
 
                 Ok(ResolvedDataType::Named {
                     id: item.id(),
