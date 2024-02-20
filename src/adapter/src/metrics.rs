@@ -22,7 +22,6 @@ pub struct Metrics {
     pub active_subscribes: IntGaugeVec,
     pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: HistogramVec,
-    pub watchdog_messages_processed: IntCounter,
     pub determine_timestamp: IntCounterVec,
     pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
     pub commands: IntCounterVec,
@@ -33,7 +32,7 @@ pub struct Metrics {
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_unsampled_bytes: IntCounterVec,
     pub statement_logging_actual_bytes: IntCounterVec,
-    pub slow_message_handling: HistogramVec,
+    pub message_handling: HistogramVec,
     pub optimization_notices: IntCounterVec,
     pub append_table_duration_seconds: HistogramVec,
     pub webhook_validation_reduce_failures: IntCounterVec,
@@ -67,10 +66,6 @@ impl Metrics {
                 name: "mz_coord_queue_busy_seconds",
                 help: "The number of seconds the coord queue was processing before it was empty. This is a sampled metric and does not measure the full coord queue wait/idle times.",
                 buckets: histogram_seconds_buckets(0.000_128, 32.0)
-            )),
-            watchdog_messages_processed: registry.register(metric!(
-                name: "mz_coord_watchdog_messages_processed",
-                help: "The total number of watchdog messages processed by the coord.",
             )),
             determine_timestamp: registry.register(metric!(
                 name: "mz_determine_timestamp",
@@ -122,10 +117,9 @@ impl Metrics {
                 name: "mz_statement_logging_actual_bytes",
                 help: "The total amount of SQL text that was logged by statement logging.",
             )),
-            slow_message_handling: registry.register(metric!(
+            message_handling: registry.register(metric!(
                 name: "mz_slow_message_handling",
-                help: "Latency for coordinator messages that are 'slow' to process. 'Slow' is \
-                    defined by the LaunchDarkly variable 'coord_slow_message_reporting_threshold'",
+                help: "Latency for ALL coordinator messages. 'slow' is in the name for legacy reasons, but is not accurate.",
                 var_labels: ["message_kind"],
                 buckets: histogram_seconds_buckets(0.128, 32.0),
             )),
