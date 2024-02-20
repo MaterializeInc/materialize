@@ -99,7 +99,7 @@ pub mod r#private {
             let file = BufReader::new(file);
             Some(
                 file.lines()
-                    .flatten()
+                    .map_while(Result::ok)
                     .filter_map(CgroupEntry::from_line)
                     .collect(),
             )
@@ -149,7 +149,7 @@ pub mod r#private {
             let file = BufReader::new(file);
             Some(
                 file.lines()
-                    .flatten()
+                    .map_while(Result::ok)
                     .filter_map(MountInfo::from_line)
                     .filter(|mi| mi.fs_type == "cgroup" || mi.fs_type == "cgroup2")
                     .partition(|mi| mi.fs_type == "cgroup2"),

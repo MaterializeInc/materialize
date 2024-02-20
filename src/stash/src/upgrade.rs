@@ -52,7 +52,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    tx.append(vec![batch]).await?;
+                    drop(tx.append(vec![batch]).await?);
                     let lower = tx.upper(collection.id).await?;
                     batch = collection.make_batch_lower(lower)?;
                     tx.peek_one(collection).await?
@@ -92,7 +92,7 @@ where
             }
         }
 
-        tx.append(vec![batch]).await?;
+        drop(tx.append(vec![batch]).await?);
 
         Ok(())
     }

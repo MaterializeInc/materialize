@@ -1383,22 +1383,21 @@ mod tests {
     fn test_mfp() {
         // Regression test for https://github.com/MaterializeInc/materialize/issues/19338
         use MirScalarExpr::*;
+
+        // Broken out so 1.74 and 1.76 rustfmt format it the same
+        let call_unary = CallUnary {
+            func: UnaryFunc::IsNull(IsNull),
+            expr: Box::new(CallBinary {
+                func: BinaryFunc::MulInt32,
+                expr1: Box::new(Column(0)),
+                expr2: Box::new(Column(0)),
+            }),
+        };
         let mfp = MapFilterProject {
             expressions: vec![],
             predicates: vec![
                 // Always fails on the known input range
-                (
-                    1,
-                    CallUnary {
-                        func: UnaryFunc::IsNull(IsNull),
-                        expr:
-                            Box::new(CallBinary {
-                                func: BinaryFunc::MulInt32,
-                                expr1: Box::new(Column(0)),
-                                expr2: Box::new(Column(0)),
-                            }),
-                    },
-                ),
+                (1, call_unary),
                 // Always returns false on the known input range
                 (
                     1,

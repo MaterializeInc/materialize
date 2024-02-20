@@ -297,7 +297,7 @@ where
                             InternalStashError::PeekSinceUpper(_) => {
                                 // If the upper isn't > since, bump the upper and try again to find a sealed
                                 // entry. Do this by appending the empty batch which will advance the upper.
-                                tx.append(vec![batch]).await?;
+                                drop(tx.append(vec![batch]).await?);
                                 let lower = tx.upper(collection.id).await?;
                                 batch = collection.make_batch_lower(lower)?;
                                 tx.peek_key_one(collection, &key).await?
@@ -309,7 +309,7 @@ where
                         Some(prev) => Ok(prev),
                         None => {
                             collection.append_to_batch(&mut batch, &key, &value, 1);
-                            tx.append(vec![batch]).await?;
+                            drop(tx.append(vec![batch]).await?);
                             Ok((*value).clone())
                         }
                     }
@@ -350,7 +350,7 @@ where
                             InternalStashError::PeekSinceUpper(_) => {
                                 // If the upper isn't > since, bump the upper and try again to find a sealed
                                 // entry. Do this by appending the empty batch which will advance the upper.
-                                tx.append(vec![batch]).await?;
+                                drop(tx.append(vec![batch]).await?);
                                 let lower = tx.upper(collection.id).await?;
                                 batch = collection.make_batch_lower(lower)?;
                                 tx.peek_one(collection).await?
@@ -364,7 +364,7 @@ where
                             prev.insert(k.clone(), v.clone());
                         }
                     }
-                    tx.append(vec![batch]).await?;
+                    drop(tx.append(vec![batch]).await?);
                     Ok(prev)
                 })
             })
@@ -401,7 +401,7 @@ where
                             InternalStashError::PeekSinceUpper(_) => {
                                 // If the upper isn't > since, bump the upper and try again to find a sealed
                                 // entry. Do this by appending the empty batch which will advance the upper.
-                                tx.append(vec![batch]).await?;
+                                drop(tx.append(vec![batch]).await?);
                                 let lower = tx.upper(collection.id).await?;
                                 batch = collection.make_batch_lower(lower)?;
                                 tx.peek_key_one(collection, &key).await?
@@ -419,7 +419,7 @@ where
                             collection.append_to_batch(&mut batch, &key, prev, -1);
                         }
                         collection.append_to_batch(&mut batch, &key, &next, 1);
-                        tx.append(vec![batch]).await?;
+                        drop(tx.append(vec![batch]).await?);
                     }
                     Ok(Ok((prev, next)))
                 })
@@ -450,7 +450,7 @@ where
                             InternalStashError::PeekSinceUpper(_) => {
                                 // If the upper isn't > since, bump the upper and try again to find a sealed
                                 // entry. Do this by appending the empty batch which will advance the upper.
-                                tx.append(vec![batch]).await?;
+                                drop(tx.append(vec![batch]).await?);
                                 let lower = tx.upper(collection.id).await?;
                                 batch = collection.make_batch_lower(lower)?;
                                 tx.peek_one(collection).await?
@@ -464,7 +464,7 @@ where
                         }
                         collection.append_to_batch(&mut batch, k, v, 1);
                     }
-                    tx.append(vec![batch]).await?;
+                    drop(tx.append(vec![batch]).await?);
                     Ok(())
                 })
             })
@@ -511,7 +511,7 @@ where
                             collection.append_to_batch(&mut batch, &key, &v, -1);
                         }
                     }
-                    tx.append(vec![batch]).await?;
+                    drop(tx.append(vec![batch]).await?);
                     Ok(())
                 })
             })
