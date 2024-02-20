@@ -72,7 +72,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 
-use crate::metrics::mysql::MySqlSourceMetrics;
+use crate::metrics::source::mysql::MySqlSourceMetrics;
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 

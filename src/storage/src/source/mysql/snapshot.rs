@@ -108,7 +108,7 @@ use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
-use crate::metrics::mysql::MySqlSnapshotMetrics;
+use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 use super::schemas::verify_schemas;

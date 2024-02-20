@@ -22,10 +22,9 @@ use mz_ore::metrics::{
 use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
 
-use super::kafka::KafkaPartitionMetricDefs;
-use super::mysql::MySqlSourceMetricDefs;
-use super::postgres::PgSourceMetricDefs;
-use super::upsert::{UpsertBackpressureMetricDefs, UpsertMetricDefs};
+pub mod kafka;
+pub mod mysql;
+pub mod postgres;
 
 /// Definitions for general metrics about sources that are not specific to the source type.
 ///
@@ -234,11 +233,9 @@ impl OffsetCommitMetrics {
 #[derive(Debug, Clone)]
 pub(crate) struct SourceMetricDefs {
     pub(crate) source_defs: GeneralSourceMetricDefs,
-    pub(crate) postgres_defs: PgSourceMetricDefs,
-    pub(crate) mysql_defs: MySqlSourceMetricDefs,
-    pub(crate) kafka_partition_defs: KafkaPartitionMetricDefs,
-    pub(crate) upsert_defs: UpsertMetricDefs,
-    pub(crate) upsert_backpressure_defs: UpsertBackpressureMetricDefs,
+    pub(crate) postgres_defs: postgres::PgSourceMetricDefs,
+    pub(crate) mysql_defs: mysql::MySqlSourceMetricDefs,
+    pub(crate) kafka_source_defs: kafka::KafkaSourceMetricDefs,
     /// A cluster-wide counter shared across all sources.
     pub(crate) bytes_read: IntCounter,
 
@@ -250,11 +247,9 @@ impl SourceMetricDefs {
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             source_defs: GeneralSourceMetricDefs::register_with(registry),
-            postgres_defs: PgSourceMetricDefs::register_with(registry),
-            mysql_defs: MySqlSourceMetricDefs::register_with(registry),
-            kafka_partition_defs: KafkaPartitionMetricDefs::register_with(registry),
-            upsert_defs: UpsertMetricDefs::register_with(registry),
-            upsert_backpressure_defs: UpsertBackpressureMetricDefs::register_with(registry),
+            postgres_defs: postgres::PgSourceMetricDefs::register_with(registry),
+            mysql_defs: mysql::MySqlSourceMetricDefs::register_with(registry),
+            kafka_source_defs: kafka::KafkaSourceMetricDefs::register_with(registry),
             bytes_read: registry.register(metric!(
                 name: "mz_bytes_read_total",
                 help: "Count of bytes read from sources",

@@ -110,7 +110,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 use tracing::{error, trace};
 
-use crate::metrics::postgres::PgSourceMetrics;
+use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, TransientError};
 use crate::source::types::ProgressStatisticsUpdate;
