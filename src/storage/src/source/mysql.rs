@@ -90,6 +90,7 @@ use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 mod replication;
 mod schemas;
 mod snapshot;
+mod statistics;
 
 impl SourceRender for MySqlSourceConnection {
     type Time = GtidPartition;
@@ -102,7 +103,7 @@ impl SourceRender for MySqlSourceConnection {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        _resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
+        resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
@@ -154,13 +155,16 @@ impl SourceRender for MySqlSourceConnection {
 
         let (repl_updates, uppers, repl_err, repl_token) = replication::render(
             scope.clone(),
-            config,
-            self,
+            config.clone(),
+            self.clone(),
             subsource_resume_uppers,
             table_info,
             &rewinds,
             metrics,
         );
+
+        let (stats_stream, stats_err, stats_token) =
+            statistics::render(scope.clone(), config, self, resume_uppers);
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
             let res = res.map(|row| SourceMessage {
@@ -171,28 +175,29 @@ impl SourceRender for MySqlSourceConnection {
             (output, res)
         });
 
-        let health = snapshot_err.concat(&repl_err).map(move |err| {
-            // This update will cause the dataflow to restart
-            let err_string = err.display_with_causes().to_string();
-            let update = HealthStatusUpdate::halting(err_string.clone(), None);
-            // TODO: change namespace for SSH errors
-            let namespace = Self::STATUS_NAMESPACE.clone();
+        let health = snapshot_err
+            .concat(&repl_err)
+            .concat(&stats_err)
+            .map(move |err| {
+                // This update will cause the dataflow to restart
+                let err_string = err.display_with_causes().to_string();
+                let update = HealthStatusUpdate::halting(err_string.clone(), None);
+                // TODO: change namespace for SSH errors
+                let namespace = Self::STATUS_NAMESPACE.clone();
 
-            HealthStatusMessage {
-                index: 0,
-                namespace: namespace.clone(),
-                update,
-            }
-        });
+                HealthStatusMessage {
+                    index: 0,
+                    namespace: namespace.clone(),
+                    update,
+                }
+            });
 
         (
             updates,
             Some(uppers),
             health,
-            // TODO(guswynn): add progress statistics updates once the core mysql impl is fully
-            // fleshed out.
-            timely::dataflow::operators::generic::operator::empty(scope),
-            vec![snapshot_token, repl_token],
+            stats_stream,
+            vec![snapshot_token, repl_token, stats_token],
         )
     }
 }
