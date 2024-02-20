@@ -38,9 +38,13 @@ struct HiddenUserVersionSnapshot<'a>(&'a Snapshot);
 
 impl HiddenUserVersionSnapshot<'_> {
     fn user_version(&self) -> Option<&proto::ConfigValue> {
-        self.0.configs.get(&proto::ConfigKey {
+        self.0.configs.get(&Self::user_version_key())
+    }
+
+    fn user_version_key() -> proto::ConfigKey {
+        proto::ConfigKey {
             key: USER_VERSION_KEY.to_string(),
-        })
+        }
     }
 }
 
@@ -64,11 +68,8 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             default_privileges,
             system_privileges,
         } = self.0;
-        let configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs
-            .into_iter()
-            .filter(|(key, _)| key.key != USER_VERSION_KEY)
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
+        let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs.clone();
+        configs.remove(&Self::user_version_key());
         f.debug_struct("Snapshot")
             .field("databases", databases)
             .field("schemas", schemas)
