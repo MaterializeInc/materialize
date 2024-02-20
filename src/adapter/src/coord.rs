@@ -2496,7 +2496,7 @@ impl Coordinator {
                         self.metrics
                             .message_handling
                             .with_label_values(&["watchdog"])
-                            .observe(0);
+                            .observe(0.0);
                         continue;
                     }
                 };
