@@ -222,10 +222,11 @@ impl Coordinator {
 
         // Timestamp selection
         let oracle_read_ts = self.oracle_read_ts(ctx.session(), &timeline, when).await;
+        let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
-                &global_mir_plan.id_bundle(optimizer.cluster_id()),
+                &bundle,
                 when,
                 optimizer.cluster_id(),
                 &timeline,
@@ -246,6 +247,13 @@ impl Coordinator {
                 return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
             }
         }
+        // Assert that the auto_cleanup fn will have the only read holds for this session so they
+        // can be cleared after optimization.
+        if self.txn_read_holds.contains_key(ctx.session().conn_id()) {
+            coord_bail!("expected empty session read holds during SUBSCRIBE sequencing");
+        }
+        self.acquire_read_holds_auto_cleanup(ctx.session(), as_of, &bundle, true)
+            .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
         // Optimize LIR
@@ -308,6 +316,13 @@ impl Coordinator {
         let (df_desc, df_meta) = global_lir_plan.unapply();
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+
+        // Release the pre-optimization read holds because the controller is now handling those.
+        if let Some(txn_reads) = self.txn_read_holds.remove(ctx.session().conn_id()) {
+            self.release_read_holds(txn_reads);
+        } else {
+            tracing::error!("expected read holds to exist for sequenced SUBSCRIBE");
+        }
 
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self
