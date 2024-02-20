@@ -215,7 +215,7 @@ fn plan_alter_item_owner(
             }
 
             // Sub-sources cannot be altered directly.
-            if item.is_subsource() {
+            if item.subsource_details().is_some() || item.is_progress_source() {
                 sql_bail!("cannot ALTER this type of source");
             }
 

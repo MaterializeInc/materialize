@@ -1534,7 +1534,8 @@ impl Coordinator {
 
                     // Subsources wait on their primary source before being
                     // added.
-                    if entry.is_subsource() && !awaited_dependent_seen.contains(&id) {
+                    if entry.subsource_details().is_some() && !awaited_dependent_seen.contains(&id)
+                    {
                         let min = entry
                             .used_by()
                             .into_iter()
