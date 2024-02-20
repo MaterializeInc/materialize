@@ -10,6 +10,7 @@
 //! A controller for a compute instance.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::time::Instant;
 
@@ -222,6 +223,10 @@ impl<T: Timestamp> Instance<T> {
     }
 
     /// Add a collection to the instance state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a collection with the same ID exists already.
     fn add_collection(
         &mut self,
         id: GlobalId,
@@ -237,7 +242,10 @@ impl<T: Timestamp> Instance<T> {
         if write_only && self.enable_aggressive_readhold_downgrades {
             state.read_policy = None;
         }
-        self.collections.insert(id, state);
+
+        if let Some(previous) = self.collections.insert(id, state) {
+            panic!("attempt to add a collection with existing ID {id} (previous={previous:?}");
+        }
 
         // Add per-replica collection state.
         for replica in self.replicas.values_mut() {
@@ -1852,7 +1860,7 @@ pub struct ReplicaState<T> {
     last_heartbeat: Option<DateTime<Utc>>,
 }
 
-impl<T> ReplicaState<T> {
+impl<T: Debug> ReplicaState<T> {
     fn new(
         id: ReplicaId,
         client: ReplicaClient<T>,
@@ -1873,6 +1881,10 @@ impl<T> ReplicaState<T> {
     }
 
     /// Add a collection to the replica state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a collection with the same ID exists already.
     fn add_collection(&mut self, id: GlobalId, as_of: Antichain<T>) {
         let metrics = self.metrics.for_collection(id);
         let hydration_flag = HydrationFlag::new(self.id, id, self.introspection_tx.clone());
@@ -1899,7 +1911,9 @@ impl<T> ReplicaState<T> {
             state.set_hydrated();
         }
 
-        self.collections.insert(id, state);
+        if let Some(previous) = self.collections.insert(id, state) {
+            panic!("attempt to add a collection with existing ID {id} (previous={previous:?}");
+        }
     }
 
     /// Remove state for a collection.
