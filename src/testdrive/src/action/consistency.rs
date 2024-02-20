@@ -47,9 +47,29 @@ impl FromStr for Level {
     }
 }
 
+/// Skips consistency checks for the current file.
+pub fn skip_consistency_checks(
+    mut cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let reason = cmd
+        .args
+        .string("reason")
+        .context("must provide reason for skipping")?;
+    tracing::info!(reason, "Skipping consistency checks as requested.");
+
+    state.consistency_checks_adhoc_skip = true;
+    Ok(ControlFlow::Continue)
+}
+
 /// Runs consistency checks against multiple parts of Materialize to make sure we haven't violated
 /// our invariants or leaked resources.
 pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow::Error> {
+    // Return early if the user adhoc disabled consistency checks for the current file.
+    if state.consistency_checks_adhoc_skip {
+        return Ok(ControlFlow::Continue);
+    }
+
     let coordinator = check_coordinator(state).await.context("coordinator");
     let catalog_state = check_catalog_state(state).await.context("catalog state");
     // TODO(parkmycar): Fix subsources so they don't leak their shards and then add a leaked shards

@@ -178,6 +178,7 @@ pub struct State {
     initial_backoff: Duration,
     backoff_factor: f64,
     consistency_checks: consistency::Level,
+    consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
     regex_replacement: String,
     postgres_factory: StashFactory,
@@ -394,6 +395,12 @@ impl State {
 
     pub fn aws_region(&self) -> &str {
         self.aws_config.region().map(|r| r.as_ref()).unwrap_or("")
+    }
+
+    /// Resets the adhoc skip consistency check that users can toggle per-file, and returns whether
+    /// the consistency checks should be skipped for this current run.
+    pub fn clear_skip_consistency_checks(&mut self) -> bool {
+        std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
     }
 
     pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
@@ -728,6 +735,9 @@ impl Run for PosCommand {
                 }
                 match builtin.name.as_ref() {
                     "check-consistency" => consistency::run_consistency_checks(state).await,
+                    "skip-consistency-checks" => {
+                        consistency::skip_consistency_checks(builtin, state)
+                    }
                     "check-shard-tombstone" => {
                         consistency::run_check_shard_tombstoned(builtin, state).await
                     }
@@ -1040,6 +1050,7 @@ pub async fn create_state(
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         consistency_checks: config.consistency_checks,
+        consistency_checks_adhoc_skip: false,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),

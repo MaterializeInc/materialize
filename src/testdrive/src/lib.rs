@@ -137,6 +137,7 @@ pub(crate) async fn run_line_reader(
             errors.push(e.into());
         }
     }
+    state.clear_skip_consistency_checks();
 
     if config.reset {
         drop(state);

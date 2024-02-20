@@ -9,6 +9,8 @@
 
 # Test `mz_internal.mz_object_dependencies`.
 
+$ skip-consistency-checks reason="workflow uses SSH keys which we currently can't check"
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
