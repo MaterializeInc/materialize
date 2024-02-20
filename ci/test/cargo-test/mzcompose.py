@@ -128,20 +128,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env["CFLAGS"] = (
                     env.get("CFLAGS", "")
                     + " "
-                    + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+                    + " ".join(rustc_flags.sanitizer_cflags[sanitizer])
                 )
                 env["CXXFLAGS"] = (
                     env.get("CXXFLAGS", "")
                     + " "
-                    + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+                    + " ".join(rustc_flags.sanitizer_cflags[sanitizer])
                 )
                 env["LDFLAGS"] = (
                     env.get("LDFLAGS", "")
                     + " "
-                    + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+                    + " ".join(rustc_flags.sanitizer_cflags[sanitizer])
                 )
-                env["CC"] = "clang"
-                env["CXX"] = "clang++"
+                # env["CC"] = "clang"
+                # env["CXX"] = "clang++"
                 spawn.runv(
                     [
                         "bin/ci-builder",

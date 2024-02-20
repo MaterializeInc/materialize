@@ -145,11 +145,23 @@ def cargo(
     env = {
         **extra_env,
         "RUSTFLAGS": " ".join(rustflags),
-        "CFLAGS": os.getenv("CFLAGS", "") + " " + " ".join(cflags),
-        "CXXFLAGS": os.getenv("CXXFLAGS", "") + " " + " ".join(cflags),
-        "LDFLAGS": os.getenv("LDFLAGS", "") + " " + " ".join(cflags),
-        "CC": "clang",
-        "CXX": "clang++",
+        "CFLAGS": os.getenv("CFLAGS", "")
+        + f" --target={target(arch)} --gcc-toolchain=/opt/x-tools/{target(arch)}/ -fuse-ld=lld --sysroot=/opt/x-tools/{target(arch)}/{target(arch)}/sysroot "
+        + " ".join(cflags),
+        "CXXFLAGS": os.getenv(
+            "CXXFLAGS",
+            f" --target={target(arch)} --gcc-toolchain=/opt/x-tools/{target(arch)}/ -fuse-ld=lld --sysroot=/opt/x-tools/{target(arch)}/{target(arch)}/sysroot ",
+        )
+        + " "
+        + " ".join(cflags),
+        "LDFLAGS": os.getenv(
+            "LDFLAGS",
+            f" --target={target(arch)} --gcc-toolchain=/opt/x-tools/{target(arch)}/ -fuse-ld=lld --sysroot=/opt/x-tools/{target(arch)}/{target(arch)}/sysroot ",
+        )
+        + " "
+        + " ".join(cflags),
+        "CC": "cc",
+        "CXX": "c++",
     }
 
     return [
