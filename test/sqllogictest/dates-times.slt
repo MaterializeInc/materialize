@@ -203,7 +203,7 @@ SELECT DATE '2000-01-01' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
-query error db error: ERROR: operator does not exist: interval \- date
+query error operator does not exist: interval \- date
 SELECT INTERVAL '1' YEAR - DATE '2000-01-01'
 
 query T
@@ -268,7 +268,7 @@ SELECT TIMESTAMP '2000-01-01 00:00:00' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
-query error db error: ERROR: operator does not exist: interval \- timestamp
+query error operator does not exist: interval \- timestamp
 SELECT INTERVAL '1' YEAR - TIMESTAMP '2000-01-01 00:00:00'
 
 # Date arithmetic with duration intervals.
@@ -548,7 +548,7 @@ SELECT TIMESTAMPTZ '2000-01-01 00:00:00-7' - INTERVAL '4' MONTH
 ----
 1999-09-01 07:00:00+00
 
-query error db error: ERROR: operator does not exist: interval \- timestamp with time zone
+query error operator does not exist: interval \- timestamp with time zone
 SELECT INTERVAL '1' YEAR - TIMESTAMPTZ '2000-01-01 00:00:00-4:00'
 
 # Timestamptz arithmetic with duration intervals.
@@ -573,19 +573,19 @@ SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' - INTERVAL '2' HOUR
 ----
 2000-01-01 02:00:00+00
 
-query error db error: ERROR: operator does not exist: interval \- timestamp with time zone
+query error operator does not exist: interval \- timestamp with time zone
 SELECT INTERVAL '2' HOUR - TIMESTAMPTZ '2000-01-01 00:00:00-04'
 
-query error db error: ERROR: operator does not exist: timestamp with time zone \* interval
+query error operator does not exist: timestamp with time zone \* interval
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' * INTERVAL '2' HOUR
 
-query error db error: ERROR: operator does not exist: timestamp with time zone / interval
+query error operator does not exist: timestamp with time zone / interval
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' / INTERVAL '2' HOUR
 
-query error db error: ERROR: operator does not exist: timestamp with time zone \+ timestamp with time zone
+query error operator does not exist: timestamp with time zone \+ timestamp with time zone
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + TIMESTAMPTZ '1999-01-01 00:00:00z'
 
-query error db error: ERROR: operator does not exist: timestamp with time zone \+ timestamp
+query error operator does not exist: timestamp with time zone \+ timestamp
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + TIMESTAMP '1999-01-01 00:00:00'
 
 # Tests with comparison operators and timestamptz
@@ -1301,19 +1301,19 @@ SELECT '"?!?2024-02-13 17:01:58.37848 ?+  00  : '::timestamp with time zone;
 2024-02-13 17:01:58.37848+00
 
 # + is prohibited after numerals
-query error db error: ERROR: invalid input syntax for type timestamp with time zone: have unprocessed tokens \+  0: "\\"\?!\?2024\-02\-13 17:01:58\.37848 \?\+  00  \+ "
+query error invalid input syntax for type timestamp with time zone: have unprocessed tokens \+  0: "\\"\?!\?2024\-02\-13 17:01:58\.37848 \?\+  00  \+ "
 SELECT '"?!?2024-02-13 17:01:58.37848 ?+  00  + '::timestamp with time zone;
 
 # - is prohibited after numerals
-query error db error: ERROR: invalid input syntax for type timestamp with time zone: have unprocessed tokens \+  0: "\\"\?!\?2024\-02\-13 17:01:58\.37848 \?\+  00  \+ "
-SELECT '"?!?2024-02-13 17:01:58.37848 ?+  00  + '::timestamp with time zone;
+query error invalid input syntax for type timestamp with time zone: have unprocessed tokens \+  0: "\\"\?!\?2024\-02\-13 17:01:58\.37848 \?\+  00  \- "
+SELECT '"?!?2024-02-13 17:01:58.37848 ?+  00  - '::timestamp with time zone;
 
 # no space between numerals
-query error db error: ERROR: invalid input syntax for type timestamp with time zone: Cannot parse timezone offset \+  0 0: "\\"\?!\?2024\-02\-13 17:01:58\.37848\+  0 0"
+query error invalid input syntax for type timestamp with time zone: Cannot parse timezone offset \+  0 0: "\\"\?!\?2024\-02\-13 17:01:58\.37848\+  0 0"
 SELECT '"?!?2024-02-13 17:01:58.37848+  0 0'::timestamp with time zone;
 
 # no non-space characters between + or - and the numerals
-query error db error: ERROR: invalid input syntax for type timestamp with time zone: Cannot parse timezone offset \+ \? 00: "\\"\?!\?2024\-02\-13 17:01:58\.37848\+ \? 00"
+query error invalid input syntax for type timestamp with time zone: Cannot parse timezone offset \+ \? 00: "\\"\?!\?2024\-02\-13 17:01:58\.37848\+ \? 00"
 SELECT '"?!?2024-02-13 17:01:58.37848+ ? 00'::timestamp with time zone;
 
 # Regression for #6272. These match postgres.
@@ -1430,7 +1430,7 @@ NULL
 query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT '1970-01-01T00:00:00.666666'::timestamp(-1);
 
-query error db error: ERROR: precision for type timestamp or timestamptz must be between 0 and 6
+query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT '1970-01-01T00:00:00.666666'::timestamp(7);
 
 query T
