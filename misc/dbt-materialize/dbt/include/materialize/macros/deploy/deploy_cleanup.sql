@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro drop_deployment_environment() %}
+{% macro deploy_cleanup() %}
 
 {% set current_target_name = target.name %}
 {% set deployment = var('deployment') %}

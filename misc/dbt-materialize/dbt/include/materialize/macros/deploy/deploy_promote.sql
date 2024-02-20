@@ -13,31 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro wait_until_ready(cluster, poll_interval) %}
-{#
-  Waits for all objects within a specified cluster to be fully hydrated,
-  polling the cluster's readiness status at a specified interval.
-
-  ## Arguments
-  - `cluster_name` (string): The name of the cluster to check for readiness.
-  - `poll_interval` (integer): The interval, in seconds, between each readiness check.
-
-  ## Returns
-  None: This macro does not return a value but will halt execution until the specified
-  cluster's objects are fully hydrated.
-#}
-{% for i in range(1, 100000) %}
-    {% if is_cluster_ready(cluster) %}
-        {{ return(true) }}
-    {% endif %}
-    -- Hydration takes time. Be a good
-    -- citizen and don't overwhelm mz_introspection
-    {{ adapter.sleep(poll_interval) }}
-{% endfor %}
-{{ exceptions.raise_compiler_error("Cluster " ~ cluster ~ " failed to hydrate within a reasonable amount of time") }}
-{% endmacro %}
-
-{% macro deploy(force=false, poll_interval=15) %}
+{% macro deploy_promote(wait=False, poll_interval=15) %}
 {#
   Performs atomic deployment of current dbt targets to production,
   based on the deployment configuration specified in the dbt_project.yml file.
@@ -47,7 +23,9 @@
   to maintain consistency and prevent partial updates.
 
   ## Arguments
-  - `force` (boolean, optional): Skips the hydration checks for deployment targets if set to true. Defaults to false. It is not recommended to override this argument to skip readiness checks, as it may lead to deploying targets that are not fully prepared for production use.
+  - `wait` (boolean, optional): Waits for the deployment to be fully hyrated.
+      Defaults to false. It is recommended you call `deploy_wait` manually and
+      run additional validation checks before promoting a deployment to production.
   - `poll_interval` (integer): The interval, in seconds, between each readiness check.
 
   ## Returns
@@ -88,9 +66,9 @@
     {% endif %}
 {% endfor %}
 
-{% if not force %}
+{% if wait %}
     {% for cluster in clusters %}
-        {{ wait_until_ready(cluster.prod_deploy, poll_interval) }}
+        {{ deploy_wait(cluster.prod_deploy, poll_interval) }}
     {% endfor %}
 {% endif %}
 

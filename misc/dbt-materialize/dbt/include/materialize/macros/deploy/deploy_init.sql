@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro create_deployment_environment(ignore_existing_objects=False) %}
+{% macro deploy_init(ignore_existing_objects=False) %}
 
 {% set current_target_name = target.name %}
 {% set deployment = var('deployment') %}

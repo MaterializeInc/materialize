@@ -69,7 +69,7 @@ class TestTargetDeploy:
             )
         )
 
-        run_dbt(["run-operation", "deploy"])
+        run_dbt(["run-operation", "deploy_promote"])
 
         after_clusters = dict(
             project.run_sql(
@@ -91,7 +91,7 @@ class TestTargetDeploy:
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE CLUSTER green SIZE = '1', REPLICATION FACTOR = 0")
+        project.run_sql("CREATE CLUSTER green SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
         project.run_sql("CREATE SCHEMA green")
 
@@ -108,7 +108,7 @@ class TestTargetDeploy:
             )
         )
 
-        run_dbt(["run-operation", "deploy", "--args", "{force: true}"])
+        run_dbt(["run-operation", "deploy_promote", "--args", "{wait: true}"])
 
         after_clusters = dict(
             project.run_sql(
@@ -133,26 +133,26 @@ class TestTargetDeploy:
         project.run_sql("CREATE SCHEMA blue")
         project.run_sql("CREATE SCHEMA green")
 
-        run_dbt(["run-operation", "deploy"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_dbt_deploy_missing_deployment_schema(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE CLUSTER green SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
 
-        run_dbt(["run-operation", "deploy"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_fails_on_unmanaged_cluster(self, project):
         project.run_sql("CREATE CLUSTER blue REPLICAS ()")
         project.run_sql("CREATE SCHEMA blue")
 
-        run_dbt(["run-operation", "create_deployment_environment"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_init"], expect_pass=False)
 
     def test_dbt_create_and_destroy_deployment_environment(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
 
-        run_dbt(["run-operation", "create_deployment_environment"])
+        run_dbt(["run-operation", "deploy_init"])
 
         (size, replication_factor) = project.run_sql(
             "SELECT size, replication_factor FROM mz_clusters WHERE name = 'green'",
@@ -167,7 +167,7 @@ class TestTargetDeploy:
         )
         assert bool(result[0])
 
-        run_dbt(["run-operation", "drop_deployment_environment"])
+        run_dbt(["run-operation", "deploy_cleanup"])
 
         result = project.run_sql(
             "SELECT count(*) = 0 FROM mz_clusters WHERE name = 'green'", fetch="one"
@@ -187,11 +187,11 @@ class TestTargetDeploy:
 
         project.run_sql("CREATE MATERIALIZED VIEW mv IN CLUSTER green AS SELECT 1")
 
-        run_dbt(["run-operation", "create_deployment_environment"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_init"], expect_pass=False)
         run_dbt(
             [
                 "run-operation",
-                "create_deployment_environment",
+                "deploy_init",
                 "--args",
                 "{ignore_existing_objects: True}",
             ]
@@ -205,11 +205,11 @@ class TestTargetDeploy:
 
         project.run_sql("CREATE VIEW green.view AS SELECT 1")
 
-        run_dbt(["run-operation", "create_deployment_environment"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_init"], expect_pass=False)
         run_dbt(
             [
                 "run-operation",
-                "create_deployment_environment",
+                "deploy_init",
                 "--args",
                 "{ignore_existing_objects: True}",
             ]
