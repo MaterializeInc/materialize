@@ -648,7 +648,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (mut external_connection, available_subsources) = match connection {
+    let (external_connection, available_subsources) = match connection {
         CreateSourceConnection::Kafka {
             connection: connection_name,
             options,
@@ -1158,25 +1158,6 @@ pub fn plan_create_source(
         // we don't allow users to manually target subsources and rely on purification generating
         // correct definitions.
         subsource_exports.insert(target_id, *idx);
-    }
-
-    if let GenericSourceConnection::Postgres(conn) = &mut external_connection {
-        // Now that we know which subsources sources we want, we can remove all
-        // unused table casts from this connection; this represents the
-        // authoritative statement about which publication tables should be
-        // used within storage.
-
-        // we want to temporarily test if any users are referring to the same table in their PG
-        // sources.
-        let mut used_pos: Vec<_> = subsource_exports.values().collect();
-        used_pos.sort();
-
-        if let Some(_) = used_pos.iter().duplicates().next() {
-            tracing::warn!("multiple references to same upstream table in PG source");
-        }
-
-        let used_pos: BTreeSet<_> = used_pos.into_iter().collect();
-        conn.table_casts.retain(|pos, _| used_pos.contains(pos));
     }
 
     let CreateSourceOptionExtracted {

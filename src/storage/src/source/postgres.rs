@@ -94,7 +94,9 @@ use mz_repr::{Datum, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::postgres::CastType;
-use mz_storage_types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
+use mz_storage_types::sources::{
+    MzOffset, PostgresSourceConnection, SourceExport, SourceTimestamp,
+};
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Concat, Map, ToStream};
@@ -150,16 +152,21 @@ impl SourceRender for PostgresSourceConnection {
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        for (i, desc) in self.publication_details.tables.iter().enumerate() {
-            // Index zero maps to the main source
-            let output_index = i + 1;
-            // The publication might contain more tables than the user has selected to ingest (via
-            // a restricted FOR TABLES <..>). The tables that are to be ingested will be present in
-            // the table_casts map and so we can filter the publication tables based on whether or
-            // not we have casts for it.
-            if let Some(casts) = self.table_casts.get(&output_index) {
-                table_info.insert(desc.oid, (output_index, desc.clone(), casts.clone()));
+        for SourceExport { output_index, .. } in config.source_exports.values() {
+            // Output index 0 is the primary source which is not a table.
+            if *output_index == 0 {
+                continue;
             }
+
+            // The output index is 1 greater than the publication details' index
+            // to account for the primary output being at index 0.
+            let table_idx = *output_index - 1;
+            let desc = self.publication_details.tables[table_idx].clone();
+
+            // Tables are indexed by their native index, but table casts are
+            // indexed by the output index.
+            let casts = self.table_casts[output_index].clone();
+            table_info.insert(desc.oid, (*output_index, desc.clone(), casts.clone()));
         }
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
