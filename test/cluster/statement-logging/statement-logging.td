@@ -146,7 +146,7 @@ mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SE
 mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null>
 mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true
 
-> WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash)),
+> WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mst.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
   SELECT sql, event_type FROM test_begin, mz_internal.mz_statement_lifecycle_history mslh
   JOIN all_stmts ON mslh.statement_id = all_stmts.id
