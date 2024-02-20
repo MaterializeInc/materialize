@@ -12,13 +12,14 @@ use mysql_common::binlog::events::{QueryEvent, RowsEventData};
 use timely::progress::Timestamp;
 use tracing::trace;
 
+use mz_mysql_util::pack_mysql_row;
 use mz_repr::Row;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::mysql::GtidPartition;
 
 use super::super::schemas::verify_schemas;
-use super::super::{pack_mysql_row, table_name, DefiniteError, TransientError};
+use super::super::{table_name, DefiniteError, TransientError};
 use super::context::ReplContext;
 
 /// Returns the UnresolvedItemName for the given table name referenced in a
@@ -232,7 +233,7 @@ pub(super) async fn handle_rows_event(
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
             let packed_row = pack_mysql_row(&mut final_row, row, table_desc)?;
-            let data = (*output_index, packed_row);
+            let data = (*output_index, Ok(packed_row));
 
             // Rewind this update if it was already present in the snapshot
             if let Some(([data_cap, _upper_cap], rewind_req)) = ctx.rewinds.get(table) {

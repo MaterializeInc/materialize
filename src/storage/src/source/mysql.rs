@@ -56,10 +56,6 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
-use itertools::{EitherOrBoth, Itertools};
-use mysql_async::Row as MySqlRow;
-use mysql_common::value::convert::from_value_opt;
-use mysql_common::Value;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
@@ -69,13 +65,10 @@ use uuid::Uuid;
 
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlColumnDesc, MySqlError, MySqlTableDesc,
+    MySqlError,
 };
-use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_repr::adt::date::Date;
-use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, Row, ScalarType};
+use mz_repr::{Diff, Row};
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
@@ -208,16 +201,10 @@ pub enum ReplicationError {
 /// A transient error that never ends up in the collection of a specific table.
 #[derive(Debug, thiserror::Error)]
 pub enum TransientError {
-    #[error("issue when decoding")]
-    DecodeError(String),
-    #[error("error decoding value for column {0} in {1}: {2}")]
-    ValueDecodeError(String, String, String),
     #[error("couldn't decode binlog row")]
     BinlogRowDecodeError(#[from] mysql_async::binlog::row::BinlogRowToRowError),
     #[error("stream ended prematurely")]
     ReplicationEOF,
-    #[error("unsupported type: {0}")]
-    UnsupportedDataType(String),
     #[error(transparent)]
     IoError(#[from] io::Error),
     #[error("sql client error")]
@@ -276,156 +263,6 @@ pub(crate) fn table_name(
         Ident::new(schema_name)?,
         Ident::new(table_name)?,
     ]))
-}
-
-pub(crate) fn pack_mysql_row(
-    row_container: &mut Row,
-    row: MySqlRow,
-    table_desc: &MySqlTableDesc,
-) -> Result<Result<Row, DefiniteError>, TransientError> {
-    let mut packer = row_container.packer();
-    let mut temp_bytes = vec![];
-    let mut temp_strs = vec![];
-    let row_values = row.unwrap();
-
-    for values in table_desc.columns.iter().zip_longest(row_values) {
-        let (col_desc, value) = match values {
-            EitherOrBoth::Both(col_desc, value) => (col_desc, value),
-            EitherOrBoth::Left(col_desc) => {
-                tracing::error!(
-                    "mysql: extra column description {col_desc:?} for table {}",
-                    table_desc.name
-                );
-                Err(TransientError::DecodeError(format!(
-                    "extra column description {col_desc:?} for table {}",
-                    table_desc.name
-                )))?
-            }
-            EitherOrBoth::Right(value) => {
-                tracing::error!("mysql: extra value {value:?} for table {}", table_desc.name);
-                Err(TransientError::DecodeError(format!(
-                    "extra value found: {value:?} for table {}",
-                    table_desc.name
-                )))?
-            }
-        };
-        let datum = match mysql_val_to_datum(value, col_desc, &mut temp_strs, &mut temp_bytes) {
-            Err(err) => Err(TransientError::ValueDecodeError(
-                col_desc.name.clone(),
-                format!("{}.{}", table_desc.schema_name, table_desc.name),
-                err.to_string(),
-            ))?,
-            Ok(datum) => datum,
-        };
-        packer.push(datum);
-    }
-
-    Ok(Ok(row_container.clone()))
-}
-
-fn mysql_val_to_datum<'a>(
-    value: Value,
-    col_desc: &MySqlColumnDesc,
-    temp_strs: &'a mut Vec<String>,
-    temp_bytes: &'a mut Vec<Vec<u8>>,
-) -> Result<Datum<'a>, anyhow::Error> {
-    Ok(match value {
-        Value::NULL => {
-            if col_desc.column_type.nullable {
-                Datum::Null
-            } else {
-                Err(anyhow::anyhow!(
-                    "received a null value in a non-null column".to_string(),
-                ))?
-            }
-        }
-        value => match &col_desc.column_type.scalar_type {
-            ScalarType::Bool => Datum::from(from_value_opt::<bool>(value)?),
-            ScalarType::UInt16 => Datum::from(from_value_opt::<u16>(value)?),
-            ScalarType::Int16 => Datum::from(from_value_opt::<i16>(value)?),
-            ScalarType::UInt32 => Datum::from(from_value_opt::<u32>(value)?),
-            ScalarType::Int32 => Datum::from(from_value_opt::<i32>(value)?),
-            ScalarType::UInt64 => Datum::from(from_value_opt::<u64>(value)?),
-            ScalarType::Int64 => Datum::from(from_value_opt::<i64>(value)?),
-            ScalarType::Float32 => Datum::from(from_value_opt::<f32>(value)?),
-            ScalarType::Float64 => Datum::from(from_value_opt::<f64>(value)?),
-            ScalarType::Char { length } => {
-                let val = from_value_opt::<String>(value)?;
-                check_char_length(length.map(|l| l.into_u32()), &val, col_desc)?;
-                temp_strs.push(val);
-                Datum::from(temp_strs.last().unwrap().as_str())
-            }
-            ScalarType::VarChar { max_length } => {
-                let val = from_value_opt::<String>(value)?;
-                check_char_length(max_length.map(|l| l.into_u32()), &val, col_desc)?;
-                temp_strs.push(val);
-                Datum::from(temp_strs.last().unwrap().as_str())
-            }
-            ScalarType::String => {
-                temp_strs.push(from_value_opt::<String>(value)?);
-                Datum::from(temp_strs.last().unwrap().as_str())
-            }
-            ScalarType::Bytes => {
-                let data = from_value_opt::<Vec<u8>>(value)?;
-                temp_bytes.push(data);
-                Datum::from(temp_bytes.last().unwrap().as_slice())
-            }
-            ScalarType::Date => {
-                let date = Date::try_from(from_value_opt::<chrono::NaiveDate>(value)?)?;
-                Datum::from(date)
-            }
-            ScalarType::Timestamp { precision: _ } => {
-                // Timestamps are encoded as different mysql_common::Value types depending on
-                // whether they are from a binlog event or a query, and depending on which
-                // mysql timestamp version is used. We handle those cases here
-                // https://github.com/blackbeam/rust_mysql_common/blob/v0.31.0/src/binlog/value.rs#L87-L155
-                // https://github.com/blackbeam/rust_mysql_common/blob/v0.31.0/src/value/mod.rs#L332
-                let chrono_timestamp = match value {
-                    Value::Date(..) => from_value_opt::<chrono::NaiveDateTime>(value)?,
-                    // old temporal format from before MySQL 5.6; didn't support fractional seconds
-                    Value::Int(val) => chrono::NaiveDateTime::from_timestamp_opt(val, 0)
-                        .ok_or(anyhow::anyhow!("received invalid timestamp value: {}", val))?,
-                    Value::Bytes(data) => {
-                        let data = std::str::from_utf8(&data)?;
-                        if data.contains('.') {
-                            chrono::NaiveDateTime::parse_from_str(data, "%s%.6f")?
-                        } else {
-                            chrono::NaiveDateTime::parse_from_str(data, "%s")?
-                        }
-                    }
-                    _ => Err(anyhow::anyhow!(
-                        "received unexpected value for timestamp type: {:?}",
-                        value
-                    ))?,
-                };
-                Datum::try_from(CheckedTimestamp::try_from(chrono_timestamp)?)?
-            }
-            ScalarType::Time => Datum::from(from_value_opt::<chrono::NaiveTime>(value)?),
-            // TODO(roshan): IMPLEMENT OTHER TYPES
-            data_type => Err(TransientError::UnsupportedDataType(format!(
-                "{:?}",
-                data_type
-            )))?,
-        },
-    })
-}
-
-fn check_char_length(
-    length: Option<u32>,
-    val: &str,
-    col_desc: &MySqlColumnDesc,
-) -> Result<(), anyhow::Error> {
-    if let Some(length) = length {
-        if let Some(_) = val.char_indices().nth(usize::cast_from(length)) {
-            Err(anyhow::anyhow!(
-                "received string value of length {} for column {} which has a max length of {}",
-                val.len(),
-                col_desc.name,
-                length
-            ))?
-        }
-    }
-    Ok(())
 }
 
 async fn return_definite_error(
