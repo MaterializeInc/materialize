@@ -1018,7 +1018,22 @@ impl PersistCatalogState {
             }
         }
 
-        for StateUpdate { kind, ts, diff } in updates {
+        let mut updates: Vec<_> = updates
+            .into_iter()
+            .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
+            .collect();
+
+        // Consolidation is required for correctness. It guarantees that for a single key, there is
+        // at most a single retraction and a single insertion per timestamp. Otherwise, we would
+        // need to match the retractions and insertions up by value and manually figure out what the
+        // end value should be.
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        // Updates must be applied in timestamp order. Within a timestamp retractions must be
+        // applied before insertions or we might end up retracting the wrong value.
+        updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
+
+        for (kind, ts, diff) in updates {
             if diff != 1 && diff != -1 {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
@@ -1624,17 +1639,6 @@ async fn sync<T: IntoStateUpdateKindRaw>(
             }
         }
     }
-
-    // Consolidation is required for correctness. It guarantees that for a single key, there is
-    // at most a single retraction and a single insertion per timestamp. Otherwise, we would
-    // need to match the retractions and insertions up by value and manually figure out what the
-    // end value should be.
-    differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-    // Updates must be applied in timestamp order. Within a timestamp retractions must be
-    // applied before insertions or we might end up retracting the wrong value.
-    updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
-
     updates
         .into_iter()
         .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff })
