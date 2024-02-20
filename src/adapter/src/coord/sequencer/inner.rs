@@ -270,44 +270,63 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                let mut read_policy_updates = Vec::new();
+                // Buffer an ingestions' read policies in case their subsources
+                // need to reference it before it's durably recorded.
+                let mut ingestion_read_policies: BTreeMap<_, _> = BTreeMap::new();
+                let mut read_policies: BTreeMap<Option<CompactionWindow>, Vec<GlobalId>> =
+                    BTreeMap::new();
 
-                for (source_id, source) in sources {
+                for (source_id, mut source) in sources {
                     let source_status_collection_id =
                         Some(coord.catalog().resolve_builtin_storage_collection(
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
-                    let (data_source, status_collection_id, set_read_policies) = match source
-                        .data_source
-                    {
+                    let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
                                 ingestion.into_inline_connection(coord.catalog().state());
 
-                            // The parent source dictates all of the subsource's read policies.
-                            let set_read_policies =
-                                ingestion.source_exports.keys().cloned().collect();
+                            ingestion_read_policies
+                                .insert(source_id, source.custom_logical_compaction_window);
 
                             (
                                 DataSource::Ingestion(ingestion),
                                 source_status_collection_id,
-                                set_read_policies,
                             )
                         }
-                        DataSourceDesc::SourceExport { id, output_index } => (
-                            DataSource::SourceExport { id, output_index },
-                            source_status_collection_id,
-                            vec![],
-                        ),
+                        DataSourceDesc::SourceExport { id, output_index } => {
+                            // Propagate source's compaction window if this
+                            // subsource does not have its own value specified.
+                            if source.custom_logical_compaction_window.is_none() {
+                                // Defined as part of the initial set of subsources.
+                                let c = match ingestion_read_policies.get(&id) {
+                                    Some(c) => c,
+                                    None => {
+                                        // Added to an existing source.
+                                        let source = coord.catalog().get_entry(&id);
+                                        match &source.item {
+                                            CatalogItem::Source(source) => {
+                                                &source.custom_logical_compaction_window
+                                            }
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                };
+                                source.custom_logical_compaction_window = c.clone();
+                            }
+
+                            (
+                                DataSource::SourceExport { id, output_index },
+                                source_status_collection_id,
+                            )
+                        }
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (
                             DataSource::Other(DataSourceOther::Source),
                             source_status_collection_id,
-                            // Subsources will inherit their parent source's read_policy.
-                            vec![],
                         ),
-                        DataSourceDesc::Progress => (DataSource::Progress, None, vec![source_id]),
+                        DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
                                 coord.catalog().state().try_get_webhook_url(&source_id)
@@ -315,7 +334,7 @@ impl Coordinator {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
 
-                            (DataSource::Webhook, None, vec![source_id])
+                            (DataSource::Webhook, None)
                         }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
@@ -343,13 +362,10 @@ impl Coordinator {
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
-                    if !set_read_policies.is_empty() {
-                        let compaction_window = source
-                            .custom_logical_compaction_window
-                            .unwrap_or(CompactionWindow::Default);
-
-                        read_policy_updates.push((set_read_policies, compaction_window));
-                    }
+                    read_policies
+                        .entry(source.custom_logical_compaction_window.clone())
+                        .or_default()
+                        .push(source_id);
                 }
 
                 // It is _very_ important that we only initialize read policies
@@ -363,9 +379,12 @@ impl Coordinator {
                 // SUBSOURCE, and all other SUBSOURCES of a SOURCE will depend
                 // on it. Both subsources and sources will show up as a `Source`
                 // in the above.
-                for (storage_policies, compaction_window) in read_policy_updates {
+                for (compaction_window, storage_policies) in read_policies {
                     coord
-                        .initialize_storage_read_policies(storage_policies, compaction_window)
+                        .initialize_storage_read_policies(
+                            storage_policies,
+                            compaction_window.unwrap_or(CompactionWindow::Default),
+                        )
                         .await;
                 }
             })
