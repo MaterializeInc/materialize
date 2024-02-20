@@ -1189,6 +1189,10 @@ impl Catalog {
         state: &CatalogState,
     ) -> Result<CatalogState, Error> {
         let mut state = state.clone();
+
+        // TODO: after we migrate subsources to the new dependency structure (in
+        // v0.96, so in v0.97 forward), we can refactor this to assume that
+        // items are topologically sorted by their `GlobalId`.
         let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
