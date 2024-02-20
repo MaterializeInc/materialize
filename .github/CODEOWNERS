@@ -47,6 +47,7 @@
 /src/controller                     @MaterializeInc/compute @MaterializeInc/storage
 /src/controller-types               @MaterializeInc/compute @MaterializeInc/storage
 /src/dyncfg                         @danhhz
+/src/dyncfgs                        @danhhz
 /src/environmentd                   @MaterializeInc/adapter
 /src/expr                           @MaterializeInc/compute
 /src/expr-test-util                 @MaterializeInc/compute

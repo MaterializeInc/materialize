@@ -20,7 +20,6 @@ use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute::server::ComputeInstanceContext;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
-use mz_dyncfg::ConfigSet;
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -258,15 +257,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .ok()
         .or_else(|| args.tracing.log_prefix.clone())
         .unwrap_or_default();
-    // Unfortunately, we can't use the `all_dyn_configs` method in mz_sql for
-    // dependency reasons, so we have to duplicate it here.
-    fn all_dyn_configs() -> ConfigSet {
-        let mut configs = ConfigSet::default();
-        configs = mz_persist_client::cfg::all_dyn_configs(configs);
-        configs = mz_persist_txn::all_dyn_configs(configs);
-        configs
-    }
-    let mut persist_cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), all_dyn_configs());
+    let mut persist_cfg =
+        PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), mz_dyncfgs::all_dyncfgs());
     persist_cfg.is_cc_active = args.is_cluster_size_v2;
     let persist_clients = Arc::new(PersistClientCache::new(
         persist_cfg,

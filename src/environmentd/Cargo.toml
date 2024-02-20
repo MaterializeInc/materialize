@@ -47,6 +47,7 @@ mz-adapter-types = { path = "../adapter-types" }
 mz-catalog = { path = "../catalog" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }
+mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-frontegg-mock = { path = "../frontegg-mock", optional = true }

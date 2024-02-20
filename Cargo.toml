@@ -22,6 +22,7 @@ members = [
     "src/controller",
     "src/controller-types",
     "src/dyncfg",
+    "src/dyncfgs",
     "src/environmentd",
     "src/expr",
     "src/expr-parser",

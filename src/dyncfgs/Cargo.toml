@@ -1,0 +1,24 @@
+[package]
+name = "mz-dyncfgs"
+description = "A registry of every mz_dyncfg."
+version = "0.0.0"
+license = "Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-dyncfg = { path = "../dyncfg"}
+mz-persist-client = { path = "../persist-client"}
+mz-persist-txn = { path = "../persist-txn"}
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[build-dependencies]
+prost-build = "0.11.2"
+protobuf-src = "1.1.0"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

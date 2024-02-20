@@ -2175,20 +2175,6 @@ feature_flags!(
     },
 );
 
-/// Returns a new ConfigSet containing every `Config` in Materialize.
-///
-/// Each time this is called, it returns a new ConfigSet disconnected from any
-/// others. It may be cloned and passed around, and updates to any of these
-/// copies will be reflected in the clones. Values from a `ConfigSet` may be
-/// copied to a disconnected `ConfigSet` via `ConfigUpdates`, which can be
-/// passed over the network to do the same across processes.
-pub fn all_dyn_configs() -> ConfigSet {
-    let mut configs = ConfigSet::default();
-    configs = mz_persist_client::cfg::all_dyn_configs(configs);
-    configs = mz_persist_txn::all_dyn_configs(configs);
-    configs
-}
-
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -2857,7 +2843,7 @@ impl SystemVars {
             vars: Default::default(),
             active_connection_count,
             allow_unsafe: false,
-            persist_configs: all_dyn_configs(),
+            persist_configs: mz_dyncfgs::all_dyncfgs(),
         };
 
         let mut vars = vars
