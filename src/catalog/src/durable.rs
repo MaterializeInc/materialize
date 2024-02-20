@@ -51,6 +51,7 @@ pub use crate::durable::objects::{
 };
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
+pub use crate::durable::upgrade::CATALOG_VERSION;
 
 pub mod debug;
 mod error;

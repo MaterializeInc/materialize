@@ -9,13 +9,15 @@
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::DurableType;
+use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
     shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
     test_persist_backed_catalog_state, test_persist_backed_catalog_state_with_version,
     test_stash_backed_catalog_state, test_stash_config, CatalogError, Database,
     DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState, Schema,
+    CATALOG_VERSION,
 };
 use mz_ore::cast::usize_to_u64;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
@@ -25,7 +27,69 @@ use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_stash::DebugStashFactory;
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
+
+/// A new type for [`Snapshot`] that excludes the user_version from the debug output. The
+/// user_version changes frequently, so it's useful to print the contents excluding the
+/// user_version to avoid having to update the expected value in tests.
+struct HiddenUserVersionSnapshot<'a>(&'a Snapshot);
+
+impl HiddenUserVersionSnapshot<'_> {
+    fn user_version(&self) -> Option<&proto::ConfigValue> {
+        self.0.configs.get(&Self::user_version_key())
+    }
+
+    fn user_version_key() -> proto::ConfigKey {
+        proto::ConfigKey {
+            key: USER_VERSION_KEY.to_string(),
+        }
+    }
+}
+
+impl Debug for HiddenUserVersionSnapshot<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let Snapshot {
+            databases,
+            schemas,
+            roles,
+            items,
+            comments,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_object_mappings,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+        } = self.0;
+        let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs.clone();
+        configs.remove(&Self::user_version_key());
+        f.debug_struct("Snapshot")
+            .field("databases", databases)
+            .field("schemas", schemas)
+            .field("roles", roles)
+            .field("items", items)
+            .field("comments", comments)
+            .field("clusters", clusters)
+            .field("cluster_replicas", cluster_replicas)
+            .field("introspection_sources", introspection_sources)
+            .field("id_allocator", id_allocator)
+            .field("configs", &configs)
+            .field("settings", settings)
+            .field("timestamps", timestamps)
+            .field("system_object_mappings", system_object_mappings)
+            .field("system_configurations", system_configurations)
+            .field("default_privileges", default_privileges)
+            .field("system_privileges", system_privileges)
+            .finish()
+    }
+}
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
@@ -565,7 +629,12 @@ async fn test_open(
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         // Check initial snapshot.
         let snapshot = state.snapshot().await.unwrap();
-        insta::assert_debug_snapshot!("initial_snapshot", snapshot);
+        {
+            let test_snapshot = HiddenUserVersionSnapshot(&snapshot);
+            let user_version = test_snapshot.user_version().unwrap();
+            assert_eq!(user_version.value, CATALOG_VERSION);
+            insta::assert_debug_snapshot!("initial_snapshot", test_snapshot);
+        }
         let audit_log = state.get_audit_logs().await.unwrap();
         insta::assert_debug_snapshot!("initial_audit_log", audit_log);
         Box::new(state).expire().await;

@@ -1114,11 +1114,6 @@ Snapshot {
         }: ConfigValue {
             value: 0,
         },
-        ConfigKey {
-            key: "user_version",
-        }: ConfigValue {
-            value: 46,
-        },
     },
     settings: {},
     timestamps: {

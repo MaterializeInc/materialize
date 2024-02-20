@@ -168,7 +168,7 @@ objects!(v42, v43, v44, v45, v46);
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub(crate) const CATALOG_VERSION: u64 = 46;
+pub const CATALOG_VERSION: u64 = 46;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
