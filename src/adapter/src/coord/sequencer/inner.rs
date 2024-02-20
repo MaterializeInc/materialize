@@ -270,7 +270,11 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                for (source_id, source) in sources {
+                // TODO: refactor this so that we expect source exports to
+                // always be empty-ish when creating a source.
+                let mut read_policies = BTreeMap::new();
+
+                for (source_id, mut source) in sources {
                     let source_status_collection_id =
                         Some(coord.catalog().resolve_builtin_storage_collection(
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
@@ -283,6 +287,9 @@ impl Coordinator {
                             let ingestion =
                                 ingestion.into_inline_connection(coord.catalog().state());
 
+                            read_policies
+                                .insert(source_id, source.custom_logical_compaction_window.clone());
+
                             // The parent source dictates all of the subsource's read policies.
                             let set_read_policies =
                                 ingestion.source_exports.keys().cloned().collect();
@@ -293,11 +300,33 @@ impl Coordinator {
                                 set_read_policies,
                             )
                         }
-                        DataSourceDesc::SourceExport { id, output_index } => (
-                            DataSource::SourceExport { id, output_index },
-                            source_status_collection_id,
-                            vec![],
-                        ),
+                        DataSourceDesc::SourceExport { id, output_index } => {
+                            // Propagate source's compaction window if this
+                            // subsource does not have its own value specified.
+                            if source.custom_logical_compaction_window.is_none() {
+                                // Defined as part of the initial set of subsources.
+                                let c = match read_policies.get(&id) {
+                                    Some(c) => c,
+                                    None => {
+                                        // Added to an existing source.
+                                        let source = coord.catalog().get_entry(&id);
+                                        match &source.item {
+                                            CatalogItem::Source(source) => {
+                                                &source.custom_logical_compaction_window
+                                            }
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                };
+                                source.custom_logical_compaction_window = c.clone();
+                            }
+
+                            (
+                                DataSource::SourceExport { id, output_index },
+                                source_status_collection_id,
+                                vec![source_id],
+                            )
+                        }
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (
                             DataSource::Other(DataSourceOther::Source),
