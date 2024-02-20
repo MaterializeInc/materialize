@@ -1468,14 +1468,18 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::Source(_))
     }
 
-    /// Reports whether this catalog entry is a subsource.
-    pub fn is_subsource(&self) -> bool {
+    /// Reports whether this catalog entry is a subsource and, if it is, the
+    /// ingestion it is a subsource of, as well as the item it exports.
+    pub fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)> {
         match &self.item() {
-            CatalogItem::Source(source) => matches!(
-                &source.data_source,
-                DataSourceDesc::Progress | DataSourceDesc::Source
-            ),
-            _ => false,
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference,
+                } => Some((*ingestion_id, external_reference)),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -2279,8 +2283,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.used_by()
     }
 
-    fn is_subsource(&self) -> bool {
-        self.is_subsource()
+    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName)> {
+        self.subsource_details()
     }
 
     fn source_exports(&self) -> BTreeMap<GlobalId, usize> {
