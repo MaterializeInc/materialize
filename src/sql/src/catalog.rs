@@ -611,8 +611,9 @@ pub trait CatalogItem {
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];
 
-    /// Reports whether this catalog item is a subsource.
-    fn is_subsource(&self) -> bool;
+    /// Reports whether this catalog item is a subsource with an output index
+    /// (i.e. not a progress subsource).
+    fn subsource_details(&self) -> Option<(GlobalId, usize)>;
 
     /// Returns the mapping of `GloablIds` to output indices for this source.
     fn source_exports(&self) -> BTreeMap<GlobalId, usize>;
