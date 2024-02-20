@@ -31,13 +31,13 @@ sanitizer = {
         "-Cllvm-args=-asan-stack=false",  # Remove when #25017 is fixed
         # "-Cdebug-assertions=on",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
-        #"-Clink-arg=-fsanitize=address",
+        # "-Clink-arg=-fsanitize=address",
         "-Clinker=clang",  # doesn't work for all, still using ~/.local/bin/cc
-        #"-Clink-arg=-Wl,-rpath=/usr/lib/llvm-17/lib/clang/17/lib/linux",
-        #"-Clink-arg=-lasan",
-        #"-Clink-arg=-static-libsan",
-        #"-Clink-arg=-Wl,-rpath=/home/deen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib",
-        #"-Clink-arg=-Wl,-rpath=/usr/lib/llvm-17/lib/clang/17/lib/linux",
+        # "-Clink-arg=-Wl,-rpath=/usr/lib/llvm-17/lib/clang/17/lib/linux",
+        # "-Clink-arg=-lasan",
+        # "-Clink-arg=-static-libsan",
+        # "-Clink-arg=-Wl,-rpath=/home/deen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib",
+        # "-Clink-arg=-Wl,-rpath=/usr/lib/llvm-17/lib/clang/17/lib/linux",
     ],
     "hwaddress": [
         "-Zsanitizer=hwaddress",
@@ -79,10 +79,10 @@ sanitizer = {
 sanitizer_cflags = {
     "address": [
         "-fsanitize=address",
-        #"-static-libsan",
-        #"-Wl,-rpath=/home/deen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib",
+        # "-static-libsan",
+        # "-Wl,-rpath=/home/deen/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib",
         ##"-Wl,-rpath=/usr/lib/llvm-17/lib/clang/17/lib/linux",
-        #"-fsanitize-address-use-after-scope",
+        # "-fsanitize-address-use-after-scope",
     ],
     "hwaddress": ["-fsanitize=hwaddress"],
     "cfi": ["-fsanitize=cfi"],
