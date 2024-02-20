@@ -115,13 +115,13 @@ function handleObject(obj, parents, columns) {
 
 // Handles primitive values by determining their SQL data type and adding them to the columns list.
 function handlePrimitive(value, parents, columns) {
-    // Determines the appropriate SQL cast and function wrapper for the value.
+    // Determine the appropriate SQL cast and function wrapper for the value.
     const { cast, wrapping_function, isNull } = determineCast(value);
     // Uses the last part of the path as the column name.
     const columnName = parents.slice(-1)[0];
-    // Generates an alias for the column based on its path, excluding the root.
+    // Generate an alias for the column based on its path, excluding the root.
     const columnAlias = parents.slice(1).join("_");
-    // Adds the column definition to the list of columns.
+    // Add the column definition to the list of columns.
     columns.push([columnName, wrapping_function, cast, parents, isNull, value]);
 }
 
