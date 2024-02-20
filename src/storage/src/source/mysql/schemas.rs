@@ -9,7 +9,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_mysql_util::{schema_info, MySqlConn, MySqlError, MySqlTableDesc, SchemaRequest};
+use mysql_async::prelude::Queryable;
+use mz_mysql_util::{schema_info, MySqlError, MySqlTableDesc, SchemaRequest};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 
@@ -19,10 +20,13 @@ use super::{table_name, DefiniteError};
 /// and verify they are compatible with the expected schema.
 ///
 /// Returns a vec of tables that have incompatible schema changes.
-pub(super) async fn verify_schemas<'a>(
-    conn: &mut MySqlConn,
+pub(super) async fn verify_schemas<'a, Q>(
+    conn: &mut Q,
     expected: &[(&'a UnresolvedItemName, &MySqlTableDesc)],
-) -> Result<Vec<(&'a UnresolvedItemName, DefiniteError)>, MySqlError> {
+) -> Result<Vec<(&'a UnresolvedItemName, DefiniteError)>, MySqlError>
+where
+    Q: Queryable,
+{
     // Get the current schema for each requested table from mysql
     let cur_schemas: BTreeMap<_, _> = schema_info(
         conn,

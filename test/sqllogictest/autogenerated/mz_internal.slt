@@ -206,6 +206,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  hydrated  boolean
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_operator_hydration_statuses' ORDER BY position
+----
+1  object_id  text
+2  physical_plan_node_id  uint8
+3  replica_id  text
+4  hydrated  boolean
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
 ----
 1  object_id  text
@@ -447,14 +455,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  privilege_type  text
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics_per_worker' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics_raw' ORDER BY position
 ----
 1  id  text
-2  worker_id  uint8
-3  messages_staged  uint8
-4  messages_committed  uint8
-5  bytes_staged  uint8
-6  bytes_committed  uint8
+2  messages_staged  uint8
+3  messages_committed  uint8
+4  bytes_staged  uint8
+5  bytes_committed  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics' ORDER BY position
@@ -486,18 +493,21 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  details  jsonb
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics_per_worker' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics_raw' ORDER BY position
 ----
 1  id  text
-2  worker_id  uint8
-3  snapshot_committed  boolean
-4  messages_received  uint8
-5  bytes_received  uint8
-6  updates_staged  uint8
-7  updates_committed  uint8
-8  envelope_state_bytes  uint8
-9  envelope_state_records  uint8
-10  rehydration_latency  interval
+2  messages_received  uint8
+3  bytes_received  uint8
+4  updates_staged  uint8
+5  updates_committed  uint8
+6  records_indexed  uint8
+7  bytes_indexed  uint8
+8  rehydration_latency  interval
+9  snapshot_records_known  uint8
+10  snapshot_records_staged  uint8
+11  snapshot_committed  boolean
+12  offset_known  uint8
+13  offset_committed  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
@@ -508,8 +518,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  bytes_received  uint8
 5  updates_staged  uint8
 6  updates_committed  uint8
-7  envelope_state_bytes  uint8
-8  envelope_state_records  uint8
+7  bytes_indexed  uint8
+8  records_indexed  uint8
 9  rehydration_latency  interval
 
 query ITT
@@ -800,6 +810,8 @@ mz_compute_import_frontiers_per_worker
 mz_compute_operator_durations_histogram
 mz_compute_operator_durations_histogram_per_worker
 mz_compute_operator_durations_histogram_raw
+mz_compute_operator_hydration_statuses
+mz_compute_operator_hydration_statuses_per_worker
 mz_dataflow_addresses
 mz_dataflow_addresses_per_worker
 mz_dataflow_arrangement_sizes
@@ -884,11 +896,11 @@ mz_show_sinks
 mz_show_sources
 mz_show_system_privileges
 mz_sink_statistics
-mz_sink_statistics_per_worker
+mz_sink_statistics_raw
 mz_sink_status_history
 mz_sink_statuses
 mz_source_statistics
-mz_source_statistics_per_worker
+mz_source_statistics_raw
 mz_source_status_history
 mz_source_statuses
 mz_statement_execution_history

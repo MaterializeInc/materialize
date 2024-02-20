@@ -48,7 +48,7 @@ use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::kafka::KafkaPartitionMetrics;
+use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
@@ -92,7 +92,7 @@ pub struct KafkaSourceReader {
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
     _metadata_thread_handle: UnparkOnDropHandle<()>,
     /// A handle to the partition specific metrics
-    partition_metrics: KafkaPartitionMetrics,
+    partition_metrics: KafkaSourceMetrics,
     /// The metadata columns requested by the user
     metadata_columns: Vec<KafkaMetadataKind>,
     /// The latest status detected by the metadata refresh thread.
@@ -102,11 +102,11 @@ pub struct KafkaSourceReader {
 }
 
 /// A partially-filled version of `ProgressStatisticsUpdate`. This allows us to
-/// only emit updates when `upstream_values` is updated by the metadata thread.
+/// only emit updates when `offset_known` is updated by the metadata thread.
 #[derive(Default)]
 struct PartialProgressStatistics {
-    upstream_values: Option<u64>,
-    committed_values: Option<u64>,
+    offset_known: Option<u64>,
+    offset_committed: Option<u64>,
 }
 
 struct PartitionCapability {
@@ -437,7 +437,7 @@ impl SourceRender for KafkaSourceConnection {
                     .map(|(_name, kind)| kind)
                     .collect(),
                 _metadata_thread_handle: metadata_thread_handle,
-                partition_metrics: config.metrics.get_kafka_partition_metrics(
+                partition_metrics: config.metrics.get_kafka_source_metrics(
                     partition_ids,
                     topic.clone(),
                     config.id,
@@ -564,7 +564,7 @@ impl SourceRender for KafkaSourceConnection {
                         .progress_statistics
                         .lock()
                         .expect("poisoned")
-                        .upstream_values = Some(upstream_stat);
+                        .offset_known = Some(upstream_stat);
                     data_cap.downgrade(&future_ts);
                     progress_cap.downgrade(&future_ts);
                     prev_pid_info = Some(partitions);
@@ -712,28 +712,28 @@ impl SourceRender for KafkaSourceConnection {
                         .await;
                 }
 
-                // If we have a new `upstream_values` from the partition metadata thread, and
+                // If we have a new `offset_known` from the partition metadata thread, and
                 // `committed` from reading the `resume_uppers` stream, we can emit a
                 // progress stats update.
                 let progress_statistics = {
                     let mut stats = reader.progress_statistics.lock().expect("poisoned");
 
-                    if stats.committed_values.is_some() && stats.upstream_values.is_some() {
+                    if stats.offset_committed.is_some() && stats.offset_known.is_some() {
                         Some((
-                            stats.upstream_values.take().unwrap(),
-                            stats.committed_values.take().unwrap(),
+                            stats.offset_known.take().unwrap(),
+                            stats.offset_committed.take().unwrap(),
                         ))
                     } else {
                         None
                     }
                 };
-                if let Some((upstream_values, committed_values)) = progress_statistics {
+                if let Some((offset_known, offset_committed)) = progress_statistics {
                     stats_output
                         .give(
                             &stats_cap,
                             ProgressStatisticsUpdate {
-                                committed_values,
-                                upstream_values,
+                                offset_committed,
+                                offset_known,
                             },
                         )
                         .await;
@@ -789,7 +789,7 @@ impl KafkaResumeUpperProcessor {
         self.progress_statistics
             .lock()
             .expect("poisoned")
-            .committed_values = Some(progress_stat);
+            .offset_committed = Some(progress_stat);
 
         if !offsets.is_empty() {
             let mut tpl = TopicPartitionList::new();

@@ -139,6 +139,7 @@ use tracing::{debug, info, info_span, instrument, span, warn, Instrument, Level,
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::active_compute_sink::ActiveComputeSink;
 use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
@@ -158,8 +159,7 @@ use crate::optimize::dataflows::{
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
-use crate::subscribe::ActiveSubscribe;
-use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
+use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
@@ -382,14 +382,18 @@ impl RealTimeRecencyContext {
 
 #[derive(Debug)]
 pub enum PeekStage {
+    /// Common stages across SELECT, EXPLAIN and COPY TO queries.
     Validate(PeekStageValidate),
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
     Optimize(PeekStageOptimize),
+    /// Final stage for a peek.
     Finish(PeekStageFinish),
-    CopyTo(PeekStageCopyTo),
+    /// Final stage for an explain.
     ExplainPlan(PeekStageExplainPlan),
+    /// Final stage for a copy to.
+    CopyTo(PeekStageCopyTo),
 }
 
 impl PeekStage {
@@ -852,7 +856,7 @@ pub struct ConnMeta {
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
-    drop_sinks: BTreeSet<ComputeSinkId>,
+    drop_sinks: BTreeSet<GlobalId>,
 
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
@@ -1253,7 +1257,9 @@ pub struct Coordinator {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
+    ///
+    /// We use a Vec because `ReadHolds` doesn't have a way of tracking multiplicity.
+    txn_read_holds: BTreeMap<ConnectionId, Vec<read_policy::ReadHolds<Timestamp>>>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
@@ -1268,8 +1274,8 @@ pub struct Coordinator {
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
 
-    /// A map from active subscribes to the subscribe description.
-    active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
+    /// A map from the compute sink ID to it's state description.
+    active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
 
@@ -1930,10 +1936,12 @@ impl Coordinator {
                         Some((id, collection_desc))
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        let collection_desc = CollectionDescription::from_desc(
-                            mv.desc.clone(),
-                            DataSourceOther::Compute,
-                        );
+                        let collection_desc = CollectionDescription {
+                            desc: mv.desc.clone(),
+                            data_source: DataSource::Other(DataSourceOther::Compute),
+                            since: mv.initial_as_of.clone(),
+                            status_collection_id: None,
+                        };
                         Some((id, collection_desc))
                     }
                     _ => None,
@@ -2399,10 +2407,6 @@ impl Coordinator {
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
-            let prometheus_threshold = self
-                .catalog
-                .system_config()
-                .coord_slow_message_reporting_threshold();
             let warn_threshold = self
                 .catalog()
                 .system_config()
@@ -2489,6 +2493,10 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.Receiver.html#cancel-safety
                     timer = idle_rx.recv() => {
                         timer.expect("does not drop").observe_duration();
+                        self.metrics
+                            .message_handling
+                            .with_label_values(&["watchdog"])
+                            .observe(0.0);
                         continue;
                     }
                 };
@@ -2527,13 +2535,10 @@ impl Coordinator {
                 self.handle_message(span, msg).await;
                 let duration = start.elapsed();
 
-                // Report slow messages to Prometheus.
-                if duration > prometheus_threshold {
-                    self.metrics
-                        .slow_message_handling
-                        .with_label_values(&[msg_kind])
-                        .observe(duration.as_secs_f64());
-                }
+                self.metrics
+                    .message_handling
+                    .with_label_values(&[msg_kind])
+                    .observe(duration.as_secs_f64());
 
                 // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
                 if duration > warn_threshold {
@@ -2937,7 +2942,7 @@ pub fn serve(
                     client_pending_peeks: BTreeMap::new(),
                     pending_real_time_recency_timestamp: BTreeMap::new(),
                     pending_linearize_read_txns: BTreeMap::new(),
-                    active_subscribes: BTreeMap::new(),
+                    active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),

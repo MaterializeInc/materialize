@@ -585,7 +585,8 @@ impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
     type Error = String;
 
     fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
-        let kind: proto::state_update_kind::Kind = value.to_serde();
+        let kind: proto::state_update_kind::Kind =
+            value.try_to_serde().map_err(|err| err.to_string())?;
         let kind = proto::StateUpdateKind { kind: Some(kind) };
         StateUpdateKind::from_proto(kind).map_err(|err| err.to_string())
     }
@@ -614,8 +615,14 @@ impl StateUpdateKindRaw {
     }
 
     pub fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
+        self.try_to_serde().expect("jsonb should roundtrip")
+    }
+
+    pub fn try_to_serde<D: serde::de::DeserializeOwned>(
+        &self,
+    ) -> Result<D, serde_json::error::Error> {
         let serde_value = self.0.as_ref().to_serde_json();
-        serde_json::from_value::<D>(serde_value).expect("jsonb should roundtrip")
+        serde_json::from_value::<D>(serde_value)
     }
 }
 

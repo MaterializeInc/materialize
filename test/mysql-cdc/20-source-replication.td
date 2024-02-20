@@ -21,9 +21,9 @@ ALTER SYSTEM SET enable_mysql_source = true
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
-DROP DATABASE IF EXISTS dummyschema;
-CREATE DATABASE dummyschema;
-USE dummyschema;
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
 CREATE TABLE dummy (f1 INTEGER PRIMARY KEY, id VARCHAR(128));
 INSERT INTO dummy VALUES (123, "dummy data");
 INSERT INTO dummy VALUES (234, "moar dummy");
@@ -35,7 +35,7 @@ COMMIT;
 234 "moar dummy"
 
 $ mysql-execute name=mysql
-USE dummyschema;
+USE public;
 INSERT INTO dummy VALUES (145, "next row");
 COMMIT;
 

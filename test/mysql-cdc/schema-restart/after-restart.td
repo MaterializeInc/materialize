@@ -31,7 +31,7 @@ true
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
-USE dummyschema
+USE public
 INSERT INTO other VALUES (4), (5);
 
 > SELECT count(*) FROM OTHER;

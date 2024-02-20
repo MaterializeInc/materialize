@@ -1,11 +1,16 @@
 In Materialize, a [cluster](/get-started/key-concepts/#clusters) is an isolated environment, similar to a virtual warehouse in Snowflake. When you create a cluster, you choose the size of its compute resource allocation based on the work you need the cluster to do, whether ingesting data from a source, computing always-up-to-date query results, serving results to clients, or a combination.
 
-In this case, you'll create 1 new cluster containing 1 `medium` replica for ingesting source data from your PostgreSQL database.
+In this case, you'll create 1 new `small` cluster for ingesting source data from your PostgreSQL database.
 
-1. In the `psql` shell connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/) command to create the new cluster:
+1. In the [Materialize SQL shell](https://console.materialize.com/), or your preferred SQL client connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/) command to create the new cluster:
 
     ```sql
-    CREATE CLUSTER ingest_postgres (SIZE = 'medium');
+    CREATE CLUSTER ingest_postgres (SIZE = 'small');
     ```
 
-    We recommend starting with a `medium` [size](/sql/create-cluster/#size) replica or larger. This will help Materialize more quickly process the initial snapshot of the tables in your publication. Once the snapshot is finished, you'll right-size the cluster.
+    A cluster of [size](/sql/create-cluster/#size) `small` should be enough to
+    process the initial snapshot of the tables in your publication. For very
+    large snapshots, consider using a larger size to speed up processing. Once
+    the snapshot is finished, you can readjust the size of the cluster to fit
+    the volume of changes being replicated from your upstream PostgeSQL
+    database.

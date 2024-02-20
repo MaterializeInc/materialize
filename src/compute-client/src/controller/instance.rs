@@ -20,6 +20,7 @@ use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::NodeId;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
@@ -45,7 +46,10 @@ use crate::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
 use crate::protocol::history::ComputeCommandHistory;
-use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
+use crate::protocol::response::{
+    ComputeResponse, CopyToResponse, OperatorHydrationStatus, PeekResponse, StatusResponse,
+    SubscribeBatch, SubscribeResponse,
+};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 #[derive(Error, Debug)]
@@ -154,6 +158,14 @@ pub(super) struct Instance<T> {
     /// on the subscribe's input. `subscribes` is only used to track which updates have been
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
+    /// Tracks all in-progress COPY TOs.
+    ///
+    /// New entries are added for all s3 oneshot sinks (corresponding to a COPY TO) exported from
+    /// dataflows created through [`ActiveInstance::create_dataflow`].
+    ///
+    /// The entry for a copy to is removed once at least one replica has finished
+    /// or the exporting collection is dropped.
+    copy_tos: BTreeSet<GlobalId>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<UIntGauge, T>,
     /// Sender for responses to be delivered.
@@ -371,6 +383,9 @@ impl<T: Timestamp> Instance<T> {
         self.metrics
             .subscribe_count
             .set(u64::cast_from(self.subscribes.len()));
+        self.metrics
+            .copy_to_count
+            .set(u64::cast_from(self.copy_tos.len()));
     }
 
     /// Report updates (inserts or retractions) to the identified collection's dependencies.
@@ -429,6 +444,34 @@ impl<T: Timestamp> Instance<T> {
         if PartialOrder::less_than(&collection.as_of, frontier) {
             collection.set_hydrated();
         }
+    }
+
+    /// Update the tracked hydration status for an operator according to a received status update.
+    fn update_operator_hydration_status(
+        &mut self,
+        replica_id: ReplicaId,
+        status: OperatorHydrationStatus,
+    ) {
+        let Some(replica) = self.replicas.get_mut(&replica_id) else {
+            tracing::error!(
+                %replica_id, ?status,
+                "status update for an unknown replica"
+            );
+            return;
+        };
+        let Some(collection) = replica.collections.get_mut(&status.collection_id) else {
+            tracing::error!(
+                %replica_id, ?status,
+                "status update for an unknown collection"
+            );
+            return;
+        };
+
+        collection.hydration_state.operator_hydrated(
+            status.lir_id,
+            status.worker_id,
+            status.hydrated,
+        );
     }
 
     /// Clean up collection state that is not needed anymore.
@@ -508,6 +551,7 @@ where
             log_sources: arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
+            copy_tos: Default::default(),
             history,
             response_tx,
             introspection_tx,
@@ -938,6 +982,11 @@ where
                 .insert(subscribe_id, ActiveSubscribe::new());
         }
 
+        // Initialize tracking of copy tos.
+        for copy_to_id in dataflow.copy_to_ids() {
+            self.compute.copy_tos.insert(copy_to_id);
+        }
+
         // Here we augment all imported sources and all exported sinks with with the appropriate
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
@@ -971,7 +1020,9 @@ where
                     ComputeSinkConnection::Persist(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
-                ComputeSinkConnection::S3Oneshot(conn) => ComputeSinkConnection::S3Oneshot(conn),
+                ComputeSinkConnection::CopyToS3Oneshot(conn) => {
+                    ComputeSinkConnection::CopyToS3Oneshot(conn)
+                }
             };
             let desc = ComputeSinkDesc {
                 from: se.from,
@@ -1046,6 +1097,9 @@ where
             // If the collection is a subscribe, stop tracking it. This ensures that the controller
             // ceases to produce `SubscribeResponse`s for this subscribe.
             self.compute.subscribes.remove(id);
+            // If the collection is a copy to, stop tracking it. This ensures that the controller
+            // ceases to produce `CopyToResponse`s` for this copy to.
+            self.compute.copy_tos.remove(id);
         }
 
         if !read_capability_updates.is_empty() {
@@ -1173,10 +1227,11 @@ where
             let old_capability = &collection.implied_capability;
             let new_capability = new_policy.frontier(collection.write_frontier.borrow());
             if PartialOrder::less_than(old_capability, &new_capability) {
-                let mut update = ChangeBatch::new();
-                update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
-                update.extend(new_capability.iter().map(|t| (t.clone(), 1)));
-                read_capability_changes.insert(id, update);
+                let entry = read_capability_changes
+                    .entry(id)
+                    .or_insert_with(ChangeBatch::new);
+                entry.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+                entry.extend(new_capability.iter().map(|t| (t.clone(), 1)));
                 collection.implied_capability = new_capability;
             }
 
@@ -1254,6 +1309,10 @@ where
             }
         }
 
+        // Prune empty changes. We might end up with empty changes for dependencies that have been
+        // dropped already, which is fine but might be confusing if we reported them.
+        storage_read_capability_changes.retain(|_key, update| !update.is_empty());
+
         if !storage_read_capability_changes.is_empty() {
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_capability_changes);
@@ -1299,13 +1358,13 @@ where
         for (id, new_upper) in updates {
             let collection = self.compute.expect_collection_mut(*id);
 
-            let old_upper = std::mem::replace(&mut collection.write_frontier, new_upper.clone());
-            let old_since = &collection.implied_capability;
-
-            if !PartialOrder::less_than(&old_upper, new_upper) {
+            if !PartialOrder::less_than(&collection.write_frontier, new_upper) {
                 continue; // frontier has not advanced
             }
 
+            collection.write_frontier = new_upper.clone();
+
+            let old_since = &collection.implied_capability;
             let new_since = match &collection.read_policy {
                 Some(read_policy) => {
                     // For readable collections the read frontier is determined by applying the
@@ -1467,8 +1526,15 @@ where
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
             }
+            ComputeResponse::CopyToResponse(id, response) => {
+                self.handle_copy_to_response(id, response, replica_id)
+            }
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
+            }
+            ComputeResponse::Status(response) => {
+                self.handle_status_response(response, replica_id);
+                None
             }
         }
     }
@@ -1539,6 +1605,37 @@ where
         Some(ComputeControllerResponse::PeekResponse(
             uuid, response, otel_ctx,
         ))
+    }
+
+    fn handle_copy_to_response(
+        &mut self,
+        sink_id: GlobalId,
+        response: CopyToResponse,
+        replica_id: ReplicaId,
+    ) -> Option<ComputeControllerResponse<T>> {
+        // We might not be tracking this COPY TO because we have already returned a response
+        // from one of the replicas. In that case, we ignore the response.
+        if self.compute.copy_tos.remove(&sink_id) {
+            let result = match response {
+                CopyToResponse::RowCount(count) => Ok(count),
+                CopyToResponse::Error(error) => Err(anyhow::anyhow!(error)),
+                // We should never get here: Replicas only drop copy to collections in response
+                // to the controller allowing them to do so, and when the controller drops a
+                // copy to it also removes it from the list of tracked copy_tos (see
+                // [`Instance::drop_collections`]).
+                CopyToResponse::Dropped => {
+                    tracing::error!(
+                        %sink_id,
+                        %replica_id,
+                        "received `Dropped` response for a tracked copy to",
+                    );
+                    return None;
+                }
+            };
+            Some(ComputeControllerResponse::CopyToResponse(sink_id, result))
+        } else {
+            None
+        }
     }
 
     fn handle_subscribe_response(
@@ -1628,6 +1725,14 @@ where
             }
         }
     }
+
+    fn handle_status_response(&mut self, response: StatusResponse, replica_id: ReplicaId) {
+        match response {
+            StatusResponse::OperatorHydration(status) => self
+                .compute
+                .update_operator_hydration_status(replica_id, status),
+        }
+    }
 }
 
 impl<'a, T> ActiveInstance<'a, T>
@@ -1673,9 +1778,7 @@ where
             let mut new_capability = Antichain::new();
             for frontier in compute_frontiers.chain(storage_frontiers) {
                 for time in frontier.iter() {
-                    if let Some(time) = time.step_back() {
-                        new_capability.insert(time);
-                    }
+                    new_capability.insert(time.step_back().unwrap_or(time.clone()));
                 }
             }
 
@@ -1795,12 +1898,12 @@ impl<T> ReplicaState<T> {
     /// Add a collection to the replica state.
     fn add_collection(&mut self, id: GlobalId, as_of: Antichain<T>) {
         let metrics = self.metrics.for_collection(id);
-        let hydration_flag = HydrationFlag::new(self.id, id, self.introspection_tx.clone());
+        let hydration_state = HydrationState::new(self.id, id, self.introspection_tx.clone());
         let mut state = ReplicaCollectionState {
             metrics,
             created_at: Instant::now(),
             as_of,
-            hydration_flag,
+            hydration_state,
         };
 
         // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
@@ -1838,14 +1941,14 @@ struct ReplicaCollectionState<T> {
     created_at: Instant,
     /// As-of frontier with which this collection was installed on the replica.
     as_of: Antichain<T>,
-    /// Tracks whether this collection is hydrated, i.e., it has produced some initial output.
-    hydration_flag: HydrationFlag,
+    /// Tracks hydration state for this collection.
+    hydration_state: HydrationState,
 }
 
 impl<T> ReplicaCollectionState<T> {
     /// Returns whether this collection is hydrated.
     fn hydrated(&self) -> bool {
-        self.hydration_flag.hydrated
+        self.hydration_state.hydrated
     }
 
     /// Marks the collection as hydrated and updates metrics and introspection accordingly.
@@ -1855,22 +1958,29 @@ impl<T> ReplicaCollectionState<T> {
             metrics.initial_output_duration_seconds.set(duration);
         }
 
-        self.hydration_flag.set();
+        self.hydration_state.collection_hydrated();
     }
 }
 
-/// A wrapper type that maintains hydration introspection for a given replica and collection, and
-/// ensures that reported introspection data is retracted when the flag is dropped.
+/// Maintains both global and operator-level hydration introspection for a given replica and
+/// collection, and ensures that reported introspection data is retracted when the flag is dropped.
 #[derive(Debug)]
-struct HydrationFlag {
+struct HydrationState {
+    /// The ID of the replica.
     replica_id: ReplicaId,
+    /// The ID of the compute collection.
     collection_id: GlobalId,
+    /// Whether the collection is hydrated.
     hydrated: bool,
+    /// Operator-level hydration state.
+    /// (lir_id, worker_id) -> hydrated
+    operators: BTreeMap<(NodeId, usize), bool>,
+    /// A channel through which introspection updates are delivered.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
 
-impl HydrationFlag {
-    /// Create a new unset `HydrationFlag` and update introspection.
+impl HydrationState {
+    /// Create a new `HydrationState` and initialize introspection.
     fn new(
         replica_id: ReplicaId,
         collection_id: GlobalId,
@@ -1880,29 +1990,55 @@ impl HydrationFlag {
             replica_id,
             collection_id,
             hydrated: false,
+            operators: Default::default(),
             introspection_tx,
         };
 
-        let insertion = self_.row();
-        self_.send(vec![(insertion, 1)]);
+        let insertion = self_.row_for_collection();
+        self_.send(
+            IntrospectionType::ComputeHydrationStatus,
+            vec![(insertion, 1)],
+        );
 
         self_
     }
 
-    /// Mark the collection as hydrated and update introspection.
-    fn set(&mut self) {
+    /// Update the collection as hydrated.
+    fn collection_hydrated(&mut self) {
         if self.hydrated {
             return; // nothing to do
         }
 
-        let retraction = self.row();
+        let retraction = self.row_for_collection();
         self.hydrated = true;
-        let insertion = self.row();
+        let insertion = self.row_for_collection();
 
-        self.send(vec![(retraction, -1), (insertion, 1)]);
+        self.send(
+            IntrospectionType::ComputeHydrationStatus,
+            vec![(retraction, -1), (insertion, 1)],
+        );
     }
 
-    fn row(&self) -> Row {
+    /// Update the given (lir_id, worker_id) pair as hydrated.
+    fn operator_hydrated(&mut self, lir_id: NodeId, worker_id: usize, hydrated: bool) {
+        let retraction = self.row_for_operator(lir_id, worker_id);
+        self.operators.insert((lir_id, worker_id), hydrated);
+        let insertion = self.row_for_operator(lir_id, worker_id);
+
+        if retraction == insertion {
+            return; // no change
+        }
+
+        let updates = retraction
+            .map(|r| (r, -1))
+            .into_iter()
+            .chain(insertion.map(|r| (r, 1)))
+            .collect();
+        self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
+    }
+
+    /// Return a `Row` reflecting the current collection hydration status.
+    fn row_for_collection(&self) -> Row {
         Row::pack_slice(&[
             Datum::String(&self.collection_id.to_string()),
             Datum::String(&self.replica_id.to_string()),
@@ -1910,25 +2046,54 @@ impl HydrationFlag {
         ])
     }
 
-    fn send(&self, updates: Vec<(Row, Diff)>) {
-        let result = self
-            .introspection_tx
-            .send((IntrospectionType::ComputeHydrationStatus, updates));
+    /// Return a `Row` reflecting the current hydration status of the identified operator.
+    ///
+    /// Returns `None` if the identified operator is not tracked.
+    fn row_for_operator(&self, lir_id: NodeId, worker_id: usize) -> Option<Row> {
+        self.operators.get(&(lir_id, worker_id)).map(|hydrated| {
+            Row::pack_slice(&[
+                Datum::String(&self.collection_id.to_string()),
+                Datum::UInt64(lir_id),
+                Datum::String(&self.replica_id.to_string()),
+                Datum::UInt64(u64::cast_from(worker_id)),
+                Datum::from(*hydrated),
+            ])
+        })
+    }
+
+    fn send(&self, introspection_type: IntrospectionType, updates: Vec<(Row, Diff)>) {
+        let result = self.introspection_tx.send((introspection_type, updates));
 
         if result.is_err() {
             // The global controller holds on to the `introspection_rx`. So when we get here that
             // probably means that the controller was dropped and the process is shutting down, in
             // which case we don't care about introspection updates anymore.
             tracing::info!(
-                "discarding `ComputeHydrationStatus` update because the receiver disconnected"
+                ?introspection_type,
+                "discarding introspection update because the receiver disconnected"
             );
         }
     }
 }
 
-impl Drop for HydrationFlag {
+impl Drop for HydrationState {
     fn drop(&mut self) {
-        let retraction = self.row();
-        self.send(vec![(retraction, -1)]);
+        // Retract collection hydration status.
+        let retraction = self.row_for_collection();
+        self.send(
+            IntrospectionType::ComputeHydrationStatus,
+            vec![(retraction, -1)],
+        );
+
+        // Retract operator-level hydration status.
+        let operators: Vec<_> = self.operators.keys().collect();
+        let updates: Vec<_> = operators
+            .into_iter()
+            .flat_map(|(lir_id, worker_id)| self.row_for_operator(*lir_id, *worker_id))
+            .map(|r| (r, -1))
+            .collect();
+        if !updates.is_empty() {
+            self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates)
+        }
     }
 }

@@ -39,7 +39,6 @@ from materialize.feature_benchmark.filter import Filter, FilterFirst, NoFilter
 from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.scenarios.benchmark_main import *  # noqa: F401 F403
 from materialize.feature_benchmark.scenarios.benchmark_main import (
-    MySqlStreaming,
     Scenario,
 )
 from materialize.feature_benchmark.scenarios.concurrency import *  # noqa: F401 F403
@@ -117,9 +116,9 @@ SERVICES = [
 
 
 def run_one_scenario(
-    c: Composition, scenario: type[Scenario], args: argparse.Namespace
+    c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
 ) -> list[Comparator]:
-    name = scenario.__name__
+    name = scenario_class.__name__
     print(f"--- Now benchmarking {name} ...")
 
     measurement_types = [MeasurementType.WALLCLOCK, MeasurementType.MESSAGES]
@@ -129,6 +128,8 @@ def run_one_scenario(
     comparators = [make_comparator(name=name, type=t) for t in measurement_types]
 
     common_seed = round(time.time())
+
+    early_abort = False
 
     for mz_id, instance in enumerate(["this", "other"]):
         balancerd, tag, size, params = (
@@ -185,7 +186,7 @@ def run_one_scenario(
             benchmark = Benchmark(
                 mz_id=mz_id,
                 mz_version=mz_version,
-                scenario=scenario,
+                scenario=scenario_class,
                 scale=args.scale,
                 executor=executor,
                 filter=make_filter(args),
@@ -195,13 +196,23 @@ def run_one_scenario(
                 default_size=size,
             )
 
-            aggregations = benchmark.run()
-            for aggregation, comparator in zip(aggregations, comparators):
-                comparator.append(aggregation.aggregate())
+            if not scenario_class.can_run(mz_version):
+                print(
+                    f"Skipping scenario {scenario_class} not supported in version {mz_version}"
+                )
+                early_abort = True
+            else:
+                aggregations = benchmark.run()
+                for aggregation, comparator in zip(aggregations, comparators):
+                    comparator.append(aggregation.aggregate())
 
         c.kill("cockroach", "materialized", "testdrive")
         c.rm("cockroach", "materialized", "testdrive")
         c.rm_volumes("mzdata")
+
+        if early_abort:
+            comparators = []
+            break
 
     return comparators
 
@@ -377,9 +388,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             [s for s in all_subclasses(root_scenario) if not s.__subclasses__()],
             key=repr,
         )
-
-        # TODO: #25124 (correctness issue with streaming)
-        selected_scenarios.remove(MySqlStreaming)
     else:
         selected_scenarios = [root_scenario]
 
@@ -409,6 +417,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenarios_with_regressions = []
         for scenario in scenarios_to_run:
             comparators = run_one_scenario(c, scenario, args)
+
+            if len(comparators) == 0:
+                continue
+
             report.extend(comparators)
 
             # Do not retry the scenario if no regressions
@@ -452,8 +464,8 @@ def _are_regressions_justified(
         return False, ""
 
     # Checked in _tag_references_release_version
-    assert this_tag != None
-    assert baseline_tag != None
+    assert this_tag is not None
+    assert baseline_tag is not None
 
     this_version = MzVersion.parse_mz(this_tag)
     baseline_version = MzVersion.parse_mz(baseline_tag)
@@ -474,7 +486,7 @@ def _are_regressions_justified(
 
 
 def _tag_references_release_version(image_tag: str | None) -> bool:
-    if image_tag == None:
+    if image_tag is None:
         return False
     return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
         image_tag

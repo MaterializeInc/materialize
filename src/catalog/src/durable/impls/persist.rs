@@ -342,7 +342,7 @@ impl UnopenedPersistCatalogState {
     async fn open_inner(
         mut self,
         mode: Mode,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
@@ -434,7 +434,7 @@ impl UnopenedPersistCatalogState {
                 catalog.snapshot
             );
             let mut txn = catalog.transaction().await?;
-            initialize::initialize(&mut txn, bootstrap_args, boot_ts, deploy_generation).await?;
+            initialize::initialize(&mut txn, bootstrap_args, initial_ts, deploy_generation).await?;
             txn
         };
 
@@ -664,14 +664,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[tracing::instrument(level = "info", skip(self))]
     async fn open_savepoint(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(
             Mode::Savepoint,
-            boot_ts,
+            initial_ts,
             bootstrap_args,
             deploy_generation,
             epoch_lower_bound,
@@ -683,10 +683,9 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[tracing::instrument(level = "info", skip(self))]
     async fn open_read_only(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, boot_ts, bootstrap_args, None, None)
+        self.open_inner(Mode::Readonly, EpochMillis::MIN, bootstrap_args, None, None)
             .boxed()
             .await
     }
@@ -694,14 +693,14 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     #[tracing::instrument(level = "info", skip(self))]
     async fn open(
         mut self: Box<Self>,
-        boot_ts: EpochMillis,
+        initial_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
         epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(
             Mode::Writable,
-            boot_ts,
+            initial_ts,
             bootstrap_args,
             deploy_generation,
             epoch_lower_bound,
@@ -1019,7 +1018,22 @@ impl PersistCatalogState {
             }
         }
 
-        for StateUpdate { kind, ts, diff } in updates {
+        let mut updates: Vec<_> = updates
+            .into_iter()
+            .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
+            .collect();
+
+        // Consolidation is required for correctness. It guarantees that for a single key, there is
+        // at most a single retraction and a single insertion per timestamp. Otherwise, we would
+        // need to match the retractions and insertions up by value and manually figure out what the
+        // end value should be.
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+
+        // Updates must be applied in timestamp order. Within a timestamp retractions must be
+        // applied before insertions or we might end up retracting the wrong value.
+        updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
+
+        for (kind, ts, diff) in updates {
             if diff != 1 && diff != -1 {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
@@ -1625,17 +1639,6 @@ async fn sync<T: IntoStateUpdateKindRaw>(
             }
         }
     }
-
-    // Consolidation is required for correctness. It guarantees that for a single key, there is
-    // at most a single retraction and a single insertion per timestamp. Otherwise, we would
-    // need to match the retractions and insertions up by value and manually figure out what the
-    // end value should be.
-    differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-    // Updates must be applied in timestamp order. Within a timestamp retractions must be
-    // applied before insertions or we might end up retracting the wrong value.
-    updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
-
     updates
         .into_iter()
         .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff })

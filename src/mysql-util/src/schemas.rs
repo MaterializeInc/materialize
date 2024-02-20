@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 
 use mysql_async::prelude::{FromRow, Queryable};
-use mysql_async::{Conn, FromRowError, Row};
+use mysql_async::{FromRowError, Row};
 
 use mz_repr::adt::char::CharLength;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
@@ -78,10 +78,13 @@ pub enum SchemaRequest<'a> {
 }
 
 /// Retrieve the tables and column descriptions for tables in the given schemas.
-pub async fn schema_info<'a>(
-    conn: &mut Conn,
+pub async fn schema_info<'a, Q>(
+    conn: &mut Q,
     schema_request: &SchemaRequest<'a>,
-) -> Result<Vec<MySqlTableDesc>, MySqlError> {
+) -> Result<Vec<MySqlTableDesc>, MySqlError>
+where
+    Q: Queryable,
+{
     let table_rows: Vec<(String, String)> = match schema_request {
         SchemaRequest::All => {
             // Get all tables in non-system schemas.
@@ -179,7 +182,7 @@ pub async fn schema_info<'a>(
                     // this is bounds-checked in the TryFrom impl
                     precision: info
                         .datetime_precision
-                        .and_then(|precision| Some(TimestampPrecision::try_from(precision)))
+                        .map(TimestampPrecision::try_from)
                         .transpose()
                         .map_err(|_| MySqlError::UnsupportedDataType {
                             column_type: info.column_type,

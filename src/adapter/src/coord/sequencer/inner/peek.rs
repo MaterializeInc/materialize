@@ -29,6 +29,7 @@ use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
@@ -50,7 +51,6 @@ use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::util::ResultExt;
 
 impl Coordinator {
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
@@ -247,8 +247,7 @@ impl Coordinator {
                     return;
                 }
                 CopyTo(stage) => {
-                    let result = self.peek_stage_copy_to(&mut ctx, stage);
-                    ctx.retire(result);
+                    self.peek_stage_copy_to_dataflow(ctx, stage).await;
                     return;
                 }
                 ExplainPlan(stage) => {
@@ -337,7 +336,7 @@ impl Coordinator {
         let source_ids = plan.source.depends_on();
         let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && plan.source.contains_temporal()
+            && plan.source.contains_temporal()?
         {
             // If the source IDs are timestamp independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timestamp dependent. This is
@@ -825,31 +824,34 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_copy_to(
+    async fn peek_stage_copy_to_dataflow(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: ExecuteContext,
         PeekStageCopyTo {
-            validity: _,
+            validity,
             optimizer,
             global_lir_plan,
         }: PeekStageCopyTo,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let session = ctx.session_mut();
+    ) {
+        let sink_id = global_lir_plan.sink_id();
+        let cluster_id = optimizer.cluster_id();
+
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
-        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
+        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
-        // Ship the dataflow
-        self.controller
-            .active_compute()
-            .create_dataflow(optimizer.cluster_id(), df_desc)
-            .unwrap_or_terminate("cannot fail to create dataflows");
+        // Callback for the active copy to.
+        let active_copy_to = ActiveCopyTo {
+            ctx,
+            cluster_id,
+            depends_on: validity.dependency_ids.clone(),
+        };
+        // Add metadata for the new COPY TO.
+        self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
+            .await;
 
-        // TODO(mouli): implement!
-        Err(AdapterError::Internal(format!(
-            "COPY TO '{}' is not yet implemented",
-            optimizer.copy_to_uri()
-        )))
+        // Ship dataflow.
+        self.ship_dataflow(df_desc, cluster_id).await;
     }
 
     fn peek_stage_explain_plan(
@@ -984,6 +986,9 @@ impl Coordinator {
         // we must acquire read holds here so they are held until the off-thread work
         // returns to the coordinator.
         if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+            // Transactions involving peeks will acquire read holds at most once.
+            assert_eq!(txn_reads.len(), 1);
+            let txn_reads = &txn_reads[0];
             // Find referenced ids not in the read hold. A reference could be caused by a
             // user specifying an object in a different schema than the first query. An
             // index could be caused by a CREATE INDEX after the transaction started.
@@ -1000,7 +1005,8 @@ impl Coordinator {
                 });
             }
         } else if let Some((timestamp, bundle)) = potential_read_holds {
-            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle);
+            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle, true)
+                .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems

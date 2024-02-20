@@ -110,7 +110,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 use tracing::{error, trace};
 
-use crate::metrics::postgres::PgSourceMetrics;
+use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, TransientError};
 use crate::source::types::ProgressStatisticsUpdate;
@@ -580,8 +580,8 @@ async fn raw_stream<'a>(
                             ProgressStatisticsUpdate {
                                 // Similar to the kafka source, we don't subtract 1 from the upper as we want to report the
                                 // _number of bytes_ we have processed/in upstream.
-                                upstream_values: upstream_stat.offset,
-                                committed_values: last_committed_upper.offset,
+                                offset_known: upstream_stat.offset,
+                                offset_committed: last_committed_upper.offset,
                             },
                         )
                         .await;

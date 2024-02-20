@@ -18,13 +18,13 @@ use mz_sql::plan::{Params, StatementDesc};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement, StatementKind};
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
-use crate::subscribe::{ActiveSubscribe, SubscribeRemovalReason};
-use crate::util::{describe, ComputeSinkId};
-use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse, PeekResponseUnary};
+use crate::util::describe;
+use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse};
 
 impl Coordinator {
     pub(crate) fn plan_statement(
@@ -200,111 +200,102 @@ impl Coordinator {
 
     /// Clears coordinator state for a connection.
     pub(crate) async fn clear_connection(&mut self, conn_id: &ConnectionId) {
-        self.remove_active_subscribes(conn_id, SubscribeRemovalReason::Finished)
+        self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Finished)
             .await;
 
         // Release this transaction's compaction hold on collections.
         if let Some(txn_reads) = self.txn_read_holds.remove(conn_id) {
-            self.release_read_hold(&txn_reads);
+            self.release_read_holds(txn_reads);
         }
     }
 
-    /// Handle adding metadata associated with a SUBSCRIBE query, returning a notify that resolves
-    /// when our builtin table updates are complete.
-    pub(crate) async fn add_active_subscribe(
+    /// Adds coordinator bookkeeping for an active compute sink.
+    ///
+    /// This is a low-level method. The caller is responsible for installing the
+    /// sink in the controller.
+    pub(crate) async fn add_active_compute_sink(
         &mut self,
         id: GlobalId,
-        active_subscribe: ActiveSubscribe,
+        active_sink: ActiveComputeSink,
     ) -> BuiltinTableAppendNotify {
-        let update = self
-            .catalog()
-            .state()
-            .pack_subscribe_update(id, &active_subscribe, 1);
-        let builtin_update_notify = self.builtin_table_update().execute(vec![update]).await;
-
-        let session_type = metrics::session_type_label_value(&active_subscribe.user);
-        self.metrics
-            .active_subscribes
-            .with_label_values(&[session_type])
-            .inc();
+        let user = self.active_conns()[active_sink.connection_id()].user();
+        let session_type = metrics::session_type_label_value(user);
 
         self.active_conns
-            .get_mut(&active_subscribe.conn_id)
+            .get_mut(active_sink.connection_id())
             .expect("must exist for active sessions")
             .drop_sinks
-            .insert(ComputeSinkId {
-                cluster_id: active_subscribe.cluster_id,
-                global_id: id,
-            });
+            .insert(id);
 
-        self.active_subscribes.insert(id, active_subscribe);
+        let ret_fut = match &active_sink {
+            ActiveComputeSink::Subscribe(active_subscribe) => {
+                let update = self
+                    .catalog()
+                    .state()
+                    .pack_subscribe_update(id, active_subscribe, 1);
 
-        builtin_update_notify
+                self.metrics
+                    .active_subscribes
+                    .with_label_values(&[session_type])
+                    .inc();
+
+                self.builtin_table_update().execute(vec![update]).await
+            }
+            ActiveComputeSink::CopyTo(_) => {
+                self.metrics
+                    .active_copy_tos
+                    .with_label_values(&[session_type])
+                    .inc();
+                Box::pin(std::future::ready(()))
+            }
+        };
+        self.active_compute_sinks.insert(id, active_sink);
+        ret_fut
     }
 
-    /// Cancel all outstanding subscribes for the identified connection.
+    /// Removes coordinator bookkeeping for an active compute sink.
+    ///
+    /// This is a low-level method. The caller is responsible for dropping the
+    /// sink from the controller. Consider calling `drop_compute_sink` or
+    /// `retire_compute_sink` instead.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn cancel_active_subscribes(&mut self, conn_id: &ConnectionId) {
-        self.remove_active_subscribes(conn_id, SubscribeRemovalReason::Canceled)
-            .await
-    }
-
-    /// Remove all outstanding subscribes for the identified connection with
-    /// the specified reason.
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_active_subscribes(
-        &mut self,
-        conn_id: &ConnectionId,
-        reason: SubscribeRemovalReason,
-    ) {
-        let drop_sinks = self
-            .active_conns
-            .get_mut(conn_id)
-            .expect("must exist for active session")
-            .drop_sinks
-            .iter()
-            .map(|sink_id| (*sink_id, reason.clone()))
-            .collect::<Vec<_>>();
-        self.drop_compute_sinks(drop_sinks).await;
-    }
-
-    /// Handle removing metadata associated with a SUBSCRIBE query.
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_active_subscribe(
+    pub(crate) async fn remove_active_compute_sink(
         &mut self,
         id: GlobalId,
-        reason: SubscribeRemovalReason,
-    ) {
-        if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
-            let update = self
-                .catalog()
-                .state()
-                .pack_subscribe_update(id, &active_subscribe, -1);
-            self.builtin_table_update().blocking(vec![update]).await;
-
-            let session_type = metrics::session_type_label_value(&active_subscribe.user);
-            self.metrics
-                .active_subscribes
-                .with_label_values(&[session_type])
-                .dec();
+    ) -> Option<ActiveComputeSink> {
+        if let Some(sink) = self.active_compute_sinks.remove(&id) {
+            let user = self.active_conns()[sink.connection_id()].user();
+            let session_type = metrics::session_type_label_value(user);
 
             self.active_conns
-                .get_mut(&active_subscribe.conn_id)
-                .expect("must exist for active subscribe")
+                .get_mut(sink.connection_id())
+                .expect("must exist for active compute sink")
                 .drop_sinks
-                .remove(&ComputeSinkId {
-                    cluster_id: active_subscribe.cluster_id,
-                    global_id: id,
-                });
+                .remove(&id);
 
-            let message = match reason {
-                SubscribeRemovalReason::Finished => return,
-                SubscribeRemovalReason::Canceled => PeekResponseUnary::Canceled,
-                SubscribeRemovalReason::DependencyDropped(d) => PeekResponseUnary::Error(format!(
-                    "subscribe has been terminated because underlying {d} was dropped"
-                )),
-            };
-            active_subscribe.send(message);
+            match &sink {
+                ActiveComputeSink::Subscribe(active_subscribe) => {
+                    let update =
+                        self.catalog()
+                            .state()
+                            .pack_subscribe_update(id, active_subscribe, -1);
+                    self.builtin_table_update().blocking(vec![update]).await;
+
+                    self.metrics
+                        .active_subscribes
+                        .with_label_values(&[session_type])
+                        .dec();
+                }
+                ActiveComputeSink::CopyTo(_) => {
+                    self.metrics
+                        .active_copy_tos
+                        .with_label_values(&[session_type])
+                        .dec();
+                }
+            }
+            Some(sink)
+        } else {
+            None
         }
     }
 }

@@ -117,7 +117,7 @@ fn plan_show_create(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql = simplify_names(scx.catalog, item.create_sql())?;
+    let create_sql = humanize_sql(scx.catalog, item.create_sql())?;
     Ok(ShowCreatePlan {
         id: item.id(),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -890,10 +890,20 @@ impl<'a> ShowColumnsSelect<'a> {
     }
 }
 
-fn simplify_names(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
+/// Convert a SQL statement into a form suitable for human consumption.
+fn humanize_sql(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
     let parsed = parse::parse(sql)?.into_element().ast;
     let (mut resolved, _) = names::resolve(catalog, parsed)?;
+
+    // Simplify names.
     let mut simplifier = NameSimplifier { catalog };
     simplifier.visit_statement_mut(&mut resolved);
+
+    // Strip internal `AS OF` syntax.
+    match &mut resolved {
+        Statement::CreateMaterializedView(stmt) => stmt.as_of = None,
+        _ => (),
+    }
+
     Ok(resolved.to_ast_string_stable())
 }

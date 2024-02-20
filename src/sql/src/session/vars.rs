@@ -940,17 +940,6 @@ static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| 
     internal: true,
 });
 
-const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("coord_slow_message_reporting_threshold"),
-    // Default to recording all messages, but left here so we can dynamically increase if this
-    // causes unexpected problems.
-    value: Duration::from_millis(0),
-    description:
-        "Sets the threshold at which we will report the handling of a coordinator message \
-    for being slow.",
-    internal: true,
-};
-
 const COORD_SLOW_MESSAGE_WARN_THRESHOLD: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("coord_slow_message_warn_threshold"),
     // Note(parkmycar): This value was chosen arbitrarily.
@@ -1198,22 +1187,22 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar
     internal: true,
 };
 
-/// The interval to submit statistics to `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker`.
+/// The interval to submit statistics to `mz_source_statistics_raw` and `mz_sink_statistics_raw`.
 const STORAGE_STATISTICS_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("storage_statistics_interval"),
     value: mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT,
-    description: "The interval to submit statistics to `mz_source_statistics_per_worker` \
+    description: "The interval to submit statistics to `mz_source_statistics_raw` \
         and `mz_sink_statistics` (Materialize).",
     internal: true,
 };
 
-/// The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in
+/// The interval to collect statistics for `mz_source_statistics_raw` and `mz_sink_statistics_raw` in
 /// clusterd. Controls the accuracy of metrics.
 const STORAGE_STATISTICS_COLLECTION_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("storage_statistics_collection_interval"),
     value: mz_storage_types::parameters::STATISTICS_COLLECTION_INTERVAL_DEFAULT,
-    description: "The interval to collect statistics for `mz_source_statistics_per_worker` \
-        and `mz_sink_statistics_per_worker` in clusterd. Controls the accuracy of metrics \
+    description: "The interval to collect statistics for `mz_source_statistics_raw` \
+        and `mz_sink_statistics_raw` in clusterd. Controls the accuracy of metrics \
         (Materialize).",
     internal: true,
 };
@@ -2166,6 +2155,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_compute_operator_hydration_status_logging,
+        desc: "log the hydration status of compute operators",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Returns a new ConfigSet containing every `Config` in Materialize.
@@ -2949,7 +2945,6 @@ impl SystemVars {
             .with_var(&OPENTELEMETRY_FILTER_DEFAULTS)
             .with_var(&SENTRY_FILTERS)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
-            .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
             .with_var(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
@@ -3746,10 +3741,6 @@ impl SystemVars {
 
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
-    }
-
-    pub fn coord_slow_message_reporting_threshold(&self) -> Duration {
-        *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
     }
 
     pub fn coord_slow_message_warn_threshold(&self) -> Duration {
@@ -5505,6 +5496,7 @@ impl SystemVars {
             || name == ENABLE_MZ_JOIN_CORE.name()
             || name == ENABLE_JEMALLOC_PROFILING.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
+            || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
             || self.is_persist_config_var(name)
             || is_tracing_var(name)
     }

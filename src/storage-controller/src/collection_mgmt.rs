@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use futures::stream::StreamExt;
+use futures::FutureExt;
 use mz_ore::channel::ReceiverExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -108,7 +110,7 @@ where
     /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
     /// it has stopped referencing the provided `id`.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn unregister_collection(&self, id: GlobalId) {
+    pub(super) fn unregister_collection(&self, id: GlobalId) -> BoxFuture<'static, ()> {
         let prev = self
             .collections
             .lock()
@@ -121,7 +123,9 @@ where
             //
             // We can ignore errors here because they indicate the task is already done.
             let _ = shutdown_tx.send(());
-            let _ = prev_task.await;
+            Box::pin(prev_task.map(|_| ()))
+        } else {
+            Box::pin(futures::future::ready(()))
         }
     }
 

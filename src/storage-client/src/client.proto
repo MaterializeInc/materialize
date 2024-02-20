@@ -19,6 +19,7 @@ import "cluster-client/src/client.proto";
 import "storage-types/src/parameters.proto";
 import "storage-types/src/sources.proto";
 import "storage-types/src/sinks.proto";
+import "storage-client/src/statistics.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -87,29 +88,9 @@ message ProtoStorageCommand {
 }
 
 message ProtoStorageResponse {
-    message ProtoSourceStatisticsUpdate {
-        mz_repr.global_id.ProtoGlobalId id = 1;
-        uint64 worker_id = 2;
-        bool snapshot_committed = 3;
-        uint64 messages_received = 4;
-        uint64 updates_staged = 5;
-        uint64 updates_committed = 6;
-        uint64 bytes_received = 7;
-        uint64 envelope_state_bytes = 8;
-        uint64 envelope_state_records = 9;
-        optional int64 rehydration_latency_ms = 10;
-    }
-    message ProtoSinkStatisticsUpdate {
-        mz_repr.global_id.ProtoGlobalId id = 1;
-        uint64 worker_id = 2;
-        uint64 messages_staged = 3;
-        uint64 messages_committed = 5;
-        uint64 bytes_staged = 4;
-        uint64 bytes_committed = 6;
-    }
     message ProtoStatisticsUpdates {
-        repeated ProtoSourceStatisticsUpdate source_updates = 1;
-        repeated ProtoSinkStatisticsUpdate sink_updates = 2;
+        repeated mz_storage_client.statistics.ProtoSourceStatisticsUpdate source_updates = 1;
+        repeated mz_storage_client.statistics.ProtoSinkStatisticsUpdate sink_updates = 2;
     }
 
     message ProtoStatus {

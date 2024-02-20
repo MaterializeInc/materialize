@@ -81,6 +81,17 @@ pub enum ComputeControllerResponse<T> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
+    /// The response from a dataflow containing an `CopyToS3Oneshot` sink.
+    ///
+    /// The `GlobalId` identifies the sink. The `Result` is the response from
+    /// the sink, where an `Ok(n)` indicates that `n` rows were successfully
+    /// copied to S3 and an `Err` indicates that an error was encountered
+    /// during the copy operation.
+    ///
+    /// For a given `CopyToS3Oneshot` sink, there will be at most one `CopyToResponse`
+    /// produced. (The sink may produce no responses if its dataflow is dropped
+    /// before completion.)
+    CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// See [`ComputeResponse::FrontierUpper`]
     FrontierUpper {
         /// TODO(#25239): Add documentation.
@@ -640,9 +651,11 @@ where
         }
 
         for (type_, updates) in updates_by_type {
-            self.storage
-                .record_introspection_updates(type_, updates)
-                .await;
+            if !updates.is_empty() {
+                self.storage
+                    .record_introspection_updates(type_, updates)
+                    .await;
+            }
         }
     }
 }
@@ -693,13 +706,17 @@ where
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn maintain(&mut self) {
-        // Record pending introspection updates.
-        self.record_introspection_updates().await;
-
         // Perform instance maintenance work.
         for instance in self.compute.instances.values_mut() {
             instance.activate(self.storage).maintain();
         }
+
+        // Record pending introspection updates.
+        //
+        // It's beneficial to do this as the last maintenance step because previous steps can cause
+        // dropping of state, which can can cause introspection retractions, which lower the volume
+        // of data we have to record.
+        self.record_introspection_updates().await;
     }
 }
 

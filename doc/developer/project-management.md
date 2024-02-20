@@ -2,11 +2,11 @@
 
 At Materialize, we have a
 [unified Engineering, Product, Design (EPD) backlog](https://github.com/orgs/MaterializeInc/projects/43).
-The backlog describes all prioritized projects across our EPD teams,
-including: Product Teams, Functional Teams, Product Design, Developer
-Experience, Education, and Analytics. Each roadmap item is marked with
-a priority ("Now," "Next," or "Later") that indicates the timeline upon
-which the item will be picked up, worked on, and eventually delivered.
+The backlog describes all prioritized projects across our EPD teams, including:
+Product Teams, Functional Teams, Product Design, and Analytics. Each roadmap
+item is marked with a priority ("Now," "Next," or "Later") that indicates the
+timeline upon which the item will be picked up, worked on, and eventually
+delivered.
 
 Each project marked "Now" must be owned by a single Directly Responsible
 Individual (DRI). The DRI for a project can be any member of the larger
@@ -98,7 +98,7 @@ skipping this step in the GitHub Epic.
 Otherwise, the DRI is responsible for researching the solution space,
 proposing potential solutions, and getting signoff from relevant stakeholders.
 This does not mean that the DRI is required to convince everyone of their chosen
-solution, we do not intend to design by committee. If you are the DRI for a
+solution — we do not intend to design by committee. If you are the DRI for a
 project and need help identifying your relevant stakeholders, please reach
 out to your manager.
 
@@ -111,7 +111,7 @@ from Internal Development to General Availability.
 
 It is not required that the DRI personally deliver each piece
 of work attached to a project. The DRI will likely require help from a
-Product Manager, a Product Designer, Engineers, and our DevEx and GTM
+Product Manager, a Product Designer, Engineers, and our testing and GTM
 teams along the way. The DRI is responsible for assigning each piece of
 work attached to a project, and ensuring that progress is moving along
 as expected.

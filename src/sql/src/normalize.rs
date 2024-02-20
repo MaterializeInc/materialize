@@ -377,6 +377,7 @@ pub fn create_statement(
             in_cluster: _,
             query,
             with_options: _,
+            as_of: _,
         }) => {
             *name = allocate_name(name)?;
             {

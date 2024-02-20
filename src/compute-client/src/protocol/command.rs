@@ -383,6 +383,8 @@ pub struct ComputeParameters {
     pub enable_jemalloc_profiling: Option<bool>,
     /// Enable lgalloc for columnation.
     pub enable_columnation_lgalloc: Option<bool>,
+    /// Enable operator hydration status logging.
+    pub enable_operator_hydration_status_logging: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
     /// Tracing configuration.
@@ -401,6 +403,7 @@ impl ComputeParameters {
             enable_mz_join_core,
             enable_jemalloc_profiling,
             enable_columnation_lgalloc,
+            enable_operator_hydration_status_logging,
             persist,
             tracing,
             grpc_client,
@@ -423,6 +426,10 @@ impl ComputeParameters {
         }
         if enable_columnation_lgalloc.is_some() {
             self.enable_columnation_lgalloc = enable_columnation_lgalloc;
+        }
+        if enable_operator_hydration_status_logging.is_some() {
+            self.enable_operator_hydration_status_logging =
+                enable_operator_hydration_status_logging;
         }
 
         self.persist.update(persist);
@@ -449,6 +456,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             enable_jemalloc_profiling: self.enable_jemalloc_profiling.into_proto(),
             enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
+            enable_operator_hydration_status_logging: self
+                .enable_operator_hydration_status_logging
+                .into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
@@ -466,6 +476,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
             enable_jemalloc_profiling: proto.enable_jemalloc_profiling.into_rust()?,
             enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
+            enable_operator_hydration_status_logging: proto
+                .enable_operator_hydration_status_logging
+                .into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,

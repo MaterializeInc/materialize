@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use http::Uri;
 use mz_compute_types::plan::Plan;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, S3OneshotSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, CopyToS3OneshotSinkConnection,
+};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_pgcopy::CopyFormatParams;
@@ -91,10 +93,6 @@ impl Optimizer {
     pub fn cluster_id(&self) -> ComputeInstanceId {
         self.compute_instance.instance_id()
     }
-
-    pub fn copy_to_uri(&self) -> &Uri {
-        &self.copy_to_uri
-    }
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
@@ -142,6 +140,14 @@ pub struct Resolved<'s> {
 pub struct GlobalLirPlan {
     df_desc: LirDataflowDescription,
     df_meta: DataflowMetainfo,
+}
+
+impl GlobalLirPlan {
+    pub fn sink_id(&self) -> GlobalId {
+        let sink_exports = &self.df_desc.sink_exports;
+        let sink_id = sink_exports.keys().next().expect("valid sink");
+        *sink_id
+    }
 }
 
 impl Optimize<HirRelationExpr> for Optimizer {
@@ -219,7 +225,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // sinks, which should be set here depending upon the url scheme.
         let connection = match &self.copy_to_connection {
             Connection::Aws(aws_connection) => {
-                ComputeSinkConnection::S3Oneshot(S3OneshotSinkConnection {
+                ComputeSinkConnection::CopyToS3Oneshot(CopyToS3OneshotSinkConnection {
                     aws_connection: aws_connection.clone(),
                     prefix: self.copy_to_uri.to_string(),
                 })

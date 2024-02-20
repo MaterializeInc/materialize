@@ -2297,7 +2297,7 @@ impl Coordinator {
                     }
                 };
 
-                if plan.values.contains_temporal() {
+                if return_if_err!(plan.values.contains_temporal(), ctx) {
                     ctx.retire(Err(AdapterError::Unsupported(
                         "calls to mz_now in write statements",
                     )));

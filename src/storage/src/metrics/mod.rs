@@ -43,9 +43,6 @@ use mz_storage_operators::metrics::BackpressureMetrics;
 
 pub mod channel;
 pub mod decode;
-pub mod kafka;
-pub mod mysql;
-pub mod postgres;
 pub mod source;
 pub mod upsert;
 
@@ -59,8 +56,10 @@ pub mod upsert;
 /// This struct can be cloned, and the various definitions are shared.
 #[derive(Clone, Debug)]
 pub struct StorageMetrics {
-    pub(crate) decode_defs: decode::DecodeMetricDefs,
     pub(crate) source_defs: source::SourceMetricDefs,
+    pub(crate) decode_defs: decode::DecodeMetricDefs,
+    pub(crate) upsert_defs: upsert::UpsertMetricDefs,
+    pub(crate) upsert_backpressure_defs: upsert::UpsertBackpressureMetricDefs,
 
     // Defined in the `statistics` module, as they are kept in sync with
     // user-facing data.
@@ -72,8 +71,10 @@ impl StorageMetrics {
     /// Register all metrics with the `MetricsRegistry`.
     pub fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
-            decode_defs: decode::DecodeMetricDefs::register_with(registry),
             source_defs: source::SourceMetricDefs::register_with(registry),
+            decode_defs: decode::DecodeMetricDefs::register_with(registry),
+            upsert_defs: upsert::UpsertMetricDefs::register_with(registry),
+            upsert_backpressure_defs: upsert::UpsertBackpressureMetricDefs::register_with(registry),
             source_statistics: SourceStatisticsMetricDefs::register_with(registry),
             sink_statistics: SinkStatisticsMetricDefs::register_with(registry),
         }
@@ -87,20 +88,17 @@ impl StorageMetrics {
     ) -> BackpressureMetrics {
         BackpressureMetrics {
             emitted_bytes: Arc::new(
-                self.source_defs
-                    .upsert_backpressure_defs
+                self.upsert_backpressure_defs
                     .emitted_bytes
                     .get_delete_on_drop_counter(vec![id.to_string(), index.to_string()]),
             ),
             last_backpressured_bytes: Arc::new(
-                self.source_defs
-                    .upsert_backpressure_defs
+                self.upsert_backpressure_defs
                     .last_backpressured_bytes
                     .get_delete_on_drop_gauge(vec![id.to_string(), index.to_string()]),
             ),
             retired_bytes: Arc::new(
-                self.source_defs
-                    .upsert_backpressure_defs
+                self.upsert_backpressure_defs
                     .retired_bytes
                     .get_delete_on_drop_counter(vec![id.to_string(), index.to_string()]),
             ),
@@ -114,12 +112,7 @@ impl StorageMetrics {
         worker_id: usize,
         backpressure_metrics: Option<BackpressureMetrics>,
     ) -> upsert::UpsertMetrics {
-        upsert::UpsertMetrics::new(
-            &self.source_defs.upsert_defs,
-            id,
-            worker_id,
-            backpressure_metrics,
-        )
+        upsert::UpsertMetrics::new(&self.upsert_defs, id, worker_id, backpressure_metrics)
     }
 
     /// Get a `SourcePersistSinkMetrics` for the given configuration.
@@ -152,13 +145,19 @@ impl StorageMetrics {
     }
 
     /// Get a `PgMetrics` for the given id.
-    pub(crate) fn get_postgres_metrics(&self, id: GlobalId) -> postgres::PgSourceMetrics {
-        postgres::PgSourceMetrics::new(&self.source_defs.postgres_defs, id)
+    pub(crate) fn get_postgres_source_metrics(
+        &self,
+        id: GlobalId,
+    ) -> source::postgres::PgSourceMetrics {
+        source::postgres::PgSourceMetrics::new(&self.source_defs.postgres_defs, id)
     }
 
     /// Get a `MySqlSourceMetrics` for the given id.
-    pub(crate) fn get_mysql_metrics(&self, id: GlobalId) -> mysql::MySqlSourceMetrics {
-        mysql::MySqlSourceMetrics::new(&self.source_defs.mysql_defs, id)
+    pub(crate) fn get_mysql_source_metrics(
+        &self,
+        id: GlobalId,
+    ) -> source::mysql::MySqlSourceMetrics {
+        source::mysql::MySqlSourceMetrics::new(&self.source_defs.mysql_defs, id)
     }
 
     /// Get an `OffsetCommitMetrics` for the given id.
@@ -166,15 +165,15 @@ impl StorageMetrics {
         source::OffsetCommitMetrics::new(&self.source_defs.source_defs, id)
     }
 
-    /// Get an `KafkaPartitionMetrics` for the given configuration.
-    pub(crate) fn get_kafka_partition_metrics(
+    /// Get an `KafkaSourceMetrics` for the given configuration.
+    pub(crate) fn get_kafka_source_metrics(
         &self,
         ids: Vec<i32>,
         topic: String,
         source_id: GlobalId,
-    ) -> kafka::KafkaPartitionMetrics {
-        kafka::KafkaPartitionMetrics::new(
-            &self.source_defs.kafka_partition_defs,
+    ) -> source::kafka::KafkaSourceMetrics {
+        source::kafka::KafkaSourceMetrics::new(
+            &self.source_defs.kafka_source_defs,
             ids,
             topic,
             source_id,

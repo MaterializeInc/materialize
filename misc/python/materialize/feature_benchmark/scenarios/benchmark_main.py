@@ -27,6 +27,9 @@ from materialize.feature_benchmark.scenario import (
 )
 from materialize.mz_version import MzVersion
 
+# for pdoc ignores
+__pdoc__ = {}
+
 
 class FastPath(Scenario):
     """Feature benchmarks related to the "fast path" in query execution, as described in the
@@ -1153,6 +1156,10 @@ true
         ]
 
 
+for i in [5, 6, 7, 8, 9]:
+    __pdoc__[f"KafkaEnvelopeNoneBytesScalability_scale_{i}"] = False
+
+
 @parameterized_class(
     [{"SCALE": i} for i in [5, 6, 7, 8, 9]], class_name_func=Scenario.name_with_scale
 )
@@ -1485,6 +1492,10 @@ class MySqlStreaming(MySqlCdc):
     """Measure the time it takes to ingest records from MySQL post-snapshot"""
 
     SCALE = 5
+
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        return version >= MzVersion.parse_mz("v0.88.0-dev")
 
     def shared(self) -> Action:
         return TdAction(

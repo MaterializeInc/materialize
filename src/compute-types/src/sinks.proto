@@ -6,6 +6,9 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+
+// buf breaking: ignore (does not currently require backward-compatibility)
+
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
@@ -33,7 +36,7 @@ message ProtoComputeSinkConnection {
     oneof kind {
         google.protobuf.Empty subscribe = 1;
         ProtoPersistSinkConnection persist = 2;
-        ProtoS3OneshotSinkConnection s3_oneshot = 3;
+        ProtoCopyToS3OneshotSinkConnection copy_to_s3_oneshot = 3;
     }
 }
 
@@ -42,7 +45,7 @@ message ProtoPersistSinkConnection {
     mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
 }
 
-message ProtoS3OneshotSinkConnection {
+message ProtoCopyToS3OneshotSinkConnection {
     string prefix = 1;
     mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
 }

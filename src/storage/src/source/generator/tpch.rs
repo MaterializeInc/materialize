@@ -19,14 +19,13 @@ use mz_ore::now::NowFn;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::load_generator::Generator;
+use mz_storage_types::sources::load_generator::{Event, Generator};
 use mz_storage_types::sources::MzOffset;
 use once_cell::sync::Lazy;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use timely::dataflow::operators::to_stream::Event;
 
 #[derive(Clone, Debug)]
 pub struct Tpch {

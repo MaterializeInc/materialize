@@ -3255,6 +3255,7 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
+        let as_of = self.parse_optional_internal_as_of()?;
 
         Ok(Statement::CreateMaterializedView(
             CreateMaterializedViewStatement {
@@ -3263,6 +3264,7 @@ impl<'a> Parser<'a> {
                 columns,
                 in_cluster,
                 query,
+                as_of,
                 with_options,
             },
         ))
@@ -6994,6 +6996,30 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(UP) {
             self.expect_keyword(TO)?;
             self.parse_expr().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Parse `AS OF`, if present.
+    ///
+    /// In contrast to `parse_optional_as_of`, this parser only supports `AS OF <time>` syntax and
+    /// directly returns an `u64`. It is only meant to be used for internal SQL syntax.
+    fn parse_optional_internal_as_of(&mut self) -> Result<Option<u64>, ParserError> {
+        fn try_parse_u64(parser: &mut Parser) -> Option<u64> {
+            let value = parser.parse_value().ok()?;
+            let Value::Number(s) = value else { return None };
+            s.parse().ok()
+        }
+
+        if self.parse_keywords(&[AS, OF]) {
+            match try_parse_u64(self) {
+                Some(time) => Ok(Some(time)),
+                None => {
+                    self.prev_token();
+                    self.expected(self.peek_pos(), "`u64` literal", self.peek_token())
+                }
+            }
         } else {
             Ok(None)
         }

@@ -14,11 +14,10 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::sources::load_generator::{
-    Generator, LoadGenerator, LoadGeneratorSourceConnection,
+    Event, Generator, LoadGenerator, LoadGeneratorSourceConnection,
 };
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use timely::dataflow::operators::to_stream::Event;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -117,8 +116,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
             let mut resume_uppers = std::pin::pin!(resume_uppers);
             let mut statistics = ProgressStatisticsUpdate {
-                upstream_values: 0,
-                committed_values: 0,
+                offset_known: 0,
+                offset_committed: 0,
             };
 
             while let Some((output, event)) = rows.next() {
@@ -140,8 +139,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
                             data_output.give(&cap, (message, offset, diff)).await;
                         }
 
-                        if offset.offset > statistics.upstream_values {
-                            statistics.upstream_values = offset.offset;
+                        if offset.offset > statistics.offset_known {
+                            statistics.offset_known = offset.offset;
                         }
                     }
                     Event::Progress(Some(offset)) => {
@@ -163,10 +162,10 @@ impl SourceRender for LoadGeneratorSourceConnection {
                                     Some(frontier) = resume_uppers.next() => {
                                         if let Some(offset) = frontier.as_option() {
                                             let total = offset.offset.saturating_sub(1);
-                                            if total > statistics.committed_values{
+                                            if total > statistics.offset_committed{
                                                 // Note we don't subtract from the upper, as we
                                                 // want to report total number of offsets we have processed.
-                                                statistics.committed_values = total;
+                                                statistics.offset_committed = total;
                                             }
                                         }
                                     }

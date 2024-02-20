@@ -28,15 +28,15 @@ use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
 
 /// An update produced by implementors of `SourceRender` that presents an _aggregated_
-/// description of the number of _committed_values_ and _upstream_values_ for the given
+/// description of the number of _offset_committed_ and _offset_known_ for the given
 /// source.
 ///
 /// The aggregate is required to be a 64 bit unsigned integer, whose units are
 /// implementation-defined.
 #[derive(Clone, Debug)]
 pub struct ProgressStatisticsUpdate {
-    pub upstream_values: u64,
-    pub committed_values: u64,
+    pub offset_known: u64,
+    pub offset_committed: u64,
 }
 
 /// Describes a source that can render itself in a timely scope.

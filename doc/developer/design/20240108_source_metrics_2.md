@@ -5,7 +5,7 @@
 
 ## The Problem
 
-The [existing source statistics](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_statistics_per_worker)
+The [existing source statistics](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_source_statistics_raw)
 we expose to users for sources answer _some important questions_, like:
 - _Generally_, how fast we are reading data from upstream?
 - Have we committed the source's snapshot?
@@ -84,31 +84,31 @@ The first set of metrics this design document proposes involve _snapshot progres
 on the _percentage_ of the source's snapshot Materialize has _read_. These metrics are designed to
 answer #1 in [the problem statement](#the-problem).
 
-We will introduce 2 new columns in `mz_source_statistics_per_worker`:
+We will introduce 2 new columns in `mz_source_statistics_raw`:
 
 ```
-| `snapshot_total`     | [`uint8`] | The total number of upstream values that are part of the snapshot. |
+| `snapshot_records_known`     | [`uint8`] | The total number of upstream values that are part of the snapshot. |
 | `snapshot_progress`  | [`uint8`] | The number of upstream values Materialize has read so far.         |
 ```
 
 The unit of _values_ depends on the source type, and will be _rows_ for MySQL and Postgres, and _offsets_ for kafka.
 
-These values can be summed across workers and compared (`snapshot_progress / snapshot_total`) to produce
+These values can be summed across workers and compared (`snapshot_progress / snapshot_records_known`) to produce
 a _lower-bound_ estimate on the % progress we have made reading the source's snapshot.
 
 ### Source specifics
 
-The `SourceReader` implementation for each source will be required to produce a `snapshot_total`, as well as
+The `SourceReader` implementation for each source will be required to produce a `snapshot_records_known`, as well as
 a continuously updated `snapshot_progress` frontier on each worker.
 
 #### Kafka
 
-`snapshot_total` can be be trivially exposed by exposing the snapshot frontier already tracked within its source operator,
+`snapshot_records_known` can be be trivially exposed by exposing the snapshot frontier already tracked within its source operator,
 and summing across partitions. Similarly, `snapshot_progress` can be derived from the operator's output frontier.
 
 #### Postgres and MySQL
 
-`snapshot_total` will need to be calculated, in the unit of rows by performing `SELECT count(*)` on the tables that participate in the snapshot.
+`snapshot_records_known` will need to be calculated, in the unit of rows by performing `SELECT count(*)` on the tables that participate in the snapshot.
 Both the Postgres and MySQL implementations will be required to perform this query, per-table, during snapshotting. Note that `count(*)` is not
 guaranteed to be cheap on Postgres and MySQL. To avoid this, we will perform this query _concurrently_ with the beginning of
 snapshotting, allowing the user to see their source's progress before a percentage can be calculated.

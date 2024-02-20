@@ -1272,6 +1272,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
+    pub as_of: Option<u64>,
     pub with_options: Vec<MaterializedViewOption<T>>,
 }
 
@@ -1310,6 +1311,11 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
 
         f.write_str(" AS ");
         f.write_node(&self.query);
+
+        if let Some(time) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_str(time);
+        }
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);

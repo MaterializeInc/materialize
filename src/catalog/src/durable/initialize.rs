@@ -87,14 +87,14 @@ const DEFAULT_ALLOCATOR_ID: u64 = 1;
 pub async fn initialize(
     tx: &mut Transaction<'_>,
     options: &BootstrapArgs,
-    now: EpochMillis,
+    initial_ts: EpochMillis,
     deploy_generation: Option<u64>,
 ) -> Result<(), CatalogError> {
     // Collect audit events so we can commit them once at the very end.
     let mut audit_events = vec![];
 
     // First thing we need to do is persist the timestamp we're booting with.
-    tx.insert_timestamp(Timeline::EpochMilliseconds, now.into())?;
+    tx.insert_timestamp(Timeline::EpochMilliseconds, initial_ts.into())?;
 
     for (name, next_id) in [
         (USER_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
@@ -597,7 +597,7 @@ pub async fn initialize(
             object_type,
             details,
             user: None,
-            occurred_at: now,
+            occurred_at: initial_ts,
         }));
     }
 

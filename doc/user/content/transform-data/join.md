@@ -3,9 +3,10 @@ title: "JOIN"
 description: "`JOIN` lets you combine two or more table expressions."
 aliases:
   - /sql/join/
+  - /transform-data/join/
 menu:
   main:
-    parent: 'transform'
+    parent: 'transform-overview'
     name: Joins
     weight: 20
 ---

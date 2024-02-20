@@ -90,7 +90,7 @@ use std::rc::Rc;
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, IsolationLevel, Row as MySqlRow, TxOpts};
+use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_timely_util::antichain::AntichainExt;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -108,7 +108,7 @@ use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
-use crate::metrics::mysql::MySqlSnapshotMetrics;
+use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 use super::schemas::verify_schemas;
@@ -295,13 +295,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .with_isolation_level(IsolationLevel::RepeatableRead)
                     .with_consistent_snapshot(true)
                     .with_readonly(true);
-                conn.start_transaction(tx_opts).await?;
+                let mut tx = conn.start_transaction(tx_opts).await?;
                 // Set the session time zone to UTC so that we can read TIMESTAMP columns as UTC
                 // From https://dev.mysql.com/doc/refman/8.0/en/datetime.html: "MySQL converts TIMESTAMP values
                 // from the current time zone to UTC for storage, and back from UTC to the current time zone
                 // for retrieval. (This does not occur for other types such as DATETIME.)"
-                conn.query_drop("set @@session.time_zone = '+00:00'")
-                    .await?;
+                tx.query_drop("set @@session.time_zone = '+00:00'").await?;
 
                 // We have started our transaction so we can unlock the tables.
                 lock_conn.query_drop("UNLOCK TABLES").await?;
@@ -311,7 +310,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                 // Verify the schemas of the tables we are snapshotting
                 let errored_tables = verify_schemas(
-                    &mut conn,
+                    &mut tx,
                     &reader_snapshot_table_info
                         .iter()
                         .map(|(table, (_, desc))| (table, desc))
@@ -356,7 +355,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 *rewind_cap_set = CapabilitySet::new();
 
                 record_table_sizes(
-                    &mut conn,
+                    &mut tx,
                     metrics,
                     reader_snapshot_table_info
                         .values()
@@ -377,7 +376,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     let query = format!("SELECT * FROM {}", table.to_ast_string());
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
-                    let mut results = conn.exec_stream(query, ()).await?;
+                    let mut results = tx.exec_stream(query, ()).await?;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
                         match pack_mysql_row(&mut final_row, row, &table_desc)? {
@@ -427,12 +426,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 }
 
 /// Record the sizes of the tables being snapshotted in `MySqlSnapshotMetrics`.
-async fn record_table_sizes(
-    conn: &mut Conn,
+async fn record_table_sizes<Q>(
+    conn: &mut Q,
     metrics: MySqlSnapshotMetrics,
     // Tables and their schemas.
     tables: Vec<(String, String)>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), anyhow::Error>
+where
+    Q: Queryable,
+{
     for (table, schema) in tables {
         let stats = collect_table_statistics(conn, &table, &schema).await?;
         if let Some(estimate) = stats.estimate_count {
@@ -463,11 +465,14 @@ struct TableStatistics {
     estimate_count: Option<u64>,
 }
 
-async fn collect_table_statistics(
-    conn: &mut Conn,
+async fn collect_table_statistics<Q>(
+    conn: &mut Q,
     table: &str,
     schema: &str,
-) -> Result<TableStatistics, anyhow::Error> {
+) -> Result<TableStatistics, anyhow::Error>
+where
+    Q: Queryable,
+{
     let mut stats = TableStatistics::default();
 
     let estimate_row: Option<u64> = conn

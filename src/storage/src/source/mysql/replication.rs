@@ -19,7 +19,7 @@
 //! See the [`mz_storage_types::sources::mysql::GtidPartition`] type for more information.
 //!
 //! To maintain a complete frontier of the full UUID GTID range, we use a
-//! [`GtidReplicationPartitions`] struct to store the GTID Set as a set of partitions.
+//! [`partitions::GtidReplicationPartitions`] struct to store the GTID Set as a set of partitions.
 //! This allows us to easily advance the frontier each time we see a new GTID on the replication
 //! stream.
 //!
@@ -39,7 +39,7 @@
 //! for a table that were present in the snapshot, we negate the snapshot update
 //! (at the minimum timestamp) and send it again at the correct GTID.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
@@ -54,8 +54,7 @@ use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
@@ -73,17 +72,18 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 
-use crate::metrics::mysql::MySqlSourceMetrics;
-use crate::source::mysql::GtidReplicationPartitions;
+use crate::metrics::source::mysql::MySqlSourceMetrics;
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 use super::{
-    pack_mysql_row, return_definite_error, table_name, validate_mysql_repl_settings, DefiniteError,
-    ReplicationError, RewindRequest, TransientError,
+    return_definite_error, validate_mysql_repl_settings, DefiniteError, ReplicationError,
+    RewindRequest, TransientError,
 };
 
+mod context;
 mod events;
+mod partitions;
 
 /// Used as a partition id to determine if the worker is
 /// responsible for reading from the MySQL replication stream
@@ -287,19 +287,22 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             // Store all partitions from the resume_upper so we can create a frontier that comprises
             // timestamps for partitions representing the full range of UUIDs to advance our main
             // capabilities.
-            let mut repl_partitions: GtidReplicationPartitions = resume_upper.into();
+            let mut repl_partitions: partitions::GtidReplicationPartitions = resume_upper.into();
 
-            // Binlog Table Id -> Table Name (its key in the `table_info` map)
-            let mut table_id_map = BTreeMap::<u64, UnresolvedItemName>::new();
-            let mut skipped_table_ids = BTreeSet::<u64>::new();
-
-            let mut errored_tables: BTreeSet<UnresolvedItemName> = BTreeSet::new();
-
-            let mut final_row = Row::default();
+            let mut repl_context = context::ReplContext::new(
+                &config,
+                &connection_config,
+                stream.as_mut(),
+                &table_info,
+                &mut data_output,
+                data_cap_set,
+                upper_cap_set,
+                rewinds,
+            );
 
             let mut next_gtid: Option<GtidPartition> = None;
 
-            while let Some(event) = stream.as_mut().next().await {
+            while let Some(event) = repl_context.stream.next().await {
                 use mysql_async::binlog::events::*;
                 let event = event?;
                 let event_data = event.read_data()?;
@@ -331,21 +334,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 .await);
                             }
                             let new_upper = repl_partitions.frontier();
-
-                            trace!(%id, "timely-{worker_id} advancing frontier from \
-                                         heartbeat to {new_upper:?}");
-                            data_cap_set.downgrade(&*new_upper);
-                            upper_cap_set.downgrade(&*new_upper);
-
-                            rewinds.retain(|_, (_, req)| {
-                                // We need to retain the rewind requests whose snapshot_upper has
-                                // at least one timestamp such that new_upper is less than that
-                                // timestamp
-                                req.snapshot_upper.iter().any(|ts| new_upper.less_than(ts))
-                            });
-
-                            trace!(%id, "timely-{worker_id} pending rewinds after \
-                                         filtering: {rewinds:?}");
+                            repl_context.advance(new_upper);
                         }
                     }
                     // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
@@ -357,92 +346,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         // Store this GTID as a partition timestamp for ease of use in publishing data
                         next_gtid = Some(GtidPartition::new_singleton(source_id, received_tx_id));
                     }
-                    // A row event is a write/update/delete event
                     Some(EventData::RowsEvent(data)) => {
-                        // Find the relevant table
-                        let binlog_table_id = data.table_id();
-                        let table_map_event =
-                            stream.get_ref().get_tme(binlog_table_id).ok_or_else(|| {
-                                TransientError::Generic(anyhow::anyhow!(
-                                    "Table map event not found"
-                                ))
-                            })?;
-                        let table = match (
-                            table_id_map.get(&binlog_table_id),
-                            skipped_table_ids.get(&binlog_table_id),
-                        ) {
-                            (Some(table), None) => table,
-                            (None, Some(_)) => {
-                                // We've seen this table ID before and it was skipped
-                                continue;
-                            }
-                            (None, None) => {
-                                let table = table_name(
-                                    &*table_map_event.database_name(),
-                                    &*table_map_event.table_name(),
-                                )?;
-                                if table_info.contains_key(&table) {
-                                    table_id_map.insert(binlog_table_id, table);
-                                    &table_id_map[&binlog_table_id]
-                                } else {
-                                    skipped_table_ids.insert(binlog_table_id);
-                                    trace!(
-                                        "timely-{worker_id} skipping table {table:?} \
-                                         with id {binlog_table_id}"
-                                    );
-                                    // We don't know about this table, so skip this event
-                                    continue;
-                                }
-                            }
-                            _ => unreachable!(),
-                        };
-                        if errored_tables.contains(table) {
-                            continue;
-                        }
-
-                        let (output_index, table_desc) = &table_info[table];
                         let new_gtid = next_gtid
                             .as_ref()
                             .expect("gtid cap should be set by previous GtidEvent");
 
-                        // Iterate over the rows in this RowsEvent. Each row is a pair of 'before_row', 'after_row',
-                        // to accomodate for updates and deletes (which include a before_row),
-                        // and updates and inserts (which inclued an after row).
-                        let mut container = Vec::new();
-                        let mut rows_iter = data.rows(table_map_event);
-                        while let Some(Ok((before_row, after_row))) = rows_iter.next() {
-                            let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
-                            for (binlog_row, diff) in updates.into_iter().flatten() {
-                                let row = mysql_async::Row::try_from(binlog_row)?;
-                                let packed_row = pack_mysql_row(&mut final_row, row, table_desc)?;
-                                let data = (*output_index, packed_row);
-
-                                // Rewind this update if it was already present in the snapshot
-                                if let Some(([data_cap, _upper_cap], rewind_req)) =
-                                    rewinds.get(table)
-                                {
-                                    if !rewind_req.snapshot_upper.less_equal(new_gtid) {
-                                        trace!(%id, "timely-{worker_id} rewinding update \
-                                                     {data:?} for {new_gtid:?}");
-                                        data_output
-                                            .give(
-                                                data_cap,
-                                                (data.clone(), GtidPartition::minimum(), -diff),
-                                            )
-                                            .await;
-                                    }
-                                }
-                                trace!(%id, "timely-{worker_id} sending update {data:?}
-                                             for {new_gtid:?}");
-                                container.push((data, new_gtid.clone(), diff));
-                            }
-                        }
-
-                        // Flush this data
-                        let gtid_cap = data_cap_set.delayed(new_gtid);
-                        trace!(%id, "timely-{worker_id} sending container for {new_gtid:?} \
-                                     with {container:?} updates");
-                        data_output.give_container(&gtid_cap, &mut container).await;
+                        events::handle_rows_event(data, &mut repl_context, new_gtid).await?;
 
                         // Advance the frontier up to the point right before this GTID
                         // We are being careful here and not advancing beyond this GTID since we aren't
@@ -466,33 +375,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         }
                         let new_upper = repl_partitions.frontier();
 
-                        trace!(%id, "timely-{worker_id} advancing frontier to {new_upper:?}");
-                        data_cap_set.downgrade(&*new_upper);
-                        upper_cap_set.downgrade(&*new_upper);
-
-                        rewinds.retain(|_, (_, req)| {
-                            // We need to retain the rewind requests whose snapshot_upper has
-                            // at least one timestamp such that new_upper is less than that
-                            // timestamp
-                            req.snapshot_upper.iter().any(|ts| new_upper.less_than(ts))
-                        });
-                        trace!(%id, "timely-{worker_id} pending rewinds \
-                                     after filtering: {rewinds:?}");
+                        repl_context.advance(new_upper);
                     }
-
                     Some(EventData::QueryEvent(event)) => {
-                        trace!(%id, "timely-{worker_id} received query event {event:?}");
-                        events::handle_query_event(
-                            event,
-                            &config,
-                            &connection_config,
-                            &table_info,
-                            &next_gtid,
-                            &mut errored_tables,
-                            &mut data_output,
-                            data_cap_set,
-                        )
-                        .await?;
+                        let new_gtid = next_gtid
+                            .as_ref()
+                            .expect("gtid cap should be set by previous GtidEvent");
+
+                        events::handle_query_event(event, &mut repl_context, new_gtid).await?;
                     }
                     _ => {
                         // TODO: Handle other event types

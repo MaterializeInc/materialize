@@ -291,13 +291,16 @@ CREATE SOURCE mz_source
 
 #### Handling unsupported types
 
-If the publication contains tables that use [data types](/sql/types/) unsupported by Materialize, use the `TEXT COLUMNS` option to decode data as `text` for the affected columns.
+If the publication contains tables that use [data types](/sql/types/)
+unsupported by Materialize, use the `TEXT COLUMNS` option to decode data as
+`text` for the affected columns. This option expects the upstream names of the
+replicated table and column (i.e. as defined in your PostgreSQL database).
 
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (
     PUBLICATION 'mz_source',
-    TEXT COLUMNS (table.column_of_unsupported_type)
+    TEXT COLUMNS (upstream_table_name.column_of_unsupported_type)
   ) FOR ALL TABLES;
 ```
 

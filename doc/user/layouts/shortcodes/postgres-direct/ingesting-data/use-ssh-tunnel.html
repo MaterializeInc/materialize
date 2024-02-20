@@ -1,4 +1,4 @@
-1. In the `psql` shell connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH tunnel connection:
+1. In the SQL client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH tunnel connection:
 
     ```sql
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
@@ -25,7 +25,7 @@
     echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
     ```
 
-1. Back in the `psql` shell connected to Materialize, validate the SSH tunnel connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+1. Back in the SQL client connected to Materialize, validate the SSH tunnel connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
     ```sql
     VALIDATE CONNECTION ssh_connection;

@@ -109,6 +109,17 @@ def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
     :param ancestor_overrides: one of #ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
     :return: image of the ancestor
     """
+
+    manual_ancestor_override = os.getenv("COMMON_ANCESTOR_OVERRIDE")
+    if manual_ancestor_override is not None:
+        image_tag = _manual_ancestor_specification_to_image_tag(
+            manual_ancestor_override
+        )
+        print(
+            f"Using specified {image_tag} as image tag for ancestor (context: specified in $COMMON_ANCESTOR_OVERRIDE)"
+        )
+        return image_tag
+
     ancestor_image_resolution = _create_ancestor_image_resolution(ancestor_overrides)
     image_tag, context = ancestor_image_resolution.resolve_image_tag()
     print(f"Using {image_tag} as image tag for ancestor (context: {context})")
@@ -122,6 +133,13 @@ def _create_ancestor_image_resolution(
         return AncestorImageResolutionInBuildkite(ancestor_overrides)
     else:
         return AncestorImageResolutionLocal(ancestor_overrides)
+
+
+def _manual_ancestor_specification_to_image_tag(ancestor_spec: str) -> str:
+    if MzVersion.is_valid_version_string(ancestor_spec):
+        return version_to_image_tag(MzVersion.parse_mz(ancestor_spec))
+    else:
+        return commit_to_image_tag(ancestor_spec)
 
 
 class AncestorImageResolutionBase:
@@ -155,12 +173,12 @@ class AncestorImageResolutionBase:
         return None
 
     def _resolve_image_tag_of_previous_release(
-        self, context_prefix: str, previous_major: bool
+        self, context_prefix: str, previous_minor: bool
     ):
         tagged_release_version = git.get_tagged_release_version(version_type=MzVersion)
         assert tagged_release_version is not None
         previous_release_version = get_previous_published_version(
-            tagged_release_version, previous_major=previous_major
+            tagged_release_version, previous_minor=previous_minor
         )
         return (
             version_to_image_tag(previous_release_version),
@@ -207,8 +225,8 @@ class AncestorImageResolutionLocal(AncestorImageResolutionBase):
     def resolve_image_tag(self) -> tuple[str, str]:
         if build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
-                "previous major release because on local release branch",
-                previous_major=True,
+                "previous minor release because on local release branch",
+                previous_minor=True,
             )
         elif build_context.is_on_main_branch():
             return self._resolve_image_tag_of_latest_release(
@@ -230,7 +248,7 @@ class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
             )
         elif build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
-                "previous major release because on release branch", previous_major=True
+                "previous minor release because on release branch", previous_minor=True
             )
         else:
             return self._resolve_image_tag_of_latest_release(
@@ -257,7 +275,7 @@ def get_latest_published_version() -> MzVersion:
 
 
 def get_previous_published_version(
-    release_version: MzVersion, previous_major: bool
+    release_version: MzVersion, previous_minor: bool
 ) -> MzVersion:
     """Get the highest preceding mz version to the specified version for which an image is published."""
     excluded_versions = set()
@@ -265,7 +283,7 @@ def get_previous_published_version(
     while True:
         previous_published_version = get_previous_mz_version(
             release_version,
-            previous_major=previous_major,
+            previous_minor=previous_minor,
             excluded_versions=excluded_versions,
         )
 
@@ -381,15 +399,15 @@ def limit_to_published_versions(
 
 def get_previous_mz_version(
     version: MzVersion,
-    previous_major: bool,
+    previous_minor: bool,
     excluded_versions: set[MzVersion] | None = None,
 ) -> MzVersion:
     """Get the predecessor of the specified version based on git tags."""
     if excluded_versions is None:
         excluded_versions = set()
 
-    if previous_major:
-        version = MzVersion.create(version.major, 0, 0)
+    if previous_minor:
+        version = MzVersion.create(version.major, version.minor, 0)
 
     if version.prerelease is not None and len(version.prerelease) > 0:
         # simply drop the prerelease, do not try to find a decremented version

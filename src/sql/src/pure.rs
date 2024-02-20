@@ -974,7 +974,7 @@ async fn purify_create_source(
             };
 
             // Retrieve schemas for all requested tables
-            let tables = mz_mysql_util::schema_info(&mut conn, &table_schema_request)
+            let tables = mz_mysql_util::schema_info(&mut *conn, &table_schema_request)
                 .await
                 .map_err(|err| match err {
                     // TODO: Refactor schema_info to return all unsupported columns rather than
@@ -1292,7 +1292,7 @@ async fn purify_alter_source(
         match desc.connection {
             GenericSourceConnection::Postgres(pg_connection) => pg_connection,
             _ => sql_bail!(
-                "{} is a {} source, which does not support ALTER TABLE...ADD SUBSOURCES",
+                "{} is a {} source, which does not support ALTER SOURCE...ADD SUBSOURCES",
                 scx.catalog.minimal_qualification(item.name()),
                 desc.connection.name()
             ),

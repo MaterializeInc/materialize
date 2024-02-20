@@ -58,7 +58,7 @@ use std::rc::Rc;
 use differential_dataflow::Collection;
 use itertools::{EitherOrBoth, Itertools};
 use mysql_async::Row as MySqlRow;
-use mysql_common::value::convert::from_value;
+use mysql_common::value::convert::from_value_opt;
 use mysql_common::Value;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pushers::TeeCore;
@@ -69,9 +69,12 @@ use uuid::Uuid;
 
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlError, MySqlTableDesc,
+    MySqlColumnDesc, MySqlError, MySqlTableDesc,
 };
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
+use mz_repr::adt::date::Date;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, Row, ScalarType};
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
@@ -138,7 +141,7 @@ impl SourceRender for MySqlSourceConnection {
             );
         }
 
-        let metrics = config.metrics.get_mysql_metrics(config.id);
+        let metrics = config.metrics.get_mysql_source_metrics(config.id);
 
         let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
             scope.clone(),
@@ -207,6 +210,8 @@ pub enum ReplicationError {
 pub enum TransientError {
     #[error("issue when decoding")]
     DecodeError(String),
+    #[error("error decoding value for column {0} in {1}: {2}")]
+    ValueDecodeError(String, String, String),
     #[error("couldn't decode binlog row")]
     BinlogRowDecodeError(#[from] mysql_async::binlog::row::BinlogRowToRowError),
     #[error("stream ended prematurely")]
@@ -238,8 +243,6 @@ pub enum DefiniteError {
     UnsupportedGtidState(String),
     #[error("received out of order gtids for source {0} at transaction-id {1}")]
     BinlogGtidMonotonicityViolation(String, GtidState),
-    #[error("received a null value in a non-null column: {0}")]
-    NullValueInNonNullColumn(String),
     #[error("mysql server does not have the binlog available at the requested gtid set")]
     BinlogNotAvailable,
     #[error("mysql server binlog frontier at {0} is beyond required frontier {1}")]
@@ -306,50 +309,13 @@ pub(crate) fn pack_mysql_row(
                 )))?
             }
         };
-        let datum = match value {
-            Value::NULL => {
-                if col_desc.column_type.nullable {
-                    Datum::Null
-                } else {
-                    // produce definite error and stop ingesting this table
-                    return Ok(Err(DefiniteError::NullValueInNonNullColumn(
-                        col_desc.name.clone(),
-                    )));
-                }
-            }
-            value => match &col_desc.column_type.scalar_type {
-                ScalarType::Bool => Datum::from(from_value::<bool>(value)),
-                ScalarType::UInt16 => Datum::from(from_value::<u16>(value)),
-                ScalarType::Int16 => Datum::from(from_value::<i16>(value)),
-                ScalarType::UInt32 => Datum::from(from_value::<u32>(value)),
-                ScalarType::Int32 => Datum::from(from_value::<i32>(value)),
-                ScalarType::UInt64 => Datum::from(from_value::<u64>(value)),
-                ScalarType::Int64 => Datum::from(from_value::<i64>(value)),
-                ScalarType::Float32 => Datum::from(from_value::<f32>(value)),
-                ScalarType::Float64 => Datum::from(from_value::<f64>(value)),
-                ScalarType::Char { length: _ } => {
-                    temp_strs.push(from_value::<String>(value));
-                    Datum::from(temp_strs.last().unwrap().as_str())
-                }
-                ScalarType::VarChar { max_length: _ } => {
-                    temp_strs.push(from_value::<String>(value));
-                    Datum::from(temp_strs.last().unwrap().as_str())
-                }
-                ScalarType::String => {
-                    temp_strs.push(from_value::<String>(value));
-                    Datum::from(temp_strs.last().unwrap().as_str())
-                }
-                ScalarType::Bytes => {
-                    let data = from_value::<Vec<u8>>(value);
-                    temp_bytes.push(data);
-                    Datum::from(temp_bytes.last().unwrap().as_slice())
-                }
-                // TODO(roshan): IMPLEMENT OTHER TYPES
-                data_type => Err(TransientError::UnsupportedDataType(format!(
-                    "{:?}",
-                    data_type
-                )))?,
-            },
+        let datum = match mysql_val_to_datum(value, col_desc, &mut temp_strs, &mut temp_bytes) {
+            Err(err) => Err(TransientError::ValueDecodeError(
+                col_desc.name.clone(),
+                format!("{}.{}", table_desc.schema_name, table_desc.name),
+                err.to_string(),
+            ))?,
+            Ok(datum) => datum,
         };
         packer.push(datum);
     }
@@ -357,117 +323,109 @@ pub(crate) fn pack_mysql_row(
     Ok(Ok(row_container.clone()))
 }
 
-/// Holds the active and future GTID partitions that represent the complete
-/// UUID range of all possible GTID source-ids from a MySQL server.
-/// The active partitions are all singleton partitions representing a single
-/// source-id timestamp, and the future partitions represent the missing
-/// UUID ranges that we have not yet seen and are held at timestamp GtidState::Absent.
-///
-/// This is used to keep track of all partitions and is updated as we receive
-/// new GTID updates from the server, and is used to create a full 'frontier'
-/// representing the current state of all GTID partitions that we can use
-/// to downgrade capabilities for the source.
-///
-/// We could instead mint capabilities for each individual partition
-/// and advance each partition as a frontier separately using its own capabilities,
-/// but since this is used inside a fallible operator if we ever hit any errors
-/// then all newly minted capabilities would be dropped by the async runtime
-/// and we might lose the ability to send any more data.
-/// However if we just use the main capabilities provided to the operator, the
-/// capabilities externally will be preserved even in the case of an error in
-/// the operator, which is why we just manage a single frontier and capability set.
-struct GtidReplicationPartitions {
-    active: BTreeMap<Uuid, GtidPartition>,
-    future: Vec<GtidPartition>,
-}
-
-impl From<Antichain<GtidPartition>> for GtidReplicationPartitions {
-    fn from(frontier: Antichain<GtidPartition>) -> Self {
-        let mut active = BTreeMap::new();
-        let mut future = Vec::new();
-        for part in frontier.iter() {
-            if part.timestamp() == &GtidState::Absent {
-                future.push(part.clone());
+fn mysql_val_to_datum<'a>(
+    value: Value,
+    col_desc: &MySqlColumnDesc,
+    temp_strs: &'a mut Vec<String>,
+    temp_bytes: &'a mut Vec<Vec<u8>>,
+) -> Result<Datum<'a>, anyhow::Error> {
+    Ok(match value {
+        Value::NULL => {
+            if col_desc.column_type.nullable {
+                Datum::Null
             } else {
-                let source_id = part.interval().singleton().unwrap().clone();
-                active.insert(source_id, part.clone());
+                Err(anyhow::anyhow!(
+                    "received a null value in a non-null column".to_string(),
+                ))?
             }
         }
-        Self { active, future }
-    }
+        value => match &col_desc.column_type.scalar_type {
+            ScalarType::Bool => Datum::from(from_value_opt::<bool>(value)?),
+            ScalarType::UInt16 => Datum::from(from_value_opt::<u16>(value)?),
+            ScalarType::Int16 => Datum::from(from_value_opt::<i16>(value)?),
+            ScalarType::UInt32 => Datum::from(from_value_opt::<u32>(value)?),
+            ScalarType::Int32 => Datum::from(from_value_opt::<i32>(value)?),
+            ScalarType::UInt64 => Datum::from(from_value_opt::<u64>(value)?),
+            ScalarType::Int64 => Datum::from(from_value_opt::<i64>(value)?),
+            ScalarType::Float32 => Datum::from(from_value_opt::<f32>(value)?),
+            ScalarType::Float64 => Datum::from(from_value_opt::<f64>(value)?),
+            ScalarType::Char { length } => {
+                let val = from_value_opt::<String>(value)?;
+                check_char_length(length.map(|l| l.into_u32()), &val, col_desc)?;
+                temp_strs.push(val);
+                Datum::from(temp_strs.last().unwrap().as_str())
+            }
+            ScalarType::VarChar { max_length } => {
+                let val = from_value_opt::<String>(value)?;
+                check_char_length(max_length.map(|l| l.into_u32()), &val, col_desc)?;
+                temp_strs.push(val);
+                Datum::from(temp_strs.last().unwrap().as_str())
+            }
+            ScalarType::String => {
+                temp_strs.push(from_value_opt::<String>(value)?);
+                Datum::from(temp_strs.last().unwrap().as_str())
+            }
+            ScalarType::Bytes => {
+                let data = from_value_opt::<Vec<u8>>(value)?;
+                temp_bytes.push(data);
+                Datum::from(temp_bytes.last().unwrap().as_slice())
+            }
+            ScalarType::Date => {
+                let date = Date::try_from(from_value_opt::<chrono::NaiveDate>(value)?)?;
+                Datum::from(date)
+            }
+            ScalarType::Timestamp { precision: _ } => {
+                // Timestamps are encoded as different mysql_common::Value types depending on
+                // whether they are from a binlog event or a query, and depending on which
+                // mysql timestamp version is used. We handle those cases here
+                // https://github.com/blackbeam/rust_mysql_common/blob/v0.31.0/src/binlog/value.rs#L87-L155
+                // https://github.com/blackbeam/rust_mysql_common/blob/v0.31.0/src/value/mod.rs#L332
+                let chrono_timestamp = match value {
+                    Value::Date(..) => from_value_opt::<chrono::NaiveDateTime>(value)?,
+                    // old temporal format from before MySQL 5.6; didn't support fractional seconds
+                    Value::Int(val) => chrono::NaiveDateTime::from_timestamp_opt(val, 0)
+                        .ok_or(anyhow::anyhow!("received invalid timestamp value: {}", val))?,
+                    Value::Bytes(data) => {
+                        let data = std::str::from_utf8(&data)?;
+                        if data.contains('.') {
+                            chrono::NaiveDateTime::parse_from_str(data, "%s%.6f")?
+                        } else {
+                            chrono::NaiveDateTime::parse_from_str(data, "%s")?
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!(
+                        "received unexpected value for timestamp type: {:?}",
+                        value
+                    ))?,
+                };
+                Datum::try_from(CheckedTimestamp::try_from(chrono_timestamp)?)?
+            }
+            ScalarType::Time => Datum::from(from_value_opt::<chrono::NaiveTime>(value)?),
+            // TODO(roshan): IMPLEMENT OTHER TYPES
+            data_type => Err(TransientError::UnsupportedDataType(format!(
+                "{:?}",
+                data_type
+            )))?,
+        },
+    })
 }
 
-impl GtidReplicationPartitions {
-    /// Return an Antichain for the frontier composed of all the
-    /// active and future GTID partitions.
-    fn frontier(&self) -> Antichain<GtidPartition> {
-        Antichain::from_iter(
-            self.active
-                .values()
-                .cloned()
-                .chain(self.future.iter().cloned()),
-        )
+fn check_char_length(
+    length: Option<u32>,
+    val: &str,
+    col_desc: &MySqlColumnDesc,
+) -> Result<(), anyhow::Error> {
+    if let Some(length) = length {
+        if let Some(_) = val.char_indices().nth(usize::cast_from(length)) {
+            Err(anyhow::anyhow!(
+                "received string value of length {} for column {} which has a max length of {}",
+                val.len(),
+                col_desc.name,
+                length
+            ))?
+        }
     }
-
-    /// Given a singleton GTID partition, update the timestamp of the existing
-    /// active partition with the same UUID
-    /// or split the future partitions to remove this new partition and then
-    /// insert the new 'active' partition.
-    ///
-    /// This is used whenever we receive a GTID update from the server and
-    /// need to update our state keeping track
-    /// of all the active and future GTID partition timestamps.
-    /// This call should usually be followed up by downgrading capabilities
-    /// using the frontier returned by `self.frontier()`
-    fn update(&mut self, new_part: GtidPartition) -> Result<(), DefiniteError> {
-        let source_id = new_part.interval().singleton().unwrap();
-        // Check if we have an active partition for the GTID UUID
-        match self.active.get_mut(source_id) {
-            Some(active_part) => {
-                // Since we start replication at a specific upper, we
-                // should only see GTID transaction-ids
-                // in a monotonic order for each source, starting at that upper.
-                if active_part.timestamp() > &new_part.timestamp() {
-                    let err = DefiniteError::BinlogGtidMonotonicityViolation(
-                        source_id.to_string(),
-                        new_part.timestamp().clone(),
-                    );
-                    return Err(err);
-                }
-
-                // replace this active partition with the new one
-                *active_part = new_part;
-            }
-            // We've received a GTID for a UUID we don't yet know about
-            None => {
-                // Extract the future partition whose range encompasses this UUID
-                // TODO: Replace with Vec::extract_if() once it's stabilized
-                let mut i = 0;
-                let mut contained_part = None;
-                while i < self.future.len() {
-                    if self.future[i].interval().contains(source_id) {
-                        contained_part = Some(self.future.remove(i));
-                        break;
-                    } else {
-                        i += 1;
-                    }
-                }
-                let contained_part =
-                    contained_part.expect("expected a future partition to contain the UUID");
-
-                // Split the future partition into partitions for before and after this UUID
-                // and add back to the future partitions.
-                let (before_range, after_range) = contained_part.split(source_id);
-                self.future
-                    .extend(before_range.into_iter().chain(after_range.into_iter()));
-
-                // Store the new part in our active partitions
-                self.active.insert(source_id.clone(), new_part);
-            }
-        };
-
-        Ok(())
-    }
+    Ok(())
 }
 
 async fn return_definite_error(

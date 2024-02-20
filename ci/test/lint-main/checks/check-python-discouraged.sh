@@ -18,28 +18,31 @@ cd "$(dirname "$0")/../../../.."
 . misc/shlib/shlib.bash
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
+  EXIT_CODE=0
+
   # check whether occurrences of `run("testdrive"` (in a single line or spread across two lines) exist, which are discouraged
 
   # shellcheck disable=SC2016
-  SINGLE_LINE_MATCHES=$(find misc/python/materialize test -name '*.py' -print0 | xargs -0 awk '/\.run\("testdrive",/ {print FILENAME ":" FNR} {prev_line = $0}')
+  TD_SINGLE_LINE_MATCHES=$(find misc/python/materialize test -name '*.py' -print0 | xargs -0 awk '/\.run\("testdrive",/ {print FILENAME ":" FNR} {prev_line = $0}')
   # shellcheck disable=SC2016
-  MULTI_LINE_MATCHES=$(find misc/python/materialize test -name '*.py' -print0 | xargs -0 awk '/"testdrive",/ && prev_line ~ /\.run\($/ {print FILENAME ":" FNR} {prev_line = $0}')
+  TD_MULTI_LINE_MATCHES=$(find misc/python/materialize test -name '*.py' -print0 | xargs -0 awk '/"testdrive",/ && prev_line ~ /\.run\($/ {print FILENAME ":" FNR} {prev_line = $0}')
 
-  MULTI_LINE_MATCHES=$(echo "$MULTI_LINE_MATCHES" | grep -v "misc/python/materialize/mzcompose/composition.py" || true)
+  TD_MULTI_LINE_MATCHES=$(echo "$TD_MULTI_LINE_MATCHES" | grep -v "misc/python/materialize/mzcompose/composition.py" || true)
 
-  if [ -n "$SINGLE_LINE_MATCHES" ] || [ -n "$MULTI_LINE_MATCHES" ]; then
+  if [ -n "$TD_SINGLE_LINE_MATCHES" ] || [ -n "$TD_MULTI_LINE_MATCHES" ]; then
       echo "Use \`.run_testdrive_files(\` instead of \`.run(\"testdrive\"\`:"
 
-      if [ -n "$SINGLE_LINE_MATCHES" ]; then
-          echo "$SINGLE_LINE_MATCHES"
+      if [ -n "$TD_SINGLE_LINE_MATCHES" ]; then
+          echo "$TD_SINGLE_LINE_MATCHES"
       fi
-      if [ -n "$MULTI_LINE_MATCHES" ]; then
-          echo "$MULTI_LINE_MATCHES"
+      if [ -n "$TD_MULTI_LINE_MATCHES" ]; then
+          echo "$TD_MULTI_LINE_MATCHES"
       fi
 
-      exit 1
+      EXIT_CODE=1
   fi
 
+  exit $EXIT_CODE
 fi
 
 try_status_report

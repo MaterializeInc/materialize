@@ -5,7 +5,6 @@ members = [
     "src/alloc",
     "src/audit-log",
     "src/avro",
-    "src/avro-derive",
     "src/aws-util",
     "src/aws-secrets-controller",
     "src/balancerd",
@@ -118,7 +117,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.74.0"
+rust-version = "1.74.1"
 
 [profile.dev]
 split-debuginfo = "unpacked"

@@ -1104,7 +1104,7 @@ INSERT INTO bar VALUES
 # 1  1  1  1  1  1
 # 2  2  2  2  2  2
 # 3  3  3  3  3  3
-#
+
 # # Regression test for 23664.
 # query III rowsort
 # SELECT * FROM onecolumn AS a(x) RIGHT JOIN twocolumn ON false
@@ -1113,7 +1113,7 @@ INSERT INTO bar VALUES
 # NULL  NULL  52
 # NULL  42    53
 # NULL  45    45
-#
+
 # # Regression test for #23609: make sure that the type of the merged column
 # # is int (not unknown).
 # query II rowsort

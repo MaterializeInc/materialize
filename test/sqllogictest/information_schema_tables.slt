@@ -429,6 +429,14 @@ mz_compute_operator_durations_histogram_raw
 SOURCE
 materialize
 mz_internal
+mz_compute_operator_hydration_statuses
+VIEW
+materialize
+mz_internal
+mz_compute_operator_hydration_statuses_per_worker
+SOURCE
+materialize
+mz_internal
 mz_dataflow_addresses
 VIEW
 materialize
@@ -765,7 +773,7 @@ mz_sink_statistics
 VIEW
 materialize
 mz_internal
-mz_sink_statistics_per_worker
+mz_sink_statistics_raw
 SOURCE
 materialize
 mz_internal
@@ -781,7 +789,7 @@ mz_source_statistics
 VIEW
 materialize
 mz_internal
-mz_source_statistics_per_worker
+mz_source_statistics_raw
 SOURCE
 materialize
 mz_internal

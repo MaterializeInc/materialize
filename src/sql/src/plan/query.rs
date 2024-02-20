@@ -880,7 +880,8 @@ pub fn plan_up_to(
         .lower_uncorrelated()
 }
 
-/// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE` statement.
+/// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE`, or `CREATE MATERIALIZED
+/// VIEW` statement.
 pub fn plan_as_of(
     scx: &StatementContext,
     as_of: Option<AsOf<Aug>>,

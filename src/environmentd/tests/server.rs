@@ -2003,7 +2003,7 @@ fn test_internal_console_proxy() {
         .unwrap()
         .get(
             Url::parse(&format!(
-                "http://{}/internal-console/styles.css",
+                "http://{}/internal-console/",
                 server.inner().internal_http_local_addr()
             ))
             .unwrap(),
@@ -2014,7 +2014,7 @@ fn test_internal_console_proxy() {
     assert_eq!(res.status().is_success(), true);
     assert_contains!(
         res.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap(),
-        "text/css"
+        "text/html"
     );
 }
 

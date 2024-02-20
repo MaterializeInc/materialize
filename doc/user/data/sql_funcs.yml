@@ -935,11 +935,7 @@
       description: >-
         Reports whether the role with the specified role name or OID has the privilege on
         the schema with the specified schema name or OID. If the role is omitted then
-        the `current_role` is assumed. This function has the following
-        limitations around schema resolution: 1) none of the schema names can have
-        database qualifiers (e.g., `has_schema_privilege('materialize.public', 'SELECT')`
-        will not work properly); 2) the name lookup does not consider the
-        active database.
+        the `current_role` is assumed.
     - signature: 'has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
       description: >-
         Reports whether the `user` has the privilege for `role`. `privilege` can either be `MEMBER`

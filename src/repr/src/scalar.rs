@@ -537,6 +537,19 @@ impl TryFrom<Datum<'_>> for Interval {
     }
 }
 
+impl TryFrom<Datum<'_>> for Option<Interval> {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Null => Ok(None),
+            Datum::Interval(i) => Ok(Some(i)),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {

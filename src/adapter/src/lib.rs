@@ -38,13 +38,13 @@ macro_rules! coord_bail {
     }
 }
 
+mod active_compute_sink;
 mod command;
 mod coord;
 mod error;
 mod explain;
 mod notice;
 mod optimize;
-mod subscribe;
 mod util;
 
 pub mod catalog;

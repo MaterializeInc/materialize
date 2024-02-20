@@ -183,27 +183,22 @@ delta = "3.8.0 -> 3.8.1"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
-
-[[audits.timely]]
-who = "Moritz Hoffmann <mh@materialize.com>"
-criteria = "safe-to-deploy"
-version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
 
 [[audits.tracing-log]]
 who = "Gus Wynn <gus@materialize.com>"

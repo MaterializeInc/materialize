@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
@@ -30,6 +31,7 @@ use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
@@ -343,12 +345,29 @@ impl Coordinator {
                 self.send_peek_response(uuid, response, otel_ctx);
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
-                // It's not an error if the subscribe does not exist. When
-                // aborting a subscribe, we eagerly remove it from
-                // `active_subscribes`, but we might receive a few responses
-                // from the controller about the zombie subscribe.
-                if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
-                    active_subscribe.process_response(response);
+                match self.active_compute_sinks.get_mut(&sink_id) {
+                    Some(ActiveComputeSink::Subscribe(active_subscribe)) => {
+                        let finished = active_subscribe.process_response(response);
+                        if finished {
+                            self.retire_compute_sinks(btreemap! {
+                                sink_id => ActiveComputeSinkRetireReason::Finished,
+                            })
+                            .await;
+                        }
+                    }
+                    _ => {
+                        tracing::error!(%sink_id, "received SubscribeResponse for nonexistent subscribe");
+                    }
+                }
+            }
+            ControllerResponse::CopyToResponse(sink_id, response) => {
+                match self.drop_compute_sink(sink_id).await {
+                    Some(ActiveComputeSink::CopyTo(active_copy_to)) => {
+                        active_copy_to.retire_with_response(response);
+                    }
+                    _ => {
+                        tracing::error!(%sink_id, "received CopyToResponse for nonexistent copy to");
+                    }
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
