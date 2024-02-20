@@ -822,25 +822,15 @@ impl CatalogState {
             .with_planning_id(id)
             .with_ignore_if_exists_errors(force_if_exists_skip);
         let mut session_catalog = self.for_system_session();
-        self.parse_plan(
-            id,
-            create_sql,
-            Some(&pcx),
-            false,
-            None,
-            &mut session_catalog,
-        )
+        self.parse_plan(create_sql, Some(&pcx), &mut session_catalog)
     }
 
     /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds)`.
-    #[tracing::instrument(level = "info", skip(self, pcx))]
+    #[tracing::instrument(skip_all)]
     pub(crate) fn parse_plan(
         &self,
-        id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
-        is_retained_metrics_object: bool,
-        custom_logical_compaction_window: Option<CompactionWindow>,
         catalog: &mut ConnCatalog,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         // Enable catalog features that might be required during planning in
@@ -885,14 +875,7 @@ impl CatalogState {
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = self.parse_plan(
-            id,
-            create_sql,
-            pcx,
-            is_retained_metrics_object,
-            custom_logical_compaction_window,
-            &mut session_catalog,
-        )?;
+        let (plan, resolved_ids) = self.parse_plan(create_sql, pcx, &mut session_catalog)?;
 
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
