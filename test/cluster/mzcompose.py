@@ -3022,9 +3022,10 @@ def workflow_test_subscribe_hydration_status(
         input=dedent(
             """
             > SELECT h.hydrated
-              FROM mz_internal.mz_subscriptions s
+              FROM mz_internal.mz_subscriptions s,
+              unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
-              JOIN mz_tables t ON (s.referenced_object_ids = list[t.id])
+              JOIN mz_tables t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             true
             """
@@ -3039,9 +3040,10 @@ def workflow_test_subscribe_hydration_status(
         input=dedent(
             """
             > SELECT h.hydrated
-              FROM mz_internal.mz_subscriptions s
-              JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
-              JOIN mz_tables t ON (s.referenced_object_ids = list[t.id])
+              FROM mz_internal.mz_subscriptions s,
+              unnest(s.referenced_object_ids) as sroi(id)
+              JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_tables t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             """
         )
