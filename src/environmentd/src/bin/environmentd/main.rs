@@ -801,6 +801,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
 
+    // We can remove the last branch once we upgrade to 1.75
+    #[allow(unreachable_patterns)]
     match args.persist_isolated_runtime_threads {
         // Use the default.
         None | Some(0) => (),
@@ -812,7 +814,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             let threads = usize::try_from(x).expect("pattern matched a positive value");
             persist_config.isolated_runtime_worker_threads = threads;
         }
-        // We can remove this branch once we upgrade to 1.75
         Some(_) => unreachable!("isize is technically non-exhaustive"),
     };
 

@@ -847,8 +847,10 @@ impl Coordinator {
             depends_on: validity.dependency_ids.clone(),
         };
         // Add metadata for the new COPY TO.
-        self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
-            .await;
+        drop(
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
+                .await,
+        );
 
         // Ship dataflow.
         self.ship_dataflow(df_desc, cluster_id).await;

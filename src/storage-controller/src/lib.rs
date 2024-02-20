@@ -2194,7 +2194,8 @@ where
                     .filter_map(|b| b)
                     .collect();
 
-                    tx.append(batches).await
+                    // Drop the notification future we don't need.
+                    tx.append(batches).await.map(drop)
                 })
             })
             .await

@@ -1099,7 +1099,7 @@ impl DurableCatalogState for Connection {
                             is_initialized,
                         )
                         .await?;
-                        tx.append(batches).await?;
+                        drop(tx.append(batches).await?);
 
                         Ok(())
                     })

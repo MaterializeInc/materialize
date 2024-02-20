@@ -154,7 +154,7 @@ where
 
                 // Fix the upper, append should work now.
                 other_batch.upper = other_upper;
-                tx.append(vec![other_batch, orders_batch]).await.unwrap();
+                drop(tx.append(vec![other_batch, orders_batch]).await.unwrap());
                 assert_eq!(
                     tx.iter(orders).await.unwrap(),
                     &[(("k1".into(), "v1".into()), -9223372036854775808, 1),]
@@ -181,7 +181,7 @@ where
                 // must also compact and consolidate.
                 for _ in 0..5 {
                     let orders_batch = orders.make_batch_tx(&tx).await.unwrap();
-                    tx.append(vec![orders_batch]).await.unwrap();
+                    drop(tx.append(vec![orders_batch]).await.unwrap());
                     assert_eq!(
                         tx.since(orders.id).await.unwrap().into_option().unwrap(),
                         tx.upper(orders.id).await.unwrap().into_option().unwrap() - 1
@@ -248,7 +248,7 @@ where
             Box::pin(async move {
                 let mut orders_batch = orders.make_batch_tx(&tx).await.unwrap();
                 orders.append_to_batch(&mut orders_batch, &"k4".to_string(), &"v4".to_string(), 1);
-                tx.append(vec![orders_batch]).await.unwrap();
+                drop(tx.append(vec![orders_batch]).await.unwrap());
                 assert_eq!(
                     tx.peek_one(orders).await.unwrap(),
                     BTreeMap::from([
@@ -745,7 +745,7 @@ async fn append(stash: &mut Stash, batches: Vec<AppendBatch>) -> Result<(), Stas
         .with_transaction(move |tx| {
             Box::pin(async move {
                 let batches = batches.clone();
-                tx.append(batches).await?;
+                drop(tx.append(batches).await?);
                 for id in tx.collections().await?.keys() {
                     tx.consolidate(*id).await?;
                 }
