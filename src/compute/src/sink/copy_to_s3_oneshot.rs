@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use differential_dataflow::Collection;
 use mz_compute_client::protocol::response::CopyToResponse;
-use mz_compute_types::sinks::{ComputeSinkDesc, S3OneshotSinkConnection};
+use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -26,7 +26,7 @@ use timely::PartialOrder;
 
 use crate::render::sinks::SinkRender;
 
-impl<G> SinkRender<G> for S3OneshotSinkConnection
+impl<G> SinkRender<G> for CopyToS3OneshotSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {

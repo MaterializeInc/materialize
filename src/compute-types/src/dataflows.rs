@@ -321,7 +321,7 @@ impl<P, S, T> DataflowDescription<P, S, T> {
         self.sink_exports
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
-                ComputeSinkConnection::S3Oneshot(_) => Some(*id),
+                ComputeSinkConnection::CopyToS3Oneshot(_) => Some(*id),
                 _ => None,
             })
     }

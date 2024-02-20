@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use http::Uri;
 use mz_compute_types::plan::Plan;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, S3OneshotSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, CopyToS3OneshotSinkConnection,
+};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_pgcopy::CopyFormatParams;
@@ -223,7 +225,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // sinks, which should be set here depending upon the url scheme.
         let connection = match &self.copy_to_connection {
             Connection::Aws(aws_connection) => {
-                ComputeSinkConnection::S3Oneshot(S3OneshotSinkConnection {
+                ComputeSinkConnection::CopyToS3Oneshot(CopyToS3OneshotSinkConnection {
                     aws_connection: aws_connection.clone(),
                     prefix: self.copy_to_uri.to_string(),
                 })

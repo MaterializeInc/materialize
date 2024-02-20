@@ -81,14 +81,14 @@ pub enum ComputeControllerResponse<T> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
-    /// The response from a dataflow containing an `S3Oneshot` sink.
+    /// The response from a dataflow containing an `CopyToS3Oneshot` sink.
     ///
     /// The `GlobalId` identifies the sink. The `Result` is the response from
     /// the sink, where an `Ok(n)` indicates that `n` rows were successfully
     /// copied to S3 and an `Err` indicates that an error was encountered
     /// during the copy operation.
     ///
-    /// For a given `S3Oneshot` sink, there will be at most one `CopyToResponse`
+    /// For a given `CopyToS3Oneshot` sink, there will be at most one `CopyToResponse`
     /// produced. (The sink may produce no responses if its dataflow is dropped
     /// before completion.)
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),

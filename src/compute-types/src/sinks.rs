@@ -117,8 +117,8 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     /// TODO(#25239): Add documentation.
     Persist(PersistSinkConnection<S>),
-    /// TODO(#25239): Add documentation.
-    S3Oneshot(S3OneshotSinkConnection),
+    /// A compute sink to do a oneshot copy to s3.
+    CopyToS3Oneshot(CopyToS3OneshotSinkConnection),
 }
 
 impl<S> ComputeSinkConnection<S> {
@@ -127,7 +127,7 @@ impl<S> ComputeSinkConnection<S> {
         match self {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
             ComputeSinkConnection::Persist(_) => "persist",
-            ComputeSinkConnection::S3Oneshot(_) => "s3",
+            ComputeSinkConnection::CopyToS3Oneshot(_) => "copy_to_s3_oneshot",
         }
     }
 
@@ -148,7 +148,9 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
             kind: Some(match self {
                 ComputeSinkConnection::Subscribe(_) => Kind::Subscribe(()),
                 ComputeSinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
-                ComputeSinkConnection::S3Oneshot(s3) => Kind::S3Oneshot(s3.into_proto()),
+                ComputeSinkConnection::CopyToS3Oneshot(s3) => {
+                    Kind::CopyToS3Oneshot(s3.into_proto())
+                }
             }),
         }
     }
@@ -161,7 +163,7 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
         Ok(match kind {
             Kind::Subscribe(_) => ComputeSinkConnection::Subscribe(SubscribeSinkConnection {}),
             Kind::Persist(persist) => ComputeSinkConnection::Persist(persist.into_rust()?),
-            Kind::S3Oneshot(s3) => ComputeSinkConnection::S3Oneshot(s3.into_rust()?),
+            Kind::CopyToS3Oneshot(s3) => ComputeSinkConnection::CopyToS3Oneshot(s3.into_rust()?),
         })
     }
 }
@@ -170,29 +172,29 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
 #[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SubscribeSinkConnection {}
 
-/// TODO(#25239): Add documentation.
+/// Connection attributes required to do a oneshot copy to s3.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct S3OneshotSinkConnection {
-    /// TODO(#25239): Add documentation.
+pub struct CopyToS3OneshotSinkConnection {
+    /// The s3 prefix path to write the data to.
     pub prefix: String,
-    /// TODO(#25239): Add documentation.
+    /// The AWS connection information to do the writes.
     pub aws_connection: mz_storage_types::connections::aws::AwsConnection,
 }
 
-impl RustType<ProtoS3OneshotSinkConnection> for S3OneshotSinkConnection {
-    fn into_proto(&self) -> ProtoS3OneshotSinkConnection {
-        ProtoS3OneshotSinkConnection {
+impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnection {
+    fn into_proto(&self) -> ProtoCopyToS3OneshotSinkConnection {
+        ProtoCopyToS3OneshotSinkConnection {
             prefix: self.prefix.clone(),
             aws_connection: Some(self.aws_connection.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoS3OneshotSinkConnection) -> Result<Self, TryFromProtoError> {
-        Ok(S3OneshotSinkConnection {
+    fn from_proto(proto: ProtoCopyToS3OneshotSinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(CopyToS3OneshotSinkConnection {
             prefix: proto.prefix,
             aws_connection: proto
                 .aws_connection
-                .into_rust_if_some("ProtoS3OneshotSinkConnection::aws_connection")?,
+                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::aws_connection")?,
         })
     }
 }
