@@ -44,13 +44,12 @@ use mz_sql::session::vars::{
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, info_span, instrument, warn, Instrument, Level};
 
-use crate::active_compute_sink::ComputeSinkRemovalReason;
+use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{CatalogState, Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -225,7 +224,7 @@ impl Coordinator {
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
-        let mut compute_sinks_to_drop = vec![];
+        let mut compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
@@ -418,22 +417,22 @@ impl Coordinator {
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id))
                     .to_string();
-                compute_sinks_to_drop.push((
+                compute_sinks_to_drop.insert(
                     *sink_id,
-                    ComputeSinkRemovalReason::DependencyDropped(format!(
+                    ActiveComputeSinkRetireReason::DependencyDropped(format!(
                         "relation {}",
                         name.quoted()
                     )),
-                ));
+                );
             } else if clusters_to_drop.contains(&cluster_id) {
                 let name = self.catalog().get_cluster(cluster_id).name();
-                compute_sinks_to_drop.push((
+                compute_sinks_to_drop.insert(
                     *sink_id,
-                    ComputeSinkRemovalReason::DependencyDropped(format!(
+                    ActiveComputeSinkRetireReason::DependencyDropped(format!(
                         "cluster {}",
                         name.quoted()
                     )),
-                ));
+                );
             }
         }
 
@@ -558,8 +557,7 @@ impl Coordinator {
                 self.drop_storage_sinks(storage_sinks_to_drop);
             }
             if !compute_sinks_to_drop.is_empty() {
-                self.drop_compute_sinks_with_reason(compute_sinks_to_drop)
-                    .await;
+                self.retire_compute_sinks(compute_sinks_to_drop).await;
             }
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {
@@ -740,17 +738,39 @@ impl Coordinator {
         }
     }
 
-    /// This method drops the compute sink, by calling `compute.drop_collections`.
-    /// This should only be called after removing the corresponding sink entry from
-    /// `self.active_compute_sinks`.
-    pub(crate) fn drop_compute_sinks(
+    /// Like `drop_compute_sinks`, but for a single compute sink.
+    ///
+    /// Returns the controller's state for the compute sink if the identified
+    /// sink was known to the controller. It is the caller's responsibility to
+    /// retire the returned sink. Consider using `retire_compute_sinks` instead.
+    #[must_use]
+    pub async fn drop_compute_sink(&mut self, sink_id: GlobalId) -> Option<ActiveComputeSink> {
+        self.drop_compute_sinks([sink_id]).await.remove(&sink_id)
+    }
+
+    /// Drops a batch of compute sinks.
+    ///
+    /// For each sink that exists, the coordinator and controller's state
+    /// associated with the sink is removed.
+    ///
+    /// Returns a map containing the controller's state for each sink that was
+    /// removed. It is the caller's responsibility to retire the returned sinks.
+    /// Consider using `retire_compute_sinks` instead.
+    #[must_use]
+    pub async fn drop_compute_sinks(
         &mut self,
-        sink_and_cluster_ids: impl IntoIterator<Item = (GlobalId, StorageInstanceId)>,
-    ) {
+        sink_ids: impl IntoIterator<Item = GlobalId>,
+    ) -> BTreeMap<GlobalId, ActiveComputeSink> {
+        let mut by_id = BTreeMap::new();
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (sink_id, cluster_id) in sink_and_cluster_ids {
-            // The active sink should have already been removed from the state
-            assert!(!self.active_compute_sinks.contains_key(&sink_id));
+        for sink_id in sink_ids {
+            let sink = match self.remove_active_compute_sink(sink_id).await {
+                None => {
+                    tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
+                    continue;
+                }
+                Some(sink) => sink,
+            };
 
             if !self
                 .controller
@@ -765,7 +785,11 @@ impl Coordinator {
                 }
             }
 
-            by_cluster.entry(cluster_id).or_default().push(sink_id);
+            by_cluster
+                .entry(sink.cluster_id())
+                .or_default()
+                .push(sink_id);
+            by_id.insert(sink_id, sink);
         }
         let mut compute = self.controller.active_compute();
         for (cluster_id, ids) in by_cluster {
@@ -776,25 +800,50 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
+        by_id
     }
 
-    /// Drops active compute sinks and might send appropriate response back
-    /// depending upon the reason.
-    pub(crate) async fn drop_compute_sinks_with_reason(
+    /// Retires a batch of sinks with disparate reasons for retirement.
+    ///
+    /// Each sink identified in `reasons` is dropped (see `drop_compute_sinks`),
+    /// then retired with its corresponding reason.
+    pub async fn retire_compute_sinks(
         &mut self,
-        sinks: impl IntoIterator<Item = (GlobalId, ComputeSinkRemovalReason)>,
+        mut reasons: BTreeMap<GlobalId, ActiveComputeSinkRetireReason>,
     ) {
-        let mut sink_cluster_id_map = BTreeMap::new();
-        for (sink_id, reason) in sinks {
-            if let Some(sink) = self.remove_active_sink(sink_id).await {
-                sink_cluster_id_map.insert(sink_id, sink.cluster_id());
-                sink.drop_with_reason(reason);
-            } else {
-                tracing::error!(%sink_id, "drop_compute_sinks called on nonexistent sink");
-                continue;
-            }
+        let sink_ids = reasons.keys().cloned();
+        for (id, sink) in self.drop_compute_sinks(sink_ids).await {
+            let reason = reasons
+                .remove(&id)
+                .expect("all returned IDs are in `reasons`");
+            sink.retire(reason);
         }
-        self.drop_compute_sinks(sink_cluster_id_map.into_iter());
+    }
+
+    /// Cancels all active compute sinks for the identified connection.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
+        self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
+            .await
+    }
+
+    /// Retires all active compute sinks for the identified connection with the
+    /// specified reason.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn retire_compute_sinks_for_conn(
+        &mut self,
+        conn_id: &ConnectionId,
+        reason: ActiveComputeSinkRetireReason,
+    ) {
+        let drop_sinks = self
+            .active_conns
+            .get_mut(conn_id)
+            .expect("must exist for active session")
+            .drop_sinks
+            .iter()
+            .map(|sink_id| (*sink_id, reason.clone()))
+            .collect();
+        self.retire_compute_sinks(drop_sinks).await;
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
