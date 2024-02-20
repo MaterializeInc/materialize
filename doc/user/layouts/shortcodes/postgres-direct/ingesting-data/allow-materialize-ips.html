@@ -1,5 +1,5 @@
 
-1. In the `psql` shell connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+1. In a SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SECRET pgpass AS '<PASSWORD>';
