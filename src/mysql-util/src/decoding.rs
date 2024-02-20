@@ -7,12 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::str::FromStr;
+
 use itertools::{EitherOrBoth, Itertools};
 use mysql_common::value::convert::from_value_opt;
 use mysql_common::{Row as MySqlRow, Value};
 
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::numeric::{get_precision, get_scale, Numeric, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, ScalarType};
 
@@ -141,6 +144,33 @@ fn val_to_datum<'a>(
                 Datum::try_from(CheckedTimestamp::try_from(chrono_timestamp)?)?
             }
             ScalarType::Time => Datum::from(from_value_opt::<chrono::NaiveTime>(value)?),
+            ScalarType::Numeric { max_scale } => {
+                // The wire-format of numeric types is a string when sent in a binary query
+                // response but is represented in a decimal binary format when sent in a binlog
+                // event. However the mysql-common crate abstracts this away and always returns
+                // a string. We parse the string into a numeric type here.
+                let val = from_value_opt::<String>(value)?;
+                let val = Numeric::from_str(&val)?;
+                if get_precision(&val) > NUMERIC_DATUM_MAX_PRECISION.into() {
+                    Err(anyhow::anyhow!(
+                        "received numeric value with precision {} for column {} which has a max precision of {}",
+                        get_precision(&val),
+                        col_desc.name,
+                        NUMERIC_DATUM_MAX_PRECISION
+                    ))?
+                }
+                if let Some(max_scale) = max_scale {
+                    if get_scale(&val) > max_scale.into_u8().into() {
+                        Err(anyhow::anyhow!(
+                            "received numeric value with scale {} for column {} which has a max scale of {}",
+                            get_scale(&val),
+                            col_desc.name,
+                            max_scale.into_u8()
+                        ))?
+                    }
+                }
+                Datum::from(val)
+            }
             // TODO(roshan): IMPLEMENT OTHER TYPES
             data_type => Err(anyhow::anyhow!(
                 "received unexpected value for type: {:?}: {:?}",

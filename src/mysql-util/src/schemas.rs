@@ -207,7 +207,7 @@ where
                     ScalarType::Numeric {
                         max_scale: info
                             .numeric_scale
-                            .and_then(|f| Some(NumericMaxScale::try_from(f)))
+                            .map(NumericMaxScale::try_from)
                             .transpose()
                             .map_err(|_| MySqlError::UnsupportedDataType {
                                 column_type: info.column_type,
