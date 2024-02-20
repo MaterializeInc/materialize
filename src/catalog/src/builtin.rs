@@ -51,6 +51,7 @@ use mz_storage_client::healthcheck::{
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
     MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
+use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
@@ -2946,35 +2947,19 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
-pub static MZ_SOURCE_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_source_statistics_per_worker",
+pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_source_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: IntrospectionType::StorageSourceStatistics,
-    desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("worker_id", ScalarType::UInt64.nullable(false))
-        .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
-        .with_column("messages_received", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
-        .with_column("updates_staged", ScalarType::UInt64.nullable(false))
-        .with_column("updates_committed", ScalarType::UInt64.nullable(false))
-        .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
-        .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
-        .with_column("rehydration_latency", ScalarType::Interval.nullable(true)),
+    desc: MZ_SOURCE_STATISTICS_RAW_DESC.clone(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_SINK_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_sink_statistics_per_worker",
+pub static MZ_SINK_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_sink_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: IntrospectionType::StorageSinkStatistics,
-    desc: RelationDesc::empty()
-        .with_column("id", ScalarType::String.nullable(false))
-        .with_column("worker_id", ScalarType::UInt64.nullable(false))
-        .with_column("messages_staged", ScalarType::UInt64.nullable(false))
-        .with_column("messages_committed", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
+    desc: MZ_SINK_STATISTICS_RAW_DESC.clone(),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
@@ -6198,14 +6183,14 @@ SELECT
     SUM(bytes_received)::uint8 AS bytes_received,
     SUM(updates_staged)::uint8 AS updates_staged,
     SUM(updates_committed)::uint8 AS updates_committed,
-    SUM(envelope_state_bytes)::uint8 AS envelope_state_bytes,
-    SUM(envelope_state_records)::uint8 AS envelope_state_records,
+    SUM(bytes_indexed)::uint8 AS bytes_indexed,
+    SUM(records_indexed)::uint8 AS records_indexed,
     -- Ensure we aggregate to NULL when not all workers are done rehydrating.
     CASE
         WHEN bool_or(rehydration_latency IS NULL) THEN NULL
         ELSE MAX(rehydration_latency)::interval
     END AS rehydration_latency
-FROM mz_internal.mz_source_statistics_per_worker
+FROM mz_internal.mz_source_statistics_raw
 GROUP BY id",
     access: vec![PUBLIC_SELECT],
 });
@@ -6229,7 +6214,7 @@ SELECT
     SUM(messages_committed)::uint8 AS messages_committed,
     SUM(bytes_staged)::uint8 AS bytes_staged,
     SUM(bytes_committed)::uint8 AS bytes_committed
-FROM mz_internal.mz_sink_statistics_per_worker
+FROM mz_internal.mz_sink_statistics_raw
 GROUP BY id",
     access: vec![PUBLIC_SELECT],
 });
@@ -6729,8 +6714,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STATEMENT_LIFECYCLE_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
-        Builtin::Source(&MZ_SOURCE_STATISTICS_PER_WORKER),
-        Builtin::Source(&MZ_SINK_STATISTICS_PER_WORKER),
+        Builtin::Source(&MZ_SOURCE_STATISTICS_RAW),
+        Builtin::Source(&MZ_SINK_STATISTICS_RAW),
         Builtin::View(&MZ_SOURCE_STATISTICS),
         Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
         Builtin::View(&MZ_SINK_STATISTICS),

@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use mz_repr::{GlobalId, Row};
 use mz_rocksdb::config::SharedWriteBufferManager;
-use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
@@ -21,6 +20,8 @@ use timely::communication::Allocate;
 use timely::progress::Antichain;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
+
+use crate::statistics::{SinkStatisticsRecord, SourceStatisticsRecord};
 
 /// _Dynamic_ storage instance configuration parameters that are used during dataflow rendering.
 /// Changes to these parameters are applied to `StorageWorker`s in a consistent order
@@ -100,9 +101,9 @@ pub enum InternalStorageCommand {
     /// For moving statistics updates to worker 0.
     StatisticsUpdate {
         /// Local statistics, with their epochs.
-        sources: Vec<(usize, SourceStatisticsUpdate)>,
+        sources: Vec<(usize, SourceStatisticsRecord)>,
         /// Local statistics, with their epochs.
-        sinks: Vec<(usize, SinkStatisticsUpdate)>,
+        sinks: Vec<(usize, SinkStatisticsRecord)>,
     },
 }
 

@@ -1264,7 +1264,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
     c.down(destroy_volumes=True)
 
     with c.override(
-        Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
+        Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.up(
             "cockroach",

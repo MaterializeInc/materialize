@@ -635,10 +635,9 @@ where
             .rehydration_updates
             .set(self.snapshot_stats.updates);
         // These `set_` functions also ensure that these values are non-negative.
+        self.stats.set_bytes_indexed(self.snapshot_stats.size_diff);
         self.stats
-            .set_envelope_state_bytes(self.snapshot_stats.size_diff);
-        self.stats
-            .set_envelope_state_records(self.snapshot_stats.values_diff);
+            .set_records_indexed(self.snapshot_stats.values_diff);
 
         if completed {
             if self.shrink_upsert_unused_buffers_by_ratio > 0 {
@@ -691,9 +690,8 @@ where
         self.worker_metrics.upsert_updates.inc_by(stats.updates);
         self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
 
-        self.stats.update_envelope_state_bytes_by(stats.size_diff);
-        self.stats
-            .update_envelope_state_records_by(stats.values_diff);
+        self.stats.update_bytes_indexed_by(stats.size_diff);
+        self.stats.update_records_indexed_by(stats.values_diff);
 
         Ok(())
     }

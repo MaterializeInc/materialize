@@ -572,9 +572,9 @@ mz_prepared_statement_history                source <null>  <null>
 mz_scheduling_elapsed_raw                    log   <null>   <null>
 mz_scheduling_parks_histogram_raw            log   <null>   <null>
 mz_session_history                           source <null>  <null>
-mz_sink_statistics_per_worker                source <null>  <null>
+mz_sink_statistics_raw                       source <null>  <null>
 mz_sink_status_history                       source <null>  <null>
-mz_source_statistics_per_worker              source <null>  <null>
+mz_source_statistics_raw                     source <null>  <null>
 mz_source_status_history                     source <null>  <null>
 mz_statement_execution_history               source <null>  <null>
 mz_statement_lifecycle_history               source <null>  <null>

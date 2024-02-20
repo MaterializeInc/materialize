@@ -20,9 +20,12 @@ use mz_ore::metrics::{
     MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_client::statistics::{
+    Gauge, SinkStatisticsUpdate, SkippableGauge, SourceStatisticsUpdate,
+};
 use mz_storage_types::sources::SourceEnvelope;
 use prometheus::core::{AtomicI64, AtomicU64};
+use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
@@ -39,13 +42,13 @@ pub(crate) struct SourceStatisticsMetricDefs {
 
     // Gauges
     pub(crate) snapshot_committed: UIntGaugeVec,
-    pub(crate) envelope_state_bytes: UIntGaugeVec,
-    pub(crate) envelope_state_records: UIntGaugeVec,
+    pub(crate) bytes_indexed: UIntGaugeVec,
+    pub(crate) records_indexed: UIntGaugeVec,
     pub(crate) rehydration_latency_ms: IntGaugeVec,
 
     // statistics that are not yet exposed to users.
-    pub(crate) upstream_values: UIntGaugeVec,
-    pub(crate) committed_values: UIntGaugeVec,
+    pub(crate) offset_known: UIntGaugeVec,
+    pub(crate) offset_committed: UIntGaugeVec,
 }
 
 impl SourceStatisticsMetricDefs {
@@ -76,13 +79,13 @@ impl SourceStatisticsMetricDefs {
                 help: "The number of bytes worth of messages the worker has received from upstream. The way the bytes are counted is source-specific.",
                 var_labels: ["source_id", "worker_id", "parent_source_id"],
             )),
-            envelope_state_bytes: registry.register(metric!(
-                name: "mz_source_envelope_state_bytes",
+            bytes_indexed: registry.register(metric!(
+                name: "mz_source_bytes_indexed",
                 help: "The number of bytes of the source envelope state kept. This will be specific to the envelope in use.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
-            envelope_state_records: registry.register(metric!(
-                name: "mz_source_envelope_state_records",
+            records_indexed: registry.register(metric!(
+                name: "mz_source_records_indexed",
                 help: "The number of records in the source envelope state. This will be specific to the envelope in use",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
             )),
@@ -91,13 +94,13 @@ impl SourceStatisticsMetricDefs {
                 help: "The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.",
                 var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id", "envelope"],
             )),
-            upstream_values: registry.register(metric!(
-                name: "mz_source_upstream_values",
+            offset_known: registry.register(metric!(
+                name: "mz_source_offset_known",
                 help: "The total number of _values_ (source-defined unit) present in upstream.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
             )),
-            committed_values: registry.register(metric!(
-                name: "mz_source_committed_values",
+            offset_committed: registry.register(metric!(
+                name: "mz_source_offset_committed",
                 help: "The total number of _values_ (source-defined unit) we have fully processed, and storage and committed.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
             )),
@@ -116,13 +119,13 @@ pub struct SourceStatisticsMetrics {
 
     // Gauges
     pub(crate) snapshot_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) envelope_state_bytes: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) envelope_state_records: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) bytes_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) records_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
 
     // statistics that are not yet exposed to users.
-    pub(crate) upstream_values: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) committed_values: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_known: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -170,13 +173,13 @@ impl SourceStatisticsMetrics {
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            envelope_state_bytes: defs.envelope_state_bytes.get_delete_on_drop_gauge(vec![
+            bytes_indexed: defs.bytes_indexed.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard.clone(),
             ]),
-            envelope_state_records: defs.envelope_state_records.get_delete_on_drop_gauge(vec![
+            records_indexed: defs.records_indexed.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
@@ -189,12 +192,12 @@ impl SourceStatisticsMetrics {
                 shard.clone(),
                 envelope.to_string(),
             ]),
-            upstream_values: defs.upstream_values.get_delete_on_drop_gauge(vec![
+            offset_known: defs.offset_known.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
             ]),
-            committed_values: defs.committed_values.get_delete_on_drop_gauge(vec![
+            offset_committed: defs.offset_committed.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
@@ -328,7 +331,7 @@ impl<Stats, Metrics, Meta: Clone> Clone for StorageStatistics<Stats, Metrics, Me
 }
 
 /// Statistics maintained for sources. Gauges can be uninitialized.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SourceStatisticsRecord {
     id: GlobalId,
     worker_id: usize,
@@ -337,11 +340,22 @@ pub struct SourceStatisticsRecord {
     bytes_received: u64,
     updates_staged: u64,
     updates_committed: u64,
-    // Gauges
-    snapshot_committed: Option<bool>,
-    envelope_state_bytes: Option<u64>,
-    envelope_state_records: Option<u64>,
+
+    // Gauges are always wrapped in an `Option` that represents if that gauge has been
+    // initialized by that worker.
+    records_indexed: Option<u64>,
+    bytes_indexed: Option<u64>,
+
+    // This field is nullable, so its value is an `Option`.
     rehydration_latency_ms: Option<Option<i64>>,
+
+    // The following fields are able to be unset when shipped to the controller, so their
+    // values are `Option`'s
+    snapshot_records_known: Option<Option<u64>>,
+    snapshot_records_staged: Option<Option<u64>>,
+    snapshot_committed: Option<bool>,
+    offset_known: Option<Option<u64>>,
+    offset_committed: Option<Option<u64>>,
 }
 
 impl SourceStatisticsRecord {
@@ -350,17 +364,71 @@ impl SourceStatisticsRecord {
         self.bytes_received = 0;
         self.updates_staged = 0;
         self.updates_committed = 0;
-        self.snapshot_committed = None;
-        // These 2 are gauges but we WANT them to be reset, so we
-        // consider them instantly initialized.
-        self.envelope_state_bytes = Some(0);
-        self.envelope_state_records = Some(0);
+
+        // These gauges MUST be initialized across all workers before we aggregate and
+        // report statistics.
         self.rehydration_latency_ms = None;
+        self.snapshot_committed = None;
+
+        // We consider these gauges always initialized
+        self.bytes_indexed = Some(0);
+        self.records_indexed = Some(0);
+
+        // We don't yet populate these, so we consider the initialized (with an empty value).
+        self.snapshot_records_known = Some(None);
+        self.snapshot_records_staged = Some(None);
+        self.offset_known = Some(None);
+        self.offset_committed = Some(None);
+    }
+
+    /// Reset counters so that we continue to ship diffs to the controller.
+    fn reset_counters(&mut self) {
+        self.messages_received = 0;
+        self.bytes_received = 0;
+        self.updates_staged = 0;
+        self.updates_committed = 0;
+    }
+
+    /// Convert this record into an `SourceStatisticsUpdate` to be merged
+    /// across workers. Gauges must be initialized.
+    fn as_update(&self) -> SourceStatisticsUpdate {
+        let SourceStatisticsRecord {
+            id,
+            worker_id: _,
+            messages_received,
+            bytes_received,
+            updates_staged,
+            updates_committed,
+            records_indexed,
+            bytes_indexed,
+            rehydration_latency_ms,
+            snapshot_records_known,
+            snapshot_records_staged,
+            snapshot_committed,
+            offset_known,
+            offset_committed,
+        } = self.clone();
+
+        SourceStatisticsUpdate {
+            id,
+            messages_received: messages_received.into(),
+            bytes_received: bytes_received.into(),
+            updates_staged: updates_staged.into(),
+            updates_committed: updates_committed.into(),
+            records_indexed: Gauge::gauge(records_indexed.unwrap()),
+            bytes_indexed: Gauge::gauge(bytes_indexed.unwrap()),
+            rehydration_latency_ms: Gauge::gauge(rehydration_latency_ms.unwrap()),
+            snapshot_records_known: Gauge::gauge(snapshot_records_known.unwrap()),
+            snapshot_records_staged: Gauge::gauge(snapshot_records_staged.unwrap()),
+            snapshot_committed: Gauge::gauge(snapshot_committed.unwrap()),
+            offset_known: SkippableGauge::gauge(offset_known.unwrap()),
+            offset_committed: SkippableGauge::gauge(offset_committed.unwrap()),
+        }
     }
 }
 
 /// Statistics maintained for sinks. Gauges can be uninitialized.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SinkStatisticsRecord {
     id: GlobalId,
     worker_id: usize,
@@ -377,6 +445,35 @@ impl SinkStatisticsRecord {
         self.messages_committed = 0;
         self.bytes_staged = 0;
         self.bytes_committed = 0;
+    }
+
+    /// Reset counters so that we continue to ship diffs to the controller.
+    fn reset_counters(&mut self) {
+        self.messages_staged = 0;
+        self.messages_committed = 0;
+        self.bytes_staged = 0;
+        self.bytes_committed = 0;
+    }
+
+    /// Convert this record into an `SinkStatisticsUpdate` to be merged
+    /// across workers. Gauges must be initialized.
+    fn as_update(&self) -> SinkStatisticsUpdate {
+        let SinkStatisticsRecord {
+            id,
+            worker_id: _,
+            messages_staged,
+            messages_committed,
+            bytes_staged,
+            bytes_committed,
+        } = self.clone();
+
+        SinkStatisticsUpdate {
+            id,
+            messages_staged: messages_staged.into(),
+            messages_committed: messages_committed.into(),
+            bytes_staged: bytes_staged.into(),
+            bytes_committed: bytes_committed.into(),
+        }
     }
 }
 
@@ -406,12 +503,14 @@ impl SourceStatistics {
                     updates_staged: 0,
                     updates_committed: 0,
                     bytes_received: 0,
-                    snapshot_committed: None,
-                    // These 2 are gauges but we WANT them to be reset, so we
-                    // consider them instantly initialized.
-                    envelope_state_bytes: Some(0),
-                    envelope_state_records: Some(0),
+                    records_indexed: Some(0),
+                    bytes_indexed: Some(0),
                     rehydration_latency_ms: None,
+                    snapshot_records_staged: Some(None),
+                    snapshot_records_known: Some(None),
+                    snapshot_committed: None,
+                    offset_known: Some(None),
+                    offset_committed: Some(None),
                 },
                 prom: SourceStatisticsMetrics::new(
                     metrics,
@@ -434,21 +533,29 @@ impl SourceStatistics {
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
-    pub fn snapshot(&self) -> Option<SourceStatisticsUpdate> {
-        let cur = self.stats.borrow_mut();
+    ///
+    /// This also resets counters, so that we continue to move diffs around.
+    pub fn snapshot(&mut self) -> Option<SourceStatisticsRecord> {
+        let mut cur = self.stats.borrow_mut();
 
-        Some(SourceStatisticsUpdate {
-            id: cur.stats.id,
-            worker_id: cur.stats.worker_id,
-            messages_received: cur.stats.messages_received,
-            bytes_received: cur.stats.bytes_received,
-            updates_staged: cur.stats.updates_staged,
-            updates_committed: cur.stats.updates_committed,
-            snapshot_committed: cur.stats.snapshot_committed?,
-            envelope_state_bytes: cur.stats.envelope_state_bytes?,
-            envelope_state_records: cur.stats.envelope_state_records?,
-            rehydration_latency_ms: cur.stats.rehydration_latency_ms?,
-        })
+        match &cur.stats {
+            SourceStatisticsRecord {
+                records_indexed: Some(_),
+                bytes_indexed: Some(_),
+                rehydration_latency_ms: Some(_),
+                snapshot_records_known: Some(_),
+                snapshot_records_staged: Some(_),
+                snapshot_committed: Some(_),
+                offset_known: Some(_),
+                offset_committed: Some(_),
+                ..
+            } => {
+                let ret = Some(cur.stats.clone());
+                cur.stats.reset_counters();
+                ret
+            }
+            _ => None,
+        }
     }
 
     /// Set the `snapshot_committed` stat based on the reported upper, and
@@ -497,84 +604,78 @@ impl SourceStatistics {
         cur.prom.bytes_received.inc_by(value);
     }
 
-    /// Update the `envelope_state_bytes` stat.
+    /// Update the `bytes_indexed` stat.
     /// A positive value will add and a negative value will subtract.
-    pub fn update_envelope_state_bytes_by(&self, value: i64) {
+    pub fn update_bytes_indexed_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         if let Some(updated) = cur
             .stats
-            .envelope_state_bytes
+            .bytes_indexed
             .unwrap_or(0)
             .checked_add_signed(value)
         {
-            cur.stats.envelope_state_bytes = Some(updated);
-            cur.prom.envelope_state_bytes.set(updated);
+            cur.stats.bytes_indexed = Some(updated);
+            cur.prom.bytes_indexed.set(updated);
         } else {
-            let envelope_state_bytes = cur.stats.envelope_state_bytes.unwrap_or(0);
+            let bytes_indexed = cur.stats.bytes_indexed.unwrap_or(0);
             tracing::warn!(
-                "Unexpected u64 overflow while updating envelope_state_bytes value {} with {}",
-                envelope_state_bytes,
+                "Unexpected u64 overflow while updating bytes_indexed value {} with {}",
+                bytes_indexed,
                 value
             );
-            cur.stats.envelope_state_bytes = Some(0);
-            cur.prom.envelope_state_bytes.set(0);
+            cur.stats.bytes_indexed = Some(0);
+            cur.prom.bytes_indexed.set(0);
         }
     }
 
-    /// Set the `envelope_state_bytes` to the given value
-    pub fn set_envelope_state_bytes(&self, value: i64) {
+    /// Set the `bytes_indexed` to the given value
+    pub fn set_bytes_indexed(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         let value = if value < 0 {
-            tracing::warn!(
-                "Unexpected negative value for envelope_state_bytes {}",
-                value
-            );
+            tracing::warn!("Unexpected negative value for bytes_indexed {}", value);
             0
         } else {
             value.unsigned_abs()
         };
-        cur.stats.envelope_state_bytes = Some(value);
-        cur.prom.envelope_state_bytes.set(value);
+        cur.stats.bytes_indexed = Some(value);
+        cur.prom.bytes_indexed.set(value);
     }
 
-    /// Update the `envelope_state_records` stat.
+    /// Update the `records_indexed` stat.
     /// A positive value will add and a negative value will subtract.
-    pub fn update_envelope_state_records_by(&self, value: i64) {
+    pub fn update_records_indexed_by(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         if let Some(updated) = cur
             .stats
-            .envelope_state_records
+            .records_indexed
             .unwrap_or(0)
             .checked_add_signed(value)
         {
-            cur.stats.envelope_state_records = Some(updated);
-            cur.prom.envelope_state_records.set(updated);
+            cur.stats.records_indexed = Some(updated);
+            cur.prom.records_indexed.set(updated);
         } else {
-            let envelope_state_records = cur.stats.envelope_state_records.unwrap_or(0);
+            let records_indexed = cur.stats.records_indexed.unwrap_or(0);
             tracing::warn!(
-                "Unexpected u64 overflow while updating envelope_state_records value {} with {}",
-                envelope_state_records,
+                "Unexpected u64 overflow while updating records_indexed value {} with {}",
+                records_indexed,
                 value
             );
-            cur.stats.envelope_state_records = Some(0);
-            cur.prom.envelope_state_records.set(0);
+            cur.stats.records_indexed = Some(0);
+            cur.prom.records_indexed.set(0);
         }
     }
 
-    /// Set the `envelope_state_records` to the given value
-    pub fn set_envelope_state_records(&self, value: i64) {
+    /// Set the `records_indexed` to the given value
+    pub fn set_records_indexed(&self, value: i64) {
         let mut cur = self.stats.borrow_mut();
         let value = if value < 0 {
-            tracing::warn!(
-                "Unexpected negative value for envelope_state_records {}",
-                value
-            );
+            tracing::warn!("Unexpected negative value for records_indexed {}", value);
             0
         } else {
             value.unsigned_abs()
         };
-        cur.stats.envelope_state_records = Some(value);
-        cur.prom.envelope_state_records.set(value);
+        cur.stats.records_indexed = Some(value);
+        cur.prom.records_indexed.set(value);
     }
 
     /// Initialize the `rehydration_latency_ms` stat as `NULL`.
@@ -603,20 +704,20 @@ impl SourceStatistics {
         cur.prom.rehydration_latency_ms.set(value);
     }
 
-    /// Set the `upstream_values` stat to the given value.
-    pub fn set_upstream_values(&self, value: u64) {
+    /// Set the `offset_known` stat to the given value.
+    pub fn set_offset_known(&self, value: u64) {
         let cur = self.stats.borrow_mut();
         // Not yet exposed to users.
-        // cur.prom.upstream_values = value;
-        cur.prom.upstream_values.set(value);
+        // cur.prom.offset_known = value;
+        cur.prom.offset_known.set(value);
     }
 
-    /// Set the `committed_values` stat to the given value.
-    pub fn set_committed_values(&self, value: u64) {
+    /// Set the `offset_committed` stat to the given value.
+    pub fn set_offset_committed(&self, value: u64) {
         let cur = self.stats.borrow_mut();
         // Not yet exposed to users.
-        // cur.prom.committed_values = value;
-        cur.prom.committed_values.set(value);
+        // cur.prom.offset_committed = value;
+        cur.prom.offset_committed.set(value);
     }
 }
 
@@ -646,17 +747,18 @@ impl SinkStatistics {
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
-    pub fn snapshot(&self) -> Option<SinkStatisticsUpdate> {
-        let cur = self.stats.borrow_mut();
+    ///
+    /// This also resets counters, so that we continue to move diffs around.
+    pub fn snapshot(&mut self) -> Option<SinkStatisticsRecord> {
+        let mut cur = self.stats.borrow_mut();
 
-        Some(SinkStatisticsUpdate {
-            id: cur.stats.id,
-            worker_id: cur.stats.worker_id,
-            messages_staged: cur.stats.messages_staged,
-            messages_committed: cur.stats.messages_committed,
-            bytes_staged: cur.stats.bytes_staged,
-            bytes_committed: cur.stats.bytes_committed,
-        })
+        match &cur.stats {
+            SinkStatisticsRecord { .. } => {
+                let ret = Some(cur.stats.clone());
+                cur.stats.reset_counters();
+                ret
+            }
+        }
     }
 
     /// Increment the `messages_staged` stat.
@@ -718,8 +820,8 @@ pub struct AggregatedStatistics {
     local_source_statistics: BTreeMap<GlobalId, (usize, SourceStatistics)>,
     local_sink_statistics: BTreeMap<GlobalId, (usize, SinkStatistics)>,
 
-    global_source_statistics: BTreeMap<GlobalId, (usize, BTreeMap<usize, SourceStatisticsUpdate>)>,
-    global_sink_statistics: BTreeMap<GlobalId, (usize, BTreeMap<usize, SinkStatisticsUpdate>)>,
+    global_source_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SourceStatisticsUpdate>>)>,
+    global_sink_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SinkStatisticsUpdate>>)>,
 }
 
 impl AggregatedStatistics {
@@ -762,13 +864,13 @@ impl AggregatedStatistics {
                 .entry(id)
                 .and_modify(|(ref mut epoch, ref mut stats)| {
                     *epoch += 1;
-                    stats.clear()
+                    *stats = vec![None; self.worker_count];
                 });
             self.global_sink_statistics
                 .entry(id)
                 .and_modify(|(ref mut epoch, ref mut stats)| {
                     *epoch += 1;
-                    stats.clear()
+                    *stats = vec![None; self.worker_count];
                 });
         }
     }
@@ -786,7 +888,7 @@ impl AggregatedStatistics {
         if self.worker_id == 0 {
             self.global_source_statistics
                 .entry(id)
-                .or_insert_with(|| (0, Default::default()));
+                .or_insert_with(|| (0, vec![None; self.worker_count]));
         }
     }
 
@@ -802,15 +904,15 @@ impl AggregatedStatistics {
         if self.worker_id == 0 {
             self.global_sink_statistics
                 .entry(id)
-                .or_insert_with(|| (0, Default::default()));
+                .or_insert_with(|| (0, vec![None; self.worker_count]));
         }
     }
 
     /// Ingest data from other workers.
     pub fn ingest(
         &mut self,
-        source_statistics: Vec<(usize, SourceStatisticsUpdate)>,
-        sink_statistics: Vec<(usize, SinkStatisticsUpdate)>,
+        source_statistics: Vec<(usize, SourceStatisticsRecord)>,
+        sink_statistics: Vec<(usize, SinkStatisticsRecord)>,
     ) {
         // Currently, only worker 0 ingest data from other workers.
         if self.worker_id == 0 {
@@ -818,7 +920,12 @@ impl AggregatedStatistics {
                 self.global_source_statistics.entry(stat.id).and_modify(
                     |(global_epoch, ref mut stats)| {
                         if epoch >= *global_epoch {
-                            stats.insert(stat.worker_id, stat);
+                            match &mut stats[stat.worker_id] {
+                                None => {
+                                    stats[stat.worker_id] = Some(stat.as_update());
+                                }
+                                Some(occupied) => occupied.incorporate(stat.as_update()),
+                            }
                         }
                     },
                 );
@@ -828,7 +935,12 @@ impl AggregatedStatistics {
                 self.global_sink_statistics.entry(stat.id).and_modify(
                     |(global_epoch, ref mut stats)| {
                         if epoch >= *global_epoch {
-                            stats.insert(stat.worker_id, stat);
+                            match &mut stats[stat.worker_id] {
+                                None => {
+                                    stats[stat.worker_id] = Some(stat.as_update());
+                                }
+                                Some(occupied) => occupied.incorporate(stat.as_update()),
+                            }
                         }
                     },
                 );
@@ -837,20 +949,20 @@ impl AggregatedStatistics {
     }
 
     fn _emit_local(
-        &self,
+        &mut self,
     ) -> (
-        Vec<(usize, SourceStatisticsUpdate)>,
-        Vec<(usize, SinkStatisticsUpdate)>,
+        Vec<(usize, SourceStatisticsRecord)>,
+        Vec<(usize, SinkStatisticsRecord)>,
     ) {
         let sources = self
             .local_source_statistics
-            .values()
+            .values_mut()
             .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
             .collect();
 
         let sinks = self
             .local_sink_statistics
-            .values()
+            .values_mut()
             .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
             .collect();
 
@@ -859,10 +971,10 @@ impl AggregatedStatistics {
 
     /// Emit a snapshot of this workers local data.
     pub fn emit_local(
-        &self,
+        &mut self,
     ) -> (
-        Vec<(usize, SourceStatisticsUpdate)>,
-        Vec<(usize, SinkStatisticsUpdate)>,
+        Vec<(usize, SourceStatisticsRecord)>,
+        Vec<(usize, SinkStatisticsRecord)>,
     ) {
         // As an optimization, worker 0 does not broadcast it data. It ingests
         // it in `snapshot`.
@@ -870,19 +982,7 @@ impl AggregatedStatistics {
             return (Vec::new(), Vec::new());
         }
 
-        let sources = self
-            .local_source_statistics
-            .values()
-            .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
-            .collect();
-
-        let sinks = self
-            .local_sink_statistics
-            .values()
-            .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
-            .collect();
-
-        (sources, sinks)
+        self._emit_local()
     }
 
     /// Emit a _global_ snapshot of data. This does not include objects whose workers have not
@@ -897,28 +997,46 @@ impl AggregatedStatistics {
 
         let sources = self
             .global_source_statistics
-            .values()
-            .filter_map(|(_, s)| {
-                if s.len() >= self.worker_count {
-                    Some(s.values().cloned())
+            .iter_mut()
+            .filter_map(|(_, (_, s))| {
+                if s.iter().all(|s| s.is_some()) {
+                    let ret = Some(SourceStatisticsUpdate::summarize(|| {
+                        s.iter().filter_map(Option::as_ref)
+                    }));
+
+                    // Reset the counters so we only report diffs.
+                    s.iter_mut().for_each(|s| {
+                        if let Some(s) = s {
+                            s.reset_counters();
+                        }
+                    });
+                    ret
                 } else {
                     None
                 }
             })
-            .flatten()
             .collect();
 
         let sinks = self
             .global_sink_statistics
-            .values()
-            .filter_map(|(_, s)| {
-                if s.len() >= self.worker_count {
-                    Some(s.values().cloned())
+            .iter_mut()
+            .filter_map(|(_, (_, s))| {
+                if s.iter().all(|s| s.is_some()) {
+                    let ret = Some(SinkStatisticsUpdate::summarize(|| {
+                        s.iter().filter_map(Option::as_ref)
+                    }));
+
+                    // Reset the counters so we only report diffs.
+                    s.iter_mut().for_each(|s| {
+                        if let Some(s) = s {
+                            s.reset_counters();
+                        }
+                    });
+                    ret
                 } else {
                     None
                 }
             })
-            .flatten()
             .collect();
 
         (sources, sinks)

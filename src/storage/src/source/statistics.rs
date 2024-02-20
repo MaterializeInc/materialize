@@ -47,8 +47,8 @@ pub fn process_statistics<G, FromTime>(
             );
 
             for d in data {
-                source_statistics.set_upstream_values(d.upstream_values);
-                source_statistics.set_committed_values(d.committed_values);
+                source_statistics.set_offset_known(d.offset_known);
+                source_statistics.set_offset_committed(d.offset_committed);
             }
         }
     });
