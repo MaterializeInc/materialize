@@ -64,6 +64,7 @@ class RepositoryDetails:
         release_mode: Whether the repository is being built in release mode.
         coverage: Whether the repository has code coverage instrumentation
             enabled.
+        asan: Whether to use address sanitizer
         cargo_workspace: The `cargo.Workspace` associated with the repository.
     """
 
@@ -73,11 +74,13 @@ class RepositoryDetails:
         arch: Arch,
         release_mode: bool,
         coverage: bool,
+        asan: bool,
     ):
         self.root = root
         self.arch = arch
         self.release_mode = release_mode
         self.coverage = coverage
+        self.asan = asan
         self.cargo_workspace = cargo.Workspace(root)
 
     def cargo(
@@ -221,13 +224,15 @@ class CargoPreImage(PreImage):
         }
 
     def extra(self) -> str:
-        # Cargo images depend on the release mode and whether coverage is
+        # Cargo images depend on the release mode and whether coverage/asan is
         # enabled.
         flags: list[str] = []
         if self.rd.release_mode:
             flags += "release"
         if self.rd.coverage:
             flags += "coverage"
+        if self.rd.asan:
+            flags += "asan"
         flags.sort()
         return ",".join(flags)
 
@@ -256,7 +261,13 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
-        rustflags = rustc_flags.coverage if rd.coverage else ["--cfg=tokio_unstable"]
+        rustflags = (
+            rustc_flags.coverage
+            if rd.coverage
+            else rustc_flags.asan
+            if rd.asan
+            else ["--cfg=tokio_unstable"]
+        )
 
         cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
 
@@ -267,6 +278,8 @@ class CargoBuild(CargoPreImage):
 
         if rd.release_mode:
             cargo_build.append("--release")
+        if rd.asan:
+            cargo_build.append("--no-default-features")
 
         return cargo_build
 
@@ -681,6 +694,7 @@ class ResolvedImage:
 
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
+        self_hash.update(f"aasan={self.image.rd.asan}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -806,6 +820,7 @@ class Repository:
         arch: The CPU architecture to build for.
         release_mode: Whether to build the repository in release mode.
         coverage: Whether to enable code coverage instrumentation.
+        asan: Whether to enable address sanitizer
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
@@ -818,8 +833,9 @@ class Repository:
         arch: Arch = Arch.host(),
         release_mode: bool = True,
         coverage: bool = False,
+        asan: bool = False,
     ):
-        self.rd = RepositoryDetails(root, arch, release_mode, coverage)
+        self.rd = RepositoryDetails(root, arch, release_mode, coverage, asan)
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
         for path, dirs, files in os.walk(self.root, topdown=True):
@@ -891,6 +907,12 @@ class Repository:
             action="store_true",
         )
         parser.add_argument(
+            "--asan",
+            help="whether to enable address sanitizer",
+            default=ui.env_is_truthy("CI_ASAN_ENABLED"),
+            action="store_true",
+        )
+        parser.add_argument(
             "--arch",
             default=Arch.host(),
             help="the CPU architecture to build for",
@@ -906,7 +928,11 @@ class Repository:
         `Repository.install_arguments`.
         """
         return cls(
-            root, release_mode=args.release, coverage=args.coverage, arch=args.arch
+            root,
+            release_mode=args.release,
+            coverage=args.coverage,
+            asan=args.asan,
+            arch=args.arch,
         )
 
     @property

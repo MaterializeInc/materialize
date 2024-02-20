@@ -18,6 +18,7 @@ RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
         curl \
+        llvm \
         postgresql-client-14 \
         tini \
         ssh \

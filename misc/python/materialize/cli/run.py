@@ -24,10 +24,16 @@ import psutil
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
 from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 from materialize.ui import UIError
+from materialize.xcompile import Arch
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
 REQUIRED_SERVICES = ["clusterd"]
 
+ASAN_TARGET = (
+    f"{Arch.host()}-unknown-linux-gnu"
+    if sys.platform.startswith("linux")
+    else f"{Arch.host()}-apple-darwin"
+)
 DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
 
 # sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
@@ -123,6 +129,12 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--asan",
+        help="Build with asan",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
         "--wrapper",
         help="Wrapper command for the program",
     )
@@ -147,9 +159,15 @@ def main() -> int:
             return build_retcode
 
         if args.release:
-            artifact_path = MZ_ROOT / "target" / "release"
+            if args.asan:
+                artifact_path = MZ_ROOT / "target" / ASAN_TARGET / "release"
+            else:
+                artifact_path = MZ_ROOT / "target" / "release"
         else:
-            artifact_path = MZ_ROOT / "target" / "debug"
+            if args.asan:
+                artifact_path = MZ_ROOT / "target" / ASAN_TARGET / "debug"
+            else:
+                artifact_path = MZ_ROOT / "target" / "debug"
 
         if args.disable_mac_codesigning:
             if sys.platform != "darwin":
@@ -308,6 +326,8 @@ def _build(
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
         )
+    if args.asan:
+        env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.asan)
     if args.features:
         features.extend(args.features.split(","))
     if features:
@@ -348,6 +368,8 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
         command += ["--timings"]
     if args.no_default_features:
         command += ["--no-default-features"]
+    if args.asan:
+        command += ["-Zbuild-std", "--target", ASAN_TARGET]
     return command
 
 

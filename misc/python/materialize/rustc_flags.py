@@ -21,3 +21,16 @@ coverage = [
     "-Cinstrument-coverage",
     "-Cllvm-args=-runtime-counter-relocation",
 ]
+
+asan = [
+    #"-Zsanitizer=address",
+    #"-Cllvm-args=-asan-use-after-scope",
+    #"-Cllvm-args=-asan-use-after-return=always",
+    #"-Cllvm-args=-asan-recover",
+    #"-Cllvm-args=-asan-stack=false",  # Remove when #25017 is fixed
+    # "-Zsanitizer-ignorelist=.config/sanitizer-ignorelist.txt",
+    "-Cdebug-assertions=on",
+    "-Zstrict-init-checks",
+    "-Zextra-const-ub-checks",
+    "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+]
