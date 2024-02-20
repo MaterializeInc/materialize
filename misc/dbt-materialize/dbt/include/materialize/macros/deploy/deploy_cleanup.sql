@@ -30,17 +30,19 @@
 {% set schemas = target_config.get('schemas', []) %}
 
 {% for schema in schemas %}
-    {{ log("Dropping schema " ~ schema.prod_deploy ~ " for target " ~ current_target_name, info=True) }}
+    {% set deploy_schema = schema ~ "_dbt_deploy" %}
+    {{ log("Dropping schema " ~ deploy_schema ~ " for target " ~ current_target_name, info=True) }}
     {% set drop_schema %}
-    DROP SCHEMA IF EXISTS {{ schema.prod_deploy }} CASCADE;
+    DROP SCHEMA IF EXISTS {{ deploy_schema }} CASCADE;
     {% endset %}
     {{ run_query(drop_schema) }}
 {% endfor %}
 
 {% for cluster in clusters %}
-    {{ log("Dropping cluster " ~ cluster.prod_deploy ~ " for target " ~ current_target_name, info=True) }}
+    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
+    {{ log("Dropping cluster " ~ deploy_cluster ~ " for target " ~ current_target_name, info=True) }}
     {% set drop_cluster %}
-    DROP CLUSTER IF EXISTS {{ cluster.prod_deploy }} CASCADE;
+    DROP CLUSTER IF EXISTS {{ deploy_cluster }} CASCADE;
     {% endset %}
     {{ run_query(drop_cluster) }}
 {% endfor %}

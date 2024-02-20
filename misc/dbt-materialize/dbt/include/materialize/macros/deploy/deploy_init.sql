@@ -32,26 +32,27 @@
 -- Check that all production schemas
 -- and clusters already exist
 {% for schema in schemas %}
-    {% if not schema_exists(schema.prod) %}
-        {{ exceptions.raise_compiler_error("Production schema " ~ schema.prod ~ " does not exist") }}
+    {% if not schema_exists(schema) %}
+        {{ exceptions.raise_compiler_error("Production schema " ~ schema ~ " does not exist") }}
     {% endif %}
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% if not cluster_exists(cluster.prod) %}
-        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " does not exist") }}
+    {% if not cluster_exists(cluster) %}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
     {% endif %}
 {% endfor %}
 
 {% for schema in schemas %}
-    {% if schema_exists(schema.prod_deploy) %}
-        {{ log("Deployment schema " ~ schema.prod_deploy ~ " already exists", info=True)}}
+    {% set deploy_schema = schema ~ "_dbt_deploy" %}
+    {% if schema_exists(deploy_schema) %}
+        {{ log("Deployment schema " ~ deploy_schema ~ " already exists", info=True)}}
         {% set schema_empty %}
             SELECT count(*)
             FROM mz_objects
             JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
             JOIN mz_databases ON mz_databases.id = mz_schemas.database_id
-            WHERE mz_schemas.name = lower(trim('{{ schema.prod_deploy }}'))
+            WHERE mz_schemas.name = lower(trim('{{ deploy_schema }}'))
                 AND mz_objects.id LIKE 'u%'
                 AND mz_databases.name = current_database()
         {% endset %}
@@ -60,11 +61,11 @@
         {% if execute %}
             {% if schema_object_count and schema_object_count.columns[0] and schema_object_count.rows[0][0] > 0 %}
                 {% if ignore_existing_objects %}
-                    {{ log("[Warning] Deployment schema " ~ schema.prod_deploy ~ " is not empty", info=True) }}
+                    {{ log("[Warning] Deployment schema " ~ deploy_schema ~ " is not empty", info=True) }}
                     {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
                 {% else %}
                     {{ exceptions.raise_compiler_error("""
-                        Deployment schema """ ~ schema.prod_deploy ~ """ already exists and is not empty.
+                        Deployment schema """ ~ deploy_schema ~ """ already exists and is not empty.
                         This is potentially dangerous as you may end up deploying objects to production you
                         do not intend.
 
@@ -78,44 +79,45 @@
         {% endif %}
 
     {% else %}
-        {{ log("Creating deployment schema " ~ schema.prod_deploy, info=True)}}
+        {{ log("Creating deployment schema " ~ deploy_schema, info=True)}}
         {% set create_schema %}
-        CREATE SCHEMA {{ schema.prod_deploy }};
+        CREATE SCHEMA {{ deploy_schema }};
         {% endset %}
         {{ run_query(create_schema) }}
     {% endif %}
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% if cluster_exists(cluster.prod_deploy) %}
-        {{ log("Deployment cluster " ~ cluster.prod_deploy ~ " already exists", info=True) }}
+    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}    
+    {% if cluster_exists(deploy_cluster) %}
+        {{ log("Deployment cluster " ~ deploy_cluster ~ " already exists", info=True) }}
         {% set cluster_empty %}
             WITH dataflows AS (
                 SELECT mz_indexes.id
                 FROM mz_indexes
                 JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
+                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
 
                 UNION ALL
 
                 SELECT mz_materialized_views.id
                 FROM mz_materialized_views
                 JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
+                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
 
                 UNION ALL
 
                 SELECT mz_sources.id
                 FROM mz_sources
                 JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-                WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
+                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
 
                 UNION ALL
 
                 SELECT mz_sinks.id
                 FROM mz_sinks
                 JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-                WHERE mz_clusters.name = lower(trim('{{ cluster.prod_deploy }}'))
+                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
             )
 
             SELECT count(*)
@@ -128,11 +130,11 @@
         {% if execute %}
             {% if cluster_object_count and cluster_object_count.columns[0] and cluster_object_count.rows[0][0] > 0 %}
                 {% if ignore_existing_objects %}
-                    {{ log("[Warning] Deployment cluster " ~ cluster.prod_deploy ~ " is not empty", info=True) }}
+                    {{ log("[Warning] Deployment cluster " ~ deploy_cluster ~ " is not empty", info=True) }}
                     {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
                 {% else %}
                     {{ exceptions.raise_compiler_error("""
-                        Deployment cluster """ ~ cluster.prod_deploy ~ """ already exists and is not empty.
+                        Deployment cluster """ ~ deploy_cluster ~ """ already exists and is not empty.
                         This is potentially dangerous as you may end up deploying objects to production you
                         do not intend.
 
@@ -146,11 +148,11 @@
         {% endif %}
 
     {% else %}
-        {{ log("Creating deployment cluster " ~ cluster.prod_deploy ~ " like cluster " ~ cluster.prod, info=True)}}
+        {{ log("Creating deployment cluster " ~ deploy_cluster ~ " like cluster " ~ cluster, info=True)}}
         {% set cluster_configuration %}
             SELECT managed, size, replication_factor
             FROM mz_clusters
-            WHERE name = lower(trim('{{ cluster.prod }}'))
+            WHERE name = lower(trim('{{ cluster }}'))
         {% endset %}
 
         {% set cluster_config_results = run_query(cluster_configuration) %}
@@ -163,11 +165,11 @@
             {% set replication_factor = results[2] %}
 
             {% if not managed %}
-                {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " is not managed") }}
+                {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " is not managed") }}
             {% endif %}
 
             {% set create_cluster %}
-                CREATE CLUSTER {{ cluster.prod_deploy }} (
+                CREATE CLUSTER {{ deploy_cluster }} (
                     SIZE = '{{ size }}',
                     REPLICATION FACTOR = {{ replication_factor }}
                 );

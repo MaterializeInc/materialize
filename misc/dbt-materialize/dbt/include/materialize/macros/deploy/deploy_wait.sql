@@ -13,26 +13,40 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_wait(cluster, poll_interval=15) %}
+{% macro deploy_wait(poll_interval=15) %}
 {#
-  Waits for all objects within a specified cluster to be fully hydrated,
+  Waits for all objects within the deployment clusters to be fully hydrated,
   polling the cluster's readiness status at a specified interval.
 
   ## Arguments
-  - `cluster_name` (string): The name of the cluster to check for readiness.
   - `poll_interval` (integer): The interval, in seconds, between each readiness check.
 
   ## Returns
   None: This macro does not return a value but will halt execution until the specified
   cluster's objects are fully hydrated.
 #}
-{% for i in range(1, 100000) %}
-    {% if is_cluster_ready(cluster) %}
-        {{ return(true) }}
-    {% endif %}
-    -- Hydration takes time. Be a good
-    -- citizen and don't overwhelm mz_introspection
-    {{ adapter.sleep(poll_interval) }}
+
+{% set current_target_name = target.name %}
+{% set deployment = var('deployment') %}
+{% set target_config = deployment[current_target_name] %}
+
+-- Check if the target-specific configuration exists
+{% if not target_config %}
+    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
+{% endif %}
+
+{% set clusters = target_config.get('clusters', []) %}
+
+{% for cluster in clusters %}
+    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
+    {% for i in range(1, 100000) %}
+        {% if is_cluster_ready(deploy_cluster) %}
+            {{ return(true) }}
+        {% endif %}
+        -- Hydration takes time. Be a good
+        -- citizen and don't overwhelm mz_introspection
+        {{ adapter.sleep(poll_interval) }}
+    {% endfor %}
+    {{ exceptions.raise_compiler_error("Cluster " ~ deploy_cluster ~ " failed to hydrate within a reasonable amount of time") }}
 {% endfor %}
-{{ exceptions.raise_compiler_error("Cluster " ~ cluster ~ " failed to hydrate within a reasonable amount of time") }}
 {% endmacro %}

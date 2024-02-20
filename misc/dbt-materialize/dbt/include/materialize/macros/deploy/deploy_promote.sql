@@ -49,40 +49,42 @@
 -- Check that all production schemas
 -- and clusters already exist
 {% for schema in schemas %}
-    {% if not schema_exists(schema.prod) %}
-        {{ exceptions.raise_compiler_error("Production schema " ~ schema.prod ~ " does not exist") }}
+    {% set deploy_schema = schema ~ "_dbt_deploy" %}
+    {% if not schema_exists(schema) %}
+        {{ exceptions.raise_compiler_error("Production schema " ~ schema ~ " does not exist") }}
     {% endif %}
-    {% if not schema_exists(schema.prod_deploy) %}
-        {{ exceptions.raise_compiler_error("Deployment schema " ~ schema.prod_deploy ~ " does not exist") }}
+    {% if not schema_exists(deploy_schema) %}
+        {{ exceptions.raise_compiler_error("Deployment schema " ~ deploy_schema ~ " does not exist") }}
     {% endif %}
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% if not cluster_exists(cluster.prod) %}
-        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster.prod ~ " does not exist") }}
+    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
+    {% if not cluster_exists(cluster) %}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
     {% endif %}
-    {% if not cluster_exists(cluster.prod_deploy) %}
-        {{ exceptions.raise_compiler_error("Deployment cluster " ~ cluster.prod_deploy ~ " does not exist") }}
+    {% if not cluster_exists(deploy_cluster) %}
+        {{ exceptions.raise_compiler_error("Deployment cluster " ~ deploy_cluster ~ " does not exist") }}
     {% endif %}
 {% endfor %}
 
 {% if wait %}
-    {% for cluster in clusters %}
-        {{ deploy_wait(cluster.prod_deploy, poll_interval) }}
-    {% endfor %}
+    {{ deploy_wait(poll_interval) }}
 {% endif %}
 
 {% call statement('swap', fetch_result=True, auto_begin=False) -%}
 BEGIN;
 
 {% for schema in schemas %}
-    {{ log("Swapping schemas " ~ schema.prod ~ " and " ~ schema.prod_deploy, info=True) }}
-    ALTER SCHEMA {{ schema.prod }} SWAP WITH {{ schema.prod_deploy }};
+    {% set deploy_schema = schema ~ "_dbt_deploy" %}
+    {{ log("Swapping schemas " ~ schema ~ " and " ~ deploy_schema, info=True) }}
+    ALTER SCHEMA {{ schema }} SWAP WITH {{ deploy_schema }};
 {% endfor %}
 
 {% for cluster in clusters %}
-    {{ log("Swapping clusters " ~ cluster.prod ~ " and " ~ cluster.prod_deploy, info=True) }}
-    ALTER CLUSTER {{ cluster.prod }} SWAP WITH {{ cluster.prod_deploy }};
+    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
+    {{ log("Swapping clusters " ~ cluster ~ " and " ~ deploy_cluster, info=True) }}
+    ALTER CLUSTER {{ cluster }} SWAP WITH {{ deploy_cluster }};
 {% endfor %}
 
 COMMIT;

@@ -20,18 +20,8 @@ project_deployment_configuration = {
     "vars": {
         "deployment": {
             "default": {
-                "clusters": [
-                    {
-                        "prod": "blue",
-                        "prod_deploy": "green",
-                    }
-                ],
-                "schemas": [
-                    {
-                        "prod": "blue",
-                        "prod_deploy": "green",
-                    }
-                ],
+                "clusters": ["blue"],
+                "schemas": ["blue"],
             }
         },
     }
@@ -46,25 +36,25 @@ class TestTargetDeploy:
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
         project.run_sql("DROP CLUSTER IF EXISTS blue CASCADE")
-        project.run_sql("DROP CLUSTER IF EXISTS green CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS blue_dbt_deploy CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS blue CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS green CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS blue_dbt_deploy CASCADE")
 
     def test_dbt_deploy(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA green")
+        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'green')",
+                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'blue_dbt_deploy')",
                 fetch="all",
             )
         )
         before_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'green')",
+                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'blue_dbt_deploy')",
                 fetch="all",
             )
         )
@@ -73,37 +63,37 @@ class TestTargetDeploy:
 
         after_clusters = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'green')",
+                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'blue_dbt_deploy')",
                 fetch="all",
             )
         )
         after_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'green')",
+                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'blue_dbt_deploy')",
                 fetch="all",
             )
         )
 
-        assert before_clusters["blue"] == after_clusters["green"]
-        assert before_clusters["green"] == after_clusters["blue"]
-        assert before_schemas["blue"] == after_schemas["green"]
-        assert before_schemas["blue"] == after_schemas["green"]
+        assert before_clusters["blue"] == after_clusters["blue_dbt_deploy"]
+        assert before_clusters["blue_dbt_deploy"] == after_clusters["blue"]
+        assert before_schemas["blue"] == after_schemas["blue_dbt_deploy"]
+        assert before_schemas["blue"] == after_schemas["blue_dbt_deploy"]
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA green")
+        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'green')",
+                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'blue_dbt_deploy')",
                 fetch="all",
             )
         )
         before_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'green')",
+                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'blue_dbt_deploy')",
                 fetch="all",
             )
         )
@@ -112,32 +102,32 @@ class TestTargetDeploy:
 
         after_clusters = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'green')",
+                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'blue_dbt_deploy')",
                 fetch="all",
             )
         )
         after_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'green')",
+                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'blue_dbt_deploy')",
                 fetch="all",
             )
         )
 
-        assert before_clusters["blue"] == after_clusters["green"]
-        assert before_clusters["green"] == after_clusters["blue"]
-        assert before_schemas["blue"] == after_schemas["green"]
-        assert before_schemas["blue"] == after_schemas["green"]
+        assert before_clusters["blue"] == after_clusters["blue_dbt_deploy"]
+        assert before_clusters["blue_dbt_deploy"] == after_clusters["blue"]
+        assert before_schemas["blue"] == after_schemas["blue_dbt_deploy"]
+        assert before_schemas["blue"] == after_schemas["blue_dbt_deploy"]
 
     def test_dbt_deploy_missing_deployment_cluster(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA green")
+        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_dbt_deploy_missing_deployment_schema(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
@@ -148,14 +138,14 @@ class TestTargetDeploy:
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
 
-    def test_dbt_create_and_destroy_deployment_environment(self, project):
+    def test_dbt_deploy_init_and_cleanup(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
 
         run_dbt(["run-operation", "deploy_init"])
 
         (size, replication_factor) = project.run_sql(
-            "SELECT size, replication_factor FROM mz_clusters WHERE name = 'green'",
+            "SELECT size, replication_factor FROM mz_clusters WHERE name = 'blue_dbt_deploy'",
             fetch="one",
         )
 
@@ -163,29 +153,34 @@ class TestTargetDeploy:
         assert replication_factor == "1"
 
         result = project.run_sql(
-            "SELECT count(*) = 1 FROM mz_schemas WHERE name = 'green'", fetch="one"
+            "SELECT count(*) = 1 FROM mz_schemas WHERE name = 'blue_dbt_deploy'",
+            fetch="one",
         )
         assert bool(result[0])
 
         run_dbt(["run-operation", "deploy_cleanup"])
 
         result = project.run_sql(
-            "SELECT count(*) = 0 FROM mz_clusters WHERE name = 'green'", fetch="one"
+            "SELECT count(*) = 0 FROM mz_clusters WHERE name = 'blue_dbt_deploy'",
+            fetch="one",
         )
         assert bool(result[0])
 
         result = project.run_sql(
-            "SELECT count(*) = 0 FROM mz_schemas WHERE name = 'green'", fetch="one"
+            "SELECT count(*) = 0 FROM mz_schemas WHERE name = 'blue_dbt_deploy'",
+            fetch="one",
         )
         assert bool(result[0])
 
     def test_cluster_contains_objects(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA green")
-        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
+        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
 
-        project.run_sql("CREATE MATERIALIZED VIEW mv IN CLUSTER green AS SELECT 1")
+        project.run_sql(
+            "CREATE MATERIALIZED VIEW mv IN CLUSTER blue_dbt_deploy AS SELECT 1"
+        )
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
         run_dbt(
@@ -200,10 +195,10 @@ class TestTargetDeploy:
     def test_schema_contains_objects(self, project):
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA green")
-        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
+        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
 
-        project.run_sql("CREATE VIEW green.view AS SELECT 1")
+        project.run_sql("CREATE VIEW blue_dbt_deploy.view AS SELECT 1")
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
         run_dbt(
