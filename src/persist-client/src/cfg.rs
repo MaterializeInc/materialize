@@ -160,7 +160,7 @@ impl PersistConfig {
     /// Returns a new instance of [PersistConfig] with default tuning and
     /// default ConfigSet.
     pub fn new_default_configs(build_info: &BuildInfo, now: NowFn) -> Self {
-        Self::new(build_info, now, all_dyn_configs(ConfigSet::default()))
+        Self::new(build_info, now, all_dyncfgs(ConfigSet::default()))
     }
 
     /// Returns a new instance of [PersistConfig] with default tuning and the
@@ -276,7 +276,7 @@ pub(crate) const MiB: usize = 1024 * 1024;
 /// TODO(cfg): Consider replacing this with a static global registry powered by
 /// something like the `ctor` or `inventory` crate. This would involve managing
 /// the footgun of a Config being linked into one binary but not the other.
-pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
+pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     mz_persist::cfg::all_dyn_configs(configs)
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::batch::BLOB_TARGET_SIZE)

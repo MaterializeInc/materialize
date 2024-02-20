@@ -262,7 +262,7 @@ mod proto {
 }
 
 /// Adds the full set of all persist-txn `Config`s.
-pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
+pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&crate::operator::DATA_SHARD_RETRYER_INITIAL_BACKOFF)
         .add(&crate::operator::DATA_SHARD_RETRYER_MULTIPLIER)

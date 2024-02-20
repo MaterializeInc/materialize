@@ -796,7 +796,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let mut persist_config = PersistConfig::new(
         &mz_environmentd::BUILD_INFO,
         now.clone(),
-        mz_sql::session::vars::all_dyn_configs(),
+        mz_dyncfgs::all_dyncfgs(),
     );
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();

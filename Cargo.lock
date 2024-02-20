@@ -4010,7 +4010,7 @@ dependencies = [
  "mz-cluster",
  "mz-compute",
  "mz-compute-client",
- "mz-dyncfg",
+ "mz-dyncfgs",
  "mz-http-util",
  "mz-metrics",
  "mz-orchestrator-tracing",
@@ -4214,6 +4214,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-dyncfgs"
+version = "0.0.0"
+dependencies = [
+ "mz-dyncfg",
+ "mz-persist-client",
+ "mz-persist-txn",
+ "prost-build",
+ "protobuf-src",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-environmentd"
 version = "0.89.0-dev"
 dependencies = [
@@ -4252,6 +4264,7 @@ dependencies = [
  "mz-catalog",
  "mz-cloud-resources",
  "mz-controller",
+ "mz-dyncfgs",
  "mz-environmentd",
  "mz-expr",
  "mz-frontegg-auth",
@@ -5539,6 +5552,7 @@ dependencies = [
  "mz-cloud-resources",
  "mz-controller-types",
  "mz-dyncfg",
+ "mz-dyncfgs",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -5650,6 +5664,7 @@ dependencies = [
  "mz-build-info",
  "mz-cloud-resources",
  "mz-controller",
+ "mz-dyncfgs",
  "mz-environmentd",
  "mz-orchestrator",
  "mz-orchestrator-process",
