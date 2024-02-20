@@ -55,3 +55,6 @@ contains:missing TABLES specification
   FOR SCHEMAS (dne);
 contains:database postgres missing referenced schemas
 detail:missing schemas: dne
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP SCHEMA other CASCADE;
