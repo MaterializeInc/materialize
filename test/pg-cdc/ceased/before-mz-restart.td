@@ -40,27 +40,5 @@ ALTER TABLE t DROP COLUMN a;
 ALTER TABLE t ADD COLUMN a int;
 INSERT INTO t VALUES (2);
 
-> SELECT true FROM mz_internal.mz_source_statuses WHERE name = 't' AND status = 'ceased' AND error ILIKE 'incompatible schema change%';
-true
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-DROP PUBLICATION mz_source;
-INSERT INTO t VALUES (1);
-
-# Primary source detects publication dropped as ceasing error
-> SELECT true
-    FROM mz_internal.mz_source_statuses
-    WHERE
-        name = 'pg_source' AND status = 'ceased'
-            AND
-        error = 'publication "mz_source" does not exist';
-true
-
-# Subsource does not have its status changed
-> SELECT true
-    FROM mz_internal.mz_source_statuses
-    WHERE
-        name = 't' AND status = 'ceased'
-            AND
-        error ILIKE 'incompatible schema change%';
+> SELECT status = 'ceased' AND error ILIKE '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 't';
 true

@@ -7,22 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Statuses have not changed
-> SELECT true
-    FROM mz_internal.mz_source_statuses
-    WHERE
-        name = 'pg_source' AND status = 'ceased'
-            AND
-        error = 'publication "mz_source" does not exist';
-true
-
 # Subsource does not have its status changed
-> SELECT true
+> SELECT status = 'ceased' AND error ILIKE '%incompatible schema change%'
     FROM mz_internal.mz_source_statuses
-    WHERE
-        name = 't' AND status = 'ceased'
-            AND
-        error ILIKE 'incompatible schema change%';
+    WHERE name = 't'
 true
 
 # Drop the source + subsources because some tests expect

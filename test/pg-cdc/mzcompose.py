@@ -24,10 +24,10 @@ SERVICES = [
 
 # Test that ceased statuses persist across restart
 def workflow_ceased_status(c: Composition, parser: WorkflowArgumentParser) -> None:
-    with c.override(Testdrive(no_reset=True)):
-        c.up("materialized", "postgres")
-        c.run_testdrive_files("ceased/before-mz-restart.td")
+    c.up("materialized", "postgres")
+    c.run_testdrive_files("ceased/before-mz-restart.td")
 
+    with c.override(Testdrive(no_reset=True)):
         # Restart mz
         c.kill("materialized")
         c.up("materialized")
@@ -109,10 +109,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.rm("postgres")
 
             if name == "default":
-                continue
-
-            if name == "ceased-status":
-                # TODO: https://github.com/MaterializeInc/materialize/issues/25198
                 continue
 
             with c.test_case(name):
