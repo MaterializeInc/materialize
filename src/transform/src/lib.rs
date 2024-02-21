@@ -32,6 +32,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
 use tracing::error;
 
+pub mod analysis;
 pub mod attribute;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
