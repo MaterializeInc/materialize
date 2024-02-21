@@ -179,7 +179,7 @@ def defs(
 @click.option("--with", "-w", "explain_flags", **Opt.explain_flags)
 @click.option("--stage", "-s", "explain_stages", **Opt.explain_stage)
 @click.option("--suffix", **Opt.explain_suffix)
-@is_documented_by(api.extract.defs)
+@is_documented_by(api.extract.plans)
 def plans(
     target: Path,
     database: str,
