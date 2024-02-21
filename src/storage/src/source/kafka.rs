@@ -731,7 +731,7 @@ impl SourceRender for KafkaSourceConnection {
                     stats_output
                         .give(
                             &stats_cap,
-                            ProgressStatisticsUpdate {
+                            ProgressStatisticsUpdate::SteadyState {
                                 offset_committed,
                                 offset_known,
                             },

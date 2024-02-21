@@ -46,9 +46,10 @@ pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) records_indexed: UIntGaugeVec,
     pub(crate) rehydration_latency_ms: IntGaugeVec,
 
-    // statistics that are not yet exposed to users.
     pub(crate) offset_known: UIntGaugeVec,
     pub(crate) offset_committed: UIntGaugeVec,
+    pub(crate) snapshot_records_known: UIntGaugeVec,
+    pub(crate) snapshot_records_staged: UIntGaugeVec,
 }
 
 impl SourceStatisticsMetricDefs {
@@ -104,6 +105,16 @@ impl SourceStatisticsMetricDefs {
                 help: "The total number of _values_ (source-defined unit) we have fully processed, and storage and committed.",
                 var_labels: ["source_id", "worker_id", "shard_id"],
             )),
+            snapshot_records_known: registry.register(metric!(
+                name: "mz_source_snapshot_records_known",
+                help: "The total number of records in the source's snapshot",
+                var_labels: ["source_id", "worker_id", "shard_id"],
+            )),
+            snapshot_records_staged: registry.register(metric!(
+                name: "mz_source_snapshot_records_staged",
+                help: "The total number of records read from the source's snapshot",
+                var_labels: ["source_id", "worker_id", "shard_id"],
+            )),
         }
     }
 }
@@ -123,9 +134,11 @@ pub struct SourceStatisticsMetrics {
     pub(crate) records_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
 
-    // statistics that are not yet exposed to users.
     pub(crate) offset_known: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) offset_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+
+    pub(crate) snapshot_records_known: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) snapshot_records_staged: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -198,6 +211,16 @@ impl SourceStatisticsMetrics {
                 parent_source_id.to_string(),
             ]),
             offset_committed: defs.offset_committed.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            snapshot_records_known: defs.snapshot_records_known.get_delete_on_drop_gauge(vec![
+                id.to_string(),
+                worker_id.to_string(),
+                parent_source_id.to_string(),
+            ]),
+            snapshot_records_staged: defs.snapshot_records_staged.get_delete_on_drop_gauge(vec![
                 id.to_string(),
                 worker_id.to_string(),
                 parent_source_id.to_string(),
@@ -716,6 +739,20 @@ impl SourceStatistics {
         let mut cur = self.stats.borrow_mut();
         cur.stats.offset_committed = Some(Some(value));
         cur.prom.offset_committed.set(value);
+    }
+
+    /// Set the `snapshot_records_known` stat to the given value.
+    pub fn set_snapshot_records_known(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.stats.snapshot_records_known = Some(Some(value));
+        cur.prom.snapshot_records_known.set(value);
+    }
+
+    /// Set the `snapshot_records_known` stat to the given value.
+    pub fn set_snapshot_records_staged(&self, value: u64) {
+        let mut cur = self.stats.borrow_mut();
+        cur.stats.snapshot_records_staged = Some(Some(value));
+        cur.prom.snapshot_records_staged.set(value);
     }
 }
 

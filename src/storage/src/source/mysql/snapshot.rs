@@ -95,7 +95,7 @@ use mz_timely_util::antichain::AntichainExt;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
-use tracing::trace;
+use tracing::{error, trace};
 
 use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlTableDesc, ER_NO_SUCH_TABLE};
 use mz_ore::metrics::MetricsFutureExt;
@@ -108,6 +108,7 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
+use crate::source::types::ProgressStatisticsUpdate;
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 use super::schemas::verify_schemas;
@@ -127,6 +128,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, RewindRequest>,
+    Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -137,6 +139,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let (mut rewinds_handle, rewinds) = builder.new_output();
     // Captures DefiniteErrors that affect the entire source, including all subsources
     let (mut definite_error_handle, definite_errors) = builder.new_output();
+
+    let (mut stats_output, stats_stream) = builder.new_output();
 
     // A global view of all exports that need to be snapshot by all workers. Note that this affects
     // `reader_snapshot_table_info` but must be kept separate from it because each worker needs to
@@ -175,7 +179,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let (button, transient_errors): (_, Stream<G, Rc<TransientError>>) =
         builder.build_fallible(move |caps| {
             Box::pin(async move {
-                let [data_cap_set, rewind_cap_set, definite_error_cap_set]: &mut [_; 3] =
+                let [data_cap_set, rewind_cap_set, definite_error_cap_set, stats_cap]: &mut [_; 4] =
                     caps.try_into().unwrap();
 
                 let id = config.id;
@@ -185,6 +189,21 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 if reader_snapshot_table_info.is_empty() {
                     trace!(%id, "timely-{worker_id} initializing table reader \
                                  with no tables to snapshot, exiting");
+                    if !export_indexes_to_snapshot.is_empty() {
+                        // Emit 0, to mark this worker as having started up correctly,
+                        // but having done no snapshotting. Otherwise leave
+                        // this not filled in (no snapshotting is occurring in this instance of
+                        // the dataflow).
+                        stats_output
+                            .give(
+                                &stats_cap[0],
+                                ProgressStatisticsUpdate::Snapshot {
+                                    records_known: 0,
+                                    records_staged: 0,
+                                },
+                            )
+                            .await;
+                    }
                     return Ok(());
                 } else {
                     trace!(%id, "timely-{worker_id} initializing table reader \
@@ -337,6 +356,33 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 for table in removed_tables {
                     reader_snapshot_table_info.remove(&table);
                 }
+
+                let snapshot_total = fetch_snapshot_size(
+                    &mut tx,
+                    reader_snapshot_table_info
+                        .values()
+                        .map(|(_, table_desc)| {
+                            (
+                                Ident::new_unchecked(table_desc.name.clone()).to_ast_string(),
+                                Ident::new_unchecked(table_desc.schema_name.clone())
+                                    .to_ast_string(),
+                            )
+                        })
+                        .collect(),
+                    metrics,
+                )
+                .await?;
+
+                stats_output
+                    .give(
+                        &stats_cap[0],
+                        ProgressStatisticsUpdate::Snapshot {
+                            records_known: snapshot_total,
+                            records_staged: 0,
+                        },
+                    )
+                    .await;
+
                 // This worker has nothing else to do
                 if reader_snapshot_table_info.is_empty() {
                     return Ok(());
@@ -353,24 +399,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 }
                 *rewind_cap_set = CapabilitySet::new();
 
-                record_table_sizes(
-                    &mut tx,
-                    metrics,
-                    reader_snapshot_table_info
-                        .values()
-                        .map(|(_, table_desc)| {
-                            (
-                                Ident::new_unchecked(table_desc.name.clone()).to_ast_string(),
-                                Ident::new_unchecked(table_desc.schema_name.clone())
-                                    .to_ast_string(),
-                            )
-                        })
-                        .collect(),
-                )
-                .await?;
-
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
+
+                let mut snapshot_staged = 0;
                 for (table, (output_index, table_desc)) in reader_snapshot_table_info {
                     let query = format!("SELECT * FROM {}", table.to_ast_string());
                     trace!(%id, "timely-{worker_id} reading snapshot from \
@@ -385,8 +417,36 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 ((output_index, Ok(packed_row)), GtidPartition::minimum(), 1),
                             )
                             .await;
+
+                        snapshot_staged += 1;
+                        // TODO(guswynn): does this 1000 need to be configurable?
+                        if snapshot_staged % 1000 == 0 {
+                            stats_output
+                                .give(
+                                    &stats_cap[0],
+                                    ProgressStatisticsUpdate::Snapshot {
+                                        records_known: snapshot_total,
+                                        records_staged: snapshot_staged,
+                                    },
+                                )
+                                .await;
+                        }
                     }
                 }
+                if snapshot_staged < snapshot_total {
+                    error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
+                                 bigger than records staged {snapshot_staged}");
+                    snapshot_staged = snapshot_total;
+                }
+                stats_output
+                    .give(
+                        &stats_cap[0],
+                        ProgressStatisticsUpdate::Snapshot {
+                            records_known: snapshot_total,
+                            records_staged: snapshot_staged,
+                        },
+                    )
+                    .await;
                 Ok(())
             })
         });
@@ -398,47 +458,38 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
-    (snapshot_updates, rewinds, errors, button.press_on_drop())
+    (
+        snapshot_updates,
+        rewinds,
+        stats_stream,
+        errors,
+        button.press_on_drop(),
+    )
 }
 
-/// Record the sizes of the tables being snapshotted in `MySqlSnapshotMetrics`.
-async fn record_table_sizes<Q>(
+/// Fetch the size of the snapshot on this worker.
+async fn fetch_snapshot_size<'a, Q>(
     conn: &mut Q,
-    metrics: MySqlSnapshotMetrics,
     // Tables and their schemas.
     tables: Vec<(String, String)>,
-) -> Result<(), anyhow::Error>
+    metrics: MySqlSnapshotMetrics,
+) -> Result<u64, anyhow::Error>
 where
     Q: Queryable,
 {
+    let mut total = 0;
     for (table, schema) in tables {
         let stats = collect_table_statistics(conn, &table, &schema).await?;
-        if let Some(estimate) = stats.estimate_count {
-            metrics.record_table_count(
-                table.clone(),
-                schema.clone(),
-                estimate,
-                stats.estimate_latency,
-            );
-        }
-        if let Some(count) = stats.count {
-            metrics.record_table_estimate(
-                table.clone(),
-                schema.clone(),
-                count,
-                stats.count_latency,
-            );
-        }
+        metrics.record_table_count_latency(table.clone(), schema.clone(), stats.count_latency);
+        total += stats.count;
     }
-    Ok(())
+    Ok(total)
 }
 
 #[derive(Default)]
 struct TableStatistics {
     count_latency: f64,
-    count: Option<u64>,
-    estimate_latency: f64,
-    estimate_count: Option<u64>,
+    count: u64,
 }
 
 async fn collect_table_statistics<Q>(
@@ -451,22 +502,13 @@ where
 {
     let mut stats = TableStatistics::default();
 
-    let estimate_row: Option<u64> = conn
-        .query_first(format!(
-            "SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES \
-            WHERE TABLE_NAME = '{table}' AND TABLE_SCHEMA = '{schema}'"
-        ))
-        .wall_time()
-        .set_at(&mut stats.estimate_latency)
-        .await?;
-    stats.estimate_count = estimate_row;
-
     let count_row: Option<u64> = conn
         .query_first(format!("SELECT COUNT(*) FROM {schema}.{table}"))
         .wall_time()
         .set_at(&mut stats.count_latency)
         .await?;
-    stats.count = count_row;
+    stats.count =
+        count_row.ok_or_else(|| anyhow::anyhow!("failed to COUNT(*) {schema}.{table}"))?;
 
     Ok(stats)
 }

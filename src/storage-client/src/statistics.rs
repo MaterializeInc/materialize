@@ -312,7 +312,9 @@ impl StorageMetric for Total {
         // A `Total` regressing to is a bug.
         if other.0 < self.0 {
             tracing::error!(
-                "boolean gauge for field {field_name} erroneously regressed from true to false",
+                "total gauge {field_name} erroneously regressed from {} to {}",
+                self.0,
+                other.0
             );
             return;
         }

@@ -97,7 +97,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
                 stats_output
                     .give(
                         &stats_cap,
-                        ProgressStatisticsUpdate {
+                        ProgressStatisticsUpdate::SteadyState {
                             offset_known: 0,
                             offset_committed: 0,
                         },
@@ -125,10 +125,9 @@ impl SourceRender for LoadGeneratorSourceConnection {
             let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
 
             let mut resume_uppers = std::pin::pin!(resume_uppers);
-            let mut statistics = ProgressStatisticsUpdate {
-                offset_known: 0,
-                offset_committed: 0,
-            };
+
+            let mut offset_known = 0;
+            let mut offset_committed = 0;
 
             while let Some((output, event)) = rows.next() {
                 match event {
@@ -149,8 +148,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
                             data_output.give(&cap, (message, offset, diff)).await;
                         }
 
-                        if offset.offset > statistics.offset_known {
-                            statistics.offset_known = offset.offset;
+                        if offset.offset > offset_known {
+                            offset_known = offset.offset;
                         }
                     }
                     Event::Progress(Some(offset)) => {
@@ -172,16 +171,24 @@ impl SourceRender for LoadGeneratorSourceConnection {
                                     Some(frontier) = resume_uppers.next() => {
                                         if let Some(offset) = frontier.as_option() {
                                             let total = offset.offset.saturating_sub(1);
-                                            if total > statistics.offset_committed{
+                                            if total > offset_committed{
                                                 // Note we don't subtract from the upper, as we
                                                 // want to report total number of offsets we have processed.
-                                                statistics.offset_committed = total;
+                                                offset_committed = total;
                                             }
                                         }
                                     }
                                 }
                             }
-                            stats_output.give(&stats_cap, statistics.clone()).await;
+                            stats_output
+                                .give(
+                                    &stats_cap,
+                                    ProgressStatisticsUpdate::SteadyState {
+                                        offset_known,
+                                        offset_committed,
+                                    },
+                                )
+                                .await;
                         }
                     }
                     Event::Progress(None) => return,
