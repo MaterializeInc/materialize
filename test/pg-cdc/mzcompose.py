@@ -12,27 +12,32 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
     Testdrive(),
     TestCerts(),
+    Toxiproxy(),
     # Set the max slot WAL keep size to 10MB
     Postgres(extra_command=["-c", "max_slot_wal_keep_size=10"]),
 ]
 
-
-# Test that ceased statuses persist across restart
-def workflow_ceased_status(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("materialized", "postgres")
-    c.run_testdrive_files("ceased/before-mz-restart.td")
+# Test that how subsource statuses work across a variety of scenarios
+def workflow_statuses(c: Composition, parser: WorkflowArgumentParser) -> None:
+    c.up("materialized", "postgres", "toxiproxy")
+    c.run_testdrive_files("status/01-setup.td")
 
     with c.override(Testdrive(no_reset=True)):
         # Restart mz
         c.kill("materialized")
         c.up("materialized")
 
-        c.run_testdrive_files("ceased/after-mz-restart.td")
+        c.run_testdrive_files(
+            "status/02-after-mz-restart.td",
+            "status/03-toxiproxy-interrupt.td",
+            "status/04-drop-publication.td",
+        )
 
 
 def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:

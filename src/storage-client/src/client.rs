@@ -331,10 +331,10 @@ impl Status {
     /// status.
     pub fn superseded_by(self, new: Status) -> bool {
         match (self, new) {
-            (Status::Dropped, _) => false,
             (_, Status::Dropped) => true,
-            (Status::Ceased, _) => false,
+            (Status::Dropped, _) => false,
             (_, Status::Ceased) => true,
+            (Status::Ceased, _) => false,
             // Don't re-mark that object as paused.
             (Status::Paused, Status::Paused) => false,
             // De-duplication of other statuses is currently managed by the
