@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from importlib import resources
 from pathlib import Path
@@ -34,7 +35,7 @@ class ExplainFormat(Enum):
     def __str__(self):
         return self.name
 
-    def suffix(self):
+    def ext(self):
         if self == ExplainFormat.JSON:
             return "json"
 
@@ -102,6 +103,114 @@ class ItemType(str, Enum):
     SOURCE = "source"
     TABLE = "table"
     VIEW = "view"
+    TYPE = "type"
+
+    def sql(self) -> str:
+        """Return the SQL string corresponding to this item type."""
+        return self.replace("-", " ").upper()
+
+
+@dataclass(frozen=True)
+class CreateFile:
+    database: str
+    schema: str
+    name: str
+    item_type: ItemType
+
+    def file_name(self) -> str:
+        return f"{self.name}.sql"
+
+    def folder(self) -> Path:
+        return Path(self.item_type.value, self.database, self.schema)
+
+    def path(self) -> Path:
+        return self.folder() / self.file_name()
+
+    def __str__(self) -> str:
+        return str(self.path())
+
+    def skip(self) -> bool:
+        if self.item_type == ItemType.SOURCE:
+            return self.name.endswith("_progress")
+        else:
+            return False
+
+
+@dataclass(frozen=True)
+class ExplainFile:
+    database: str
+    schema: str
+    name: str
+    suffix: str | None
+    item_type: ItemType
+    explainee_type: ExplaineeType
+    stage: ExplainStage
+    ext: str
+
+    def file_name(self) -> str:
+        return ".".join(
+            str(part)
+            for part in [
+                self.name,
+                self.explainee_type,
+                self.stage.name.lower(),
+                self.suffix,
+                "json" if self.stage == ExplainStage.OPTIMIZER_TRACE else self.ext,
+            ]
+            if part
+        )
+
+    def folder(self) -> Path:
+        return Path(self.item_type.value, self.database, self.schema)
+
+    def path(self) -> Path:
+        return self.folder() / self.file_name()
+
+    def __str__(self) -> str:
+        return str(self.path())
+
+
+def explain_file(path: Path) -> ExplainFile | None:
+    filename = path.name.split(".")
+
+    if len(filename) == 5:
+        ext = filename.pop()
+        suffix = filename.pop()
+        stage = filename.pop()
+        explainee_type = filename.pop()
+        name = filename.pop()
+    elif len(filename) == 4:
+        ext = filename.pop()
+        suffix = None
+        stage = filename.pop()
+        explainee_type = filename.pop()
+        name = filename.pop()
+    else:
+        return None
+
+    parents = list(path.parents)
+    parents.reverse()
+    schema = parents.pop().name
+    database = parents.pop().name
+    item_type = parents.pop().name
+
+    try:
+        return ExplainFile(
+            database=database,
+            schema=schema,
+            name=name,
+            suffix=suffix,
+            item_type=ItemType(item_type.lower()),
+            explainee_type=ExplaineeType[explainee_type.upper()],
+            stage=ExplainStage[stage.upper()],
+            ext=ext,
+        )
+    except (KeyError, ValueError):
+        return None
+
+
+def explain_diff(base: ExplainFile, diff_suffix: str) -> ExplainFile:
+    return replace(base, suffix=diff_suffix)
 
 
 def resource_path(name: str) -> Path:

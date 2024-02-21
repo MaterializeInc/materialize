@@ -13,6 +13,7 @@ from typing import Any
 import click
 
 import materialize.mzexplore as api
+import materialize.mzexplore.common as common
 
 # import logging
 # logging.basicConfig(encoding='utf-8', level=logging.DEBUG)
@@ -36,7 +37,29 @@ class Arg:
             readable=True,
             resolve_path=True,
         ),
-        callback=lambda ctx, param, value: Path(value),
+        callback=lambda ctx, param, value: Path(value),  # type: ignore
+    )
+
+    summary_file: dict[str, Any] = dict(
+        type=click.Path(
+            exists=False,
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            readable=True,
+            resolve_path=True,
+        ),
+        callback=lambda ctx, param, value: Path(value),  # type: ignore
+    )
+
+    base_suffix: dict[str, Any] = dict(
+        type=str,
+        metavar="BASE",
+    )
+
+    diff_suffix: dict[str, Any] = dict(
+        type=str,
+        metavar="DIFF",
     )
 
 
@@ -79,7 +102,7 @@ class Opt:
     explainee_type = dict(
         type=click.Choice([v.name.lower() for v in list(api.ExplaineeType)]),
         default="all",  # We should have at least arity for good measure.
-        callback=lambda ctx, param, v: api.ExplaineeType[v.upper()],
+        callback=lambda ctx, param, v: api.ExplaineeType[v.upper()],  # type: ignore
         help="EXPLAIN mode.",
         metavar="MODE",
     )
@@ -88,7 +111,7 @@ class Opt:
         type=click.Choice([v.name.lower() for v in list(api.ExplainFlag)]),
         multiple=True,
         default=["arity"],  # We should have at least arity for good measure.
-        callback=lambda ctx, param, vals: [api.ExplainFlag[v.upper()] for v in vals],
+        callback=lambda ctx, param, vals: [api.ExplainFlag[v.upper()] for v in vals],  # type: ignore
         help="WITH flag to pass to the EXPLAIN command.",
         metavar="FLAG",
     )
@@ -97,7 +120,7 @@ class Opt:
         type=click.Choice([str(v.name.lower()) for v in list(api.ExplainStage)]),
         multiple=True,
         default=["optimized_plan"],  # Most often we'll only the optimized plan.
-        callback=lambda ctx, param, vals: [api.ExplainStage[v.upper()] for v in vals],
+        callback=lambda ctx, param, vals: [api.ExplainStage[v.upper()] for v in vals],  # type: ignore
         help="EXPLAIN stage to export.",
         metavar="STAGE",
     )
@@ -111,8 +134,8 @@ class Opt:
 
     explain_format = dict(
         type=click.Choice([str(v.name.lower()) for v in list(api.ExplainFormat)]),
-        default=["TEXT"],
-        callback=lambda ctx, param, v: api.ExplainFormat[v.upper()],
+        default="text",
+        callback=lambda ctx, param, v: api.ExplainFormat[v.upper()],  # type: ignore
         help="AS [FORMAT] clause to pass to the EXPLAIN command.",
         metavar="FORMAT",
     )
@@ -170,6 +193,9 @@ def defs(
             mzfmt,
         )
     except Exception as e:
+        import traceback
+
+        traceback.print_tb(e.__traceback__)
         raise click.ClickException(f"extract defs command failed: {e=}, {type(e)=}")
 
 
@@ -223,7 +249,51 @@ def plans(
             suffix,
         )
     except Exception as e:
+        import traceback
+
+        traceback.print_tb(e.__traceback__)
         raise click.ClickException(f"extract plans command failed: {e=}, {type(e)=}")
+
+
+@app.group()
+@is_documented_by(api.analyze)
+def analyze() -> None:
+    pass
+
+
+@analyze.command()
+@click.argument("target", **Arg.repository)  # type: ignore
+@click.argument("summary_file", **Arg.summary_file)  # type: ignore
+@click.argument("base_suffix", **Arg.base_suffix)
+@click.argument("diff_suffix", **Arg.diff_suffix)
+@is_documented_by(api.analyze.changes)
+def changes(
+    target: Path,
+    summary_file: Path,
+    base_suffix: str,
+    diff_suffix: str,
+) -> None:
+    """
+    Prepare an analysis report of plan changes as a Markdown document.
+    """
+
+    try:
+        with summary_file.open("a+", encoding="utf-8") as out:
+            api.analyze.changes(
+                out=out,
+                target=target,
+                header_name=str(target),
+                base_suffix=base_suffix,
+                diff_suffix=diff_suffix,
+            )
+            common.info(f"Summary written to {summary_file}")
+
+    except Exception as e:
+        import traceback
+
+        traceback.print_tb(e.__traceback__)
+        msg = f"analyze changes command failed: {e=}, {type(e)=}"
+        raise click.ClickException(msg) from e
 
 
 # Entrypoint
