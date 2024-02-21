@@ -15,13 +15,12 @@
 
 import pytest
 from dbt.tests.util import run_dbt
-
 from fixtures import (
     test_materialized_view,
     test_materialized_view_index,
-    test_view_index,
-    test_source,
     test_sink,
+    test_source,
+    test_view_index,
 )
 
 
@@ -132,8 +131,8 @@ class TestTargetDeploy:
             "vars": {
                 "deployment": {
                     "default": {
-                        "clusters": ["blue"],
-                        "schemas": ["blue"],
+                        "clusters": ["prod"],
+                        "schemas": ["prod"],
                     }
                 },
             }
@@ -141,26 +140,26 @@ class TestTargetDeploy:
 
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
-        project.run_sql("DROP CLUSTER IF EXISTS blue CASCADE")
-        project.run_sql("DROP CLUSTER IF EXISTS blue_dbt_deploy CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS blue CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS blue_dbt_deploy CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
 
     def test_dbt_deploy(self, project):
-        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
-        project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'blue_dbt_deploy')",
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
                 fetch="all",
             )
         )
         before_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'blue_dbt_deploy')",
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
                 fetch="all",
             )
         )
@@ -169,37 +168,37 @@ class TestTargetDeploy:
 
         after_clusters = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'blue_dbt_deploy')",
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
                 fetch="all",
             )
         )
         after_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'blue_dbt_deploy')",
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
                 fetch="all",
             )
         )
 
-        assert before_clusters["blue"] == after_clusters["blue_dbt_deploy"]
-        assert before_clusters["blue_dbt_deploy"] == after_clusters["blue"]
-        assert before_schemas["blue"] == after_schemas["blue_dbt_deploy"]
-        assert before_schemas["blue"] == after_schemas["blue_dbt_deploy"]
+        assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
+        assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
+        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
 
     def test_dbt_deploy_with_force(self, project):
-        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
-        project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'blue_dbt_deploy')",
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
                 fetch="all",
             )
         )
         before_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'blue_dbt_deploy')",
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
                 fetch="all",
             )
         )
@@ -208,50 +207,50 @@ class TestTargetDeploy:
 
         after_clusters = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_clusters WHERE name IN ('blue', 'blue_dbt_deploy')",
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
                 fetch="all",
             )
         )
         after_schemas = dict(
             project.run_sql(
-                "SELECT name, id FROM mz_schemas WHERE name IN ('blue', 'blue_dbt_deploy')",
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
                 fetch="all",
             )
         )
 
-        assert before_clusters["blue"] == after_clusters["blue_dbt_deploy"]
-        assert before_clusters["blue_dbt_deploy"] == after_clusters["blue"]
-        assert before_schemas["blue"] == after_schemas["blue_dbt_deploy"]
-        assert before_schemas["blue"] == after_schemas["blue_dbt_deploy"]
+        assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
+        assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
+        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
 
     def test_dbt_deploy_missing_deployment_cluster(self, project):
-        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_dbt_deploy_missing_deployment_schema(self, project):
-        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
-        project.run_sql("CREATE SCHEMA blue")
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE SCHEMA prod")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_fails_on_unmanaged_cluster(self, project):
-        project.run_sql("CREATE CLUSTER blue REPLICAS ()")
-        project.run_sql("CREATE SCHEMA blue")
+        project.run_sql("CREATE CLUSTER prod REPLICAS ()")
+        project.run_sql("CREATE SCHEMA prod")
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
 
     def test_dbt_deploy_init_and_cleanup(self, project):
-        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE SCHEMA blue")
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE SCHEMA prod")
 
         run_dbt(["run-operation", "deploy_init"])
 
         (size, replication_factor) = project.run_sql(
-            "SELECT size, replication_factor FROM mz_clusters WHERE name = 'blue_dbt_deploy'",
+            "SELECT size, replication_factor FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
             fetch="one",
         )
 
@@ -259,7 +258,7 @@ class TestTargetDeploy:
         assert replication_factor == "1"
 
         result = project.run_sql(
-            "SELECT count(*) = 1 FROM mz_schemas WHERE name = 'blue_dbt_deploy'",
+            "SELECT count(*) = 1 FROM mz_schemas WHERE name = 'prod_dbt_deploy'",
             fetch="one",
         )
         assert bool(result[0])
@@ -267,25 +266,25 @@ class TestTargetDeploy:
         run_dbt(["run-operation", "deploy_cleanup"])
 
         result = project.run_sql(
-            "SELECT count(*) = 0 FROM mz_clusters WHERE name = 'blue_dbt_deploy'",
+            "SELECT count(*) = 0 FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
             fetch="one",
         )
         assert bool(result[0])
 
         result = project.run_sql(
-            "SELECT count(*) = 0 FROM mz_schemas WHERE name = 'blue_dbt_deploy'",
+            "SELECT count(*) = 0 FROM mz_schemas WHERE name = 'prod_dbt_deploy'",
             fetch="one",
         )
         assert bool(result[0])
 
     def test_cluster_contains_objects(self, project):
-        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
-        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
 
         project.run_sql(
-            "CREATE MATERIALIZED VIEW mv IN CLUSTER blue_dbt_deploy AS SELECT 1"
+            "CREATE MATERIALIZED VIEW mv IN CLUSTER prod_dbt_deploy AS SELECT 1"
         )
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
@@ -299,12 +298,12 @@ class TestTargetDeploy:
         )
 
     def test_schema_contains_objects(self, project):
-        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA blue_dbt_deploy")
-        project.run_sql("CREATE CLUSTER blue_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
 
-        project.run_sql("CREATE VIEW blue_dbt_deploy.view AS SELECT 1")
+        project.run_sql("CREATE VIEW prod_dbt_deploy.view AS SELECT 1")
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
         run_dbt(
