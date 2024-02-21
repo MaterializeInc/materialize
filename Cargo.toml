@@ -104,6 +104,10 @@ members = [
     "src/regexp",
 ]
 
+# Here we should specify our high level binaries to prevent folks from needing to take extra steps
+# like updating git submodules when building the workspace without a target specified.
+default-members = ["src/clusterd", "src/environmentd", "src/balancerd"]
+
 exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
     #  invalidations for the core Mz crates.
