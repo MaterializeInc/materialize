@@ -158,8 +158,10 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
                 assert len(groups) == 1, f"Expected only 1 element in {groups}"
                 group, issue_id = groups[0]
 
+                is_referenced_with_url = "issues/" in issue_match.group(0)
+
                 # Explain plans can look like issue references
-                if int(issue_id) < 10:
+                if int(issue_id) < 100 and not is_referenced_with_url:
                     continue
 
                 issue_refs.append(
