@@ -21,8 +21,12 @@ def get(
     request_path: str, params: dict[str, str], max_fetches: int | None
 ) -> list[Any]:
     headers = {}
-    if token := os.getenv("BUILDKITE_TOKEN"):
+    token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
+
+    if token is not None and len(token) > 0:
         headers["Authorization"] = f"Bearer {token}"
+    else:
+        print("Authentication token is not specified or empty!")
 
     url = f"{BUILDKITE_API_URL}/{request_path}"
     results = []
@@ -55,3 +59,26 @@ def get(
             break
 
     return results
+
+
+def fetch_builds(
+    pipeline_slug: str,
+    max_fetches: int | None,
+    branch: str | None,
+    build_state: str | None,
+    items_per_page: int = 100,
+    include_retries: bool = True,
+) -> list[Any]:
+    request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
+    params = {
+        "include_retried_jobs": str(include_retries).lower(),
+        "per_page": str(items_per_page),
+    }
+
+    if branch is not None:
+        params["branch"] = branch
+
+    if build_state is not None:
+        params["state"] = build_state
+
+    return get(request_path, params, max_fetches=max_fetches)

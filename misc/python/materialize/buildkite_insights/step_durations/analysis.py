@@ -10,13 +10,15 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
-from materialize.buildkite_insights.util import buildkite_api
+from materialize.buildkite_insights.step_durations.build_step import (
+    BuildStepOutcome,
+    extract_build_step_data,
+)
+from materialize.buildkite_insights.util.buildkite_api import fetch_builds
 from materialize.buildkite_insights.util.data_io import (
     ensure_temp_dir_exists,
     exists_file_with_recent_data,
@@ -64,17 +66,6 @@ MZ_PIPELINES = [
 ]
 
 
-@dataclass
-class StepData:
-    step_key: str
-    build_number: int
-    created_at: datetime
-    duration_in_min: float | None
-    passed: bool
-    exit_status: int | None
-    retry_count: int
-
-
 def get_data(
     pipeline_slug: str,
     fetch_mode: str,
@@ -101,80 +92,19 @@ def get_data(
         print(f"Using existing data: {file_path}")
         return read_results_from_file(file_path)
 
-    request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
-    params = {"include_retried_jobs": "true", "per_page": str(items_per_page)}
-
-    if branch is not None:
-        params["branch"] = branch
-
-    if build_state is not None:
-        params["state"] = build_state
-
-    result = buildkite_api.get(request_path, params, max_fetches=max_fetches)
+    result = fetch_builds(
+        pipeline_slug=pipeline_slug,
+        max_fetches=max_fetches,
+        branch=branch,
+        build_state=build_state,
+        items_per_page=items_per_page,
+    )
     write_results_to_file(result, file_path)
     return result
 
 
-def get_step_infos_from_build(build: Any, build_step_keys: list[str]) -> list[StepData]:
-    collected_steps = []
-
-    for job in build["jobs"]:
-        if not job.get("step_key"):
-            continue
-
-        if build_step_keys is not None and job["step_key"] not in build_step_keys:
-            continue
-
-        if job["state"] in ["canceled", "running"]:
-            continue
-
-        build_number = build["number"]
-        created_at = datetime.fromisoformat(job["created_at"])
-        build_step_key = job["step_key"]
-
-        if job.get("started_at") and job.get("finished_at"):
-            started_at = datetime.fromisoformat(job["started_at"])
-            finished_at = datetime.fromisoformat(job["finished_at"])
-            duration_in_min = (finished_at - started_at).total_seconds() / 60
-        else:
-            duration_in_min = None
-
-        job_passed = job["state"] == "passed"
-        exit_status = job["exit_status"]
-        retry_count = job["retries_count"] or 0
-
-        assert (
-            not job_passed or duration_in_min is not None
-        ), "Duration must be available for passed step"
-
-        step_data = StepData(
-            build_step_key,
-            build_number,
-            created_at,
-            duration_in_min,
-            job_passed,
-            exit_status=exit_status,
-            retry_count=retry_count,
-        )
-        collected_steps.append(step_data)
-
-    return collected_steps
-
-
-def collect_data(
-    data: list[Any],
-    build_step_keys: list[str],
-) -> list[StepData]:
-    result = []
-    for build in data:
-        step_infos = get_step_infos_from_build(build, build_step_keys)
-        result.extend(step_infos)
-
-    return result
-
-
 def print_data(
-    step_infos: list[StepData],
+    step_infos: list[BuildStepOutcome],
     pipeline_slug: str,
     build_step_keys: list[str],
     output_type: str,
@@ -209,7 +139,7 @@ def print_data(
 
 
 def print_stats(
-    step_infos: list[StepData],
+    step_infos: list[BuildStepOutcome],
     build_step_keys: list[str],
 ) -> None:
     if len(step_infos) == 0:
@@ -252,8 +182,10 @@ def main(
     build_state: str | None,
     output_type: str,
 ) -> None:
-    data = get_data(pipeline_slug, fetch_mode, max_fetches, branch, build_state)
-    step_infos = collect_data(data, build_step_keys)
+    builds_data = get_data(pipeline_slug, fetch_mode, max_fetches, branch, build_state)
+    step_infos = extract_build_step_data(
+        builds_data=builds_data, selected_build_steps=build_step_keys
+    )
     print_data(step_infos, pipeline_slug, build_step_keys, output_type)
 
 
@@ -292,7 +224,7 @@ if __name__ == "__main__":
 
     main(
         args.pipeline,
-        args.build_step_key,
+        args.build_step_key or [],
         args.fetch,
         args.max_fetches,
         args.branch if args.branch != "*" else None,

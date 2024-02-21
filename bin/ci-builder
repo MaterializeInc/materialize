@@ -203,6 +203,7 @@ case "$cmd" in
             --env AWS_DEFAULT_REGION
             --env AWS_SECRET_ACCESS_KEY
             --env AWS_SESSION_TOKEN
+            --env BUILDKITE_CI_API_KEY
             --env CI
             --env CI_COVERAGE_ENABLED
             --env CI_FINAL_PREFLIGHT_CHECK_VERSION
