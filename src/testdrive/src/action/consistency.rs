@@ -117,8 +117,7 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
         .await
         .context("querying coordinator")?;
     if response.status() == StatusCode::NOT_FOUND {
-        tracing::info!("Coordinator consistency check not available");
-        return Ok(());
+        bail!("Coordinator consistency check not available");
     }
 
     let inconsistencies: serde_json::Value =
@@ -138,6 +137,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
         .map(|catalog| catalog.dump().expect("state must be dumpable"));
     let Some(disk_catalog) = maybe_disk_catalog else {
+        // TODO(parkmycar): Ideally this could be an error, but a lot of test suites fail.
         tracing::warn!("No Catalog state on disk, skipping consistency check");
         return Ok(());
     };
@@ -175,6 +175,7 @@ async fn check_shard_tombstoned(state: &State, shard_id: &str) -> Result<(), any
     let (Some(consensus_uri), Some(blob_uri)) =
         (&state.persist_consensus_url, &state.persist_blob_url)
     else {
+        // TODO(parkmycar): Testdrive on Cloud Test doesn't currently supply the Persist URLs.
         tracing::warn!("Persist consensus or blob URL not known");
         return Ok(());
     };
