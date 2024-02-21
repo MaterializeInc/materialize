@@ -63,9 +63,13 @@ def fetch_builds(
     branch: str | None,
     build_state: str | None,
     items_per_page: int = 100,
+    include_retries: bool = True,
 ) -> list[Any]:
     request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
-    params = {"include_retried_jobs": "true", "per_page": str(items_per_page)}
+    params = {
+        "include_retried_jobs": str(include_retries).lower(),
+        "per_page": str(items_per_page),
+    }
 
     if branch is not None:
         params["branch"] = branch
