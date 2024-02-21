@@ -7,10 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+{
+  "name": "postgres",
+  "listen": "0.0.0.0:5432",
+  "upstream": "postgres:5432",
+  "enabled": true
+}
+
 > CREATE SECRET pgpass AS 'postgres'
 
 > CREATE CONNECTION pg TO POSTGRES (
-    HOST postgres,
+    HOST toxiproxy,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
@@ -40,5 +48,18 @@ ALTER TABLE t DROP COLUMN a;
 ALTER TABLE t ADD COLUMN a int;
 INSERT INTO t VALUES (2);
 
-> SELECT status = 'ceased' AND error ILIKE '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 't';
+> SELECT name, status FROM mz_internal.mz_source_statuses;
+pg_source           running
+pg_source_progress  running
+t                   ceased
+
+> SELECT
+        status = 'ceased'
+            AND
+        error ILIKE '%incompatible schema change%'
+    FROM mz_internal.mz_source_statuses
+    WHERE name = 't';
 true
+
+! SELECT * FROM t;
+contains: incompatible schema change

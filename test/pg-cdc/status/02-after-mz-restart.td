@@ -13,7 +13,5 @@
     WHERE name = 't'
 true
 
-# Drop the source + subsources because some tests expect
-# all remaining sources at the end of the test to be
-# healthy.
-> DROP SOURCE pg_source;
+! SELECT * FROM t;
+contains:incompatible schema change
