@@ -61,9 +61,6 @@ where
 
 /// Ensures that the specified table is still compatible with the current upstream schema
 /// and that it has not been dropped.
-///
-/// TODO: Implement real compatibility checks and don't error on backwards-compatible
-/// schema changes
 fn verify_schema(
     table: &UnresolvedItemName,
     expected_desc: &MySqlTableDesc,
@@ -73,11 +70,8 @@ fn verify_schema(
         .get(table)
         .ok_or_else(|| DefiniteError::TableDropped(table.to_ast_string()))?;
 
-    if current_desc != expected_desc {
-        return Err(DefiniteError::IncompatibleSchema(format!(
-            "expected: {:#?}, actual: {:#?}",
-            expected_desc, current_desc
-        )));
+    match expected_desc.determine_compatibility(current_desc) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
     }
-    Ok(())
 }

@@ -37,6 +37,6 @@ INSERT INTO other VALUES (1), (2), (3);
 # Now alter the dummy table
 $ mysql-execute name=mysql
 USE public;
-ALTER TABLE dummy ADD COLUMN f3 varchar(2);
+ALTER TABLE dummy DROP COLUMN f2;
 
 # Now restart MZ
