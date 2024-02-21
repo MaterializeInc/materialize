@@ -96,6 +96,7 @@ pub(super) async fn handle_query_event(
                     ctx.errored_tables.insert(table.clone());
                 }
             }
+
         // Detect `DROP TABLE [IF EXISTS] <tbl>, <tbl>` statements. Since
         // this can drop multiple tables we just check all tables we care about
         } else if first.eq_ignore_ascii_case("drop") && second.eq_ignore_ascii_case("table") {

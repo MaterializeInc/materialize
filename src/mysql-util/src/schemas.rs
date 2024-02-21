@@ -99,7 +99,9 @@ where
         }
         SchemaRequest::Schemas(schemas) => {
             // Get all tables of type 'Base Table' in specified schemas
-            assert!(!schemas.is_empty());
+            if schemas.is_empty() {
+                return Ok(vec![]);
+            }
             let table_q = format!(
                 "SELECT table_name, table_schema
                 FROM information_schema.tables
@@ -111,7 +113,9 @@ where
         }
         SchemaRequest::Tables(tables) => {
             // Get all specified tables
-            assert!(!tables.is_empty());
+            if tables.is_empty() {
+                return Ok(vec![]);
+            }
             let table_q = format!(
                 "SELECT table_name, table_schema
                 FROM information_schema.tables
