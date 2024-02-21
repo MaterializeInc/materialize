@@ -138,7 +138,7 @@ def comment_blocks(file: IO) -> Iterator[tuple[int, str]]:
         yield (comment.line_number, comment.text)
 
 
-def detect_closed_issues(filename: str) -> list[IssueRef]:
+def detect_referenced_issues(filename: str) -> list[IssueRef]:
     issue_refs: list[IssueRef] = []
 
     with open(filename) as file:
@@ -263,7 +263,7 @@ def main() -> int:
             and not os.path.isdir(filename)
             and not os.path.islink(filename)
         ):
-            issue_refs.extend(detect_closed_issues(filename))
+            issue_refs.extend(detect_referenced_issues(filename))
 
     if args.changed_lines_only:
         issue_refs = filter_changed_lines(issue_refs)
