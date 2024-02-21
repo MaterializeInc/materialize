@@ -106,7 +106,19 @@ members = [
 
 # Here we should specify our high level binaries to prevent folks from needing to take extra steps
 # like updating git submodules when building the workspace without a target specified.
-default-members = ["src/clusterd", "src/environmentd", "src/balancerd"]
+#
+# Crates we want to make sure are _excluded_ are:
+# * `fivetran-destination` since it depends on the `fivetran-sdk` submodule.
+#
+default-members = [
+    "src/clusterd",
+    "src/environmentd",
+    "src/balancerd",
+    "src/testdrive",
+    "src/sqllogictest",
+    "src/stash-debug",
+    "src/catalog-debug",
+]
 
 exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
