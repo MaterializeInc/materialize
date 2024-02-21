@@ -585,16 +585,14 @@ pub(crate) struct EncodedPart<T> {
     needs_truncation: bool,
 }
 
-impl<K, V, T, D> Iterator for FetchedPart<K, V, T, D>
+impl<K, V, T, D> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    type Item = ((Result<K, String>, Result<V, String>), T, D);
-
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
         while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
                 continue;
@@ -632,6 +630,20 @@ where
             return Some(((k, v), t, d));
         }
         None
+    }
+}
+
+impl<K, V, T, D> Iterator for FetchedPart<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    type Item = ((Result<K, String>, Result<V, String>), T, D);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!("WIP")
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
