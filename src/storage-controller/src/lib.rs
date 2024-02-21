@@ -832,7 +832,8 @@ where
                         IntrospectionType::PreparedStatementHistory
                         | IntrospectionType::StatementExecutionHistory
                         | IntrospectionType::SessionHistory
-                        | IntrospectionType::StatementLifecycleHistory => {
+                        | IntrospectionType::StatementLifecycleHistory
+                        | IntrospectionType::SqlText => {
                             // do nothing.
                         }
                     }

@@ -97,13 +97,13 @@ SELECT count(*) >= 0 FROM mz_internal.mz_statement_execution_history
 db error: ERROR: permission denied for SOURCE "mz_internal.mz_statement_execution_history"
 
 simple conn=mz_support,user=mz_support
-SELECT count(*) >= 0 FROM mz_internal.mz_prepared_statement_history
+SELECT count(*) >= 0 FROM mz_internal.mz_sql_text
 ----
-db error: ERROR: permission denied for SOURCE "mz_internal.mz_prepared_statement_history"
+db error: ERROR: permission denied for SOURCE "mz_internal.mz_sql_text"
 
 # It _can_ query the bowdlerized tables
 simple conn=mz_support,user=mz_support
-SELECT count(*) >= 0 FROM mz_internal.mz_prepared_statement_history_redacted
+SELECT count(*) >= 0 FROM mz_internal.mz_sql_text_redacted
 ----
 t
 COMPLETE 1

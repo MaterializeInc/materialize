@@ -308,7 +308,7 @@ mz_object_lifetimes_ind                                     mz_object_lifetimes 
 mz_object_transitive_dependencies_ind                       mz_object_transitive_dependencies            mz_introspection    {object_id}
 mz_notices_ind                                              mz_notices                                   mz_introspection    {id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,type,duration_ns}
-mz_recent_activity_log_ind                                  mz_recent_activity_log                       mz_introspection    {session_id}
+mz_recent_activity_log_thinned_ind                          mz_recent_activity_log_thinned               mz_introspection    {sql_hash}
 mz_roles_ind                                                mz_roles                                     mz_introspection    {id}
 mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_introspection    {id,worker_id}
 mz_scheduling_parks_histogram_raw_s2_primary_idx            mz_scheduling_parks_histogram_raw            mz_introspection    {worker_id,slept_for_ns,requested_ns}
@@ -335,3 +335,4 @@ mz_source_statistics_ind                                    mz_source_statistics
 mz_source_status_history_ind                                mz_source_status_history                     mz_introspection    {source_id}
 mz_source_statuses_ind                                      mz_source_statuses                           mz_introspection    {id}
 mz_sources_ind                                              mz_sources                                   mz_introspection    {id}
+mz_recent_sql_text_ind                                      mz_recent_sql_text                           mz_introspection    {sql_hash}

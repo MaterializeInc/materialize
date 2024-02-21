@@ -11,11 +11,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::BytesMut;
+use md5::{Digest, Md5};
 use mz_controller_types::ClusterId;
 use mz_ore::now::{to_datetime, NowFn};
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
 use mz_sql_parser::ast::{statement_kind_label_value, StatementKind};
@@ -68,6 +70,12 @@ pub enum PreparedStatementLoggingInfo {
 pub struct StatementLoggingId(Uuid);
 
 #[derive(Debug)]
+pub(crate) struct PreparedStatementEvent {
+    prepared_statement: Row,
+    sql_text: Row,
+}
+
+#[derive(Debug)]
 pub(crate) struct StatementLogging {
     /// Information about statement executions that have been logged
     /// but not finished.
@@ -88,7 +96,7 @@ pub(crate) struct StatementLogging {
     reproducible_rng: rand_chacha::ChaCha8Rng,
 
     pending_statement_execution_events: Vec<(Row, Diff)>,
-    pending_prepared_statement_events: Vec<Row>,
+    pending_prepared_statement_events: Vec<PreparedStatementEvent>,
     pending_session_events: Vec<Row>,
     pending_statement_lifecycle_events: Vec<Row>,
 
@@ -180,11 +188,16 @@ impl Coordinator {
             .into_iter()
             .map(|update| (update, 1))
             .collect();
-        let prepared_statement_updates =
+        let (prepared_statement_updates, sql_text_updates) =
             std::mem::take(&mut self.statement_logging.pending_prepared_statement_events)
                 .into_iter()
-                .map(|update| (update, 1))
-                .collect();
+                .map(
+                    |PreparedStatementEvent {
+                         prepared_statement,
+                         sql_text,
+                     }| ((prepared_statement, 1), (sql_text, 1)),
+                )
+                .unzip::<_, _, Vec<_>, Vec<_>>();
         let statement_execution_updates =
             std::mem::take(&mut self.statement_logging.pending_statement_execution_events);
         let statement_lifecycle_updates =
@@ -199,6 +212,7 @@ impl Coordinator {
             (PreparedStatementHistory, prepared_statement_updates),
             (StatementExecutionHistory, statement_execution_updates),
             (StatementLifecycleHistory, statement_lifecycle_updates),
+            (SqlText, sql_text_updates),
         ] {
             self.controller
                 .storage
@@ -241,7 +255,10 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
-    ) -> Option<(Option<(StatementPreparedRecord, Row)>, Uuid)> {
+    ) -> Option<(
+        Option<(StatementPreparedRecord, PreparedStatementEvent)>,
+        Uuid,
+    )> {
         let logging = session.qcell_rw(&*logging);
         let mut out = None;
 
@@ -261,22 +278,42 @@ impl Coordinator {
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
                 let uuid = Uuid::new_v4();
+                let sql = std::mem::take(sql);
+                let redacted_sql = std::mem::take(redacted_sql);
+                let sql_hash: [u8; 16] = Md5::digest(sql.as_bytes()).into();
                 let record = StatementPreparedRecord {
                     id: uuid,
-                    sql: std::mem::take(sql),
-                    redacted_sql: std::mem::take(redacted_sql),
+                    sql_hash,
                     name: std::mem::take(name),
                     session_id: *session_id,
                     prepared_at: *prepared_at,
                     kind: *kind,
                 };
-                let mut row = Row::default();
-                let mut packer = row.packer();
-                Self::pack_statement_prepared_update(&record, &mut packer);
-                let cost = packer.byte_len();
+                let mut mpsh_row = Row::default();
+                let mut mpsh_packer = mpsh_row.packer();
+                Self::pack_statement_prepared_update(&record, &mut mpsh_packer);
+                let sql_row = Row::pack([
+                    Datum::TimestampTz(
+                        to_datetime(*prepared_at)
+                            .truncate_day()
+                            .try_into()
+                            .expect("must fit"),
+                    ),
+                    Datum::Bytes(sql_hash.as_slice()),
+                    Datum::String(sql.as_str()),
+                    Datum::String(redacted_sql.as_str()),
+                ]);
+
+                let cost = mpsh_packer.byte_len() + sql_row.byte_len();
                 let throttled_count = self.statement_logging_throttling_check(cost)?;
-                packer.push(Datum::UInt64(throttled_count.try_into().expect("must fit")));
-                out = Some((record, row));
+                mpsh_packer.push(Datum::UInt64(throttled_count.try_into().expect("must fit")));
+                out = Some((
+                    record,
+                    PreparedStatementEvent {
+                        prepared_statement: mpsh_row,
+                        sql_text: sql_row,
+                    },
+                ));
 
                 *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
                 uuid
@@ -417,8 +454,7 @@ impl Coordinator {
             id,
             session_id,
             name,
-            sql,
-            redacted_sql,
+            sql_hash,
             prepared_at,
             kind,
         } = record;
@@ -426,8 +462,7 @@ impl Coordinator {
             Datum::Uuid(*id),
             Datum::Uuid(*session_id),
             Datum::String(name.as_str()),
-            Datum::String(sql.as_str()),
-            Datum::String(redacted_sql.as_str()),
+            Datum::Bytes(sql_hash.as_slice()),
             Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
             kind.map(statement_kind_label_value).into(),
         ]);

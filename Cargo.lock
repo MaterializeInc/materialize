@@ -3564,6 +3564,7 @@ dependencies = [
  "itertools",
  "launchdarkly-server-sdk",
  "maplit",
+ "md-5",
  "mz-adapter-types",
  "mz-audit-log",
  "mz-build-info",

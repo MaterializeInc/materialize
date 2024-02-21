@@ -64,6 +64,7 @@ pub enum IntrospectionType {
     StatementExecutionHistory,
     SessionHistory,
     PreparedStatementHistory,
+    SqlText,
     // For statement lifecycle logging, which is closely related
     // to statement logging
     StatementLifecycleHistory,

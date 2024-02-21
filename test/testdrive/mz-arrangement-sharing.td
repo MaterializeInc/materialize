@@ -710,11 +710,11 @@ ReduceMinsMaxes
 "ArrangeAccumulable [val: empty]"             3
 "ArrangeBy[[Column(0), Column(2)]]"           1
 "ArrangeBy[[Column(0)]] [val: empty]"         2
-"ArrangeBy[[Column(0)]]-errors"              20
-"ArrangeBy[[Column(0)]]"                     39
+"ArrangeBy[[Column(0)]]-errors"              21
+"ArrangeBy[[Column(0)]]"                     41
 "ArrangeBy[[Column(1), Column(3)]]"           2
 "ArrangeBy[[Column(1)]]-errors"               4
-"ArrangeBy[[Column(1)]]"                     11
+"ArrangeBy[[Column(1)]]"                     12
 "ArrangeBy[[Column(2)]]-errors"               9
 "ArrangeBy[[Column(2)]]"                     15
 "ArrangeBy[[Column(3)]]"                      2
@@ -722,15 +722,15 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(4)]]"                      5
 "ArrangeBy[[Column(5)]]-errors"               2
 "ArrangeBy[[Column(5)]]"                      2
-"ArrangeBy[[Column(19)]]"                     1
-"ArrangeBy[[Column(19)]]-errors"              1
-"Arranged DistinctBy [val: empty]"            7
+"ArrangeBy[[Column(17)]]"                     1
+"ArrangeBy[[Column(17)]]-errors"              1
+"Arranged DistinctBy [val: empty]"            8
 "Arranged MinsMaxesHierarchical input"        7
 "Arranged ReduceInaccumulable"                1
 "Arranged TopK input"                        16
 "Distinct recursive err"                      1
-"DistinctBy [val: empty]"                     7
-"DistinctByErrorCheck"                        7
+"DistinctBy [val: empty]"                     8
+"DistinctByErrorCheck"                        8
 "ReduceAccumulable"                           3
 "ReduceCollation Errors"                      1
 "ReduceCollation"                             1

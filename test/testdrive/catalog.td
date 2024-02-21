@@ -576,6 +576,7 @@ mz_sink_statistics_raw                       source <null>  <null>
 mz_sink_status_history                       source <null>  <null>
 mz_source_statistics_raw                     source <null>  <null>
 mz_source_status_history                     source <null>  <null>
+mz_sql_text                                  source <null>  <null>
 mz_statement_execution_history               source <null>  <null>
 mz_statement_lifecycle_history               source <null>  <null>
 mz_storage_shards                            source <null>  <null>
@@ -604,8 +605,7 @@ mz_webhook_sources
 name
 -------------------------------------
 mz_active_peeks
-mz_activity_log
-mz_activity_log_redacted
+mz_activity_log_thinned
 mz_arrangement_sharing
 mz_arrangement_sharing_per_worker
 mz_arrangement_sizes
@@ -652,9 +652,11 @@ mz_object_oid_alias
 mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
-mz_prepared_statement_history_redacted
 mz_recent_activity_log
+mz_recent_activity_log_thinned
 mz_recent_activity_log_redacted
+mz_recent_sql_text
+mz_recent_sql_text_redacted
 mz_records_per_dataflow
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_per_worker
@@ -688,6 +690,7 @@ mz_sink_statistics
 mz_sink_statuses
 mz_source_statistics
 mz_source_statuses
+mz_sql_text_redacted
 mz_aws_privatelink_connection_statuses
 mz_statement_execution_history_redacted
 
@@ -708,7 +711,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-126
+127
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
