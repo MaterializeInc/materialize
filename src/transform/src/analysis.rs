@@ -80,35 +80,41 @@ pub mod common {
         }
         /// Result offsets for the state of a various number of children of the current expression.
         ///
-        /// The integers are the zero-offset locations in the `SubtreeSize` analysis,
-        /// which if absent will cause the method to return `None`. The order of the children
-        /// is descending, from last child to first, because of how the information is laid out,
-        /// and the non-reversibility of the look-ups.
+        /// The integers are the zero-offset locations in the `SubtreeSize` analysis. The order of
+        /// the children is descending, from last child to first, because of how the information is
+        /// laid out, and the non-reversibility of the look-ups.
         ///
-        /// It is an error to call this method with more children than expression has
+        /// It is an error to call this method with more children than expression has.
         pub fn children_of_rev<'a>(
             &'a self,
             start: usize,
             count: usize,
-        ) -> Option<impl Iterator<Item = usize> + 'a> {
-            if let Some(sizes) = self.results::<SubtreeSize>() {
-                let offset = 1;
-                Some((0..count).scan(offset, move |offset, _| {
-                    let result = start - *offset;
-                    *offset += sizes[result];
-                    Some(result)
-                }))
-            } else {
-                None
-            }
+        ) -> impl Iterator<Item = usize> + 'a {
+            let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
+            let offset = 1;
+            (0..count).scan(offset, move |offset, _| {
+                let result = start - *offset;
+                *offset += sizes[result];
+                Some(result)
+            })
         }
     }
 
     /// A builder wrapper to accumulate announced dependencies and construct default state.
     #[allow(missing_debug_implementations)]
-    #[derive(Default)]
     pub struct DerivedBuilder {
         result: Derived,
+    }
+
+    impl Default for DerivedBuilder {
+        fn default() -> Self {
+            // The default builder should include `SubtreeSize` to facilitate navigation.
+            let mut builder = DerivedBuilder {
+                result: Derived::default(),
+            };
+            builder.require::<SubtreeSize>();
+            builder
+        }
     }
 
     impl DerivedBuilder {
@@ -289,7 +295,6 @@ mod arity {
             let position = results.len();
             let mut offsets = depends
                 .children_of_rev(position, expr.children().count())
-                .expect("SubtreeSize missing")
                 .map(|child| results[child])
                 .collect::<Vec<_>>();
             offsets.reverse();
@@ -325,7 +330,6 @@ mod types {
             let position = results.len();
             let offsets = depends
                 .children_of_rev(position, expr.children().count())
-                .expect("SubtreeSize missing")
                 .map(|child| &results[child])
                 .collect::<Vec<_>>();
 
@@ -375,7 +379,6 @@ mod unique_keys {
             let position = results.len();
             let mut offsets = depends
                 .children_of_rev(position, expr.children().count())
-                .expect("SubtreeSize missing")
                 .collect::<Vec<_>>();
             offsets.reverse();
 
@@ -440,7 +443,6 @@ mod non_negative {
                     let position = results.len();
                     depends
                         .children_of_rev(position, expr.children().count())
-                        .expect("SubtreeSize missing")
                         .all(|off| results[off])
                 }
                 _ => *results.last().unwrap(),
