@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use futures::stream::FuturesOrdered;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -15,17 +16,19 @@ use http::Uri;
 use itertools::Either;
 use maplit::btreemap;
 use mz_controller_types::ClusterId;
-use mz_expr::CollectionPlan;
+use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
-use mz_sql::catalog::CatalogCluster;
+use mz_repr::{Datum, GlobalId, Row, RowArena, Timestamp};
+use mz_sql::catalog::{CatalogCluster, SessionCatalog};
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
+use mz_persist_client::stats::{SnapshotPartStats, SnapshotPartsStats};
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
+use mz_storage_types::stats::RelationPartStats;
 use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
@@ -33,7 +36,7 @@ use tracing::{event, warn, Level};
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
+use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
@@ -41,9 +44,10 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     Coordinator, CopyToContext, ExecuteContext, ExplainContext, ExplainPlanContext, Message,
-    PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageFinish, PeekStageLinearizeTimestamp,
-    PeekStageOptimize, PeekStageRealTimeRecency, PeekStageTimestampReadHold, PeekStageValidate,
-    PlanValidity, RealTimeRecencyContext, TargetCluster,
+    PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageExplainPushdown, PeekStageFinish,
+    PeekStageLinearizeTimestamp, PeekStageOptimize, PeekStageRealTimeRecency,
+    PeekStageTimestampReadHold, PeekStageValidate, PlanValidity, RealTimeRecencyContext,
+    TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -257,6 +261,11 @@ impl Coordinator {
                 }
                 ExplainPlan(stage) => {
                     let result = self.peek_stage_explain_plan(&mut ctx, stage);
+                    ctx.retire(result);
+                    return;
+                }
+                ExplainPushdown(stage) => {
+                    let result = self.peek_stage_explain_pushdown(&mut ctx, stage).await;
                     ctx.retire(result);
                     return;
                 }
@@ -566,17 +575,18 @@ impl Coordinator {
                 let stage = match pipeline() {
                     Ok(Either::Left(global_lir_plan)) => {
                         let optimizer = optimizer.unwrap_left();
-                        if let ExplainContext::Plan(explain_ctx) = explain_ctx {
-                            let (_, df_meta, _) = global_lir_plan.unapply();
-                            PeekStage::ExplainPlan(PeekStageExplainPlan {
-                                validity,
-                                select_id: optimizer.select_id(),
-                                finishing: optimizer.finishing().clone(),
-                                df_meta,
-                                explain_ctx,
-                            })
-                        } else {
-                            PeekStage::Finish(PeekStageFinish {
+                        match explain_ctx {
+                            ExplainContext::Plan(explain_ctx) => {
+                                let (_, df_meta, _) = global_lir_plan.unapply();
+                                PeekStage::ExplainPlan(PeekStageExplainPlan {
+                                    validity,
+                                    select_id: optimizer.select_id(),
+                                    finishing: optimizer.finishing().clone(),
+                                    df_meta,
+                                    explain_ctx,
+                                })
+                            }
+                            ExplainContext::None => PeekStage::Finish(PeekStageFinish {
                                 validity,
                                 plan,
                                 id_bundle,
@@ -585,7 +595,26 @@ impl Coordinator {
                                 determination,
                                 optimizer,
                                 global_lir_plan,
-                            })
+                            }),
+                            ExplainContext::Pushdown => {
+                                let (plan, _, _) = global_lir_plan.unapply();
+                                let imports = match plan {
+                                    PeekPlan::SlowPath(plan) => plan
+                                        .desc
+                                        .source_imports
+                                        .into_iter()
+                                        .filter_map(|(id, (desc, _))| {
+                                            desc.arguments.operators.map(|mfp| (id, mfp))
+                                        })
+                                        .collect(),
+                                    PeekPlan::FastPath(_) => BTreeMap::default(),
+                                };
+                                PeekStage::ExplainPushdown(PeekStageExplainPushdown {
+                                    validity,
+                                    determination,
+                                    imports,
+                                })
+                            }
                         }
                     }
                     Ok(Either::Right(global_lir_plan)) => {
@@ -899,6 +928,94 @@ impl Coordinator {
         }
 
         Ok(Self::send_immediate_rows(rows))
+    }
+
+    async fn peek_stage_explain_pushdown(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        stage: PeekStageExplainPushdown,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        use futures::stream::TryStreamExt;
+        use mz_ore::cast::CastFrom;
+
+        let as_of = stage.determination.timestamp_context.antichain();
+        let mz_now = stage
+            .determination
+            .timestamp_context
+            .timestamp()
+            .map(|t| ResultSpec::value(Datum::MzTimestamp(*t)))
+            .unwrap_or_else(ResultSpec::value_all);
+
+        let futures: FuturesOrdered<_> = stage
+            .imports
+            .into_iter()
+            .map(|(gid, mfp)| {
+                let as_of = &as_of;
+                let mz_now = &mz_now;
+                let this = &self;
+                let ctx = &*ctx;
+                async move {
+                    let catalog_entry = this.catalog.get_entry(&gid);
+                    let full_name = this
+                        .catalog
+                        .for_session(&ctx.session)
+                        .resolve_full_name(&catalog_entry.name);
+                    let name = format!("{}", full_name);
+                    let relation_desc = catalog_entry
+                        .item
+                        .desc_opt()
+                        .expect("source should have a proper desc");
+                    let snapshot_stats: SnapshotPartsStats = this
+                        .controller
+                        .storage
+                        .snapshot_parts_stats(gid, as_of.clone())
+                        .await?;
+
+                    let mut total_bytes = 0;
+                    let mut total_parts = 0;
+                    let mut selected_bytes = 0;
+                    let mut selected_parts = 0;
+                    for SnapshotPartStats {
+                        encoded_size_bytes: bytes,
+                        stats,
+                    } in &snapshot_stats.parts
+                    {
+                        let bytes = u64::cast_from(*bytes);
+                        total_bytes += bytes;
+                        total_parts += 1u64;
+                        let selected = match stats {
+                            None => true,
+                            Some(stats) => {
+                                let stats = stats.decode();
+                                let stats = RelationPartStats::new(
+                                    name.as_str(),
+                                    &snapshot_stats.metrics,
+                                    &relation_desc,
+                                    &stats,
+                                );
+                                stats.may_match_mfp(mz_now.clone(), &mfp)
+                            }
+                        };
+
+                        if selected {
+                            selected_bytes += bytes;
+                            selected_parts += 1u64;
+                        }
+                    }
+                    Ok::<_, AdapterError>(Row::pack_slice(&[
+                        name.as_str().into(),
+                        total_bytes.into(),
+                        selected_bytes.into(),
+                        total_parts.into(),
+                        selected_parts.into(),
+                    ]))
+                }
+            })
+            .collect();
+
+        let rows = futures.try_collect().await?;
+
+        Ok(ExecuteResponse::SendingRowsImmediate { rows })
     }
 
     /// Determines the query timestamp and acquires read holds on dependent sources

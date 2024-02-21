@@ -97,7 +97,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
@@ -391,6 +391,7 @@ pub enum PeekStage {
     Finish(PeekStageFinish),
     /// Final stage for an explain.
     ExplainPlan(PeekStageExplainPlan),
+    ExplainPushdown(PeekStageExplainPushdown),
     /// Final stage for a copy to.
     CopyTo(PeekStageCopyTo),
 }
@@ -405,7 +406,10 @@ impl PeekStage {
             | PeekStage::Optimize(PeekStageOptimize { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. })
             | PeekStage::CopyTo(PeekStageCopyTo { validity, .. })
-            | PeekStage::ExplainPlan(PeekStageExplainPlan { validity, .. }) => Some(validity),
+            | PeekStage::ExplainPlan(PeekStageExplainPlan { validity, .. })
+            | PeekStage::ExplainPushdown(PeekStageExplainPushdown { validity, .. }) => {
+                Some(validity)
+            }
         }
     }
 }
@@ -526,6 +530,13 @@ pub struct PeekStageExplainPlan {
 }
 
 #[derive(Debug)]
+pub struct PeekStageExplainPushdown {
+    validity: PlanValidity,
+    determination: TimestampDetermination<mz_repr::Timestamp>,
+    imports: BTreeMap<GlobalId, MapFilterProject>,
+}
+
+#[derive(Debug)]
 pub enum CreateIndexStage {
     Optimize(CreateIndexOptimize),
     Finish(CreateIndexFinish),
@@ -601,6 +612,8 @@ pub enum ExplainContext {
     None,
     /// The `EXPLAIN <level> PLAN FOR <explainee>` version of the statement.
     Plan(ExplainPlanContext),
+    /// `EXPLAIN FILTER PUSHDOWN`
+    Pushdown,
 }
 
 impl ExplainContext {
