@@ -16,22 +16,128 @@
 import pytest
 from dbt.tests.util import run_dbt
 
-project_deployment_configuration = {
-    "vars": {
-        "deployment": {
-            "default": {
-                "clusters": ["blue"],
-                "schemas": ["blue"],
+from fixtures import (
+    test_materialized_view,
+    test_materialized_view_index,
+    test_view_index,
+    test_source,
+    test_sink,
+)
+
+
+class TestRunWithDeploy:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
+                }
             }
-        },
-    }
-}
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_materialized_view_index.sql": test_materialized_view_index,
+            "test_view_index.sql": test_view_index,
+        }
+
+    def test_deployment_run(self, project):
+        # the test runner overrides schemas
+        # so we can only validate the cluster
+        # configuration is overriden.
+
+        run_dbt(["run-operation", "deploy_init"])
+        run_dbt(["run", "--vars", "deploy: True"])
+
+        mat_views = project.run_sql(
+            """
+            SELECT count(*) 
+            FROM mz_materialized_views
+            JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
+            WHERE mz_clusters.name = 'quickstart_dbt_deploy'
+               AND mz_materialized_views.id LIKE 'u%'""",
+            fetch="one",
+        )
+
+        assert int(mat_views[0]) == 1
+
+        indexes = project.run_sql(
+            """
+            SELECT count(*) 
+            FROM mz_indexes
+            JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
+            WHERE mz_clusters.name = 'quickstart_dbt_deploy'
+               AND mz_indexes.id LIKE 'u%'""",
+            fetch="one",
+        )
+
+        assert int(indexes[0]) == 2
+
+        run_dbt(["run-operation", "deploy_cleanup"])
+
+
+class TestSourceFail:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
+                }
+            }
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_source.sql": test_source,
+        }
+
+    def test_source_fails(self, project):
+        run_dbt(["run-operation", "deploy_init"])
+        run_dbt(["run", "--vars", "deploy: True"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_cleanup"])
+
+
+class TestSinkFail:
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {"clusters": ["quickstart"], "schemas": ["public"]}
+                }
+            }
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_materialized_view.sql": test_materialized_view,
+            "test_sink.sql": test_sink,
+        }
+
+    def test_source_fails(self, project):
+        run_dbt(["run-operation", "deploy_init"])
+        run_dbt(["run", "--vars", "deploy: True"], expect_pass=False)
+        run_dbt(["run-operation", "deploy_cleanup"])
 
 
 class TestTargetDeploy:
     @pytest.fixture(scope="class")
     def project_config_update(self):
-        return project_deployment_configuration
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {
+                        "clusters": ["blue"],
+                        "schemas": ["blue"],
+                    }
+                },
+            }
+        }
 
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
