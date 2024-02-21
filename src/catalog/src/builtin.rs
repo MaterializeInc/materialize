@@ -2569,6 +2569,10 @@ pub static MZ_RECENT_SQL_TEXT: Lazy<BuiltinView> = Lazy::new(|| {
     name: "mz_recent_sql_text",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
+    // This should always be 1 day more than the interval in
+    // `MZ_RECENT_THINNED_ACTIVITY_LOG` , because `prepared_day`
+    // is rounded down to the nearest day.  Thus something that actually happened three days ago
+    // could have a `prepared day` anywhere from 3 to 4 days back.
     sql: "SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text WHERE prepared_day + INTERVAL '4 days' >= mz_now()",
     access: vec![MONITOR_SELECT],
 }
@@ -2578,7 +2582,7 @@ pub static MZ_RECENT_SQL_TEXT_REDACTED: Lazy<BuiltinView> = Lazy::new(|| Builtin
     name: "mz_recent_sql_text_redacted",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: "SELECT sql, redacted_sql FROM mz_internal.mz_recent_sql_text",
+    sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_recent_sql_text",
     access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
 });
 
