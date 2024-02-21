@@ -18,7 +18,7 @@ use mz_persist_types::columnar::{PartDecoder, PartEncoder};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
-use mz_repr::{ColumnType, Datum, RelationDesc, Row, ScalarType};
+use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -260,9 +260,10 @@ fn encode_legacy(rows: &[Row]) -> ColumnarRecords {
 }
 
 fn decode_legacy(part: &ColumnarRecords) -> Row {
+    let mut storage = Some(ProtoRow::default());
     let mut row = Row::default();
     for ((key, _val), _ts, _diff) in part.iter() {
-        row = Row::decode(key).unwrap();
+        Row::decode_from(&mut row, key, &mut storage).unwrap();
         black_box(&row);
     }
     row
