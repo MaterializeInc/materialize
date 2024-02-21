@@ -20,9 +20,6 @@ steps:
     # sure we use the exact same version for testing here as was tagged and
     # will be released, and don't build our own version just for the tests.
     if: build.source == "ui" || build.source == "schedule" || build.source == "api"
-    # TODO(def-) Remove automatic retry when #24818 is fixed
-    retry:
-      automatic: true
 
   - wait: ~
 
