@@ -27,11 +27,22 @@ pub use replication::{
 pub mod schemas;
 pub use schemas::{schema_info, SchemaRequest};
 
+pub mod decoding;
+pub use decoding::pack_mysql_row;
+
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
     #[error("error setting up ssh: {0}")]
     Ssh(#[source] anyhow::Error),
-    #[error("unsupported data type: '{column_type}' for '{qualified_table_name}.{column_name}'.")]
+    #[error("decode error: {0}")]
+    DecodeError(String),
+    #[error("error decoding value for '{qualified_table_name}' column '{column_name}': {error}")]
+    ValueDecodeError {
+        column_name: String,
+        qualified_table_name: String,
+        error: String,
+    },
+    #[error("unsupported data type: '{column_type}' for '{qualified_table_name}' column '{column_name}'.")]
     UnsupportedDataType {
         column_type: String,
         qualified_table_name: String,

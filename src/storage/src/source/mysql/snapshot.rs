@@ -95,10 +95,9 @@ use mz_timely_util::antichain::AntichainExt;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
-use tracing::{trace, warn};
+use tracing::trace;
 
-use mz_mysql_util::MySqlTableDesc;
-use mz_mysql_util::{query_sys_var, ER_NO_SUCH_TABLE};
+use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlTableDesc, ER_NO_SUCH_TABLE};
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
@@ -113,8 +112,8 @@ use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 use super::schemas::verify_schemas;
 use super::{
-    pack_mysql_row, return_definite_error, validate_mysql_repl_settings, DefiniteError,
-    ReplicationError, RewindRequest, TransientError,
+    return_definite_error, validate_mysql_repl_settings, DefiniteError, ReplicationError,
+    RewindRequest, TransientError,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -372,43 +371,20 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
-                'outer: for (table, (output_index, table_desc)) in reader_snapshot_table_info {
+                for (table, (output_index, table_desc)) in reader_snapshot_table_info {
                     let query = format!("SELECT * FROM {}", table.to_ast_string());
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
                     let mut results = tx.exec_stream(query, ()).await?;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
-                        match pack_mysql_row(&mut final_row, row, &table_desc)? {
-                            Ok(packed_row) => {
-                                raw_handle
-                                    .give(
-                                        &data_cap_set[0],
-                                        (
-                                            (output_index, Ok(packed_row)),
-                                            GtidPartition::minimum(),
-                                            1,
-                                        ),
-                                    )
-                                    .await;
-                            }
-                            Err(err) => {
-                                // A definite error for this table means we should stop ingesting it
-                                raw_handle
-                                    .give(
-                                        &data_cap_set[0],
-                                        (
-                                            (output_index, Err(err.clone())),
-                                            GtidPartition::minimum(),
-                                            1,
-                                        ),
-                                    )
-                                    .await;
-                                warn!(%id, "timely-{worker_id} stopping snapshot of \
-                                            table {table} due to encoding error: {err:?}");
-                                continue 'outer;
-                            }
-                        }
+                        let packed_row = pack_mysql_row(&mut final_row, row, &table_desc)?;
+                        raw_handle
+                            .give(
+                                &data_cap_set[0],
+                                ((output_index, Ok(packed_row)), GtidPartition::minimum(), 1),
+                            )
+                            .await;
                     }
                 }
                 Ok(())

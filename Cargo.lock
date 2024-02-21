@@ -4700,9 +4700,11 @@ name = "mz-mysql-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "indexmap 1.9.1",
  "itertools",
  "mysql_async",
+ "mysql_common",
  "mz-cloud-resources",
  "mz-ore",
  "mz-proto",
