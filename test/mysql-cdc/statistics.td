@@ -32,7 +32,9 @@ CREATE TABLE t1 (f1 TEXT);
 
 INSERT INTO t1 VALUES ('one');
 
-> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqc FOR TABLES (public.t1);
+> CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
+
+> CREATE SOURCE mz_source IN CLUSTER stats_cluster FROM MYSQL CONNECTION mysqc FOR TABLES (public.t1);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true
@@ -43,13 +45,15 @@ $ set-sql-timeout duration=2minutes
 > SELECT
     s.name,
     SUM(u.offset_committed) > 0,
-    SUM(u.offset_known) >= SUM(u.offset_committed)
+    SUM(u.offset_known) >= SUM(u.offset_committed),
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
   GROUP BY s.name
   ORDER BY s.name
-mz_source true true
+mz_source true true 1 1
 
 $ set-from-sql var=previous-offset-committed
 SELECT
@@ -62,14 +66,47 @@ SELECT
 $ mysql-execute name=mysql
 INSERT INTO t1 VALUES ('two');
 
-
 > SELECT
     s.name,
     SUM(u.offset_committed) > ${previous-offset-committed},
-    SUM(u.offset_known) >= SUM(u.offset_committed)
+    SUM(u.offset_known) >= SUM(u.offset_committed),
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
   GROUP BY s.name
   ORDER BY s.name
-mz_source true true
+mz_source true true 1 1
+
+$ set-from-sql var=pre-restart-offset-committed
+SELECT
+    (SUM(u.offset_committed))::text
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('mz_source')
+
+> ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
+
+$ mysql-execute name=mysql
+INSERT INTO t1 VALUES ('three');
+
+> ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 1)
+
+# Ensure the snapshot stats stay there, and don't change.
+> SELECT
+    s.name,
+    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.offset_known) >= SUM(u.offset_committed),
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('mz_source')
+  GROUP BY s.name
+  ORDER BY s.name
+mz_source true true 1 1
+
+# TODO(guswynn/roshan): test snapshot stats when alter cluster add table is supported by mysql
+
+> DROP CLUSTER stats_cluster CASCADE
