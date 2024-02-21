@@ -22,6 +22,7 @@ use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::envelopes;
 
 const AVRO_NAMESPACE: &str = "com.materialize.sink";
+const MICROS_PER_MILLIS: u32 = 1_000;
 
 // Manages encoding of JSON-encoded bytes
 pub struct JsonEncoder {
@@ -158,14 +159,20 @@ impl ToJson for TypedDatum<'_> {
             // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
             ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
             ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
-            ScalarType::Timestamp { .. } => serde_json::Value::String(format!(
-                "{:?}",
-                datum.unwrap_timestamp().to_naive().timestamp_millis()
-            )),
-            ScalarType::TimestampTz { .. } => serde_json::Value::String(format!(
-                "{:?}",
-                datum.unwrap_timestamptz().to_naive().timestamp_millis()
-            )),
+            ScalarType::Timestamp { .. } => {
+                let naive = datum.unwrap_timestamp().to_naive();
+                let millis = naive.timestamp_millis();
+                let micros = naive.timestamp_subsec_micros()
+                    - (naive.timestamp_subsec_millis() * MICROS_PER_MILLIS);
+                serde_json::Value::String(format!("{millis}.{micros:0>3}"))
+            }
+            ScalarType::TimestampTz { .. } => {
+                let naive = datum.unwrap_timestamptz().to_naive();
+                let millis = naive.timestamp_millis();
+                let micros = naive.timestamp_subsec_micros()
+                    - (naive.timestamp_subsec_millis() * MICROS_PER_MILLIS);
+                serde_json::Value::String(format!("{millis}.{micros:0>3}"))
+            }
             ScalarType::Interval => {
                 serde_json::Value::String(format!("{}", datum.unwrap_interval()))
             }
