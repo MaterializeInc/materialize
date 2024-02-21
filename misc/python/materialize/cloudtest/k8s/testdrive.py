@@ -64,9 +64,6 @@ class TestdriveBase:
             "--var=single-replica-cluster=quickstart",
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",
-            # Consistency checks increase the runtime, and we already have coverage via other
-            # methods of running testdrive.
-            "--consistency-checks=disable",
             *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
             # S3 sources are not compatible with Minio unfortunately
             # f"--aws-endpoint=http://minio-service.{self.namespace()}:9000",

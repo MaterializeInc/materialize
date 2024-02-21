@@ -175,7 +175,8 @@ async fn check_shard_tombstoned(state: &State, shard_id: &str) -> Result<(), any
     let (Some(consensus_uri), Some(blob_uri)) =
         (&state.persist_consensus_url, &state.persist_blob_url)
     else {
-        bail!("Persist consensus or blob URL not known")
+        tracing::warn!("Persist consensus or blob URL not known");
+        return Ok(());
     };
 
     let location = PersistLocation {
