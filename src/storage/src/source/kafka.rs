@@ -43,6 +43,7 @@ use rdkafka::{ClientContext, Message, TopicPartitionList};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::progress::Timestamp;
 use timely::PartialOrder;
 use tokio::sync::Notify;
 use tracing::{error, info, trace, warn};
@@ -200,6 +201,10 @@ impl SourceRender for KafkaSourceConnection {
                     .iter()
                     .map(Partitioned::<RangeBound<PartitionId>, MzOffset>::decode_row),
             );
+
+            // Whether or not this instance of the dataflow is performing a snapshot.
+            let mut is_snapshotting = &*resume_upper == &[Partitioned::minimum()];
+
             for ts in resume_upper.elements() {
                 if let Some(pid) = ts.interval().singleton() {
                     let pid = pid.unwrap_exact();
@@ -453,6 +458,23 @@ impl SourceRender for KafkaSourceConnection {
                 progress_statistics: Arc::clone(&reader.progress_statistics),
             };
 
+            // Seed the progress metrics with `0` if we are snapshotting.
+            if is_snapshotting {
+                if let Err(e) = offset_committer
+                    .process_frontier(resume_upper.clone())
+                    .await
+                {
+                    offset_commit_metrics.offset_commit_failures.inc();
+                    tracing::warn!(
+                        %e,
+                        "timely-{} source({}) failed to commit offsets: resume_upper={}",
+                        config.id,
+                        config.worker_id,
+                        resume_upper.pretty()
+                    );
+                }
+            }
+
             let resume_uppers_process_loop = async move {
                 tokio::pin!(resume_uppers);
                 while let Some(frontier) = resume_uppers.next().await {
@@ -476,6 +498,8 @@ impl SourceRender for KafkaSourceConnection {
             tokio::pin!(resume_uppers_process_loop);
 
             let mut prev_pid_info: Option<BTreeMap<PartitionId, WatermarkOffsets>> = None;
+            let mut snapshot_total = None;
+
             loop {
                 let partition_info = reader.partition_info.lock().unwrap().take();
                 if let Some(partitions) = partition_info {
@@ -558,6 +582,15 @@ impl SourceRender for KafkaSourceConnection {
                                 });
                             }
                         }
+                    }
+
+                    // If we are snapshotting, record our first set of partitions as the snapshot
+                    // size.
+                    if is_snapshotting && snapshot_total.is_none() {
+                        // Note that we want to represent the _number of offsets_, which
+                        // means the watermark's frontier semantics is correct, without
+                        // subtracting (Kafka offsets start at 0).
+                        snapshot_total = Some(upstream_stat);
                     }
 
                     reader
@@ -664,6 +697,8 @@ impl SourceRender for KafkaSourceConnection {
 
                 let positions = reader.consumer.position().unwrap();
                 let topic_positions = positions.elements_for_topic(&reader.topic_name);
+                let mut snapshot_staged = 0;
+
                 for position in topic_positions {
                     // The offset begins in the `Offset::Invalid` state in which case we simply
                     // skip this partition.
@@ -675,6 +710,19 @@ impl SourceRender for KafkaSourceConnection {
 
                         let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
                         part_cap.data.downgrade(&upper);
+
+                        if is_snapshotting {
+                            // The `.position()` of the consumer represents what offset we have
+                            // read up to.
+                            snapshot_staged += offset.try_into().unwrap_or(0u64);
+                            // This will always be `Some` at this point.
+                            if let Some(snapshot_total) = snapshot_total {
+                                // We will eventually read past the snapshot total, so we need
+                                // to bound it here.
+                                snapshot_staged = std::cmp::min(snapshot_staged, snapshot_total);
+                            }
+                        }
+
                         // We use try_downgrade here because during the initial snapshot phase the
                         // data capability is not beyond the progress capability and therefore a
                         // normal downgrade would panic. Once it catches up though the data
@@ -737,6 +785,22 @@ impl SourceRender for KafkaSourceConnection {
                             },
                         )
                         .await;
+                }
+
+                if let (Some(snapshot_total), true) = (snapshot_total, is_snapshotting) {
+                    stats_output
+                        .give(
+                            &stats_cap,
+                            ProgressStatisticsUpdate::Snapshot {
+                                records_known: snapshot_total,
+                                records_staged: snapshot_staged,
+                            },
+                        )
+                        .await;
+
+                    if snapshot_total == snapshot_staged {
+                        is_snapshotting = false;
+                    }
                 }
 
                 // Wait to be notified while also making progress with offset committing
