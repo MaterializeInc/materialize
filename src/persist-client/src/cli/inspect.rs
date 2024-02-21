@@ -632,6 +632,7 @@ pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String, Option<Cod
     ));
 
 impl Codec for K {
+    type Storage = ();
     type Schema = TodoSchema<K>;
 
     fn codec_name() -> String {
@@ -650,6 +651,7 @@ impl Codec for K {
 }
 
 impl Codec for V {
+    type Storage = ();
     type Schema = TodoSchema<V>;
 
     fn codec_name() -> String {
@@ -668,6 +670,7 @@ impl Codec for V {
 }
 
 impl Codec for T {
+    type Storage = ();
     type Schema = TodoSchema<T>;
 
     fn codec_name() -> String {

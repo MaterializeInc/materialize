@@ -65,6 +65,31 @@ pub trait Codec: Sized + 'static {
     // TODO: Mechanically, this could return a ref to the original bytes
     // without any copies, see if we can make the types work out for that.
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String>;
+
+    /// A type used with [Self::decode_from] for allocation reuse. Set to `()`
+    /// if unnecessary.
+    type Storage;
+    /// An alternate form of [Self::decode] which enables amortizing allocs.
+    ///
+    /// First, instead of returning `Self`, it takes `&mut Self` as a parameter,
+    /// allowing for reuse of the internal `Row`/`SourceData` allocations.
+    ///
+    /// Second, it adds a `type Storage` to `Codec` and also passes it in as
+    /// `&mut Option<Self::Storage>`, allowing for reuse of
+    /// `ProtoRow`/`ProtoSourceData` allocations. If `Some`, this impl may
+    /// attempt to reuse allocations with it. It may also leave allocations in
+    /// it for use in future calls to `decode_from`.
+    ///
+    /// A default implementation is provided for `Codec` impls that can't take
+    /// advantage of this.
+    fn decode_from<'a>(
+        &mut self,
+        buf: &'a [u8],
+        _storage: &mut Option<Self::Storage>,
+    ) -> Result<(), String> {
+        *self = Self::decode(buf)?;
+        Ok(())
+    }
 }
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp

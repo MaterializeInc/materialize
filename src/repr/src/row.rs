@@ -145,6 +145,15 @@ impl Arbitrary for Row {
 
 impl Row {
     const SIZE: usize = CompactBytes::MAX_INLINE;
+
+    /// A variant of `Row::from_proto` that allows for reuse of internal allocs.
+    pub fn decode_from_proto(&mut self, proto: &ProtoRow) -> Result<(), String> {
+        let mut packer = self.packer();
+        for d in proto.datums.iter() {
+            packer.try_push_proto(d)?;
+        }
+        Ok(())
+    }
 }
 
 /// These implementations order first by length, and then by slice contents.

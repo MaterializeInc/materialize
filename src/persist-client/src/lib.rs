@@ -729,6 +729,7 @@ impl PersistClient {
 }
 
 impl Codec for ShardId {
+    type Storage = ();
     type Schema = ShardIdSchema;
     fn codec_name() -> String {
         "ShardId".into()
