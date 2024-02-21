@@ -95,11 +95,12 @@ mod spines {
 
 /// A `Row`-specialized container using dictionary compression.
 mod container {
+    use std::cmp::Ordering;
 
     use differential_dataflow::trace::cursor::MyTrait;
     use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::trace::implementations::OffsetList;
-
+    use mz_ore::region::Region;
     use mz_repr::{read_datum, Datum, Row};
 
     /// A slice container with four bytes overhead per slice.
@@ -189,7 +190,7 @@ mod container {
     /// The backing storage for this batch will not be resized.
     pub struct DatumBatch {
         offsets: OffsetList,
-        storage: lgalloc::Region<u8>,
+        storage: Region<u8>,
     }
 
     impl DatumBatch {
@@ -219,7 +220,7 @@ mod container {
             offsets.push(0);
             Self {
                 offsets,
-                storage: lgalloc::Region::new_auto(byte_cap.next_power_of_two()),
+                storage: Region::new_auto(byte_cap.next_power_of_two()),
             }
         }
     }
@@ -236,7 +237,6 @@ mod container {
         }
     }
 
-    use std::cmp::Ordering;
     impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
         fn eq(&self, other: &DatumSeq<'a>) -> bool {
             self.bytes.eq(other.bytes)

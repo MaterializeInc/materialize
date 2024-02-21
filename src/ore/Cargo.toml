@@ -29,7 +29,7 @@ ctor = { version = "0.1.26", optional = true }
 either = "1.8.0"
 futures = { version = "0.3.25", optional = true }
 hibitset = { version = "0.6.4", optional = true }
-lgalloc = { version = "0.1", optional = true }
+lgalloc = { version = "0.2", optional = true }
 mz-ore-instrument-macro = { path = "../ore-instrument-macro", default-features = false }
 mz-test-macro = { path = "../test-macro", default-features = false }
 num = "0.4.0"
