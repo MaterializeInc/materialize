@@ -88,7 +88,7 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}    
+    {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
     {% if cluster_exists(deploy_cluster) %}
         {{ log("Deployment cluster " ~ deploy_cluster ~ " already exists", info=True) }}
         {% set cluster_empty %}

@@ -52,7 +52,7 @@ class TestRunWithDeploy:
 
         mat_views = project.run_sql(
             """
-            SELECT count(*) 
+            SELECT count(*)
             FROM mz_materialized_views
             JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
             WHERE mz_clusters.name = 'quickstart_dbt_deploy'
@@ -64,7 +64,7 @@ class TestRunWithDeploy:
 
         indexes = project.run_sql(
             """
-            SELECT count(*) 
+            SELECT count(*)
             FROM mz_indexes
             JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
             WHERE mz_clusters.name = 'quickstart_dbt_deploy'

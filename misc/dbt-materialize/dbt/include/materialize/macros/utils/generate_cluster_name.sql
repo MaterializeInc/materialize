@@ -19,4 +19,3 @@
     {{ default_cluster }}{{ deploy_suffix }}
 
 {%- endmacro %}
-
