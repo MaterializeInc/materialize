@@ -490,9 +490,13 @@ mz_source_statistics  bytes_indexed
 mz_source_statistics  bytes_received
 mz_source_statistics  id
 mz_source_statistics  messages_received
+mz_source_statistics  offset_committed
+mz_source_statistics  offset_known
 mz_source_statistics  records_indexed
 mz_source_statistics  rehydration_latency
 mz_source_statistics  snapshot_committed
+mz_source_statistics  snapshot_records_known
+mz_source_statistics  snapshot_records_staged
 mz_source_statistics  updates_committed
 mz_source_statistics  updates_staged
 mz_source_statistics_raw  bytes_indexed
