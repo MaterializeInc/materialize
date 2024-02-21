@@ -296,6 +296,11 @@ impl MySqlSourcePurificationError {
             Self::InvalidTableReference(_) => Some(
                 "Specify tables names as SCHEMA_NAME.TABLE_NAME in a FOR TABLES (..) clause".into(),
             ),
+            Self::UnrecognizedTypes { cols: _ } => Some(
+                "Check the docs -- some types can be supported using the TEXT COLUMNS option to \
+                ingest their values as text."
+                    .into(),
+            ),
             _ => None,
         }
     }

@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mysql_async::prelude::Queryable;
-use mz_mysql_util::{schema_info, MySqlError, MySqlTableDesc, SchemaRequest};
+use mz_mysql_util::{schema_info, MySqlError, MySqlTableDesc, QualifiedTableRef, SchemaRequest};
+use mz_storage_types::sources::mysql::MySqlColumnRef;
 
 use super::{DefiniteError, MySqlTableName};
 
@@ -21,10 +22,22 @@ use super::{DefiniteError, MySqlTableName};
 pub(super) async fn verify_schemas<'a, Q>(
     conn: &mut Q,
     expected: &[(&'a MySqlTableName, &MySqlTableDesc)],
+    text_columns: &Vec<MySqlColumnRef>,
 ) -> Result<Vec<(&'a MySqlTableName, DefiniteError)>, MySqlError>
 where
     Q: Queryable,
 {
+    let mut text_column_map = BTreeMap::new();
+    for column in text_columns {
+        text_column_map
+            .entry(QualifiedTableRef {
+                schema_name: column.schema_name.as_str(),
+                table_name: column.table_name.as_str(),
+            })
+            .or_insert_with(BTreeSet::new)
+            .insert(column.column_name.as_str());
+    }
+
     // Get the current schema for each requested table from mysql
     let cur_schemas: BTreeMap<_, _> = schema_info(
         conn,
@@ -34,6 +47,7 @@ where
                 .map(|(f, _)| (f.0.as_str(), f.1.as_str()))
                 .collect(),
         ),
+        Some(&text_column_map),
     )
     .await?
     .into_iter()

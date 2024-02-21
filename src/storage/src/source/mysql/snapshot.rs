@@ -366,6 +366,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         .iter()
                         .map(|(table, (_, desc))| (table, desc))
                         .collect::<Vec<_>>(),
+                    &connection.text_columns,
                 )
                 .await?;
                 let mut removed_tables = vec![];

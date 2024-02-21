@@ -85,7 +85,7 @@ use mz_storage_types::sources::envelope::{
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
 use mz_storage_types::sources::mysql::{
-    MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
+    MySqlColumnRef, MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
 };
 use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
@@ -426,7 +426,11 @@ generate_extracted_config!(
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
-generate_extracted_config!(MySqlConfigOption, (Details, String));
+generate_extracted_config!(
+    MySqlConfigOption,
+    (Details, String),
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+);
 
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
@@ -995,7 +999,11 @@ pub fn plan_create_source(
                     scx.catalog.resolve_full_name(connection_item.name())
                 ),
             };
-            let MySqlConfigOptionExtracted { details, seen: _ } = options.clone().try_into()?;
+            let MySqlConfigOptionExtracted {
+                details,
+                text_columns: text_cols,
+                seen: _,
+            } = options.clone().try_into()?;
 
             let details = details
                 .as_ref()
@@ -1021,11 +1029,33 @@ pub fn plan_create_source(
                 available_subsources.insert(name, index + 1);
             }
 
+            let mut text_columns = vec![];
+            for name in text_cols {
+                // We already verified that this is a fully-qualified column name during purification
+                // but we double check to be sure
+                if name.0.len() != 3 {
+                    tracing::error!(
+                        name = %name,
+                        "internal error: Expected fully qualified mysql column name"
+                    );
+                    sql_bail!(
+                        "internal error: Expected fully qualified mysql column name, got {}",
+                        name
+                    );
+                }
+                text_columns.push(MySqlColumnRef {
+                    schema_name: name.0[0].to_string(),
+                    table_name: name.0[1].to_string(),
+                    column_name: name.0[2].to_string(),
+                });
+            }
+
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
                     connection: connection_item.id(),
                     connection_id: connection_item.id(),
                     details,
+                    text_columns,
                 });
 
             (connection, Some(available_subsources))

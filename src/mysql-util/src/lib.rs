@@ -28,10 +28,35 @@ pub use replication::{
 };
 
 pub mod schemas;
-pub use schemas::{schema_info, SchemaRequest};
+pub use schemas::{schema_info, QualifiedTableRef, SchemaRequest};
 
 pub mod decoding;
 pub use decoding::pack_mysql_row;
+
+#[derive(Debug, Clone)]
+pub struct UnsupportedDataType {
+    pub column_type: String,
+    pub qualified_table_name: String,
+    pub column_name: String,
+    pub intended_type: Option<String>,
+}
+
+impl std::fmt::Display for UnsupportedDataType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match &self.intended_type {
+            Some(intended_type) => write!(
+                f,
+                "'{}.{}' of type '{}' represented as: '{}'",
+                self.qualified_table_name, self.column_name, self.column_type, intended_type
+            ),
+            None => write!(
+                f,
+                "'{}.{}' of type '{}'",
+                self.qualified_table_name, self.column_name, self.column_type
+            ),
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
@@ -47,12 +72,8 @@ pub enum MySqlError {
         qualified_table_name: String,
         error: String,
     },
-    #[error("unsupported data type: '{column_type}' for '{qualified_table_name}' column '{column_name}'.")]
-    UnsupportedDataType {
-        column_type: String,
-        qualified_table_name: String,
-        column_name: String,
-    },
+    #[error("unsupported data types: {columns:?}")]
+    UnsupportedDataTypes { columns: Vec<UnsupportedDataType> },
     #[error("invalid mysql system setting '{setting}'. Expected '{expected}'. Got '{actual}'.")]
     InvalidSystemSetting {
         setting: String,
