@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-
 use mz_pgrepr::Type;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
@@ -17,8 +15,7 @@ use tokio_postgres::Client;
 use crate::destination::{config, FIVETRAN_SYSTEM_COLUMN_DELETE};
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{
-    AlterTableRequest, Column, CreateTableRequest, DataType, DecimalParams, DescribeTableRequest,
-    Table,
+    AlterTableRequest, Column, CreateTableRequest, DataType, DescribeTableRequest, Table,
 };
 use crate::utils;
 
@@ -180,67 +177,12 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
 }
 
 pub async fn handle_alter_table(request: AlterTableRequest) -> Result<(), OpError> {
-    let (dbname, client) = config::connect(request.configuration).await?;
-
     // Bail early if there isn't a table to alter.
     let Some(request_table) = request.table else {
         return Ok(());
     };
 
-    let current_table = describe_table(&client, &dbname, &request.schema_name, &request_table.name)
-        .await
-        .context("alter table")?;
-    let Some(current_table) = current_table else {
-        return Err(OpErrorKind::UnknownTable {
-            database: dbname,
-            schema: request.schema_name,
-            table: request_table.name,
-        }
-        .into());
-    };
-
-    if columns_match(&request_table, &current_table) {
-        Ok(())
-    } else {
-        let error = format!(
-            "alter_table, request: {:?}, current: {:?}",
-            request_table, current_table
-        );
-        Err(OpErrorKind::Unsupported(error).into())
-    }
-}
-
-// TODO(parkmycar): Implement some more complex diffing logic.
-fn columns_match(request: &Table, current: &Table) -> bool {
-    #[derive(Clone, Debug)]
-    struct ColumnMetadata {
-        ty: DataType,
-        primary_key: bool,
-        decimal: Option<DecimalParams>,
-    }
-
-    impl PartialEq<ColumnMetadata> for ColumnMetadata {
-        fn eq(&self, other: &ColumnMetadata) -> bool {
-            self.ty == other.ty
-                && self.primary_key == other.primary_key
-                // TODO(parkmycar): Better comparison for decimals.
-                && self.decimal.is_some() == other.decimal.is_some()
-        }
-    }
-
-    let map_columns = |col: &Column| {
-        let metadata = ColumnMetadata {
-            ty: col.r#type(),
-            primary_key: col.primary_key,
-            decimal: col.decimal.clone(),
-        };
-        (col.name.clone(), metadata)
-    };
-
-    // Sort the columns by name, and check if they're equal. Eventually we'll have some more
-    // complex logic here.
-    let request_cols: BTreeMap<_, _> = request.columns.iter().map(map_columns).collect();
-    let current_cols: BTreeMap<_, _> = current.columns.iter().map(map_columns).collect();
-
-    request_cols == current_cols
+    // All other kinds of alter table requests are unsupported.
+    let error = format!("alter_table, request: {request_table:?}");
+    Err(OpErrorKind::Unsupported(error).into())
 }
