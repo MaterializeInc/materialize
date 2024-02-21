@@ -259,12 +259,13 @@ fn encode_legacy(rows: &[Row]) -> ColumnarRecords {
     buf.finish(&ColumnarMetrics::disconnected())
 }
 
-fn decode_legacy(part: &ColumnarRecords) -> Vec<Row> {
-    let mut rows = Vec::new();
+fn decode_legacy(part: &ColumnarRecords) -> Row {
+    let mut row = Row::default();
     for ((key, _val), _ts, _diff) in part.iter() {
-        rows.push(Row::decode(key).unwrap());
+        row = Row::decode(key).unwrap();
+        black_box(&row);
     }
-    rows
+    row
 }
 
 fn encode_structured(schema: &RelationDesc, rows: &[Row]) -> Part {

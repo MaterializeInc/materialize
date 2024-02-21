@@ -9,6 +9,10 @@ publish = false
 [lints]
 workspace = true
 
+[[bench]]
+name = "row"
+harness = false
+
 [dependencies]
 anyhow = "1.0.66"
 aws-config = { version = "1.1.1", default-features = false, features = ["sso"] }
@@ -67,6 +71,9 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 base64 = "0.13.1"
+criterion = { version = "0.4.0" }
+mz-persist = { path = "../persist" }
+rand = "0.8.5"
 
 [build-dependencies]
 prost-build = "0.11.2"
