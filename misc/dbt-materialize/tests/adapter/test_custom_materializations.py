@@ -23,6 +23,7 @@ from fixtures import (
     test_relation_name_length,
     test_sink,
     test_sinkv2,
+    test_sinkv2_cluster,
     test_source,
     test_source_index,
     test_sourcev2,

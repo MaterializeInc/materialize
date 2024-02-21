@@ -108,7 +108,7 @@
   {% if contract_config.enforced %}
     {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
   {%- endif %}
-  
+
   {%- set cluster = config.get('cluster', target.cluster) -%}
 
   create sink {{ relation }}
