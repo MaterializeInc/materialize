@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::BytesMut;
-use md5::{Digest, Md5};
 use mz_controller_types::ClusterId;
 use mz_ore::now::{to_datetime, NowFn};
 use mz_ore::task::spawn;
@@ -25,6 +24,7 @@ use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
+use sha2::{Digest, Sha256};
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
 use uuid::Uuid;
@@ -280,7 +280,7 @@ impl Coordinator {
                 let uuid = Uuid::new_v4();
                 let sql = std::mem::take(sql);
                 let redacted_sql = std::mem::take(redacted_sql);
-                let sql_hash: [u8; 16] = Md5::digest(sql.as_bytes()).into();
+                let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
                 let record = StatementPreparedRecord {
                     id: uuid,
                     sql_hash,
