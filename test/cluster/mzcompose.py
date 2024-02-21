@@ -3164,3 +3164,78 @@ def workflow_cluster_drop_concurrent(
                     ), e
             for thread in threads:
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"
+
+
+def workflow_test_refresh_mv_warmup_after_restart(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Regression test for https://github.com/MaterializeInc/materialize/issues/25279
+    Test that bootstrapping selects an as_of for an MV dataflow in a way that allows it to warm up before its next
+    refresh.
+    """
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_refresh_every_mvs": "true",
+            },
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.down(destroy_volumes=True)
+
+        c.up("materialized")
+        c.up("testdrive", persistent=True)
+
+        # Create a new cluster
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 SIZE '1'
+            """
+        )
+
+        # Create an MV that will have its first refresh immediately, but it's next refresh is a long time away.
+        c.testdrive(
+            input=dedent(
+                """
+                > SET cluster = cluster1;
+                > CREATE TABLE t (a int);
+                > INSERT INTO t VALUES (100);
+                > CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '1 day') AS
+                  SELECT count(*) FROM (SELECT generate_series(1,a) FROM t);
+
+                > SELECT * FROM mv;
+                100
+
+                > INSERT INTO t VALUES (1000);
+                """
+            )
+        )
+
+        # Restart environmentd to trigger the MV `as_of` selection code in bootstrapping.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Check that the dataflow hydrates, even though we are a long time away from the next refresh.
+        c.testdrive(
+            input=dedent(
+                """
+                > SELECT hydrated
+                  FROM mz_internal.mz_compute_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+                  WHERE name = 'mv';
+                true
+                """
+            )
+        )
+
+        # Check that the next refresh hasn't happened yet.
+        c.testdrive(
+            input=dedent(
+                """
+                > INSERT INTO t VALUES (10000);
+                > SELECT * FROM mv;
+                100
+                """
+            )
+        )
