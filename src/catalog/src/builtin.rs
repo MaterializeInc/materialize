@@ -2709,7 +2709,7 @@ pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
             -- If self not errored, but parent is, use parent; else self
             CASE
                 WHEN
-                    self_events.status <> 'stalled' AND
+                    self_events.status <> 'ceased' AND
                     parent_events.status = 'stalled'
                 THEN parent_events.source_id
                 ELSE self_events.source_id
