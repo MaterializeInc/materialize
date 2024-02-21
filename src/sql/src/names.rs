@@ -1291,16 +1291,16 @@ impl<'a> NameResolver<'a> {
                 queue.push_back(item);
                 while let Some(item) = queue.pop_front() {
                     self.ids.insert(item.id());
-                    let references = item
-                        .type_details()
-                        .expect("references type")
-                        .typ
-                        .references()
-                        .into_iter()
-                        .cloned()
-                        .filter(|id| !self.ids.contains(id))
-                        .map(|id| self.catalog.get_item(&id));
-                    queue.extend(references);
+                    // let references = item
+                    //     .type_details()
+                    //     .expect("references type")
+                    //     .typ
+                    //     .references()
+                    //     .into_iter()
+                    //     .cloned()
+                    //     .filter(|id| !self.ids.contains(id))
+                    //     .map(|id| self.catalog.get_item(&id));
+                    // queue.extend(references);
                 }
 
                 Ok(ResolvedDataType::Named {
