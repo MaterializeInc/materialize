@@ -171,7 +171,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
                                     Some(frontier) = resume_uppers.next() => {
                                         if let Some(offset) = frontier.as_option() {
                                             let total = offset.offset.saturating_sub(1);
-                                            if total > offset_committed{
+                                            if total > offset_committed {
                                                 // Note we don't subtract from the upper, as we
                                                 // want to report total number of offsets we have processed.
                                                 offset_committed = total;
@@ -180,6 +180,10 @@ impl SourceRender for LoadGeneratorSourceConnection {
                                     }
                                 }
                             }
+
+                            // TODO(guswynn): generators have various definitions of "snapshot", so
+                            // we are not going to implement snapshot progress statistics for them
+                            // right now, but will come back to it.
                             stats_output
                                 .give(
                                     &stats_cap,
