@@ -193,12 +193,12 @@ impl JoinImplementation {
                 input.visit(&mut attributes)?;
 
                 let cardinality = attributes
-                    .get_results_mut::<Cardinality>()
-                    .pop()
+                    .get_results::<Cardinality>()
+                    .last()
                     .expect("cardinality");
 
                 cardinality.collect_symbolics(&mut symbolics);
-                symbolic_cardinalities.push(cardinality);
+                symbolic_cardinalities.push(cardinality.clone());
             }
 
             let mut cardinality_stats = BTreeMap::new();
