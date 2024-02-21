@@ -62,6 +62,8 @@ use crate::metrics::MetricsRegistry;
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
 
+pub use mz_instrument_macro::instrument;
+
 /// Application tracing configuration.
 ///
 /// See the [`configure`] function for details.

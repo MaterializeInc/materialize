@@ -30,6 +30,7 @@ either = "1.8.0"
 futures = { version = "0.3.25", optional = true }
 hibitset = { version = "0.6.4", optional = true }
 lgalloc = { version = "0.1", optional = true }
+mz-instrument-macro = { path = "../instrument-macro", optional = true }
 mz-test-macro = { path = "../test-macro", default-features = false }
 num = "0.4.0"
 once_cell = "1.16.0"
@@ -125,6 +126,7 @@ tracing_ = [
   "hyper",
   "hyper-tls",
   "metrics",
+  "mz-instrument-macro",
   "opentelemetry",
   "opentelemetry-otlp",
   "opentelemetry_sdk",

@@ -1,0 +1,29 @@
+[package]
+name = "mz-instrument-macro"
+description = "instrument macro with improved default safety."
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Materialize, Inc."]
+
+[lints]
+workspace = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = { version = "1.0" }
+syn = { version = "1.0", features = ["extra-traits", "full"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+tracing = "0.1.37"
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
+[lib]
+proc-macro = true
