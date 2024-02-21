@@ -17,8 +17,6 @@ use mz_expr::{LocalId, MirRelationExpr};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::explain::{AnnotatedPlan, Attributes};
 
-pub mod analysis;
-
 mod arity;
 pub mod cardinality;
 mod column_names;

@@ -117,22 +117,31 @@ pub mod common {
         /// This ensures that `A` will be performed, and before any analysis that
         /// invokes this method.
         pub fn require<A: Analysis>(&mut self) {
+            // The method recursively descends through required analyses, first
+            // installing each in `result.analyses` and second in `result.order`.
+            // The first is an obligation, and serves as an indication that we have
+            // found a cycle in dependencies.
             let type_id = TypeId::of::<Bundle<A>>();
-            if !self.result.analyses.contains_key(&type_id) {
-                A::announce_dependencies(self);
+            if !self.result.order.contains(&type_id) {
+                // If we have not sequenced `type_id` but have a bundle, it means
+                // we are in the process of fulfilling its requirements: a cycle.
                 if self.result.analyses.contains_key(&type_id) {
-                    // panic!("Cyclic dependency detected: {:?}");
+                    // TODO: Find a better way to identify `A`.
+                    panic!("Cyclic dependency detected: {:?}", type_id);
                 }
-                self.result.order.push(type_id);
+                // Insert the analysis bundle first, so that we can detect cycles.
                 self.result.analyses.insert(
                     type_id,
                     Box::new(Bundle::<A> {
                         results: Vec::new(),
                     }),
                 );
+                A::announce_dependencies(self);
+                // All dependencies are successfully sequenced; sequence `type_id`.
+                self.result.order.push(type_id);
             }
         }
-        /// Complete the building, and return a usable `Derivation`.
+        /// Complete the building: perform analyses and return the resulting `Derivation`.
         pub fn visit(self, expr: &MirRelationExpr) -> Derived {
             let mut result = self.result;
 
@@ -170,7 +179,7 @@ pub mod common {
                     Err(local_id) => {
                         // Capture the *remaining* work, which we'll need to flip around.
                         let prior = result.bindings.insert(local_id, rev_post_order.len());
-                        assert!(prior.is_none());
+                        assert!(prior.is_none(), "Shadowing not allowed");
                     }
                 }
             }
