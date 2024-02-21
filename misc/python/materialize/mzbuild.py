@@ -258,7 +258,7 @@ class CargoBuild(CargoPreImage):
     ) -> list[str]:
         rustflags = rustc_flags.coverage if rd.coverage else ["--cfg=tokio_unstable"]
 
-        cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
+        cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags), "--workspace"]
 
         for bin in bins:
             cargo_build.extend(["--bin", bin])

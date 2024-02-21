@@ -111,19 +111,23 @@ members = [
 # * `fivetran-destination` since it depends on the `fivetran-sdk` submodule.
 #
 default-members = [
+    "src/balancerd",
+    "src/catalog-debug",
     "src/clusterd",
     "src/environmentd",
-    "src/balancerd",
-    "src/testdrive",
+    "src/kafka-util",
+    "src/mz",
+    "src/persist-cli",
     "src/sqllogictest",
     "src/stash-debug",
-    "src/catalog-debug",
+    "src/testdrive",
+    "test/metabase/smoketest",
 ]
 
 exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
     #  invalidations for the core Mz crates.
-    "misc/wasm/*"
+    "misc/wasm/*",
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features.
