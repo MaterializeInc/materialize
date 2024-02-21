@@ -145,7 +145,11 @@ def detect_referenced_issues(filename: str) -> list[IssueRef]:
         for line_number, text in comment_blocks(file):
             if not REFERENCE_RE.search(text) or IGNORE_RE.search(text):
                 continue
-            if issue_match := ISSUE_RE.search(text):
+
+            offset = 0
+            while issue_match := ISSUE_RE.search(text, offset):
+                offset = issue_match.span()[1]
+
                 groups = [
                     (key, value)
                     for key, value in issue_match.groupdict().items()
