@@ -49,10 +49,12 @@ one
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received)
+  SUM(u.messages_received),
+  SUM(u.offset_known),
+  SUM(u.offset_committed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 1
-remote2 true 1
+remote1 true 1 1 1
+remote2 true 1 1 1

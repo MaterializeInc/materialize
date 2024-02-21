@@ -88,3 +88,6 @@ REVOKE SELECT ON public."""select""" FROM priv;
   FOR SCHEMAS(public);
 contains:insufficient privileges
 detail:user priv lacks SELECT privileges for tables public."""select""", public."select"
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP SCHEMA IF EXISTS other CASCADE;

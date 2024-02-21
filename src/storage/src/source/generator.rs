@@ -93,6 +93,16 @@ impl SourceRender for LoadGeneratorSourceConnection {
             let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
 
             if !config.responsible_for(()) {
+                // Emit 0, to mark this worker as having started up correctly.
+                stats_output
+                    .give(
+                        &stats_cap,
+                        ProgressStatisticsUpdate {
+                            offset_known: 0,
+                            offset_committed: 0,
+                        },
+                    )
+                    .await;
                 return;
             }
 

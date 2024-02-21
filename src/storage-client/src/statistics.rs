@@ -364,7 +364,7 @@ impl<T> SkippableGauge<T> {
     }
 }
 
-impl<T: StorageMetric + Default + Clone> SkippableGauge<T> {
+impl<T: StorageMetric + Default + Clone + std::fmt::Debug> SkippableGauge<T> {
     fn summarize<'a, I>(values: I) -> Self
     where
         I: IntoIterator<Item = &'a Self>,
@@ -378,12 +378,13 @@ impl<T: StorageMetric + Default + Clone> SkippableGauge<T> {
         }));
 
         // If any are none, we can't aggregate.
-        Self(any_none.then_some(inner))
+        Self((!any_none).then_some(inner))
     }
 
     fn incorporate(&mut self, other: Self, field_name: &'static str) {
         match (&mut self.0, other.0) {
-            (None, _) | (_, None) => {}
+            (_, None) => {}
+            (None, Some(other)) => self.0 = Some(other),
             (Some(this), Some(other)) => this.incorporate(other, field_name),
         }
     }

@@ -184,6 +184,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
+                // Emit 0, to mark this worker as having started up correctly.
+                stats_output
+                    .give(
+                        &stats_cap[0],
+                        ProgressStatisticsUpdate {
+                            offset_known: 0,
+                            offset_committed: 0,
+                        },
+                    )
+                    .await;
                 return Ok(());
             }
 

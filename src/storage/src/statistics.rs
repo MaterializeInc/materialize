@@ -706,17 +706,15 @@ impl SourceStatistics {
 
     /// Set the `offset_known` stat to the given value.
     pub fn set_offset_known(&self, value: u64) {
-        let cur = self.stats.borrow_mut();
-        // Not yet exposed to users.
-        // cur.prom.offset_known = value;
+        let mut cur = self.stats.borrow_mut();
+        cur.stats.offset_known = Some(Some(value));
         cur.prom.offset_known.set(value);
     }
 
     /// Set the `offset_committed` stat to the given value.
     pub fn set_offset_committed(&self, value: u64) {
-        let cur = self.stats.borrow_mut();
-        // Not yet exposed to users.
-        // cur.prom.offset_committed = value;
+        let mut cur = self.stats.borrow_mut();
+        cur.stats.offset_committed = Some(Some(value));
         cur.prom.offset_committed.set(value);
     }
 }
