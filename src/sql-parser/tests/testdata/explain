@@ -223,3 +223,10 @@ EXPLAIN SELECT 665 AS OF 3
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT 665 AS OF 3
 =>
 ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Value(Number("3")))) }, false) })
+
+parse-statement
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10
+----
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers WHERE value > 10
+=>
+ExplainPushdown(ExplainPushdownStatement { explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("numbers")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: None, op: ">" }, expr1: Identifier([Ident("value")]), expr2: Some(Value(Number("10"))) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
