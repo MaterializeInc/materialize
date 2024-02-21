@@ -36,6 +36,8 @@ class Clusterd(Service):
 
         environment += [f"CLUSTERD_ENVIRONMENT_ID={environment_id}"]
 
+        options = ["--scratch-directory=/scratch", *options]
+
         config: ServiceConfig = {}
 
         if image:
