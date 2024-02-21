@@ -14,8 +14,10 @@ use mz_expr::MirRelationExpr;
 pub use common::{Derived, DerivedBuilder, DerivedView};
 
 pub use arity::Arity;
+pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
 pub use types::RelationType;
+pub use unique_keys::UniqueKeys;
 
 /// An analysis that can be applied bottom-up to a `MirRelationExpr`.
 pub trait Analysis: 'static {
@@ -155,13 +157,13 @@ pub mod common {
             // Each extracted slice corresponds to a child of the current expression.
             // We should end cleanly with an empty slice, otherwise there is an issue.
             let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
-            let sizes = &sizes[.. sizes.len() - 1];
+            let sizes = &sizes[..sizes.len() - 1];
 
             let offset = self.lower;
             let derived = self.derived;
             (0..).scan(sizes, move |sizes, _| {
                 if let Some(size) = sizes.last() {
-                    *sizes = &sizes[.. sizes.len() - size];
+                    *sizes = &sizes[..sizes.len() - size];
                     Some(Self {
                         derived,
                         lower: offset + sizes.len(),
@@ -170,7 +172,7 @@ pub mod common {
                 } else {
                     None
                 }
-            }).collect::<Vec<_>>().into_iter()
+            })
         }
     }
 

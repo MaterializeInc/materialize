@@ -14,9 +14,10 @@
 //! can be simplified to a map operation.
 
 use itertools::Itertools;
-use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 
+use crate::analysis::{DerivedBuilder, DerivedView};
+use crate::analysis::{RelationType, UniqueKeys};
 use crate::TransformCtx;
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
@@ -35,48 +36,79 @@ impl crate::Transform for ReduceElision {
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let result = relation.try_visit_mut_post(&mut |e| self.action(e));
+        // Assemble type information once for the whole expression.
+        let mut builder = DerivedBuilder::default();
+        builder.require::<RelationType>();
+        builder.require::<UniqueKeys>();
+        let derived = builder.visit(relation);
+        let derived_view = derived.as_view();
+
+        self.action(relation, derived_view);
+
         mz_repr::explain::trace_plan(&*relation);
-        result
+        Ok(())
     }
 }
 
 impl ReduceElision {
     /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
-        if let MirRelationExpr::Reduce {
-            input,
-            group_key,
-            aggregates,
-            monotonic: _,
-            expected_group_size: _,
-        } = relation
-        {
-            let input_type = input.typ();
-            if input_type.keys.iter().any(|keys| {
-                keys.iter()
-                    .all(|k| group_key.contains(&mz_expr::MirScalarExpr::Column(*k)))
-            }) {
-                let map_scalars = aggregates
-                    .iter()
-                    .map(|a| a.on_unique(&input_type.column_types))
-                    .collect_vec();
+    pub fn action(&self, relation: &mut MirRelationExpr, derived: DerivedView) {
+        let mut todo = vec![(relation, derived)];
+        while let Some((expr, view)) = todo.pop() {
+            if let MirRelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+                monotonic: _,
+                expected_group_size: _,
+            } = expr
+            {
+                // Pull the input type information from the derived view.
+                let types = view
+                    .results::<RelationType>()
+                    .expect("RelationType required");
+                let input_type = types[types.len() - 2]
+                    .as_ref()
+                    .expect("Expression not well-typed");
+                let keys = view.results::<UniqueKeys>().expect("UniqueKeys required");
+                let input_keys = &keys[keys.len() - 2];
 
-                let mut result = input.take_dangerous();
+                if input_keys.iter().any(|keys| {
+                    keys.iter()
+                        .all(|k| group_key.contains(&mz_expr::MirScalarExpr::Column(*k)))
+                }) {
+                    let map_scalars = aggregates
+                        .iter()
+                        .map(|a| a.on_unique(input_type))
+                        .collect_vec();
 
-                // Append the group keys, then any `map_scalars`, then project
-                // to put them all in the right order.
-                let mut new_scalars = group_key.clone();
-                new_scalars.extend(map_scalars);
-                result = result.map(new_scalars).project(
-                    (input_type.column_types.len()
-                        ..(input_type.column_types.len() + (group_key.len() + aggregates.len())))
-                        .collect(),
-                );
+                    let mut result = input.take_dangerous();
 
-                *relation = result;
+                    let input_arity = input_type.len();
+
+                    assert_eq!(input_arity, result.arity());
+
+                    // Append the group keys, then any `map_scalars`, then project
+                    // to put them all in the right order.
+                    let mut new_scalars = group_key.clone();
+                    new_scalars.extend(map_scalars);
+                    result = result.map(new_scalars).project(
+                        (input_arity..(input_arity + (group_key.len() + aggregates.len())))
+                            .collect(),
+                    );
+
+                    *expr = result;
+
+                    // Continue on `input`, which is now hidden behind a map and project stage.
+                    if let MirRelationExpr::Project { input, .. } = expr {
+                        if let MirRelationExpr::Map { input, .. } = &mut **input {
+                            todo.push((&mut **input, view.children_rev().next().unwrap()))
+                        }
+                    }
+                }
+            } else {
+                todo.extend(expr.children_mut().rev().zip(view.children_rev()));
             }
         }
-        Ok(())
     }
 }
