@@ -98,17 +98,22 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in c.workflows:
-        # clear postgres to avoid issues with special arguments conflicting with existing state
-        c.kill("postgres")
-        c.rm("postgres")
+    # If args were passed then we are running the main CDC workflow
+    if parser.args:
+        workflow_cdc(c, parser)
+    else:
+        # Otherwise we are running all workflows
+        for name in c.workflows:
+            # clear postgres to avoid issues with special arguments conflicting with existing state
+            c.kill("postgres")
+            c.rm("postgres")
 
-        if name == "default":
-            continue
+            if name == "default":
+                continue
 
-        if name == "ceased-status":
-            # TODO: https://github.com/MaterializeInc/materialize/issues/25198
-            continue
+            if name == "ceased-status":
+                # TODO: https://github.com/MaterializeInc/materialize/issues/25198
+                continue
 
-        with c.test_case(name):
-            c.workflow(name)
+            with c.test_case(name):
+                c.workflow(name)
