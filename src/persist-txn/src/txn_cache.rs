@@ -545,9 +545,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
 
             // Advance the registration times.
             while let Some(x) = times.registered.front_mut() {
-                if x.register_ts < self.since_ts {
-                    x.register_ts.clone_from(&self.since_ts);
-                }
                 if let Some(forget_ts) = x.forget_ts.as_ref() {
                     if forget_ts < &self.since_ts {
                         times.registered.pop_front();
