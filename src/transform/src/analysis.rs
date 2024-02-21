@@ -11,7 +11,7 @@
 
 use mz_expr::MirRelationExpr;
 
-pub use common::{Derived, DerivedBuilder};
+pub use common::{Derived, DerivedBuilder, DerivedView};
 
 pub use arity::Arity;
 pub use subtree::SubtreeSize;
@@ -97,6 +97,80 @@ pub mod common {
                 *offset += sizes[result];
                 Some(result)
             })
+        }
+
+        /// Recast the derived data as a view that can be subdivided into views over child state.
+        pub fn as_view<'a>(&'a self) -> DerivedView<'a> {
+            DerivedView {
+                derived: self,
+                lower: 0,
+                upper: self
+                    .results::<SubtreeSize>()
+                    .expect("SubtreeSize missing")
+                    .len(),
+            }
+        }
+    }
+
+    /// The subset of a `Derived` corresponding to an expression and its children.
+    #[allow(missing_debug_implementations)]
+    pub struct DerivedView<'a> {
+        derived: &'a Derived,
+        lower: usize,
+        upper: usize,
+    }
+
+    impl<'a> DerivedView<'a> {
+        /// The results for expression and its children.
+        ///
+        /// The results for the expression itself will be the last element.
+        pub fn results<A: Analysis>(&self) -> Option<&'a [A::Value]> {
+            self.derived
+                .results::<A>()
+                .map(|slice| &slice[self.lower..self.upper])
+        }
+
+        /// Bindings from local identifiers to result offsets for analysis values.
+        ///
+        /// This method returns all bindings, which may include bindings not in scope for
+        /// the expression and its children; they should be ignored.
+        pub fn bindings(&self) -> &'a BTreeMap<LocalId, usize> {
+            self.derived.bindings()
+        }
+
+        /// Subviews over `self` corresponding to the children of the expression, in reverse order.
+        ///
+        /// These views should disjointly cover the same interval as `self`, except for the last element
+        /// which corresponds to the expression itself.
+        ///
+        /// The number of produced items should exactly match the number of children, which need not
+        /// be provided as an argument. This relies on the well-formedness of the view, which should
+        /// exhaust itself just as it enumerates its last (the first) child view.
+        pub fn children_rev(&self) -> impl Iterator<Item = DerivedView<'a>> + 'a {
+            // This logic is copy/paste from `Derived::children_of_rev` but it was annoying to layer
+            // it over the output of that function, and perhaps clearer to rewrite in any case.
+
+            // Discard the last element (the size of the expression's subtree).
+            // Repeatedly read out the last element, then peel off that many elements.
+            // Each extracted slice corresponds to a child of the current expression.
+            // We should end cleanly with an empty slice, otherwise there is an issue.
+            let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
+            let sizes = &sizes[.. sizes.len() - 1];
+
+            let offset = self.lower;
+            let derived = self.derived;
+            (0..).scan(sizes, move |sizes, _| {
+                if let Some(size) = sizes.last() {
+                    *sizes = &sizes[.. sizes.len() - size];
+                    Some(Self {
+                        derived,
+                        lower: offset + sizes.len(),
+                        upper: offset + sizes.len() + size,
+                    })
+                } else {
+                    None
+                }
+            }).collect::<Vec<_>>().into_iter()
         }
     }
 
@@ -272,8 +346,7 @@ pub mod subtree {
 /// Expression arities
 mod arity {
 
-    use super::subtree::SubtreeSize;
-    use super::{Analysis, Derived, DerivedBuilder};
+    use super::{Analysis, Derived};
     use mz_expr::MirRelationExpr;
 
     /// Analysis that determines the number of columns of relation expressions.
@@ -282,10 +355,6 @@ mod arity {
 
     impl Analysis for Arity {
         type Value = usize;
-
-        fn announce_dependencies(builder: &mut DerivedBuilder) {
-            builder.require::<SubtreeSize>();
-        }
 
         fn derive(
             expr: &MirRelationExpr,
@@ -306,8 +375,7 @@ mod arity {
 /// Expression types
 mod types {
 
-    use super::subtree::SubtreeSize;
-    use super::{Analysis, Derived, DerivedBuilder};
+    use super::{Analysis, Derived};
     use mz_expr::MirRelationExpr;
     use mz_repr::ColumnType;
 
@@ -317,10 +385,6 @@ mod types {
 
     impl Analysis for RelationType {
         type Value = Option<Vec<ColumnType>>;
-
-        fn announce_dependencies(builder: &mut DerivedBuilder) {
-            builder.require::<SubtreeSize>();
-        }
 
         fn derive(
             expr: &MirRelationExpr,
@@ -348,7 +412,6 @@ mod types {
 mod unique_keys {
 
     use super::arity::Arity;
-    use super::subtree::SubtreeSize;
     use super::{Analysis, Derived, DerivedBuilder};
     use mz_expr::MirRelationExpr;
 
@@ -367,7 +430,6 @@ mod unique_keys {
         type Value = Vec<Vec<usize>>;
 
         fn announce_dependencies(builder: &mut DerivedBuilder) {
-            builder.require::<SubtreeSize>();
             builder.require::<Arity>();
         }
 
@@ -399,8 +461,7 @@ mod unique_keys {
 /// negative accumulations.
 mod non_negative {
 
-    use super::subtree::SubtreeSize;
-    use super::{Analysis, Derived, DerivedBuilder};
+    use super::{Analysis, Derived};
     use mz_expr::{Id, MirRelationExpr};
 
     /// Analysis that determines if all accumulations at all times are non-negative.
@@ -411,10 +472,6 @@ mod non_negative {
 
     impl Analysis for NonNegative {
         type Value = bool;
-
-        fn announce_dependencies(builder: &mut DerivedBuilder) {
-            builder.require::<SubtreeSize>();
-        }
 
         fn derive(
             expr: &MirRelationExpr,
