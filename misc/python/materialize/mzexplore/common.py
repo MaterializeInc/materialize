@@ -27,6 +27,20 @@ class ExplaineeType(Enum):
         return (self.value & other.value) > 0
 
 
+class ExplainFormat(Enum):
+    TEXT = "TEXT"
+    JSON = "JSON"
+
+    def __str__(self):
+        return self.name
+
+    def suffix(self):
+        if self == ExplainFormat.JSON:
+            return "json"
+
+        return "txt"
+
+
 class ExplainStage(str, Enum):
     RAW_PLAN = "RAW PLAN"
     DECORRELATED_PLAN = "DECORRELATED PLAN"
