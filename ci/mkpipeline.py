@@ -65,6 +65,8 @@ so it is executed.""",
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
 
+    print(f"Pipeline is: {args.pipeline}")
+
     # Make sure we have an up to date view of main.
     spawn.runv(["git", "fetch", "origin", "main"])
 
