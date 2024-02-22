@@ -19,7 +19,7 @@ use futures::future::{pending, BoxFuture, FutureExt};
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, Portal, PortalState, TransactionStatus,
+    EndTransactionAction, InProgressRows, Portal, PortalState, SessionConfig, TransactionStatus,
 };
 use mz_adapter::statement_logging::StatementEndedExecutionReason;
 use mz_adapter::{
@@ -34,14 +34,13 @@ use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
-use mz_repr::user::ExternalUserMetadata;
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
-use mz_sql::session::user::{User, INTERNAL_USER_NAMES};
+use mz_sql::session::user::INTERNAL_USER_NAMES;
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, Var, VarInput, MAX_COPY_FROM_SIZE};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
@@ -184,32 +183,11 @@ where
                 // Frontegg may return an email address with different casing than the user
                 // supplied via the pgwire username field. We want to use the Frontegg casing as
                 // canonical.
-                let mut session = adapter_client.new_session(
-                    conn.conn_id().clone(),
-                    User {
-                        name: claims.email.clone(),
-                        external_metadata: Some(ExternalUserMetadata {
-                            user_id: claims.user_id,
-                            admin: claims.is_admin,
-                        }),
-                    },
-                );
-
-                // Whenever refreshing a token, if the metadata has changed we'll update our
-                // session vars.
-                if session
-                    .register_external_metadata_transmitter(refresh_updates)
-                    .is_err()
-                {
-                    // TODO(parkmycar): Promote this to a panic as long as we don't see it in production.
-                    tracing::error!("Double register of external metadata transmitter!");
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INTERNAL_ERROR,
-                            "resource already registered",
-                        ))
-                        .await;
-                }
+                let session = adapter_client.new_session(SessionConfig {
+                    conn_id: conn.conn_id().clone(),
+                    user: claims.email.clone(),
+                    external_metadata_rx: Some(refresh_updates),
+                });
 
                 (session, valid_until_fut.left_future())
             }
@@ -224,13 +202,11 @@ where
             }
         }
     } else {
-        let session = adapter_client.new_session(
-            conn.conn_id().clone(),
-            User {
-                name: user,
-                external_metadata: None,
-            },
-        );
+        let session = adapter_client.new_session(SessionConfig {
+            conn_id: conn.conn_id().clone(),
+            user,
+            external_metadata_rx: None,
+        });
         // No frontegg check, so is_expired never resolves.
         let is_expired = pending().right_future();
         (session, is_expired)
