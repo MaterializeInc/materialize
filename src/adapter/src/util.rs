@@ -352,7 +352,9 @@ impl ShouldHalt for DataflowCreationError {
             DataflowCreationError::SinceViolation(_)
             | DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
-            | DataflowCreationError::MissingAsOf => false,
+            | DataflowCreationError::MissingAsOf
+            | DataflowCreationError::EmptyAsOfForSubscribe
+            | DataflowCreationError::EmptyAsOfForCopyTo => false,
         }
     }
 }
