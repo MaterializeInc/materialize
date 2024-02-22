@@ -27,7 +27,6 @@ ALTER SYSTEM SET enable_mysql_source = true
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
-# TODO: #24797: needs to be disabled because when this test fails, schemas don't get removed, causing follow-up failures
 $ mysql-execute name=mysql
 DROP SCHEMA IF EXISTS schema1;
 CREATE SCHEMA schema1;

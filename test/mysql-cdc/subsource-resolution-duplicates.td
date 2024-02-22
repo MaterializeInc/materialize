@@ -24,6 +24,7 @@ $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-pass
 
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
+DROP DATABASE IF EXISTS other;
 CREATE DATABASE public;
 CREATE DATABASE other;
 USE public;

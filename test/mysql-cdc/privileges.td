@@ -22,6 +22,7 @@ USE public;
 
 CREATE USER priv IDENTIFIED BY 'priv';
 
+DROP SCHEMA IF EXISTS other;
 CREATE SCHEMA other;
 CREATE TABLE other.s (a int);
 # do not grant any privileges to priv

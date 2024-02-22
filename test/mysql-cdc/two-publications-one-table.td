@@ -49,7 +49,7 @@ INSERT INTO t1 VALUES (1);
 > SELECT * FROM t1_1;
 1
 
-> SELECT * FROM t1_1;
+> SELECT * FROM t1_2;
 1
 
 $ mysql-execute name=mysql
@@ -59,7 +59,7 @@ INSERT INTO t1 VALUES (2);
 1
 2
 
-> SELECT * FROM t1_1;
+> SELECT * FROM t1_2;
 1
 2
 

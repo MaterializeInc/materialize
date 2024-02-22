@@ -51,9 +51,8 @@ INSERT INTO nonpk_table VALUES (2, 2), (2, 2);
 
 # no range types in MySQL
 
-# TODO: #25032: add numeric_col DECIMAL(8,4) with 1234.5678 as value
-CREATE TABLE types_table (char_col char(3), date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col VARCHAR(36), double_col DOUBLE PRECISION);
-INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 1234.56768);
+CREATE TABLE types_table (char_col char(3), date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col VARCHAR(36), double_col DOUBLE PRECISION, numeric_col DECIMAL(8,4));
+INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 1234.56768, 1234.5678);
 
 # no array_types_table: MySQL does not support array types
 
@@ -298,11 +297,10 @@ contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER 
 2 2
 
 > SELECT * FROM types_table;
-"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768"
+"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
 
-# TODO: #25032 (numeric)
-# > SELECT pg_typeof(numeric) FROM types_table;
-# "numeric"
+> SELECT pg_typeof(numeric_col) FROM types_table;
+"numeric"
 
 # no array_types_table: MySQL does not support array types
 
@@ -384,7 +382,7 @@ DELETE FROM nonpk_table WHERE f1 = 1 LIMIT 1;
 UPDATE nonpk_table SET f1 = f1 + 10 WHERE f1 = 1;
 UPDATE nonpk_table SET f1 = f1 + 100 WHERE f1 = 3;
 
-INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 1234.56768);
+INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 1234.56768, 1234.5678);
 
 INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), 'abc', 'abc');
 
@@ -427,8 +425,8 @@ UPDATE utf8_table SET f1 = concat(f1, f1), f2 = concat(f2, f2);
 2 2
 
 > SELECT * FROM types_table;
-"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768"
-"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768"
+"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
+"foo" "2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
 
 > SELECT LENGTH(f1), LENGTH(f2), LENGTH(f3) FROM large_text;
 16777216 1048576 65535

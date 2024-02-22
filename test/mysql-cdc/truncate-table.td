@@ -44,5 +44,6 @@ INSERT INTO t1 VALUES (1);
 $ mysql-execute name=mysql
 TRUNCATE TABLE t1;
 
-> SELECT * FROM t1;
-1
+# TODO: #25051 (truncate table)
+# > SELECT count(*) FROM t1;
+# 0

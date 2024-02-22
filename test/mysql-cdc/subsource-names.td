@@ -37,6 +37,7 @@ INSERT INTO t1 VALUES (1);
 CREATE TABLE t2 (f1 INTEGER);
 INSERT INTO t2 VALUES (5);
 
+> DROP SCHEMA IF EXISTS a;
 > CREATE SCHEMA a;
 > CREATE SOURCE a.mz_source
   FROM MYSQL CONNECTION mysql_conn
@@ -45,6 +46,7 @@ INSERT INTO t2 VALUES (5);
 > SELECT * FROM a.t1;
 1
 
+> DROP SCHEMA IF EXISTS another;
 > CREATE SCHEMA another;
 > CREATE SOURCE another.mz_source
   FROM MYSQL CONNECTION mysql_conn
@@ -55,6 +57,9 @@ INSERT INTO t2 VALUES (5);
 
 > SELECT * FROM another.t2;
 5
+
+> DROP SCHEMA IF EXISTS foo;
+> DROP SCHEMA IF EXISTS bar;
 
 > CREATE SCHEMA foo;
 > CREATE SCHEMA bar;
@@ -76,6 +81,7 @@ contains: unknown
 > SELECT * FROM bar.table2;
 5
 
+> DROP SCHEMA IF EXISTS baz;
 > CREATE SCHEMA baz;
 > CREATE SOURCE baz.mz_source
   FROM MYSQL CONNECTION mysql_conn

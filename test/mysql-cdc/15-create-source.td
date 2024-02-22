@@ -59,6 +59,7 @@ CREATE TABLE t2 (f1 INTEGER);
 INSERT INTO t2 VALUES (5);
 COMMIT;
 
+> DROP SCHEMA IF EXISTS a;
 > CREATE SCHEMA a;
 > CREATE SOURCE a.mz_source FROM MYSQL CONNECTION mysqc
   FOR TABLES (public.t1);
@@ -66,6 +67,7 @@ COMMIT;
 > SELECT * FROM a.t1;
 1
 
+> DROP SCHEMA IF EXISTS another;
 > CREATE SCHEMA another;
 > CREATE SOURCE another.mz_source FROM MYSQL CONNECTION mysqc
   FOR TABLES (public.t1, public.t2);
@@ -76,6 +78,8 @@ COMMIT;
 > SELECT * FROM another.t2;
 5
 
+> DROP SCHEMA IF EXISTS foo;
+> DROP SCHEMA IF EXISTS bar;
 > CREATE SCHEMA foo;
 > CREATE SCHEMA bar;
 > CREATE SOURCE foo.mz_source FROM MYSQL CONNECTION mysqc
@@ -95,6 +99,7 @@ contains: unknown
 > SELECT * FROM bar.table2;
 5
 
+> DROP SCHEMA IF EXISTS baz;
 > CREATE SCHEMA baz;
 > CREATE SOURCE baz.mz_source FROM MYSQL CONNECTION mysqc
   FOR SCHEMAS (public);
