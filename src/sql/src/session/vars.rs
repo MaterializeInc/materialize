@@ -1241,7 +1241,7 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
 /// is additionally gated by a feature flag.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
-    value: false,
+    value: true,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
     internal: false,
 };
