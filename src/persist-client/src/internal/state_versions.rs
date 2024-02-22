@@ -1085,6 +1085,9 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             }
         });
 
+        // Check that the sets of batches overall cover the same pTVC.
+        // Partial ordering means we can't just take the first and last batches; instead compute
+        // bounds using the lattice operations.
         fn overall_desc<'a, T: Timestamp + Lattice>(
             iter: impl Iterator<Item = &'a Description<T>>,
         ) -> (Antichain<T>, Antichain<T>) {
@@ -1101,6 +1104,7 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
 
+        // Check that the overall set of parts contained in both representations is the same.
         let inc_parts: HashSet<_> = self
             .inc_batches
             .iter()
@@ -1115,6 +1119,7 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             .collect();
         assert_eq!(inc_parts, full_parts);
 
+        // Check that both representations have the same rollups.
         assert_eq!(self.inc_rollups, self.full_rollups);
     }
 }
