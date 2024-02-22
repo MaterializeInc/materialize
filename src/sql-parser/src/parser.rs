@@ -2604,18 +2604,12 @@ impl<'a> Parser<'a> {
 
         let (col_names, key_constraint) = self.parse_source_columns()?;
 
-        // For webhook sources we require `IN CLUSTER`, so track the position for an error message.
-        let cluster_err = self.expected(self.peek_pos(), "IN CLUSTER", self.peek_token());
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
 
         // Webhook Source, which works differently than all other sources.
         if self.peek_keyword(WEBHOOK) {
-            return self.parse_create_webhook_source(
-                name,
-                if_not_exists,
-                (in_cluster, cluster_err),
-            );
+            return self.parse_create_webhook_source(name, if_not_exists, in_cluster);
         }
 
         let connection = self.parse_create_source_connection()?;
@@ -2782,10 +2776,8 @@ impl<'a> Parser<'a> {
         &mut self,
         name: UnresolvedItemName,
         if_not_exists: bool,
-        in_cluster: (Option<RawClusterName>, Result<(), ParserError>),
+        in_cluster: Option<RawClusterName>,
     ) -> Result<Statement<Raw>, ParserError> {
-        let in_cluster = in_cluster.0.ok_or_else(|| in_cluster.1.unwrap_err())?;
-
         // Consume this keyword because we only peeked it earlier.
         self.expect_keyword(WEBHOOK)?;
 

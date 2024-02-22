@@ -428,8 +428,11 @@ generate_extracted_config!(MySqlConfigOption, (Details, String));
 
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
-    stmt: CreateWebhookSourceStatement<Aug>,
+    mut stmt: CreateWebhookSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
+    // we plan to normalize when we canonicalize the create statement.
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 
@@ -439,7 +442,8 @@ pub fn plan_create_webhook_source(
         body_format,
         include_headers,
         validate_using,
-        in_cluster,
+        // We resolved `in_cluster` above, so we want to ignore it here.
+        in_cluster: _,
     } = stmt;
 
     let validate_using = validate_using
@@ -545,10 +549,6 @@ pub fn plan_create_webhook_source(
 
     let typ = RelationType::new(column_ty);
     let desc = RelationDesc::new(typ, column_names);
-
-    // Webhook sources must currently specify the cluster on which they run, so
-    // we don't need to wait to normalize the statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut Some(in_cluster))?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;

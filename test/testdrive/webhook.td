@@ -506,6 +506,18 @@ foo-after
 bar-bar
 baz-after
 
+# Creating a webhook source without specifying the cluster.
+
+$ set-from-sql var=current-cluster
+SHOW cluster;
+
+> CREATE SOURCE webhook_in_current FROM WEBHOOK BODY FORMAT JSON;
+
+> SELECT c.name = '${current-cluster}' FROM mz_clusters c JOIN mz_sources s ON c.id = s.cluster_id WHERE s.name = 'webhook_in_current';
+true
+
+> DROP SOURCE webhook_in_current;
+
 # Dropping a webhook source should drop the underlying persist shards.
 
 $ set-from-sql var=webhook-source-id

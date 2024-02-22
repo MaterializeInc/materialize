@@ -703,7 +703,7 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub body_format: Format<T>,
     pub include_headers: CreateWebhookSourceIncludeHeaders,
     pub validate_using: Option<CreateWebhookSourceCheck<T>>,
-    pub in_cluster: T::ClusterName,
+    pub in_cluster: Option<T::ClusterName>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
@@ -714,8 +714,10 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
         }
         f.write_node(&self.name);
 
-        f.write_str(" IN CLUSTER ");
-        f.write_node(&self.in_cluster);
+        if let Some(cluster_name) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster_name);
+        }
 
         f.write_str(" FROM WEBHOOK ");
 
