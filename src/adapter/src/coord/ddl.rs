@@ -62,9 +62,7 @@ use crate::util::ResultExt;
 use crate::{catalog, flags, AdapterError, TimestampProvider};
 
 /// State provided to a catalog transaction closure.
-pub struct CatalogTxn<'a, T> {
-    pub(crate) dataflow_client: &'a mz_controller::Controller<T>,
-
+pub struct CatalogTxn<'a> {
     // TODO: This field is currently unused. Consider removing it.
     #[allow(dead_code)]
     pub(crate) catalog: &'a CatalogState,
@@ -209,7 +207,7 @@ impl Coordinator {
         f: F,
     ) -> Result<(R, BuiltinTableAppendNotify), AdapterError>
     where
-        F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, AdapterError>,
+        F: FnOnce(CatalogTxn) -> Result<R, AdapterError>,
     {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
@@ -505,7 +503,6 @@ impl Coordinator {
 
         let Coordinator {
             catalog,
-            controller,
             active_conns,
             ..
         } = self;
@@ -517,10 +514,7 @@ impl Coordinator {
             result,
         } = catalog
             .transact(oracle_write_ts, conn, ops, |catalog| {
-                f(CatalogTxn {
-                    dataflow_client: controller,
-                    catalog,
-                })
+                f(CatalogTxn { catalog })
             })
             .await?;
 
