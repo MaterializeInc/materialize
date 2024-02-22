@@ -39,6 +39,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
@@ -62,7 +63,6 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{self, Duration, Interval, MissedTickBehavior};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::instrument;
 use uuid::Uuid;
 
 pub mod clusters;

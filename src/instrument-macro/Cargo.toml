@@ -11,9 +11,6 @@ authors = ["Materialize, Inc."]
 workspace = true
 
 [dependencies]
-proc-macro2 = "1.0"
-quote = { version = "1.0" }
-syn = { version = "1.0", features = ["extra-traits", "full"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

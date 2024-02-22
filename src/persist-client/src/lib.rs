@@ -24,6 +24,7 @@ use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
+use mz_ore::instrument;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
 use mz_persist_types::columnar::{ColumnPush, Schema};
@@ -32,7 +33,6 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tracing::instrument;
 use uuid::Uuid;
 
 use crate::async_runtime::IsolatedRuntime;

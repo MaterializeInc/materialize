@@ -864,7 +864,7 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
-    #[tracing::instrument(level = "info", skip(self, pcx))]
+    #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
         id: GlobalId,

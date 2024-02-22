@@ -25,45 +25,36 @@
 
 extern crate proc_macro;
 
-use proc_macro::TokenStream;
-use quote::quote;
-use syn::parse_macro_input;
-use syn::AttributeArgs;
-use syn::ItemFn;
-use syn::Meta;
-use syn::NestedMeta;
+use proc_macro::{TokenStream, TokenTree};
 
 #[proc_macro_attribute]
 pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(attr as AttributeArgs);
-    let input = parse_macro_input!(item as ItemFn);
-
-    let mut output = Vec::new();
-    for arg in &args {
-        match arg {
-            NestedMeta::Meta(Meta::Path(path)) => {
-                if let Some(ident) = path.get_ident() {
-                    // Forcibly included, so remove.
-                    if *ident == "skip_all" {
-                        continue;
+    // syn appears to not be able to parse the `%` part of things like `#[instrument(fields(shard =
+    // %id))]`, so we use the more naive proc_macro crate and look for strings.
+    let mut iter = attr.into_iter().peekable();
+    let mut args = String::from("skip_all");
+    let mut delim = ",";
+    while let Some(tok) = iter.next() {
+        match &tok {
+            TokenTree::Ident(ident) => match ident.to_string().as_str() {
+                "skip_all" => {
+                    // If the next token is a comma, remove it.
+                    if let Some(next) = iter.peek() {
+                        if next.to_string() == "," {
+                            iter.next();
+                        }
                     }
+                    continue;
                 }
-            }
-            NestedMeta::Meta(Meta::List(list)) => {
-                if let Some(ident) = list.path.get_ident() {
-                    if *ident == "skip" {
-                        panic!("skip prohibited; use fields");
-                    }
-                }
-            }
+                "skip" => panic!("skip prohibited; use fields"),
+                _ => {}
+            },
             _ => {}
         }
-        output.push(arg);
+        args.push_str(delim);
+        delim = "";
+        args.push_str(&tok.to_string());
     }
-
-    let result = quote! {
-      #[tracing::instrument(skip_all, #(#output),*)]
-      #input
-    };
-    result.into()
+    let res = format!("#[::tracing::instrument({args})]\n{item}");
+    res.parse().unwrap()
 }
