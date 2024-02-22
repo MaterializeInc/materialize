@@ -52,10 +52,6 @@ def main() -> None:
             f"Fetched {len(last_build_step_outcomes)} finished builds of pipeline {pipeline_slug} and step {step_key}"
         )
 
-    index_of_last_failed_execution = determine_index_of_last_failed_execution(
-        last_build_step_outcomes
-    )
-    last_execution_on_main_failed = index_of_last_failed_execution == 0
     failed_execution_count = len(
         [execution for execution in last_build_step_outcomes if not execution.passed]
     )
@@ -64,6 +60,11 @@ def main() -> None:
     if failed_execution_count == 0:
         print("None of the fetched builds failed")
         return
+
+    index_of_last_failed_execution = determine_index_of_last_failed_execution(
+        last_build_step_outcomes
+    )
+    last_execution_on_main_failed = index_of_last_failed_execution == 0
 
     url_to_last_failed_build_step = f"{builds_data[index_of_last_failed_execution]['web_url']}#{last_build_step_outcomes[index_of_last_failed_execution].id}"
 
