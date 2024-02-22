@@ -55,6 +55,7 @@ impl ReduceElision {
     pub fn action(&self, relation: &mut MirRelationExpr, derived: DerivedView) {
         let mut todo = vec![(relation, derived)];
         while let Some((expr, view)) = todo.pop() {
+            let mut replaced = false;
             if let MirRelationExpr::Reduce {
                 input,
                 group_key,
@@ -63,15 +64,16 @@ impl ReduceElision {
                 expected_group_size: _,
             } = expr
             {
-                // Pull the input type information from the derived view.
-                let types = view
-                    .results::<RelationType>()
-                    .expect("RelationType required");
-                let input_type = types[types.len() - 2]
+                let input_type = view
+                    .last_child()
+                    .value::<RelationType>()
+                    .expect("RelationType required")
                     .as_ref()
                     .expect("Expression not well-typed");
-                let keys = view.results::<UniqueKeys>().expect("UniqueKeys required");
-                let input_keys = &keys[keys.len() - 2];
+                let input_keys = view
+                    .last_child()
+                    .value::<UniqueKeys>()
+                    .expect("UniqueKeys required");
 
                 if input_keys.iter().any(|keys| {
                     keys.iter()
@@ -86,8 +88,6 @@ impl ReduceElision {
 
                     let input_arity = input_type.len();
 
-                    assert_eq!(input_arity, result.arity());
-
                     // Append the group keys, then any `map_scalars`, then project
                     // to put them all in the right order.
                     let mut new_scalars = group_key.clone();
@@ -98,15 +98,19 @@ impl ReduceElision {
                     );
 
                     *expr = result;
+                    replaced = true;
 
-                    // Continue on `input`, which is now hidden behind a map and project stage.
-                    if let MirRelationExpr::Project { input, .. } = expr {
-                        if let MirRelationExpr::Map { input, .. } = &mut **input {
-                            todo.push((&mut **input, view.children_rev().next().unwrap()))
-                        }
-                    }
+                    // // NB: The following is borked because of smart builders.
+                    // if let MirRelationExpr::Project { input, .. } = expr {
+                    //     if let MirRelationExpr::Map { input, .. } = &mut **input {
+                    //         todo.push((&mut **input, view.last_child()))
+                    //     }
+                    // }
                 }
-            } else {
+            }
+
+            // This gets around an awkward borrow of both `expr` and `input` above.
+            if !replaced {
                 todo.extend(expr.children_mut().rev().zip(view.children_rev()));
             }
         }

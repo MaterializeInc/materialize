@@ -115,6 +115,11 @@ pub mod common {
     }
 
     /// The subset of a `Derived` corresponding to an expression and its children.
+    ///
+    /// Specifically, bounds an interval `[lower, upper)` that ends with the state
+    /// of an expression, at `upper-1`, and is preceded by the state of descendents.
+    ///
+    /// This is best thought of as a node in a tree rather
     #[allow(missing_debug_implementations)]
     pub struct DerivedView<'a> {
         derived: &'a Derived,
@@ -123,6 +128,30 @@ pub mod common {
     }
 
     impl<'a> DerivedView<'a> {
+        /// The value associated with the expression.
+        pub fn value<A: Analysis>(&self) -> Option<&'a A::Value> {
+            self.results::<A>().and_then(|slice| slice.last())
+        }
+
+        /// The post-order traversal index for the expression.
+        ///
+        /// This can be used to index into the full set of results, as provided by an
+        /// instance of `Derived`.
+        pub fn index(&self) -> usize {
+            self.upper - 1
+        }
+
+        /// The value bound to an identifier, if it has been derived.
+        ///
+        /// There are several reasons the value could not be derived, and this method
+        /// does not distinguish between them.
+        pub fn bound<A: Analysis>(&self, id: LocalId) -> Option<&'a A::Value> {
+            self.derived
+                .bindings
+                .get(&id)
+                .and_then(|index| self.derived.results::<A>().and_then(|r| r.get(*index)))
+        }
+
         /// The results for expression and its children.
         ///
         /// The results for the expression itself will be the last element.
@@ -173,6 +202,17 @@ pub mod common {
                     None
                 }
             })
+        }
+
+        /// A convenience method for the view over the expressions last child.
+        ///
+        /// This method is appropriate to call on expressions with multiple children,
+        /// and in particular for `Let` and `LetRecv` variants where the body is the
+        /// last child.
+        ///
+        /// It is an error to call this on a view for an expression with no children.
+        pub fn last_child(&self) -> DerivedView<'a> {
+            self.children_rev().next().unwrap()
         }
     }
 
@@ -245,7 +285,7 @@ pub mod common {
                             MirRelationExpr::LetRec {
                                 ids, values, body, ..
                             } => {
-                                for (id, value) in ids.iter().zip(values).rev() {
+                                for (id, value) in ids.iter().zip(values) {
                                     todo.push(Ok(value));
                                     todo.push(Err(*id));
                                 }
