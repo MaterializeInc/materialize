@@ -723,6 +723,7 @@ mod codec_impls {
     use crate::maelstrom::txn_list_append_single::{MaelstromKey, MaelstromVal};
 
     impl Codec for MaelstromKey {
+        type Storage = ();
         type Schema = MaelstromKeySchema;
 
         fn codec_name() -> String {
@@ -766,6 +767,7 @@ mod codec_impls {
     }
 
     impl Codec for MaelstromVal {
+        type Storage = ();
         type Schema = MaelstromValSchema;
 
         fn codec_name() -> String {

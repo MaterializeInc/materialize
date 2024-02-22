@@ -27,8 +27,8 @@ use mz_persist_types::stats::StatsFn;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, RelationDesc, Row, RowDecoder,
-    RowEncoder,
+    ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
+    RowDecoder, RowEncoder,
 };
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -991,6 +991,7 @@ impl RustType<ProtoSourceData> for SourceData {
 }
 
 impl Codec for SourceData {
+    type Storage = ProtoRow;
     type Schema = RelationDesc;
 
     fn codec_name() -> String {
@@ -1006,6 +1007,37 @@ impl Codec for SourceData {
     fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
+    }
+
+    fn decode_from<'a>(
+        &mut self,
+        buf: &'a [u8],
+        storage: &mut Option<ProtoRow>,
+    ) -> Result<(), String> {
+        // Optimize for common case of `Ok` by leaving a (cleared) `ProtoRow` in
+        // the `Ok` variant of `ProtoSourceData`. prost's `Message::merge` impl
+        // is smart about reusing the `Vec<Datum>` when it can.
+        let mut proto = storage.take().unwrap_or_default();
+        proto.clear();
+        let mut proto = ProtoSourceData {
+            kind: Some(proto_source_data::Kind::Ok(proto)),
+        };
+        proto.merge(buf).map_err(|err| err.to_string())?;
+        match (proto.kind, &mut self.0) {
+            // Again, optimize for the common case...
+            (Some(proto_source_data::Kind::Ok(proto)), Ok(row)) => {
+                let ret = row.decode_from_proto(&proto);
+                storage.replace(proto);
+                ret
+            }
+            // ...otherwise fall back to the obvious thing.
+            (kind, _) => {
+                let proto = ProtoSourceData { kind };
+                *self = proto.into_rust().map_err(|err| err.to_string())?;
+                // Nothing to put back in storage.
+                Ok(())
+            }
+        }
     }
 }
 

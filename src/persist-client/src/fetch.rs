@@ -522,6 +522,8 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     schemas: Schemas<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
     part_cursor: Cursor,
+    key_storage: Option<K::Storage>,
+    val_storage: Option<V::Storage>,
 
     _phantom: PhantomData<fn() -> D>,
 }
@@ -535,6 +537,8 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
             schemas: self.schemas.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             part_cursor: self.part_cursor.clone(),
+            key_storage: None,
+            val_storage: None,
             _phantom: self._phantom.clone(),
         }
     }
@@ -562,6 +566,8 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             schemas,
             filter_pushdown_audit,
             part_cursor: Cursor::default(),
+            key_storage: None,
+            val_storage: None,
             _phantom: PhantomData,
         }
     }
@@ -585,16 +591,19 @@ pub(crate) struct EncodedPart<T> {
     needs_truncation: bool,
 }
 
-impl<K, V, T, D> Iterator for FetchedPart<K, V, T, D>
+impl<K, V, T, D> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    type Item = ((Result<K, String>, Result<V, String>), T, D);
-
-    fn next(&mut self) -> Option<Self::Item> {
+    /// [Self::next] but optionally providing a `K` and `V` for alloc reuse.
+    pub fn next_with_storage(
+        &mut self,
+        key: &mut Option<K>,
+        val: &mut Option<V>,
+    ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
         while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
                 continue;
@@ -627,11 +636,37 @@ where
                 continue;
             }
 
-            let k = self.metrics.codecs.key.decode(|| K::decode(k));
-            let v = self.metrics.codecs.val.decode(|| V::decode(v));
+            let k = self.metrics.codecs.key.decode(|| match key.take() {
+                Some(mut key) => match K::decode_from(&mut key, k, &mut self.key_storage) {
+                    Ok(()) => Ok(key),
+                    Err(err) => Err(err),
+                },
+                None => K::decode(k),
+            });
+            let v = self.metrics.codecs.val.decode(|| match val.take() {
+                Some(mut val) => match V::decode_from(&mut val, v, &mut self.val_storage) {
+                    Ok(()) => Ok(val),
+                    Err(err) => Err(err),
+                },
+                None => V::decode(v),
+            });
             return Some(((k, v), t, d));
         }
         None
+    }
+}
+
+impl<K, V, T, D> Iterator for FetchedPart<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    type Item = ((Result<K, String>, Result<V, String>), T, D);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_with_storage(&mut None, &mut None)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
