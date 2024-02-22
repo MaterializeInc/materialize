@@ -916,6 +916,10 @@ impl MirRelationExpr {
                         // determining the arity of Let operators.
                         Some(vec![&*body])
                     }
+                    MirRelationExpr::Project { .. } | MirRelationExpr::Reduce { .. } => {
+                        // No further traversal is required; these operators know their arity.
+                        Some(Vec::new())
+                    }
                     _ => None,
                 }
             },
@@ -931,12 +935,14 @@ impl MirRelationExpr {
                         arity_stack.extend(std::iter::repeat(0).take(values.len()));
                         arity_stack.push(body_arity);
                     }
+                    MirRelationExpr::Project { .. } | MirRelationExpr::Reduce { .. } => {
+                        arity_stack.push(0);
+                    }
                     _ => {}
                 }
                 let num_inputs = e.num_inputs();
-                let arity = e
-                    .arity_with_input_arities(arity_stack[arity_stack.len() - num_inputs..].iter());
-                arity_stack.truncate(arity_stack.len() - num_inputs);
+                let input_arities = arity_stack.drain(arity_stack.len() - num_inputs..);
+                let arity = e.arity_with_input_arities(input_arities);
                 arity_stack.push(arity);
             },
         );
@@ -955,9 +961,9 @@ impl MirRelationExpr {
     ///
     /// It is meant to be used during post-order traversals to compute arities
     /// incrementally.
-    pub fn arity_with_input_arities<'a, I>(&self, mut input_arities: I) -> usize
+    pub fn arity_with_input_arities<I>(&self, mut input_arities: I) -> usize
     where
-        I: Iterator<Item = &'a usize>,
+        I: Iterator<Item = usize>,
     {
         use MirRelationExpr::*;
 
@@ -966,20 +972,20 @@ impl MirRelationExpr {
             Get { typ, .. } => typ.arity(),
             Let { .. } => {
                 input_arities.next();
-                *input_arities.next().unwrap()
+                input_arities.next().unwrap()
             }
             LetRec { values, .. } => {
                 for _ in 0..values.len() {
                     input_arities.next();
                 }
-                *input_arities.next().unwrap()
+                input_arities.next().unwrap()
             }
             Project { outputs, .. } => outputs.len(),
-            Map { scalars, .. } => *input_arities.next().unwrap() + scalars.len(),
+            Map { scalars, .. } => input_arities.next().unwrap() + scalars.len(),
             FlatMap { func, .. } => {
-                *input_arities.next().unwrap() + func.output_type().column_types.len()
+                input_arities.next().unwrap() + func.output_type().column_types.len()
             }
-            Join { .. } => input_arities.map(|a| *a).sum(),
+            Join { .. } => input_arities.sum(),
             Reduce {
                 input: _,
                 group_key,
@@ -991,7 +997,7 @@ impl MirRelationExpr {
             | Negate { .. }
             | Threshold { .. }
             | Union { .. }
-            | ArrangeBy { .. } => *input_arities.next().unwrap(),
+            | ArrangeBy { .. } => input_arities.next().unwrap(),
         }
     }
 
