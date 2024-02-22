@@ -50,8 +50,6 @@ use std::fmt;
 /// space for 10 separate copies of `SomeBigType`. This can quickly result in
 /// massive stack frames for perfectly reasonable code.
 pub const STACK_RED_ZONE: usize = {
-    #[cfg(debug_assertions)]
-    {
         8192 << 10 // 8192KiB
     }
     #[cfg(not(debug_assertions))]
