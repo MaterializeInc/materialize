@@ -176,6 +176,7 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
     Ok(())
 }
 
+#[allow(clippy::unused_async)]
 pub async fn handle_alter_table(request: AlterTableRequest) -> Result<(), OpError> {
     // Bail early if there isn't a table to alter.
     let Some(request_table) = request.table else {
