@@ -75,6 +75,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "cargo",
                 "llvm-cov",
                 "run",
+                "--workspace",
                 "--bin",
                 "clusterd",
                 "--release",
@@ -120,6 +121,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 [
                     "cargo",
                     "build",
+                    "--workspace",
                     "--bin",
                     "clusterd",
                     "--profile=ci",
@@ -138,6 +140,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "cargo",
                     "nextest",
                     "run",
+                    "--workspace",
                     "--profile=ci",
                     "--cargo-profile=ci",
                     f"--partition=count:{partition}/{total}",

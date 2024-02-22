@@ -104,10 +104,30 @@ members = [
     "src/regexp",
 ]
 
+# Here we should specify our high level binaries to prevent folks from needing to take extra steps
+# like updating git submodules when building the workspace without a target specified.
+#
+# Crates we want to make sure are _excluded_ are:
+# * `fivetran-destination` since it depends on the `fivetran-sdk` submodule.
+#
+default-members = [
+    "src/balancerd",
+    "src/catalog-debug",
+    "src/clusterd",
+    "src/environmentd",
+    "src/kafka-util",
+    "src/mz",
+    "src/persist-cli",
+    "src/sqllogictest",
+    "src/stash-debug",
+    "src/testdrive",
+    "test/metabase/smoketest",
+]
+
 exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
     #  invalidations for the core Mz crates.
-    "misc/wasm/*"
+    "misc/wasm/*",
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features.
