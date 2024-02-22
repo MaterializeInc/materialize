@@ -65,6 +65,8 @@ so it is executed.""",
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
 
+    print(f"Pipeline is: {args.pipeline}")
+
     # Make sure we have an up to date view of main.
     spawn.runv(["git", "fetch", "origin", "main"])
 
@@ -94,6 +96,7 @@ so it is executed.""",
             print("--- Trimming unchanged steps from pipeline")
             trim_tests_pipeline(pipeline, args.coverage)
 
+    if args.pipeline in ["test", "nightly"]:
         # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
         # if we trim away all the JUnit report-generating steps.
         Path("junit_dummy.xml").write_text("")
