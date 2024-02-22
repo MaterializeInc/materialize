@@ -11,9 +11,10 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as _};
 use std::io::{self, Write};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
+use http::StatusCode;
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -120,11 +121,101 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, 
         println!();
         return Err(e);
     }
-    if state.consistency_checks == super::consistency::Level::Statement {
-        super::consistency::run_consistency_checks(state).await?;
+
+    if !state.no_consistency_checks {
+        run_extra_checks(state, &stmt).await?;
     }
 
     Ok(ControlFlow::Continue)
+}
+
+async fn run_extra_checks(state: &State, stmt: &Statement<Raw>) -> Result<(), anyhow::Error> {
+    match stmt {
+        Statement::AlterDefaultPrivileges { .. }
+        | Statement::AlterOwner { .. }
+        | Statement::CreateDatabase { .. }
+        | Statement::CreateIndex { .. }
+        | Statement::CreateSchema { .. }
+        | Statement::CreateSource { .. }
+        | Statement::CreateTable { .. }
+        | Statement::CreateView { .. }
+        | Statement::CreateMaterializedView { .. }
+        | Statement::DropObjects { .. }
+        | Statement::GrantPrivileges { .. }
+        | Statement::GrantRole { .. }
+        | Statement::RevokePrivileges { .. }
+        | Statement::RevokeRole { .. } => {
+            let response = Retry::default()
+                .max_duration(Duration::from_secs(3))
+                .clamp_backoff(Duration::from_millis(500))
+                .retry_async(|_| async {
+                    reqwest::get(&format!(
+                        "http://{}/api/coordinator/check",
+                        state.materialize_internal_http_addr,
+                    ))
+                    .await
+                    .context("while getting response from coordinator check")
+                })
+                .await?;
+            if response.status() == StatusCode::NOT_FOUND {
+                tracing::info!(
+                    "not performing coordinator check because the endpoint doesn't exist"
+                );
+            } else {
+                // 404 can happen if we're testing an older version of environmentd
+                let inconsistencies = response
+                    .error_for_status()
+                    .context("response from coordinator check returned an error")?
+                    .text()
+                    .await
+                    .context("while getting text from coordinator check")?;
+                let inconsistencies: serde_json::Value = serde_json::from_str(&inconsistencies)
+                    .with_context(|| {
+                        format!(
+                            "while parsing result from consistency check: {:?}",
+                            inconsistencies
+                        )
+                    })?;
+                if inconsistencies != serde_json::json!("") {
+                    bail!("Internal catalog inconsistencies {inconsistencies:#?}");
+                }
+            }
+
+            let catalog_state = state
+                .with_catalog_copy(|catalog| catalog.state().clone())
+                .await
+                .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?;
+
+            // Check that our on-disk state matches the in-memory state.
+            let disk_state =
+                catalog_state.map(|state| state.dump().expect("state must be dumpable"));
+            if let Some(disk_state) = disk_state {
+                let mem_state = reqwest::get(&format!(
+                    "http://{}/api/catalog/dump",
+                    state.materialize_internal_http_addr,
+                ))
+                .await?
+                .text()
+                .await?;
+                if disk_state != mem_state {
+                    // The state objects here are around 100k lines pretty printed, so find the
+                    // first lines that differs and show context around it.
+                    let diff = similar::TextDiff::from_lines(&mem_state, &disk_state)
+                        .unified_diff()
+                        .context_radius(50)
+                        .to_string()
+                        .lines()
+                        .take(200)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    bail!("the in-memory state of the catalog does not match its on-disk state:\n{diff}");
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 async fn try_run_sql(

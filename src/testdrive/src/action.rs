@@ -52,8 +52,6 @@ use crate::parser::{
 use crate::util;
 use crate::util::postgres::postgres_client;
 
-pub mod consistency;
-
 mod file;
 mod http;
 mod kafka;
@@ -106,7 +104,7 @@ pub struct Config {
     /// Set to 1 to retry at a steady pace.
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
-    pub consistency_checks: consistency::Level,
+    pub no_consistency_checks: bool,
 
     // === Materialize options. ===
     /// The pgwire connection parameters for the Materialize instance that
@@ -177,8 +175,7 @@ pub struct State {
     max_tries: usize,
     initial_backoff: Duration,
     backoff_factor: f64,
-    consistency_checks: consistency::Level,
-    consistency_checks_adhoc_skip: bool,
+    no_consistency_checks: bool,
     regex: Option<Regex>,
     regex_replacement: String,
     postgres_factory: StashFactory,
@@ -395,12 +392,6 @@ impl State {
 
     pub fn aws_region(&self) -> &str {
         self.aws_config.region().map(|r| r.as_ref()).unwrap_or("")
-    }
-
-    /// Resets the adhoc skip consistency check that users can toggle per-file, and returns whether
-    /// the consistency checks should be skipped for this current run.
-    pub fn clear_skip_consistency_checks(&mut self) -> bool {
-        std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
     }
 
     pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
@@ -734,13 +725,6 @@ impl Run for PosCommand {
                     *line = subst(line, &state.cmd_vars)?;
                 }
                 match builtin.name.as_ref() {
-                    "check-consistency" => consistency::run_consistency_checks(state).await,
-                    "skip-consistency-checks" => {
-                        consistency::skip_consistency_checks(builtin, state)
-                    }
-                    "check-shard-tombstone" => {
-                        consistency::run_check_shard_tombstoned(builtin, state).await
-                    }
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
                     "http-request" => http::run_request(builtin, state).await,
@@ -1049,8 +1033,7 @@ pub async fn create_state(
         max_tries: config.default_max_tries,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
-        consistency_checks: config.consistency_checks,
-        consistency_checks_adhoc_skip: false,
+        no_consistency_checks: config.no_consistency_checks,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),

@@ -68,7 +68,7 @@ class Docker(Executor):
             f"--seed={self._seed}",
             "--initial-backoff=10ms",  # Retry every 10ms until success
             "--backoff-factor=0",
-            "--consistency-checks=disable",
+            "--no-consistency-checks",
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
             stdin=input,
             capture=True,
@@ -174,7 +174,7 @@ class MzCloud(Executor):
             *self._testdrive_args,
             "--initial-backoff=10ms",
             "--backoff-factor=0",
-            "--consistency-checks=disable",
+            "--no-consistency-checks",
             stdin=input,
             capture=True,
         ).stdout
