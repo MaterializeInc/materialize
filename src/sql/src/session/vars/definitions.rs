@@ -1199,7 +1199,7 @@ pub static ENABLE_LAUNCHDARKLY: VarDefinition = VarDefinition::new(
 /// is additionally gated by a feature flag.
 pub static REAL_TIME_RECENCY: VarDefinition = VarDefinition::new(
     "real_time_recency",
-    value!(bool; false),
+    value!(bool; true),
     "Feature flag indicating whether real time recency is enabled (Materialize).",
     false,
 )
