@@ -298,7 +298,7 @@ mod arity {
                 .map(|child| results[child])
                 .collect::<Vec<_>>();
             offsets.reverse();
-            expr.arity_with_input_arities(offsets.iter())
+            expr.arity_with_input_arities(offsets.into_iter())
         }
     }
 }
