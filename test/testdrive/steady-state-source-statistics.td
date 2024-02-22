@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
+
 $ set keyschema={
     "type": "record",
     "name": "Key",
@@ -71,12 +76,6 @@ fish          fish    1000
 birdmore      geese   56
 mammalmore    moose   2
 
-# statistics are only populated every minute by default
-$ set-sql-timeout duration=3minutes
-
-# NOTE: These queries are slow to succeed because the default metrics scraping
-# interval is 30 seconds.
-
 > SELECT
     s.name,
     SUM(u.offset_known) > 0,
@@ -109,6 +108,12 @@ SELECT
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"}
+
+> SELECT key, f1, f2 FROM upsert
+key           f1      f2
+------------------------
+fish          fish    1000
+birdmore      geese   56
 
 > SELECT
     s.name,

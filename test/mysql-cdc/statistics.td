@@ -11,6 +11,10 @@
 # Test progress statistics
 #
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
+
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -38,9 +42,6 @@ INSERT INTO t1 VALUES ('one');
 
 > SELECT COUNT(*) > 0 FROM t1;
 true
-
-# statistics are only populated every minute by default
-$ set-sql-timeout duration=2minutes
 
 > SELECT
     s.name,

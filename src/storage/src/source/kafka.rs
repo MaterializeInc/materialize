@@ -337,7 +337,13 @@ impl SourceRender for KafkaSourceConnection {
 
                 // We want a fairly low ceiling on our polling frequency, since we rely
                 // on this heartbeat to determine the health of our Kafka connection.
-                let poll_interval = topic_metadata_refresh_interval.min(Duration::from_secs(60));
+                let poll_interval = topic_metadata_refresh_interval.min(
+                    config
+                        .config
+                        .parameters
+                        .kafka_timeout_config
+                        .default_metadata_fetch_interval,
+                );
 
                 let status_report = Arc::clone(&health_status);
 

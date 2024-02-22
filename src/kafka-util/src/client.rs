@@ -667,6 +667,8 @@ pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 /// The timeout for reading records from the progress topic. Set to something slightly longer than
 /// the idle transaction timeout (60s) to wait out any stuck producers.
 pub const DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT: Duration = Duration::from_secs(90);
+/// The interval we will fetch metadata from, unless overridden by the source.
+pub const DEFAULT_METADATA_FETCH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Configurable timeouts for Kafka connections.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -684,6 +686,8 @@ pub struct TimeoutConfig {
     pub fetch_metadata_timeout: Duration,
     /// The timeout for reading records from the progress topic.
     pub progress_record_fetch_timeout: Duration,
+    /// The interval we will fetch metadata from, unless overridden by the source.
+    pub default_metadata_fetch_interval: Duration,
 }
 
 impl Default for TimeoutConfig {
@@ -695,6 +699,7 @@ impl Default for TimeoutConfig {
             socket_connection_setup_timeout: DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
             fetch_metadata_timeout: DEFAULT_FETCH_METADATA_TIMEOUT,
             progress_record_fetch_timeout: DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT,
+            default_metadata_fetch_interval: DEFAULT_METADATA_FETCH_INTERVAL,
         }
     }
 }
@@ -709,6 +714,7 @@ impl TimeoutConfig {
         socket_connection_setup_timeout: Duration,
         fetch_metadata_timeout: Duration,
         progress_record_fetch_timeout: Duration,
+        default_metadata_fetch_interval: Duration,
     ) -> TimeoutConfig {
         // Constrain values based on ranges here:
         // <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
@@ -793,6 +799,7 @@ impl TimeoutConfig {
             socket_connection_setup_timeout,
             fetch_metadata_timeout,
             progress_record_fetch_timeout,
+            default_metadata_fetch_interval,
         }
     }
 }

@@ -9,6 +9,9 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
 
 > CREATE CLUSTER cluster1 (SIZE '2')
 
@@ -40,9 +43,6 @@ one:two
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
-
-# NOTE: These queries are slow to succeed because the default metrics scraping
-# interval is 30 seconds. Here we are just ensuring metrics were populated.
 
 # Ensure we produce statistics
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
