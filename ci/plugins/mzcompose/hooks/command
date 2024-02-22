@@ -106,7 +106,7 @@ upload_artifact() {
     fi
 }
 
-if [ -n "${CI_HEAP_PROFILES:-}" ]; then
+if is_truthy "${CI_HEAP_PROFILES:-}"; then
     rm -rf prof
     mkdir prof
     (while true; do
