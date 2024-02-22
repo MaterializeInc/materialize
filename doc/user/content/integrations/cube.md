@@ -5,9 +5,9 @@ aliases:
   /third-party/cube/
 ---
 
-[Cube](https://www.cubejs.com/) is a headless BI platform that makes data accessible and consistent across every application. It provides data modeling, access control, caching, and a variety of APIs (SQL, GraphQL, and REST) on top of any data warehouse, database, or query engine, including Materialize.
+[Cube](https://cube.dev/) is a headless BI platform that makes data accessible and consistent across every application. It provides data modeling, access control, caching, and a variety of APIs (SQL, GraphQL, and REST) on top of any data warehouse, database, or query engine, including Materialize.
 
-In this guide, we’ll cover how to connect and configure a [Cube Cloud](https://cube.dev/docs/cloud) deployment to Materialize.
+In this guide, we’ll cover how to connect and configure a [Cube Cloud](https://cube.dev/product/why-cube-cloud) deployment to Materialize.
 
 ## Steps
 
