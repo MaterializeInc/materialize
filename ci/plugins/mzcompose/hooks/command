@@ -119,7 +119,7 @@ if [ -n "${CI_HEAP_PROFILES:-}" ]; then
     ) &
 fi
 
-ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
+ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}\`"
 
 mzcompose run "${run_args[@]}" |& tee run.log
 RESULT=$?
