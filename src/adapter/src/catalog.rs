@@ -410,10 +410,9 @@ impl ConnectionResolver for ConnCatalog<'_> {
     }
 }
 
-pub struct TransactionResult<R> {
+pub struct TransactionResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     pub audit_events: Vec<VersionedEvent>,
-    pub result: R,
 }
 
 impl Catalog {
@@ -1179,16 +1178,12 @@ impl Catalog {
     }
 
     #[instrument(name = "catalog::transact")]
-    pub async fn transact<F, R>(
+    pub async fn transact(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
-        f: F,
-    ) -> Result<TransactionResult<R>, AdapterError>
-    where
-        F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
-    {
+    ) -> Result<TransactionResult, AdapterError> {
         trace!("transact: {:?}", ops);
         fail::fail_point!("catalog_transact", |arg| {
             Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -1232,8 +1227,6 @@ impl Catalog {
             &mut state,
         )?;
 
-        let result = f(&state)?;
-
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
@@ -1262,7 +1255,6 @@ impl Catalog {
         Ok(TransactionResult {
             builtin_table_updates,
             audit_events,
-            result,
         })
     }
 
@@ -4434,7 +4426,6 @@ mod tests {
                         public_schema_oid: 2,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
-                    |_catalog| Ok(()),
                 )
                 .await
                 .expect("failed to transact");
@@ -4683,7 +4674,6 @@ mod tests {
                         id,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
-                    |_catalog| Ok(()),
                 )
                 .await
                 .expect("failed to transact");
@@ -5659,7 +5649,7 @@ mod tests {
                 value: OwnedVarInput::Flat(CatalogKind::Persist.as_str().to_string()),
             };
             catalog
-                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .transact(mz_repr::Timestamp::MIN, None, vec![op])
                 .await
                 .expect("failed to transact");
 
@@ -5686,7 +5676,7 @@ mod tests {
                 name: CATALOG_KIND_IMPL.name().to_string(),
             };
             catalog
-                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .transact(mz_repr::Timestamp::MIN, None, vec![op])
                 .await
                 .expect("failed to transact");
 

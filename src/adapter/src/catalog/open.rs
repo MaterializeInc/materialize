@@ -1940,7 +1940,6 @@ mod builtin_migration_tests {
                     item,
                     owner_id: MZ_SYSTEM_ROLE_ID,
                 }],
-                |_| Ok(()),
             )
             .await
             .expect("failed to transact");

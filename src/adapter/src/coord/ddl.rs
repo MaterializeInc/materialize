@@ -51,7 +51,7 @@ use serde_json::json;
 use tracing::{event, info_span, warn, Instrument, Level};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{CatalogState, Op, TransactionResult};
+use crate::catalog::{Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
@@ -61,31 +61,21 @@ use crate::telemetry::SegmentClientExt;
 use crate::util::ResultExt;
 use crate::{catalog, flags, AdapterError, TimestampProvider};
 
-/// State provided to a catalog transaction closure.
-pub struct CatalogTxn<'a> {
-    // TODO: This field is currently unused. Consider removing it.
-    #[allow(dead_code)]
-    pub(crate) catalog: &'a CatalogState,
-}
-
 impl Coordinator {
-    /// Same as [`Self::catalog_transact_with`] without a closure passed in.
+    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
         &mut self,
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let (result, table_updates) = self
-            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
-            .await?;
-        table_updates.await;
-
-        Ok(result)
+        self.catalog_transact_conn(session.map(|session| session.conn_id()), ops)
+            .await
     }
 
-    /// Same as [`Self::catalog_transact_with`] but runs builtin table updates concurrently with
-    /// any side effects (e.g. creating collections).
+    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
+    /// builtin table updates concurrently with any side effects (e.g. creating
+    /// collections).
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
     pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
         &'c mut self,
@@ -97,8 +87,8 @@ impl Coordinator {
         F: FnOnce(&'c mut Coordinator) -> Fut,
         Fut: Future<Output = ()>,
     {
-        let (result, table_updates) = self
-            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+        let table_updates = self
+            .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
             .await?;
         let side_effects_fut = side_effect(self);
 
@@ -113,23 +103,23 @@ impl Coordinator {
         )
         .await;
 
-        Ok(result)
+        Ok(())
     }
 
-    /// Same as [`Self::catalog_transact_with`] without a closure passed in.
-    #[instrument(name = "coord::catalog_transact_conn")]
+    /// Same as [`Self::catalog_transact_inner`] but awaits the table updates.
+    #[instrument(name = "coord::catalog_transact_inner")]
     pub(crate) async fn catalog_transact_conn(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let (result, table_updates) = self.catalog_transact_with(conn_id, ops, |_| Ok(())).await?;
+        let table_updates = self.catalog_transact_inner(conn_id, ops).await?;
         table_updates.await;
-        Ok(result)
+        Ok(())
     }
 
-    /// Executes a Catalog transaction with handling if the provided `Session` is in a SQL
-    /// transaction that is executing DDL.
+    /// Executes a Catalog transaction with handling if the provided [`Session`]
+    /// is in a SQL transaction that is executing DDL.
     #[instrument(name = "coord::catalog_transact_with_ddl_transaction")]
     pub(crate) async fn catalog_transact_with_ddl_transaction(
         &mut self,
@@ -180,26 +170,15 @@ impl Coordinator {
         }
     }
 
-    /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
-    /// made from the prospective [`CatalogState`] (i.e., the `Catalog` with `ops`
-    /// applied but before the transaction is committed). The closure can return
-    /// an error to abort the transaction, or otherwise return a value that is
-    /// returned by this function. This allows callers to error while building
-    /// [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called after this
-    /// function successfully returns on any built `DataflowDesc`.
-    ///
-    /// [`CatalogState`]: crate::catalog::CatalogState
-    /// [`DataflowDesc`]: mz_compute_types::dataflows::DataflowDesc
-    #[instrument(name = "coord::catalog_transact_with")]
-    pub(crate) async fn catalog_transact_with<'a, F, R>(
+    /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
+    /// called after this function successfully returns on any built
+    /// [`DataflowDesc`].
+    #[instrument(name = "coord::catalog_transact_inner")]
+    pub(crate) async fn catalog_transact_inner<'a>(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
-        f: F,
-    ) -> Result<(R, BuiltinTableAppendNotify), AdapterError>
-    where
-        F: FnOnce(CatalogTxn) -> Result<R, AdapterError>,
-    {
+    ) -> Result<BuiltinTableAppendNotify, AdapterError> {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
@@ -502,12 +481,7 @@ impl Coordinator {
         let TransactionResult {
             builtin_table_updates,
             audit_events,
-            result,
-        } = catalog
-            .transact(oracle_write_ts, conn, ops, |catalog| {
-                f(CatalogTxn { catalog })
-            })
-            .await?;
+        } = catalog.transact(oracle_write_ts, conn, ops).await?;
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
@@ -677,7 +651,7 @@ impl Coordinator {
             "coordinator inconsistency detected"
         );
 
-        Ok((result, builtin_update_notify))
+        Ok(builtin_update_notify)
     }
 
     async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
