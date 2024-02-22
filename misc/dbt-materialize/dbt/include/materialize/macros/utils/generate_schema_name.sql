@@ -16,7 +16,7 @@
 
 -- Fork of generate_schema_name to add deployment suffix
 -- See https://docs.getdbt.com/docs/build/custom-schemas
-{% macro generate_schema_name(custom_schema_name, node) -%}
+{% macro materialize__generate_schema_name(custom_schema_name, node) -%}
 
     {%- set default_schema = target.schema -%}
     {%- set deploy_suffix = "_dbt_deploy" if var('deploy', False) else "" -%}
