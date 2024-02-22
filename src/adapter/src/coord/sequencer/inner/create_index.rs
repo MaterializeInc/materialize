@@ -30,7 +30,6 @@ use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
-#[async_trait::async_trait(?Send)]
 impl Staged for CreateIndexStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
