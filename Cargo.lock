@@ -4759,6 +4759,7 @@ dependencies = [
  "prost",
  "prost-build",
  "protobuf-src",
+ "regex",
  "serde",
  "thiserror",
  "tonic-build",

@@ -10,6 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
+use once_cell::sync::Lazy;
+use regex::Regex;
 
 use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{FromRowError, Row};
@@ -20,14 +22,10 @@ use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{ColumnType, ScalarType};
 
-use crate::desc::{MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc};
+use crate::desc::{
+    MySqlColumnDesc, MySqlColumnMeta, MySqlColumnMetaEnum, MySqlKeyDesc, MySqlTableDesc,
+};
 use crate::{MySqlError, UnsupportedDataType};
-
-/// The types that we support being casted as TEXT COLUMNS. This is the set of types that is
-/// represented as an encoded-string in both the mysql-common binary query response and binlog
-/// event representation, OR it's a type that we've added explicit casting support for.
-// TODO: Add `enum` support
-const SUPPORTED_TEXT_COLUMN_TYPES: &[&str] = &["json"];
 
 /// Helper for querying information_schema.columns
 // NOTE: The order of these names *must* match the order of fields of the [`InfoSchema`] struct.
@@ -180,22 +178,17 @@ where
             // treat it as a string and skip type parsing.
             if let Some(text_columns) = table_text_cols {
                 if text_columns.contains(&info.column_name.as_str()) {
-                    if !SUPPORTED_TEXT_COLUMN_TYPES.contains(&info.data_type.as_str()) {
-                        error_cols.push(UnsupportedDataType {
-                            column_type: info.column_type.clone(),
-                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-                            column_name: info.column_name.clone(),
-                            intended_type: Some("text".to_string()),
-                        });
-                        continue;
+                    match parse_as_text_column(&info, &schema_name, &table_name) {
+                        Err(err) => error_cols.push(err),
+                        Ok((scalar_type, meta)) => columns.push(MySqlColumnDesc {
+                            name: info.column_name,
+                            column_type: ColumnType {
+                                scalar_type,
+                                nullable: &info.is_nullable == "YES",
+                            },
+                            meta,
+                        }),
                     }
-                    columns.push(MySqlColumnDesc {
-                        name: info.column_name,
-                        column_type: ColumnType {
-                            scalar_type: ScalarType::String,
-                            nullable: &info.is_nullable == "YES",
-                        },
-                    });
                     continue;
                 }
             }
@@ -209,6 +202,7 @@ where
                         scalar_type,
                         nullable: &info.is_nullable == "YES",
                     },
+                    meta: None,
                 }),
             }
         }
@@ -375,5 +369,70 @@ fn parse_data_type(
             column_name: info.column_name.clone(),
             intended_type: None,
         }),
+    }
+}
+
+/// Parse the specified column as a TEXT COLUMN. We only support the set of types that are
+/// represented as an encoded-string in both the mysql-common binary query response and binlog
+/// event representation, OR types that we've added explicit casting support for.
+fn parse_as_text_column(
+    info: &InfoSchema,
+    schema_name: &str,
+    table_name: &str,
+) -> Result<(ScalarType, Option<MySqlColumnMeta>), UnsupportedDataType> {
+    match info.data_type.as_str() {
+        "json" => Ok((ScalarType::String, None)),
+        "enum" => Ok((
+            ScalarType::String,
+            Some(MySqlColumnMeta::Enum(MySqlColumnMetaEnum {
+                values: enum_vals_from_column_type(info.column_type.as_str()).map_err(|_| {
+                    UnsupportedDataType {
+                        column_type: info.column_type.clone(),
+                        qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                        column_name: info.column_name.clone(),
+                        intended_type: Some("text".to_string()),
+                    }
+                })?,
+            })),
+        )),
+        _ => Err(UnsupportedDataType {
+            column_type: info.column_type.clone(),
+            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+            column_name: info.column_name.clone(),
+            intended_type: Some("text".to_string()),
+        }),
+    }
+}
+
+static ENUM_VAL_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"'((?:[^']|'')*)'").expect("valid regex"));
+
+/// Parse the enum values from a column_type value on an enum column, which is a string like
+/// "enum('apple','banana','cher,ry','ora''nge')"
+/// We need to handle the case where the enum value itself contains a comma or a
+/// single quote (escaped with another quote), so we use a regex to do so
+fn enum_vals_from_column_type(s: &str) -> Result<Vec<String>, anyhow::Error> {
+    let vals_str = s
+        .strip_prefix("enum(")
+        .and_then(|s| s.strip_suffix(')'))
+        .ok_or(anyhow::format_err!(
+            "Unable to parse enum column type string"
+        ))?;
+
+    Ok(ENUM_VAL_REGEX
+        .captures_iter(vals_str)
+        .map(|s| s[1].to_string())
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_enum_value_parsing() {
+        let vals =
+            enum_vals_from_column_type("enum('apple','banana','cher,ry','ora''nge')").unwrap();
+        assert_eq!(vals, vec!["apple", "banana", "cher,ry", "ora''nge"]);
     }
 }

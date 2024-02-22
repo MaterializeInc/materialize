@@ -28,13 +28,13 @@ $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
-CREATE TABLE t1 (f1 JSON);
+CREATE TABLE t1 (f1 JSON, f2 ENUM('small', 'medium', 'large'));
 
-INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false}' AS JSON));
+INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false}' AS JSON), 'large');
 
 > CREATE SOURCE da
   FROM MYSQL CONNECTION mysqc (
-    TEXT COLUMNS (public.t1.f1)
+    TEXT COLUMNS (public.t1.f1, public.t1.f2)
   )
   FOR TABLES (public.t1);
 
@@ -46,6 +46,10 @@ INSERT INTO t1 SELECT * FROM t1;
 > SELECT f1::jsonb->>'balance' FROM t1;
 7.77
 7.77
+
+> SELECT f2 FROM t1;
+"large"
+"large"
 
 #
 # Validate that unsupported types error even as TEXT COLUMNS

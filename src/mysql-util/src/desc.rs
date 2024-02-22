@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::ColumnType;
 
+use self::proto_my_sql_column_desc::Meta;
+
 include!(concat!(env!("OUT_DIR"), "/mz_mysql_util.rs"));
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
@@ -132,11 +134,39 @@ impl MySqlTableDesc {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct MySqlColumnMetaEnum {
+    #[proptest(strategy = "proptest::collection::vec(any::<String>(), 0..3)")]
+    pub values: Vec<String>,
+}
+
+impl RustType<ProtoMySqlColumnMetaEnum> for MySqlColumnMetaEnum {
+    fn into_proto(&self) -> ProtoMySqlColumnMetaEnum {
+        ProtoMySqlColumnMetaEnum {
+            values: self.values.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoMySqlColumnMetaEnum) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            values: proto.values,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub enum MySqlColumnMeta {
+    /// The described column is an enum, with the given possible values.
+    Enum(MySqlColumnMetaEnum),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlColumnDesc {
     /// The name of the column.
     pub name: String,
-    /// The MySQL datatype of the column.
+    /// The intended data type of this column within Materialize
     pub column_type: ColumnType,
+    /// Optional metadata about the column that may be necessary for decoding
+    pub meta: Option<MySqlColumnMeta>,
 }
 
 impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
@@ -144,6 +174,9 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
         ProtoMySqlColumnDesc {
             name: self.name.clone(),
             column_type: Some(self.column_type.into_proto()),
+            meta: self.meta.as_ref().and_then(|meta| match meta {
+                MySqlColumnMeta::Enum(e) => Some(Meta::Enum(e.into_proto())),
+            }),
         }
     }
 
@@ -153,6 +186,15 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
             column_type: proto
                 .column_type
                 .into_rust_if_some("ProtoMySqlColumnDesc::column_type")?,
+            meta: proto
+                .meta
+                .and_then(|meta| match meta {
+                    Meta::Enum(e) => Some(
+                        MySqlColumnMetaEnum::from_proto(e)
+                            .and_then(|e| Ok(MySqlColumnMeta::Enum(e))),
+                    ),
+                })
+                .transpose()?,
         })
     }
 }

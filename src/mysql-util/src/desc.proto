@@ -20,9 +20,17 @@ message ProtoMySqlTableDesc {
     repeated ProtoMySqlKeyDesc keys = 4;
 }
 
+message ProtoMySqlColumnMetaEnum {
+    repeated string values = 1;
+}
+
 message ProtoMySqlColumnDesc {
     string name = 1;
     mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
+
+    oneof meta {
+        ProtoMySqlColumnMetaEnum enum = 3;
+    }
 }
 
 message ProtoMySqlKeyDesc {
