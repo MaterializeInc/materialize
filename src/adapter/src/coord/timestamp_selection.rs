@@ -478,6 +478,16 @@ pub trait TimestampProvider {
         since
     }
 
+    /// Returns `least_valid_write` - 1, i.e., each time in `least_valid_write` stepped back in a
+    /// saturating way.
+    fn greatest_available_read(&self, id_bundle: &CollectionIdBundle) -> Antichain<Timestamp> {
+        let mut frontier = Antichain::new();
+        for t in self.least_valid_write(id_bundle) {
+            frontier.insert(t.step_back().unwrap_or(t));
+        }
+        frontier
+    }
+
     fn generate_timestamp_not_valid_error_msg(
         &self,
         id_bundle: &CollectionIdBundle,
