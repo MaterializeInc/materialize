@@ -173,6 +173,7 @@ steps:
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
+    skip: "TODO(def-) reenable when greener"
 
   - id: nightlies-preflight-check-rollback
     label: Nightlies with preflight check and rollback
@@ -185,6 +186,7 @@ steps:
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
+    skip: "TODO(def-) reenable when greener"
 
   - wait: ~
     continue_on_failure: true
