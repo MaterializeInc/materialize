@@ -1122,6 +1122,15 @@ const KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// The interval we will fetch metadata from, unless overridden by the source.
+const KAFKA_DEFAULT_METADATA_FETCH_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("kafka_default_metadata_fetch_interval"),
+    value: mz_kafka_util::client::DEFAULT_METADATA_FETCH_INTERVAL,
+    description: "The interval we will fetch metadata from, unless overridden by the source. \
+        Defaults to 60s.",
+    internal: true,
+};
+
 /// The maximum number of in-flight bytes emitted by persist_sources feeding compute dataflows.
 const COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
     name: UncasedStr::new("compute_dataflow_max_inflight_bytes"),
@@ -2918,6 +2927,7 @@ impl SystemVars {
             .with_var(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
             .with_var(&KAFKA_FETCH_METADATA_TIMEOUT)
             .with_var(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
+            .with_var(&KAFKA_DEFAULT_METADATA_FETCH_INTERVAL)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -3543,6 +3553,11 @@ impl SystemVars {
     /// Returns the `kafka_progress_record_fetch_timeout` configuration parameter.
     pub fn kafka_progress_record_fetch_timeout(&self) -> Duration {
         *self.expect_value(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
+    }
+
+    /// Returns the `kafka_default_metadata_fetch_interval` configuration parameter.
+    pub fn kafka_default_metadata_fetch_interval(&self) -> Duration {
+        *self.expect_value(&KAFKA_DEFAULT_METADATA_FETCH_INTERVAL)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -5515,12 +5530,15 @@ impl SystemVars {
             || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
             || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
             || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
+            || name == KAFKA_DEFAULT_METADATA_FETCH_INTERVAL.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
             || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
             || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
             || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
+            || name == STORAGE_STATISTICS_INTERVAL.name()
+            || name == STORAGE_STATISTICS_COLLECTION_INTERVAL.name()
             || is_upsert_rocksdb_config_var(name)
             || self.is_persist_config_var(name)
             || is_tracing_var(name)

@@ -25,6 +25,7 @@ use mz_storage_client::statistics::PackableStats;
 use timely::progress::ChangeBatch;
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
+use tokio::sync::watch::Receiver;
 
 use crate::collection_mgmt::CollectionManager;
 
@@ -35,8 +36,8 @@ pub(super) fn spawn_statistics_scraper<Stats, T>(
     collection_mgmt: CollectionManager<T>,
     shared_stats: Arc<Mutex<BTreeMap<GlobalId, Option<Stats>>>>,
     previous_values: Vec<Row>,
-    // TODO(guswynn): make this dynamic?
-    interval: Duration,
+    initial_interval: Duration,
+    mut interval_updated: Receiver<Duration>,
 ) -> Box<dyn Any + Send + Sync>
 where
     Stats: PackableStats + Debug + Send + 'static,
@@ -62,13 +63,22 @@ where
             }
         }
 
-        let mut interval = tokio::time::interval(interval);
+        let mut interval = tokio::time::interval(initial_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
                 _msg = &mut shutdown_rx => {
                     break;
+                }
+
+               _ = interval_updated.changed() => {
+                    let new_interval = *interval_updated.borrow_and_update();
+                    if new_interval != interval.period() {
+                        interval = tokio::time::interval(new_interval);
+                        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        // Note that the next interval will tick immediately. This is fine.
+                    }
                 }
 
                 _ = interval.tick() => {

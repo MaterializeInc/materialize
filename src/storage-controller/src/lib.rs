@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -72,6 +73,7 @@ use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::oneshot;
+use tokio::sync::watch::{channel, Sender};
 use tokio_stream::StreamMap;
 use tracing::{debug, info, instrument, warn};
 
@@ -196,6 +198,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics: Arc<Mutex<BTreeMap<GlobalId, Option<SinkStatisticsUpdate>>>>,
+    /// A way to update the statistics interval in the statistics tasks.
+    statistics_interval_sender: Sender<Duration>,
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
@@ -258,6 +262,8 @@ where
             client.send(StorageCommand::UpdateConfiguration(config_params.clone()));
         }
         self.config.update(config_params);
+        self.statistics_interval_sender
+            .send_replace(self.config.parameters.statistics_interval);
     }
 
     /// Get the current configuration
@@ -736,6 +742,7 @@ where
                                 Arc::clone(&self.source_statistics),
                                 prev,
                                 self.config.parameters.statistics_interval,
+                                self.statistics_interval_sender.subscribe(),
                             );
 
                             // Make sure this is dropped when the controller is
@@ -752,6 +759,7 @@ where
                                 Arc::clone(&self.sink_statistics),
                                 prev,
                                 self.config.parameters.statistics_interval,
+                                self.statistics_interval_sender.subscribe(),
                             );
 
                             // Make sure this is dropped when the controller is
@@ -2254,6 +2262,9 @@ where
             Arc::clone(&introspection_ids),
         );
 
+        let (statistics_interval_sender, _) =
+            channel(mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT);
+
         Self {
             build_info,
             collections: BTreeMap::default(),
@@ -2275,6 +2286,7 @@ where
             envd_epoch,
             source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
+            statistics_interval_sender,
             clients: BTreeMap::new(),
             replicas: BTreeMap::new(),
             initialized: false,

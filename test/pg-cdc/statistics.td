@@ -11,6 +11,10 @@
 # Test progress statistics
 #
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
