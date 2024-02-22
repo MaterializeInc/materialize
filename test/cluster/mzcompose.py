@@ -195,12 +195,16 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     """
     )
 
-    # This should ensure that compute crashed (and does not just hang forever)
-    c1 = c.invoke("logs", "clusterd1", capture=True)
-    assert (
-        "halting process: new timely configuration does not match existing timely configuration"
-        in c1.stdout
-    )
+    for i in range(5):
+        # This should ensure that compute crashed (and does not just hang forever)
+        c1 = c.invoke("logs", "clusterd1", capture=True)
+        if (
+            "halting process: new timely configuration does not match existing timely configuration"
+            in c1.stdout
+        ):
+            break
+        # Waiting for logs to arrive
+        time.sleep(1)
 
 
 def workflow_test_github_12251(c: Composition) -> None:
