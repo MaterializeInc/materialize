@@ -43,6 +43,7 @@ use mz_storage_operators::metrics::BackpressureMetrics;
 
 pub mod channel;
 pub mod decode;
+pub mod sink;
 pub mod source;
 pub mod upsert;
 
@@ -60,6 +61,7 @@ pub struct StorageMetrics {
     pub(crate) decode_defs: decode::DecodeMetricDefs,
     pub(crate) upsert_defs: upsert::UpsertMetricDefs,
     pub(crate) upsert_backpressure_defs: upsert::UpsertBackpressureMetricDefs,
+    pub(crate) sink_defs: sink::SinkMetricDefs,
 
     // Defined in the `statistics` module, as they are kept in sync with
     // user-facing data.
@@ -75,6 +77,7 @@ impl StorageMetrics {
             decode_defs: decode::DecodeMetricDefs::register_with(registry),
             upsert_defs: upsert::UpsertMetricDefs::register_with(registry),
             upsert_backpressure_defs: upsert::UpsertBackpressureMetricDefs::register_with(registry),
+            sink_defs: sink::SinkMetricDefs::register_with(registry),
             source_statistics: SourceStatisticsMetricDefs::register_with(registry),
             sink_statistics: SinkStatisticsMetricDefs::register_with(registry),
         }
@@ -178,6 +181,14 @@ impl StorageMetrics {
             topic,
             source_id,
         )
+    }
+
+    /// Get an `KafkaSinkMetrics` for the given configuration.
+    pub(crate) fn get_kafka_sink_metrics(
+        &self,
+        sink_id: GlobalId,
+    ) -> sink::kafka::KafkaSinkMetrics {
+        sink::kafka::KafkaSinkMetrics::new(&self.sink_defs.kafka_defs, sink_id)
     }
 
     /// Produce an instrumented channel for use in the source pipeline.

@@ -103,14 +103,17 @@ use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::metadata::Metadata;
 use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
 use rdkafka::types::RDKafkaErrorCode;
+use rdkafka::Statistics;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
+use tokio::sync::watch;
 use tracing::{error, info};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::kafka::KafkaSinkMetrics;
 use crate::render::sinks::SinkRender;
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
@@ -155,6 +158,13 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             storage_state.storage_configuration.clone(),
         );
 
+        let metrics = storage_state.metrics.get_kafka_sink_metrics(sink_id);
+        let statistics = storage_state
+            .aggregated_statistics
+            .get_sink(&sink_id)
+            .expect("statistics initialized")
+            .clone();
+
         let (sink_status, sink_token) = sink_collection(
             format!("kafka-{sink_id}-sink"),
             &encoded,
@@ -162,11 +172,8 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             self.clone(),
             storage_state.storage_configuration.clone(),
             sink.as_of.clone(),
-            storage_state
-                .aggregated_statistics
-                .get_sink(&sink_id)
-                .expect("statistics initialized")
-                .clone(),
+            metrics,
+            statistics,
             write_frontier,
         );
 
@@ -216,6 +223,7 @@ impl TransactionalProducer {
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
         storage_configuration: &StorageConfiguration,
+        metrics: KafkaSinkMetrics,
         statistics: SinkStatistics,
     ) -> Result<Self, ContextCreationError> {
         let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
@@ -255,10 +263,18 @@ impl TransactionalProducer {
         options.insert("transactional.id", transactional_id);
         // Allow Kafka monitoring tools to identify this producer.
         options.insert("client.id", client_id);
+        // We want to be notified frequently with statistics
+        options.insert("statistics.interval.ms", "500".into());
+
+        let ctx = MzClientContext::default();
+
+        let stats_receiver = ctx.subscribe_statistics();
+        let task_name = format!("kafka_sink_metrics_collector:{sink_id}");
+        task::spawn(|| &task_name, collect_statistics(stats_receiver, metrics));
 
         let producer: BaseProducer<_> = connection
             .connection
-            .create_with_context(storage_configuration, MzClientContext::default(), &options)
+            .create_with_context(storage_configuration, ctx, &options)
             .await?;
 
         let task_name = format!("kafka_sink_producer:{sink_id}");
@@ -423,6 +439,48 @@ impl TransactionalProducer {
     }
 }
 
+/// Listens for statistics updates from librdkafka and updates our Prometheus metrics.
+async fn collect_statistics(mut receiver: watch::Receiver<Statistics>, metrics: KafkaSinkMetrics) {
+    let mut outbuf_cnt: i64 = 0;
+    let mut outbuf_msg_cnt: i64 = 0;
+    let mut waitresp_cnt: i64 = 0;
+    let mut waitresp_msg_cnt: i64 = 0;
+    let mut txerrs: u64 = 0;
+    let mut txretries: u64 = 0;
+    let mut req_timeouts: u64 = 0;
+    let mut connects: i64 = 0;
+    let mut disconnects: i64 = 0;
+    while receiver.changed().await.is_ok() {
+        let stats = receiver.borrow();
+        for broker in stats.brokers.values() {
+            outbuf_cnt += broker.outbuf_cnt;
+            outbuf_msg_cnt += broker.outbuf_msg_cnt;
+            waitresp_cnt += broker.waitresp_cnt;
+            waitresp_msg_cnt += broker.waitresp_msg_cnt;
+            txerrs += broker.txerrs;
+            txretries += broker.txretries;
+            req_timeouts += broker.req_timeouts;
+            connects += broker.connects.unwrap_or(0);
+            disconnects += broker.disconnects.unwrap_or(0);
+        }
+        metrics.rdkafka_msg_cnt.set(stats.msg_cnt);
+        metrics.rdkafka_msg_size.set(stats.msg_size);
+        metrics.rdkafka_txmsgs.set(stats.txmsgs);
+        metrics.rdkafka_txmsg_bytes.set(stats.txmsg_bytes);
+        metrics.rdkafka_tx.set(stats.tx);
+        metrics.rdkafka_tx_bytes.set(stats.tx_bytes);
+        metrics.rdkafka_outbuf_cnt.set(outbuf_cnt);
+        metrics.rdkafka_outbuf_msg_cnt.set(outbuf_msg_cnt);
+        metrics.rdkafka_waitresp_cnt.set(waitresp_cnt);
+        metrics.rdkafka_waitresp_msg_cnt.set(waitresp_msg_cnt);
+        metrics.rdkafka_txerrs.set(txerrs);
+        metrics.rdkafka_txretries.set(txretries);
+        metrics.rdkafka_req_timeouts.set(req_timeouts);
+        metrics.rdkafka_connects.set(connects);
+        metrics.rdkafka_disconnects.set(disconnects);
+    }
+}
+
 /// Sinks a collection of encoded rows to Kafka.
 ///
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
@@ -435,6 +493,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
     as_of: Antichain<Timestamp>,
+    metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
@@ -462,6 +521,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                 sink_id,
                 &connection,
                 &storage_configuration,
+                metrics,
                 statistics,
             )
             .await?;

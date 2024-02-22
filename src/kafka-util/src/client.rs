@@ -16,6 +16,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use tokio::sync::watch;
 
 use anyhow::{anyhow, Context};
 use crossbeam::channel::{unbounded, Receiver, Sender};
@@ -48,10 +49,12 @@ pub const DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_sec
 /// All code in Materialize that constructs Kafka clients should use this
 /// context or a custom context that delegates the `log` and `error` methods to
 /// this implementation.
-#[derive(Clone)]
 pub struct MzClientContext {
     /// The last observed error log, if any.
     error_tx: Sender<MzKafkaError>,
+    /// A tokio watch that retains the last statistics received by rdkafka and provides async
+    /// notifications to anyone interested in subscribing.
+    statistics_tx: watch::Sender<Statistics>,
 }
 
 impl Default for MzClientContext {
@@ -67,7 +70,18 @@ impl MzClientContext {
     // until we upgrade to `1.72` and the std mpsc sender is `Sync`.
     pub fn with_errors() -> (Self, Receiver<MzKafkaError>) {
         let (error_tx, error_rx) = unbounded();
-        (Self { error_tx }, error_rx)
+        let (statistics_tx, _) = watch::channel(Default::default());
+        let ctx = Self {
+            error_tx,
+            statistics_tx,
+        };
+        (ctx, error_rx)
+    }
+
+    /// Creates a tokio Watch subscription for statistics reported by librdkafka. It is necessary
+    /// that the `statistics.ms.interval` is set for this stream to contain any values.
+    pub fn subscribe_statistics(&self) -> watch::Receiver<Statistics> {
+        self.statistics_tx.subscribe()
     }
 
     fn record_error(&self, msg: &str) {
@@ -231,6 +245,10 @@ impl ClientContext for MzClientContext {
             Info => info!(target: "librdkafka", "{} {}", fac, log_message),
             Debug => debug!(target: "librdkafka", "{} {}", fac, log_message),
         }
+    }
+
+    fn stats(&self, statistics: Statistics) {
+        let _ = self.statistics_tx.send(statistics);
     }
 
     fn error(&self, error: KafkaError, reason: &str) {

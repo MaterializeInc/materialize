@@ -1273,7 +1273,6 @@ impl PartitionConsumer {
 
 /// An implementation of [`ConsumerContext`] that forwards statistics to the
 /// worker
-#[derive(Clone)]
 struct GlueConsumerContext {
     notificator: Arc<Notify>,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
