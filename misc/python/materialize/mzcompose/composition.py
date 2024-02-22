@@ -23,6 +23,7 @@ import inspect
 import json
 import os
 import re
+import selectors
 import ssl
 import subprocess
 import sys
@@ -320,6 +321,7 @@ class Composition:
 
         ret = None
         stdout_result = ""
+        stderr_result = ""
         for retry in range(1, max_tries + 1):
             file.seek(0)
             try:
@@ -329,7 +331,7 @@ class Composition:
                         close_fds=False,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
+                        stderr=subprocess.PIPE,
                         text=True,
                         bufsize=1,
                     )
@@ -337,17 +339,30 @@ class Composition:
                         p.stdin.write(stdin)  # type: ignore
                     if p.stdin is not None:
                         p.stdin.close()
-                    for line in p.stdout:  # type: ignore
-                        print(line, end="")
-                        stdout_result += line
+                    sel = selectors.DefaultSelector()
+                    sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
+                    sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
+                    while True:
+                        for key, val in sel.select():
+                            line = key.fileobj.readline()  # type: ignore
+                            if not line:
+                                break
+                            if key.fileobj is p.stdout:
+                                print(line, end="")
+                                stdout_result += line
+                            else:
+                                print(line, end="", file=sys.stderr)
+                                stderr_result += line
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
                     if check and retcode:
                         raise subprocess.CalledProcessError(
-                            retcode, p.args, output=stdout_result
+                            retcode, p.args, output=stdout_result, stderr=stderr_result
                         )
-                    return subprocess.CompletedProcess(p.args, retcode, stdout_result)
+                    return subprocess.CompletedProcess(
+                        p.args, retcode, stdout_result, stderr_result
+                    )
                 else:
                     ret = subprocess.run(
                         cmd,
