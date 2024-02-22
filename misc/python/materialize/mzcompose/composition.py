@@ -344,11 +344,13 @@ class Composition:
                     sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
                     running = True
                     while running:
+                        running = False
                         for key, val in sel.select():
                             line = key.fileobj.readline()  # type: ignore
                             if not line:
-                                running = False
-                                break
+                                continue
+                            # Keep running as long as stdout or stderr have any content
+                            running = True
                             if key.fileobj is p.stdout:
                                 print(line, end="")
                                 stdout_result += line
