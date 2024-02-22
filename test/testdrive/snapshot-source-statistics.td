@@ -49,18 +49,16 @@ goofus,gallant
     URL '${testdrive.schema-registry-url}'
   );
 
+> CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
+
 > CREATE SOURCE upsert
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER stats_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
-
-> CREATE SOURCE counter
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER;
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
@@ -71,7 +69,8 @@ fish          fish    1000
 birdmore      geese   56
 mammalmore    moose   2
 
-# statistics are only populated every minute by default
+# statistics are only populated every minute by default, and kafka has a 60 second
+# interval on when it collects partition metadata.
 $ set-sql-timeout duration=3minutes
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
@@ -79,25 +78,14 @@ $ set-sql-timeout duration=3minutes
 
 > SELECT
     s.name,
-    SUM(u.offset_known) > 0,
-    SUM(u.offset_known) = SUM(u.offset_committed)
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true true
-
-> SELECT
-    s.name,
-    SUM(u.offset_known) > 0,
-    SUM(u.offset_committed) > 0
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('counter')
-  GROUP BY s.name
-  ORDER BY s.name
-counter true true
+upsert 9 9
 
 $ set-from-sql var=previous-offset-known
 SELECT
@@ -110,16 +98,45 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"}
 
+# Snapshot counts don't move...
 > SELECT
     s.name,
     SUM(u.offset_known) > ${previous-offset-known},
-    SUM(u.offset_known) = SUM(u.offset_committed)
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true true
+upsert true 9 9
+
+# ...even if we restart.
+
+$ set-from-sql var=pre-restart-offset-committed
+SELECT
+    (SUM(u.offset_committed))::text
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('upsert')
+
+> ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
+
+$ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
+{"key": "mammalmore"} {"f1":"moose", "f2": 100}
+
+> ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 1)
+
+> SELECT
+    s.name,
+    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.snapshot_records_known),
+    SUM(u.snapshot_records_staged)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('upsert')
+  GROUP BY s.name
+  ORDER BY s.name
+upsert true 9 9
 
 > DROP SOURCE upsert
-> DROP SOURCE counter

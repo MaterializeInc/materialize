@@ -137,14 +137,15 @@ impl SourceRender for MySqlSourceConnection {
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
-            scope.clone(),
-            config.clone(),
-            self.clone(),
-            subsource_resume_uppers.clone(),
-            table_info.clone(),
-            metrics.snapshot_metrics.clone(),
-        );
+        let (snapshot_updates, rewinds, snapshot_stats, snapshot_err, snapshot_token) =
+            snapshot::render(
+                scope.clone(),
+                config.clone(),
+                self.clone(),
+                subsource_resume_uppers.clone(),
+                table_info.clone(),
+                metrics.snapshot_metrics.clone(),
+            );
 
         let (repl_updates, uppers, repl_err, repl_token) = replication::render(
             scope.clone(),
@@ -158,6 +159,8 @@ impl SourceRender for MySqlSourceConnection {
 
         let (stats_stream, stats_err, stats_token) =
             statistics::render(scope.clone(), config, self, resume_uppers);
+
+        let stats_stream = stats_stream.concat(&snapshot_stats);
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
             let res = res.map(|row| SourceMessage {

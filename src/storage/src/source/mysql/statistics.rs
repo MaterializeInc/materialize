@@ -55,7 +55,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 stats_output
                     .give(
                         &stats_cap[0],
-                        ProgressStatisticsUpdate {
+                        ProgressStatisticsUpdate::SteadyState {
                             offset_known: 0,
                             offset_committed: 0,
                         },
@@ -122,7 +122,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     stats_output
                         .give(
                             &stats_cap[0],
-                            ProgressStatisticsUpdate {
+                            ProgressStatisticsUpdate::SteadyState {
                                 offset_known,
                                 offset_committed,
                             },
