@@ -23,6 +23,7 @@ import inspect
 import json
 import os
 import re
+import selectors
 import ssl
 import subprocess
 import sys
@@ -319,9 +320,9 @@ class Composition:
             *args,
         ]
 
-        ret = None
-        stdout_result = ""
         for retry in range(1, max_tries + 1):
+            stdout_result = ""
+            stderr_result = ""
             file.seek(0)
             try:
                 if capture_and_print:
@@ -330,7 +331,7 @@ class Composition:
                         close_fds=False,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
+                        stderr=subprocess.PIPE,
                         text=True,
                         bufsize=1,
                     )
@@ -338,19 +339,34 @@ class Composition:
                         p.stdin.write(stdin)  # type: ignore
                     if p.stdin is not None:
                         p.stdin.close()
-                    for line in p.stdout:  # type: ignore
-                        print(line, end="")
-                        stdout_result += line
+                    sel = selectors.DefaultSelector()
+                    sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
+                    sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
+                    running = True
+                    while running:
+                        for key, val in sel.select():
+                            line = key.fileobj.readline()  # type: ignore
+                            if not line:
+                                running = False
+                                break
+                            if key.fileobj is p.stdout:
+                                print(line, end="")
+                                stdout_result += line
+                            else:
+                                print(line, end="", file=sys.stderr)
+                                stderr_result += line
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
                     if check and retcode:
                         raise subprocess.CalledProcessError(
-                            retcode, p.args, output=stdout_result
+                            retcode, p.args, output=stdout_result, stderr=stderr_result
                         )
-                    return subprocess.CompletedProcess(p.args, retcode, stdout_result)
+                    return subprocess.CompletedProcess(
+                        p.args, retcode, stdout_result, stderr_result
+                    )
                 else:
-                    ret = subprocess.run(
+                    return subprocess.run(
                         cmd,
                         close_fds=False,
                         check=check,
@@ -361,8 +377,10 @@ class Composition:
                         bufsize=1,
                     )
             except subprocess.CalledProcessError as e:
-                if e.stdout:
+                if e.stdout and not capture_and_print:
                     print(e.stdout)
+                if e.stderr and not capture_and_print:
+                    print(e.stderr, file=sys.stderr)
 
                 if retry < max_tries:
                     print("Retrying ...")
@@ -375,10 +393,7 @@ class Composition:
                         stdout=e.stdout,
                         stderr=e.stderr,
                     )
-            break
-
-        assert ret is not None
-        return ret
+        assert False, "unreachable"
 
     def port(self, service: str, private_port: int | str) -> int:
         """Get the public port for a service's private port.
