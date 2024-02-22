@@ -228,17 +228,12 @@ case "$cmd" in
             --env PYPI_TOKEN
             --env MZ_DEV_BUILD_SHA
             --env BUILDKITE_SENTRY_DSN
-            # For Miri/ASan with nightly Rust
+            # For Miri with nightly Rust
             --env ZOOKEEPER_ADDR
             --env KAFKA_ADDRS
             --env SCHEMA_REGISTRY_URL
             --env POSTGRES_URL
             --env COCKROACH_URL
-            # For ASan with nightly Rust
-            --env RUSTFLAGS
-            --env LDFLAGS
-            --env MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET
-            --env MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL
         )
 
         if [[ $detach_container == "true" ]]; then

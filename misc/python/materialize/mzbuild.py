@@ -38,7 +38,7 @@ from typing import IO, Any, cast
 import yaml
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize.xcompile import Arch
+from materialize.xcompile import Arch, target
 
 
 class Fingerprint(bytes):
@@ -95,7 +95,7 @@ class RepositoryDetails:
         subcommand: str,
         rustflags: list[str],
         channel: str | None = None,
-        cflags: list[str] = [],
+        extra_env: dict[str, str] = {},
     ) -> list[str]:
         """Start a cargo invocation for the configured architecture."""
         return xcompile.cargo(
@@ -103,7 +103,7 @@ class RepositoryDetails:
             channel=channel,
             subcommand=subcommand,
             rustflags=rustflags,
-            cflags=cflags,
+            extra_env=extra_env,
         )
 
     def tool(self, name: str) -> list[str]:
@@ -284,11 +284,36 @@ class CargoBuild(CargoPreImage):
             else ["--cfg=tokio_unstable"]
         )
         cflags = (
-            rustc_flags.sanitizer_cflags[rd.sanitizer] if rd.sanitizer != "none" else []
+            [
+                f"--target={target(rd.arch)}",
+                f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
+                "-fuse-ld=lld",
+                f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
+                f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
+            ]
+            + rustc_flags.sanitizer_cflags[rd.sanitizer]
+            if rd.sanitizer != "none"
+            else []
+        )
+        extra_env = (
+            {
+                "CFLAGS": " ".join(cflags),
+                "CXXFLAGS": " ".join(cflags),
+                "LDFLAGS": " ".join(cflags),
+                "CXXSTDLIB": "stdc++",
+                "CC": "cc",
+                "CXX": "c++",
+                "CPP": "clang-cpp-15",
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+                "PATH": f"/asanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            }
+            if rd.sanitizer != "none"
+            else {}
         )
 
         cargo_build = [
-            *rd.cargo("build", channel=None, rustflags=rustflags, cflags=cflags),
+            *rd.cargo("build", channel=None, rustflags=rustflags, extra_env=extra_env),
             "--workspace",
         ]
 
@@ -1010,8 +1035,8 @@ class Repository:
                 visit(self.images[d], path + [image.name])
             resolved[image.name] = image
 
-        for target in sorted(targets, key=lambda image: image.name):
-            visit(target)
+        for target_image in sorted(targets, key=lambda image: image.name):
+            visit(target_image)
 
         return DependencySet(resolved.values())
 

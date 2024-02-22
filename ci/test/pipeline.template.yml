@@ -221,6 +221,7 @@ steps:
               composition: cargo-test
         agents:
           queue: builder-linux-aarch64
+        sanitizer: skip # TODO(def-): This should work but --no-default-profiles still enables jemalloc in cargo tests somehow
 
       - id: miri-test
         label: Miri test (fast)
@@ -506,6 +507,7 @@ steps:
           args: [--exitfirst, -m, "not long and not node_recovery", --aws-region=us-east-1, test/cloudtest/]
     agents:
       queue: linux-aarch64
+    sanitizer: skip
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"

@@ -17,6 +17,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.xcompile import Arch, target
 
 SERVICES = [
     Zookeeper(),
@@ -34,6 +35,10 @@ SERVICES = [
     Postgres(image="postgres:14.2"),
     Cockroach(),
 ]
+
+
+def flatten(xss):
+    return [x for xs in xss for x in xs]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -110,43 +115,61 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         if args.miri_full:
             spawn.runv(
-                ["bin/ci-builder", "run", "nightly", "ci/test/cargo-test-miri.sh"],
+                [
+                    "bin/ci-builder",
+                    "run",
+                    "nightly",
+                    "ci/test/cargo-test-miri.sh",
+                ],
                 env=env,
             )
         elif args.miri_fast:
             spawn.runv(
-                ["bin/ci-builder", "run", "nightly", "ci/test/cargo-test-miri-fast.sh"],
+                [
+                    "bin/ci-builder",
+                    "run",
+                    "nightly",
+                    "ci/test/cargo-test-miri-fast.sh",
+                ],
                 env=env,
             )
         else:
             if sanitizer != "none":
-                env["RUSTFLAGS"] = (
-                    env.get("RUSTFLAGS", "")
-                    + " -L/usr/lib/gcc/aarch64-linux-gnu/12"
-                    + " ".join(rustc_flags.sanitizer[sanitizer])
-                )
-                env["CFLAGS"] = (
-                    env.get("CFLAGS", "")
-                    + " "
-                    + " ".join(rustc_flags.sanitizer_cflags[sanitizer])
-                )
-                env["CXXFLAGS"] = (
-                    env.get("CXXFLAGS", "")
-                    + " "
-                    + " ".join(rustc_flags.sanitizer_cflags[sanitizer])
-                )
-                env["LDFLAGS"] = (
-                    env.get("LDFLAGS", "")
-                    + " "
-                    + " ".join(rustc_flags.sanitizer_cflags[sanitizer])
-                )
-                # env["CC"] = "clang"
-                # env["CXX"] = "clang++"
+                cflags = [
+                    f"--target={target(Arch.host())}",
+                    f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
+                    "-fuse-ld=lld",
+                    f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
+                    f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
+                ] + rustc_flags.sanitizer_cflags[sanitizer]
+                extra_env = {
+                    "CFLAGS": " ".join(cflags),
+                    "CXXFLAGS": " ".join(cflags),
+                    "LDFLAGS": " ".join(cflags),
+                    "CXXSTDLIB": "stdc++",
+                    "CC": "cc",
+                    "CXX": "c++",
+                    "CPP": "clang-cpp-15",
+                    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+                    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+                    "PATH": f"/asanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "RUSTFLAGS": (
+                        env.get("RUSTFLAGS", "")
+                        + " "
+                        + " ".join(rustc_flags.sanitizer[sanitizer])
+                    ),
+                }
                 spawn.runv(
                     [
                         "bin/ci-builder",
                         "run",
                         "nightly",
+                        *flatten(
+                            [
+                                ["--env", f"{key}={val}"]
+                                for key, val in extra_env.items()
+                            ]
+                        ),
                         "cargo",
                         "build",
                         "--workspace",
@@ -158,7 +181,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         SANITIZER_TARGET,
                         "--profile=ci",
                     ],
-                    env=env,
                 )
             else:
                 spawn.runv(
@@ -185,6 +207,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "bin/ci-builder",
                         "run",
                         "nightly",
+                        *flatten(
+                            [
+                                ["--env", f"{key}={val}"]
+                                for key, val in extra_env.items()
+                            ]
+                        ),
                         "cargo",
                         "nextest",
                         "run",

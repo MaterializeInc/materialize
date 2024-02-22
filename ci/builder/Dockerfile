@@ -280,11 +280,11 @@ COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 ENV AR=$ARCH_GCC-unknown-linux-gnu-ar
 ENV LD=$ARCH_GCC-unknown-linux-gnu-lld
 ENV RANLIB=$ARCH_GCC-unknown-linux-gnu-ranlib
-ENV CPP="clang-cpp-15"
-ENV CC=cc
-ENV CXX=c++
+ENV CPP=$ARCH_GCC-unknown-linux-gnu-cpp
+ENV CC=$ARCH_GCC-unknown-linux-gnu-cc
+ENV CXX=$ARCH_GCC-unknown-linux-gnu-c++
 ENV CXXSTDLIB=static=stdc++
-ENV LDFLAGS="-fuse-ld=lld"
+ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
 ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-fuse-ld=lld -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib/ -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
 ENV TARGET_AR=$AR
 ENV TARGET_CC=$CC
@@ -292,8 +292,8 @@ ENV TARGET_CXX=$CXX
 ENV TARGET_CXXSTDLIB=static=stdc++
 ENV TARGET_RANLIB=$RANLIB
 ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
-ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc
-ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=cc
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=0
 
@@ -323,7 +323,7 @@ RUN userdel -r ubuntu
 # logged properly in Buildkite
 ENV PYTHONUNBUFFERED=1
 
-RUN echo "#!/usr/bin/bash\nexec /usr/bin/clang -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot \"\$@\"" > /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/cc \
-    && chmod +x /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/cc \
-    && echo "#!/usr/bin/bash\nexec /usr/bin/clang++ -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot \"\$@\"" > /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/c++ \
-    && chmod +x /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/c++
+RUN mkdir /asanshim \
+    && echo "#!/usr/bin/bash\nexec /usr/bin/clang -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib \"\$@\"" > /asanshim/cc \
+    && echo "#!/usr/bin/bash\nexec /usr/bin/clang++ -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib \"\$@\"" > /asanshim/c++ \
+    && chmod +x /asanshim/cc /asanshim/c++

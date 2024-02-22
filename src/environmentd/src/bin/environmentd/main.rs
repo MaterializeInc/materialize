@@ -995,7 +995,6 @@ struct Metrics {
     pub start_time_environmentd: IntGauge,
 }
 
-
 impl Metrics {
     pub fn register_into(registry: &MetricsRegistry, build_info: BuildInfo) -> Metrics {
         Metrics {

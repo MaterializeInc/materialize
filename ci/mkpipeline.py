@@ -120,7 +120,7 @@ so it is executed.""",
         def visit(step: dict[str, Any]) -> None:
             # ASan runs are slower ...
             if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 2
+                step["timeout_in_minutes"] *= 8
 
             # ... and need more memory:
             if "agents" in step:
@@ -131,6 +131,12 @@ so it is executed.""",
                     agent = "linux-aarch64-large"
                 elif agent == "linux-aarch64-large":
                     agent = "builder-linux-aarch64"
+                elif agent == "linux-x86_64-small":
+                    agent = "linux-x86_64"
+                elif agent == "linux-x86_64":
+                    agent = "linux-x86_64-large"
+                elif agent == "linux-x86_64-large":
+                    agent = "builder-linux-x86_64"
                 step["agents"] = {"queue": agent}
 
             if step.get("sanitizer") == "skip":
