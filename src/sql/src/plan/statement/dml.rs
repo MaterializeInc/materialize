@@ -26,8 +26,9 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
+    CteBlock, ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
+    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput,
+    UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection};
@@ -47,8 +48,8 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{
-    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainSinkSchemaPlan,
-    ExplainTimestampPlan,
+    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
+    ExplainSinkSchemaPlan, ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -285,6 +286,25 @@ pub fn describe_explain_plan(
     )
 }
 
+pub fn describe_explain_pushdown(
+    scx: &StatementContext,
+    statement: ExplainPushdownStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let relation_desc = RelationDesc::empty()
+        .with_column("Source", ScalarType::String.nullable(false))
+        .with_column("Total Bytes", ScalarType::UInt64.nullable(false))
+        .with_column("Selected Bytes", ScalarType::UInt64.nullable(false))
+        .with_column("Total Parts", ScalarType::UInt64.nullable(false))
+        .with_column("Selected Parts", ScalarType::UInt64.nullable(false));
+
+    Ok(
+        StatementDesc::new(Some(relation_desc)).with_params(match statement.explainee {
+            Explainee::Select(select, _) => describe_select(scx, *select)?.param_types,
+            _ => vec![],
+        }),
+    )
+}
+
 pub fn describe_explain_timestamp(
     scx: &StatementContext,
     ExplainTimestampStatement { select, .. }: ExplainTimestampStatement<Aug>,
@@ -305,40 +325,12 @@ pub fn describe_explain_schema(
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
-pub fn plan_explain_plan(
+fn plan_explainee(
     scx: &StatementContext,
-    ExplainPlanStatement {
-        stage,
-        config_flags,
-        format,
-        explainee,
-    }: ExplainPlanStatement<Aug>,
+    explainee: Explainee<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<plan::Explainee, PlanError> {
     use crate::plan::ExplaineeStatement;
-
-    let format = match format {
-        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
-        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
-        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
-    };
-
-    let config = {
-        let config_flags = config_flags
-            .iter()
-            .map(|ident| ident.to_string().to_lowercase())
-            .collect::<BTreeSet<_>>();
-
-        let mut config = ExplainConfig::try_from(config_flags)?;
-
-        if config.filter_pushdown {
-            scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
-            // If filtering is disabled, explain plans should not include pushdown info.
-            config.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
-        }
-
-        config
-    };
 
     let is_replan = matches!(
         explainee,
@@ -430,6 +422,44 @@ pub fn plan_explain_plan(
         }
     };
 
+    Ok(explainee)
+}
+
+pub fn plan_explain_plan(
+    scx: &StatementContext,
+    ExplainPlanStatement {
+        stage,
+        config_flags,
+        format,
+        explainee,
+    }: ExplainPlanStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let format = match format {
+        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
+        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+    };
+
+    let config = {
+        let config_flags = config_flags
+            .iter()
+            .map(|ident| ident.to_string().to_lowercase())
+            .collect::<BTreeSet<_>>();
+
+        let mut config = ExplainConfig::try_from(config_flags)?;
+
+        if config.filter_pushdown {
+            scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
+            // If filtering is disabled, explain plans should not include pushdown info.
+            config.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
+        }
+
+        config
+    };
+
+    let explainee = plan_explainee(scx, explainee, params)?;
+
     Ok(Plan::ExplainPlan(ExplainPlanPlan {
         stage,
         format,
@@ -486,6 +516,16 @@ pub fn plan_explain_schema(
         },
         _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
     }
+}
+
+pub fn plan_explain_pushdown(
+    scx: &StatementContext,
+    statement: ExplainPushdownStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_EXPLAIN_PUSHDOWN)?;
+    let explainee = plan_explainee(scx, statement.explainee, params)?;
+    Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
 }
 
 pub fn plan_explain_timestamp(

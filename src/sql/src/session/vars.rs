@@ -1790,6 +1790,13 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_explain_pushdown,
+        desc: "EXPLAIN FILTER PUSHDOWN",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_index_options,
         desc: "INDEX OPTIONS",
         default: false,

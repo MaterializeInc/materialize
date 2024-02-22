@@ -499,6 +499,7 @@ impl Coordinator {
                     | Statement::Discard(_)
                     | Statement::Execute(_)
                     | Statement::ExplainPlan(_)
+                    | Statement::ExplainPushdown(_)
                     | Statement::ExplainTimestamp(_)
                     | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)

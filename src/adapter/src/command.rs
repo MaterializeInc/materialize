@@ -625,8 +625,8 @@ impl ExecuteResponse {
             DropObjects => vec![DroppedObject],
             DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
-            ExplainPlan | ExplainTimestamp | Select | ShowAllVariables | ShowCreate
-            | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => {
+            ExplainPlan | ExplainPushdown | ExplainTimestamp | Select | ShowAllVariables
+            | ShowCreate | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => {
                 vec![
                     ExecuteResponseKind::CopyTo,
                     SendingRows,
