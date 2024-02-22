@@ -74,6 +74,10 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
         )
         .with_column(
+            "mz_version",
+            ScalarType::String.nullable(false),
+        )
+        .with_column(
             "began_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )

@@ -392,6 +392,7 @@ impl Coordinator {
             execution_timestamp,
             transaction_id,
             transient_index_id,
+            mz_version,
         } = record;
 
         let cluster = cluster_id.map(|id| id.to_string());
@@ -425,6 +426,7 @@ impl Coordinator {
                     .map(|p| Datum::from(p.as_ref().map(String::as_str))),
             )
             .expect("correct array dimensions");
+        packer.push(Datum::from(mz_version.as_str()));
         packer.push(Datum::TimestampTz(
             to_datetime(*began_at).try_into().expect("Sane system time"),
         ));
@@ -676,6 +678,7 @@ impl Coordinator {
                 .inner()
                 .expect("Every statement runs in an explicit or implicit transaction")
                 .id,
+            mz_version: self.catalog().state().config().build_info.human_version(),
             // These are not known yet; we'll fill them in later.
             cluster_id: None,
             cluster_name: None,
