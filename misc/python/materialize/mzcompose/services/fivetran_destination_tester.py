@@ -9,7 +9,7 @@
 
 from materialize.mzcompose.service import Service
 
-FIVETRAN_TESTER_VERSION = "024.0207.001"
+FIVETRAN_TESTER_VERSION = "024.0222.001"
 
 
 class FivetranDestinationTester(Service):
