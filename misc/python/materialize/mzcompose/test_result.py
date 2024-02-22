@@ -63,10 +63,14 @@ class FailedTestExecutionError(UIError):
 def try_determine_errors_from_cmd_execution(
     e: CommandFailureCausedUIError,
 ) -> list[TestFailureDetails]:
-    if e.stderr is None:
+    output = e.stderr
+    if output is None:
+        output = e.stdout
+
+    if output is None:
         return []
 
-    error_chunks = extract_error_chunks_from_stderr(e.stderr)
+    error_chunks = extract_error_chunks_from_output(output)
 
     collected_errors = []
     for chunk in error_chunks:
@@ -114,11 +118,11 @@ def try_determine_error_location_from_cmd(cmd: list[str]) -> str | None:
     return None
 
 
-def extract_error_chunks_from_stderr(stderr: str) -> list[str]:
-    if "+++ !!! Error Report" not in stderr:
+def extract_error_chunks_from_output(output: str) -> list[str]:
+    if "+++ !!! Error Report" not in output:
         return []
 
-    error_output = stderr[: stderr.index("+++ !!! Error Report") - 1]
+    error_output = output[: output.index("+++ !!! Error Report") - 1]
     error_chunks = error_output.split("^^^ +++")
 
     return [chunk.strip() for chunk in error_chunks if len(chunk.strip()) > 0]
