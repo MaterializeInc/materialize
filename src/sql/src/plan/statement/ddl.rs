@@ -1378,13 +1378,10 @@ fn plan_source_envelope(
             (envelope, desc)
         }
         ast::SourceEnvelope::Debezium => {
-            // The key schema after INCLUDE KEY processing
-            let (key_envelope, _key_desc) = plan_key_envelope(included_items, key_desc.clone())?;
-
-            if key_envelope.is_some() {
-                sql_bail!(
-                    "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
-                );
+            // `ENVELOPE DEBEZIUM` does not support `INCLUDE KEY`.
+            // TODO(petrosagg): there is no reason for this. add support for including the key
+            if let (Some(_), _) = plan_key_envelope(included_items, key_desc.clone())? {
+                sql_bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM");
             }
 
             let Ok((_key_name, key_typ)) = key_desc.iter().exactly_one() else {
@@ -1486,10 +1483,8 @@ fn plan_source_envelope(
                 sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
             }
 
-            // The key schema after INCLUDE KEY processing
-            let (key_envelope, _key_desc) = plan_key_envelope(included_items, key_desc)?;
-
-            if key_envelope.is_some() {
+            // `ENVELOPE MATERIALIZE` does not support `INCLUDE KEY`.
+            if let (Some(_), _) = plan_key_envelope(included_items, key_desc)? {
                 sql_bail!("Cannot use INCLUDE KEY with ENVELOPE MATERIALIZE.");
             }
 
@@ -1969,8 +1964,6 @@ fn get_encoding(
     scx: &StatementContext,
     format: &Format<Aug>,
 ) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
-    // TODO(petrosagg): why is the key schema discovery buried in this place?
-    // Avro/CSR can include an additional key schema.
     Ok(match dbg!(format) {
         Format::Bytes => SourceDataEncoding {
             key: None,

@@ -183,7 +183,7 @@ $ kafka-create-topic topic=avro-dbz partitions=1
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE debezium
-contains:Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys.
+contains:Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM
 
 # formats: TEXT and REGEX
 $ kafka-create-topic topic=textsrc partitions=1
