@@ -7,7 +7,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.74.1"
+rust-version = "1.76.0"
 
 [workspace.metadata.vet]
 store = { path = "../cargo-vet" }
