@@ -138,14 +138,18 @@ def comment_blocks(file: IO) -> Iterator[tuple[int, str]]:
         yield (comment.line_number, comment.text)
 
 
-def detect_closed_issues(filename: str) -> list[IssueRef]:
+def detect_referenced_issues(filename: str) -> list[IssueRef]:
     issue_refs: list[IssueRef] = []
 
     with open(filename) as file:
         for line_number, text in comment_blocks(file):
             if not REFERENCE_RE.search(text) or IGNORE_RE.search(text):
                 continue
-            if issue_match := ISSUE_RE.search(text):
+
+            offset = 0
+            while issue_match := ISSUE_RE.search(text, offset):
+                offset = issue_match.span()[1]
+
                 groups = [
                     (key, value)
                     for key, value in issue_match.groupdict().items()
@@ -154,8 +158,10 @@ def detect_closed_issues(filename: str) -> list[IssueRef]:
                 assert len(groups) == 1, f"Expected only 1 element in {groups}"
                 group, issue_id = groups[0]
 
+                is_referenced_with_url = "issues/" in issue_match.group(0)
+
                 # Explain plans can look like issue references
-                if int(issue_id) < 10:
+                if int(issue_id) < 100 and not is_referenced_with_url:
                     continue
 
                 issue_refs.append(
@@ -263,7 +269,7 @@ def main() -> int:
             and not os.path.isdir(filename)
             and not os.path.islink(filename)
         ):
-            issue_refs.extend(detect_closed_issues(filename))
+            issue_refs.extend(detect_referenced_issues(filename))
 
     if args.changed_lines_only:
         issue_refs = filter_changed_lines(issue_refs)
