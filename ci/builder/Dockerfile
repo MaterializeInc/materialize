@@ -323,7 +323,7 @@ RUN userdel -r ubuntu
 # logged properly in Buildkite
 ENV PYTHONUNBUFFERED=1
 
-RUN echo "#!/usr/bin/bash\nexec /usr/bin/clang -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot \"\$@\"" > /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/cc \
+RUN echo "#!/usr/bin/bash\nexec /usr/bin/clang -fsanitize=thread --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot \"\$@\"" > /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/cc \
     && chmod +x /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/cc \
-    && echo "#!/usr/bin/bash\nexec /usr/bin/clang++ -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot \"\$@\"" > /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/c++ \
+    && echo "#!/usr/bin/bash\nexec /usr/bin/clang++ -fsanitize=thread --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot \"\$@\"" > /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/c++ \
     && chmod +x /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/c++
