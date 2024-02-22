@@ -102,7 +102,3 @@ true
 > DROP MATERIALIZED VIEW q14
 > SELECT count(*)  FROM mz_internal.mz_dataflow_operators
 0
-
-# Clean up.
-> DROP CLUSTER test CASCADE
-> DROP SOURCE lgtpch CASCADE

@@ -162,5 +162,3 @@ data2  <null>  storage
   WHERE s.id LIKE 'u%'
 sink1  <null>  storage
 sink2  <null>  storage
-
-> DROP CLUSTER storage CASCADE

@@ -341,8 +341,3 @@ r3 <null>
   JOIN mz_indexes ON (id = object_id)
   WHERE name = 'idx2'
 true true
-
-# Cleanup
-
-> DROP CLUSTER test CASCADE
-> DROP CLUSTER test_source CASCADE

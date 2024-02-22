@@ -123,5 +123,3 @@ contains:DISK option not supported for cluster sizes ending in cc or C
 
 ! CREATE CLUSTER REPLICA c.r SIZE '1cc', DISK = false;
 contains:DISK option not supported for cluster sizes ending in cc or C
-
-> DROP CLUSTER c

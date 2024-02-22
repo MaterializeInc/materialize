@@ -127,9 +127,3 @@ INSERT INTO fraud_accounts VALUES (12)
 #     SELECT SUM(credits), SUM(debits) FROM funds_movement
 #   )
 # > FETCH 1 c WITH (timeout='1s')
-
-> DROP SOURCE auction_house CASCADE
-
-> DROP TABLE fraud_accounts
-
-> DROP CLUSTER quickstart_tutorial CASCADE

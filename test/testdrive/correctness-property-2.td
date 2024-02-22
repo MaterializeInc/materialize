@@ -70,5 +70,3 @@ CREATE CLUSTER REPLICA storage.r1 SIZE = '1';
 0 1 crustycrab ${count}
 
 > COMMIT
-
-> DROP CLUSTER storage CASCADE;
