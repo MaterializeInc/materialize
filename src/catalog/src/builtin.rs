@@ -6205,6 +6205,10 @@ ON mz_internal.mz_sink_status_history (sink_id)",
 // uint8's to `uint8` instead of leaving them as `numeric`. This is because we want to
 // save index space, and we don't expect the sum to be > 2^63
 // (even if a source with 2000 workers, that each produce 400 terabytes in a month ~ 2^61).
+//
+//
+// These aggregations are just to make `GROUP BY` happy. Each id has a single row in the
+// underlying relation.
 pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_source_statistics",
     schema: MZ_INTERNAL_SCHEMA,
@@ -6212,18 +6216,25 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     sql: "
 SELECT
     id,
-    bool_and(snapshot_committed) as snapshot_committed,
+    -- Counters
     SUM(messages_received)::uint8 AS messages_received,
     SUM(bytes_received)::uint8 AS bytes_received,
     SUM(updates_staged)::uint8 AS updates_staged,
     SUM(updates_committed)::uint8 AS updates_committed,
-    SUM(bytes_indexed)::uint8 AS bytes_indexed,
+    -- Resetting Gauges
     SUM(records_indexed)::uint8 AS records_indexed,
+    SUM(bytes_indexed)::uint8 AS bytes_indexed,
     -- Ensure we aggregate to NULL when not all workers are done rehydrating.
     CASE
         WHEN bool_or(rehydration_latency IS NULL) THEN NULL
         ELSE MAX(rehydration_latency)::interval
-    END AS rehydration_latency
+    END AS rehydration_latency,
+    SUM(snapshot_records_known)::uint8 AS snapshot_records_known,
+    SUM(snapshot_records_staged)::uint8 AS snapshot_records_staged,
+    bool_and(snapshot_committed) as snapshot_committed,
+    -- Gauges
+    SUM(offset_known)::uint8 AS offset_known,
+    SUM(offset_committed)::uint8 AS offset_committed
 FROM mz_internal.mz_source_statistics_raw
 GROUP BY id",
     access: vec![PUBLIC_SELECT],
