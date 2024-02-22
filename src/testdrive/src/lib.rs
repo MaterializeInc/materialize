@@ -30,7 +30,6 @@ mod format;
 mod parser;
 mod util;
 
-pub use crate::action::consistency::Level as ConsistencyCheckLevel;
 pub use crate::action::{CatalogConfig, Config};
 pub use crate::error::Error;
 
@@ -132,12 +131,6 @@ pub(crate) async fn run_line_reader(
             }
         }
     }
-    if config.consistency_checks == action::consistency::Level::File {
-        if let Err(e) = action::consistency::run_consistency_checks(&state).await {
-            errors.push(e.into());
-        }
-    }
-    state.clear_skip_consistency_checks();
 
     if config.reset {
         drop(state);

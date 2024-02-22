@@ -123,7 +123,7 @@ class Testdrive(Service):
             entrypoint.append(f"--seed={seed}")
 
         if no_consistency_checks:
-            entrypoint.append("--consistency-checks=disable")
+            entrypoint.append("--no-consistency-checks")
 
         if external_minio:
             depends_graph["minio"] = {"condition": "service_healthy"}

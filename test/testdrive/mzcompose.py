@@ -68,7 +68,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.td"],
         help="run against the specified files",
     )
-    (args, passthrough_args) = parser.parse_known_args()
+    args = parser.parse_args()
 
     dependencies = ["materialized"]
     if args.redpanda:
@@ -140,7 +140,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         try:
             junit_report = ci_util.junit_report_filename(c.name)
-            print(f"Passing through arguments to testdrive {passthrough_args}\n")
+            print("")
             for file in args.files:
                 c.run_testdrive_files(
                     f"--junit-report={junit_report}",
@@ -148,7 +148,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     f"--var=default-replica-size={materialized.default_replica_size}",
                     f"--var=default-storage-size={materialized.default_storage_size}",
                     f"--var=single-replica-cluster={single_replica_cluster}",
-                    *passthrough_args,
                     file,
                 )
                 c.sanity_restart_mz()

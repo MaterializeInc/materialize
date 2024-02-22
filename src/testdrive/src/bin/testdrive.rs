@@ -22,7 +22,7 @@ use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_sql::session::vars::CatalogKind;
-use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
+use mz_testdrive::{CatalogConfig, Config};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -105,8 +105,8 @@ struct Args {
     #[clap(long, value_name = "FILE")]
     junit_report: Option<PathBuf>,
     /// Whether we skip coordinator and catalog consistency checks.
-    #[clap(long, default_value_t = ConsistencyCheckLevel::default(), value_enum)]
-    consistency_checks: ConsistencyCheckLevel,
+    #[clap(long)]
+    no_consistency_checks: bool,
     /// Which log messages to emit.
     ///
     /// See environmentd's `--startup-log-filter` option for details.
@@ -309,12 +309,12 @@ async fn main() {
     Schema registry URL: {}
     Materialize host: {:?}
     Error limit: {}
-    Consistency check level: {:?}",
+    Skipping consistency checks: {}",
         args.kafka_addr,
         args.schema_registry_url,
         args.materialize_url.get_hosts()[0],
         args.max_errors,
-        args.consistency_checks,
+        args.no_consistency_checks
     );
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
         eprintln!("    Shard: {}/{}", shard + 1, shard_count);
@@ -376,7 +376,7 @@ async fn main() {
         default_max_tries: args.default_max_tries,
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
-        consistency_checks: args.consistency_checks,
+        no_consistency_checks: args.no_consistency_checks,
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,

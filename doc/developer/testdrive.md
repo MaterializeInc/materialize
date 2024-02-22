@@ -229,12 +229,6 @@ Shuffle the list of tests before running them (using the value from --seed, if a
 
 ## Other options
 
-#### `--consistency-checks=<file, statement, disable>`
-
-There are internal invariants that we want to make sure are upheld within Materialize. By default
-we check these invariants after an entire test run. You can also optionally disable them, or when
-debugging, run them after every statement.
-
 #### `--validate-catalog-store=<store-kind>`
 
 After executing a DDL statement, validate that representation of the catalog is identical to the in-memory one. `<store-kind>` can be one of:

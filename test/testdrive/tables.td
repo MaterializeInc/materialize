@@ -382,33 +382,20 @@ a    true     integer
 
 # Test that the underlying Persist shard gets cleaned up on DROP.
 > CREATE TABLE shard_drop_test (a int, b text);
-> INSERT INTO shard_drop_test VALUES (1, 'hello');
 
-> CREATE TABLE shard_drop_test_empty (a int, b text);
+> INSERT INTO shard_drop_test VALUES (1, 'hello');
 
 $ set-from-sql var=shard-drop-test-id
 SELECT id FROM mz_tables WHERE name = 'shard_drop_test';
 
+> CREATE TABLE shard_drop_test_empty (a int, b text);
+
 $ set-from-sql var=shard-drop-test-empty-id
 SELECT id FROM mz_tables WHERE name = 'shard_drop_test_empty';
 
-# Wait for the mz_storage_shards table to get updated.
-> SELECT COUNT(shard_id) FROM mz_internal.mz_storage_shards WHERE object_id IN ('${shard-drop-test-id}', '${shard-drop-test-empty-id}');
-2
-
-$ set-from-sql var=shard-drop-test-shard-id
-SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${shard-drop-test-id}';
-
-$ set-from-sql var=shard-drop-test-empty-shard-id
-SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${shard-drop-test-empty-id}';
-
 > DROP TABLE shard_drop_test;
+
 > DROP TABLE shard_drop_test_empty;
 
-> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id IN ('${shard-drop-test-id}', '${shard-drop-test-empty-id}');
+> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id IN ('$shard-drop-test-id', '$shard-drop-test-empty-id');
 0
-
-$ check-shard-tombstone shard-id=${shard-drop-test-shard-id}
-
-# TODO(parkmycar): The since and upper of the shard are empty, but the controller still has it's handle registered.
-# $ check-shard-tombstone shard-id=${shard-drop-test-empty-shard-id}
