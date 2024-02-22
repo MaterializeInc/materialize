@@ -14,7 +14,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_mysql_source = true
 
 #
-# Test the temporal data types (DATE, DATETIME, TIME, TIMESTAMP)
+# Test the various character data types
 #
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -31,24 +31,43 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE t1 (date_col DATE, time_col TIME(6), time_trunc_col TIME, datetime_col DATETIME(6), datetime_trunc_col DATETIME, timestamp_col TIMESTAMP(6), timestamp_trunc_col TIMESTAMP);
+# Insert data pre-snapshot
+CREATE TABLE t1 (f1 VARCHAR(10), f2 CHAR(10), f3 TEXT);
 
-INSERT INTO t1 VALUES ('2011-11-11', '11:11:11.123456', '11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456');
+INSERT INTO t1 VALUES ('abc', 'abc', 'abc');
+INSERT INTO t1 VALUES ('ABC', 'ABC', 'ABC');
+INSERT INTO t1 VALUES ('abc ', 'abc ', 'abc ');
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
 
-> SELECT * FROM t1;
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
+> SELECT COUNT(*) > 0 FROM t1;
+true
 
 # Insert the same data post-snapshot
 $ mysql-execute name=mysql
 INSERT INTO t1 SELECT * FROM t1;
 
-> SELECT pg_typeof(date_col), pg_typeof(datetime_col), pg_typeof(time_col), pg_typeof(timestamp_col) FROM t1 LIMIT 1;
-date "timestamp without time zone" time "timestamp without time zone"
+> SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3) FROM t1 LIMIT 1;
+"character varying" "character" "text"
 
 > SELECT * FROM t1;
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
+"abc" "abc       " "abc"
+"abc" "abc       " "abc"
+"ABC" "ABC       " "ABC"
+"ABC" "ABC       " "ABC"
+"abc " "abc       " "abc "
+"abc " "abc       " "abc "
+
+$ mysql-execute name=mysql
+UPDATE t1 SET f1 = 'klm', f2 = 'klm', f3 = 'klm' WHERE f1 = 'abc';
+UPDATE t1 SET f1 = 'xyz ', f2 = 'xyz ', f3 = 'xyz ' WHERE f1 = 'abc ';
+
+> SELECT * FROM t1;
+"klm" "klm       " "klm"
+"klm" "klm       " "klm"
+"klm" "klm       " "klm"
+"klm" "klm       " "klm"
+"xyz " "xyz       " "xyz "
+"xyz " "xyz       " "xyz "

@@ -14,7 +14,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_mysql_source = true
 
 #
-# Test the temporal data types (DATE, DATETIME, TIME, TIMESTAMP)
+# Test UTF-8 data both pre- and -post snapshot
 #
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -26,29 +26,32 @@ ALTER SYSTEM SET enable_mysql_source = true
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
+# Insert data pre-snapshot
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE t1 (date_col DATE, time_col TIME(6), time_trunc_col TIME, datetime_col DATETIME(6), datetime_trunc_col DATETIME, timestamp_col TIMESTAMP(6), timestamp_trunc_col TIMESTAMP);
+CREATE TABLE t1 (f1 TEXT);
 
-INSERT INTO t1 VALUES ('2011-11-11', '11:11:11.123456', '11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456');
+INSERT INTO t1 VALUES ('това е текст'), ('това ''е'' "текст"');
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
 
-> SELECT * FROM t1;
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
+> SELECT COUNT(*) > 0 FROM t1;
+true
 
 # Insert the same data post-snapshot
 $ mysql-execute name=mysql
 INSERT INTO t1 SELECT * FROM t1;
 
-> SELECT pg_typeof(date_col), pg_typeof(datetime_col), pg_typeof(time_col), pg_typeof(timestamp_col) FROM t1 LIMIT 1;
-date "timestamp without time zone" time "timestamp without time zone"
+> SELECT pg_typeof(f1) FROM t1 LIMIT 1;
+text
 
 > SELECT * FROM t1;
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
+"това е текст"
+"това \'е\' \"текст\""
+"това е текст"
+"това \'е\' \"текст\""

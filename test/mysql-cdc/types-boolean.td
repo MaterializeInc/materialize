@@ -14,7 +14,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_mysql_source = true
 
 #
-# Test the temporal data types (DATE, DATETIME, TIME, TIMESTAMP)
+# Test the BOOLEAN data type
 #
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -31,24 +31,27 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE t1 (date_col DATE, time_col TIME(6), time_trunc_col TIME, datetime_col DATETIME(6), datetime_trunc_col DATETIME, timestamp_col TIMESTAMP(6), timestamp_trunc_col TIMESTAMP);
-
-INSERT INTO t1 VALUES ('2011-11-11', '11:11:11.123456', '11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456');
+# Insert data pre-snapshot
+CREATE TABLE t1 (f1 BOOLEAN);
+INSERT INTO t1 VALUES (true), (false);
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
 
-> SELECT * FROM t1;
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
+> SELECT COUNT(*) > 0 FROM t1;
+true
 
 # Insert the same data post-snapshot
 $ mysql-execute name=mysql
 INSERT INTO t1 SELECT * FROM t1;
 
-> SELECT pg_typeof(date_col), pg_typeof(datetime_col), pg_typeof(time_col), pg_typeof(timestamp_col) FROM t1 LIMIT 1;
-date "timestamp without time zone" time "timestamp without time zone"
+# MySQL does not have a proper boolean type
+> SELECT pg_typeof(f1) FROM t1 LIMIT 1;
+smallint
 
 > SELECT * FROM t1;
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
+1
+0
+1
+0

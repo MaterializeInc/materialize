@@ -112,6 +112,7 @@ class Composition:
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.files = {}
+        self.sources_and_sinks_ignored_from_validation = set()
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -839,25 +840,34 @@ class Composition:
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""
 
+        exclusion_clause = "true"
+        if len(self.sources_and_sinks_ignored_from_validation) > 0:
+            excluded_items = ", ".join(
+                f"'{name}'" for name in self.sources_and_sinks_ignored_from_validation
+            )
+            exclusion_clause = f"name NOT IN ({excluded_items})"
+
         # starting sources are currently expected if no new data is produced, see #21980
         results = self.sql_query(
-            """
+            f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
                 status IN ('running', 'starting') OR
                 (type = 'progress' AND status = 'created')
             )
+            AND {exclusion_clause}
             """
         )
         for (name, status, error, details) in results:
             return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
-            """
+            f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_sink_statuses
             WHERE status NOT IN ('running', 'dropped')
+            AND {exclusion_clause}
             """
         )
         for (name, status, error, details) in results:

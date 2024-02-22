@@ -7,44 +7,44 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=1s
+$ set-max-tries max-tries=20
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_mysql_source = true
+
 #
 # Test that two publications can replicate the same table
 #
 
-> CREATE SECRET pgpass AS 'postgres'
-> CREATE CONNECTION pg TO POSTGRES (
-    HOST postgres,
-    DATABASE postgres,
-    USER postgres,
-    PASSWORD SECRET pgpass
+> CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
+> CREATE CONNECTION mysql_conn TO MYSQL (
+    HOST mysql,
+    USER root,
+    PASSWORD SECRET mysqlpass
   )
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER USER postgres WITH replication;
-DROP SCHEMA IF EXISTS public CASCADE;
-DROP PUBLICATION IF EXISTS mz_source1;
-DROP PUBLICATION IF EXISTS mz_source2;
+$ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
-CREATE SCHEMA public;
+$ mysql-execute name=mysql
+DROP DATABASE IF EXISTS public;
+CREATE DATABASE public;
+USE public;
 
 CREATE TABLE t1 (f1 INTEGER);
-ALTER TABLE t1 REPLICA IDENTITY FULL;
 INSERT INTO t1 VALUES (1);
-
-CREATE PUBLICATION mz_source1 FOR ALL TABLES;
-CREATE PUBLICATION mz_source2 FOR ALL TABLES;
 
 > DROP SCHEMA IF EXISTS schema1
 
 > CREATE SCHEMA schema1
 
 > CREATE SOURCE mz_source1
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source1')
-  FOR TABLES (t1 AS t1_1);
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.t1 AS t1_1);
 
 > CREATE SOURCE mz_source2
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source2')
-  FOR TABLES (t1 AS t1_2);
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.t1 AS t1_2);
 
 > SELECT * FROM t1_1;
 1
@@ -52,7 +52,7 @@ CREATE PUBLICATION mz_source2 FOR ALL TABLES;
 > SELECT * FROM t1_2;
 1
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
+$ mysql-execute name=mysql
 INSERT INTO t1 VALUES (2);
 
 > SELECT * FROM t1_1;
