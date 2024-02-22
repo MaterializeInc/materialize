@@ -105,7 +105,7 @@ def initialize(c: Composition) -> None:
         "configure-toxiproxy.td",
         "populate-tables.td",
         "configure-postgres.td",
-        "configure-materalize.td",
+        "configure-materialize.td",
     )
 
 
