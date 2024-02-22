@@ -155,6 +155,7 @@ class Composition:
             {
                 "mzdata": None,
                 "pgdata": None,
+                "mysqldata": None,
                 # Used for certain pg-cdc scenarios. The memory will not be
                 # allocated for compositions that do not require this volume.
                 "sourcedata_512Mb": {
