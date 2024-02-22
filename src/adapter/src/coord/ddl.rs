@@ -136,7 +136,6 @@ impl Coordinator {
         session: &mut Session,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let conn_id = session.conn_id().clone();
         let Some(Transaction {
             ops:
                 TransactionOps::DDL {
@@ -156,25 +155,17 @@ impl Coordinator {
         }
 
         // Combine the existing ops with the new ops so we can replay them.
-        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len());
+        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len() + 1);
         all_ops.extend(txn_ops.iter().cloned());
         all_ops.extend(ops.clone());
+        all_ops.push(Op::TransactionDryRun);
 
         // Run our Catalog transaction, but abort before committing.
-        let result = self
-            .catalog_transact_with(Some(&conn_id), all_ops.clone(), |state| {
-                // Return an error so we don't commit the Catalog Transaction, but include our
-                // updated state.
-                Err::<(), _>(AdapterError::DDLTransactionDryRun {
-                    new_ops: all_ops,
-                    new_state: state.catalog.clone(),
-                })
-            })
-            .await;
+        let result = self.catalog_transact(Some(session), all_ops).await;
 
         match result {
             // We purposefully fail with this error to prevent committing the transaction.
-            Err(AdapterError::DDLTransactionDryRun { new_ops, new_state }) => {
+            Err(AdapterError::TransactionDryRun { new_ops, new_state }) => {
                 // Adds these ops to our transaction, bailing if the Catalog has changed since we
                 // ran the transaction.
                 session.transaction_mut().add_ops(TransactionOps::DDL {
@@ -184,7 +175,7 @@ impl Coordinator {
                 })?;
                 Ok(())
             }
-            Ok((_result, _table_updates)) => unreachable!("unexpected success!"),
+            Ok(_) => unreachable!("unexpected success!"),
             Err(e) => Err(e),
         }
     }
@@ -1300,7 +1291,8 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateRotatedKeys { .. }
-                | Op::Comment { .. } => {}
+                | Op::Comment { .. }
+                | Op::TransactionDryRun => {}
             }
         }
 
