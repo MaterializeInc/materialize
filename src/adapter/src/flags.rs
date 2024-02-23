@@ -43,9 +43,9 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
             config.enable_compute_operator_hydration_status_logging(),
         ),
         enable_lgalloc_eager_reclamation: Some(config.enable_lgalloc_eager_reclamation()),
-        persist: persist_config(config),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
+        dyncfg_updates: config.persist_configs(),
     }
 }
 

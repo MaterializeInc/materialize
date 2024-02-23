@@ -11,9 +11,9 @@
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_compute_types::dataflows::{DataflowDescription, YieldSpec};
+use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
@@ -387,12 +387,13 @@ pub struct ComputeParameters {
     pub enable_operator_hydration_status_logging: Option<bool>,
     /// Enable lgalloc's eager memory return/reclamation feature.
     pub enable_lgalloc_eager_reclamation: Option<bool>,
-    /// Persist client configuration.
-    pub persist: PersistParameters,
     /// Tracing configuration.
     pub tracing: TracingParameters,
     /// gRPC client configuration.
     pub grpc_client: GrpcClientParameters,
+
+    /// Config updates for components migrated to `mz_dyncfg`.
+    pub dyncfg_updates: ConfigUpdates,
 }
 
 impl ComputeParameters {
@@ -407,9 +408,9 @@ impl ComputeParameters {
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
             enable_lgalloc_eager_reclamation,
-            persist,
             tracing,
             grpc_client,
+            dyncfg_updates,
         } = other;
 
         if max_result_size.is_some() {
@@ -438,14 +439,17 @@ impl ComputeParameters {
             self.enable_lgalloc_eager_reclamation = enable_lgalloc_eager_reclamation;
         }
 
-        self.persist.update(persist);
         self.tracing.update(tracing);
         self.grpc_client.update(grpc_client);
+
+        self.dyncfg_updates.extend(dyncfg_updates);
     }
 
     /// Return whether all parameters are unset.
     pub fn all_unset(&self) -> bool {
-        self.max_result_size.is_none() && self.persist.all_unset() && self.grpc_client.all_unset()
+        self.max_result_size.is_none()
+            && self.grpc_client.all_unset()
+            && self.dyncfg_updates.updates.is_empty()
     }
 }
 
@@ -466,9 +470,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                 .enable_operator_hydration_status_logging
                 .into_proto(),
             enable_lgalloc_eager_reclamation: self.enable_lgalloc_eager_reclamation.into_proto(),
-            persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
+            dyncfg_updates: Some(self.dyncfg_updates.clone()),
         }
     }
 
@@ -487,15 +491,15 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                 .enable_operator_hydration_status_logging
                 .into_rust()?,
             enable_lgalloc_eager_reclamation: proto.enable_lgalloc_eager_reclamation.into_rust()?,
-            persist: proto
-                .persist
-                .into_rust_if_some("ProtoComputeParameters::persist")?,
             tracing: proto
                 .tracing
                 .into_rust_if_some("ProtoComputeParameters::tracing")?,
             grpc_client: proto
                 .grpc_client
                 .into_rust_if_some("ProtoComputeParameters::grpc_client")?,
+            dyncfg_updates: proto.dyncfg_updates.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoComputeParameters::dyncfg_updates")
+            })?,
         })
     }
 }

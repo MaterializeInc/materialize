@@ -237,9 +237,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
             enable_lgalloc_eager_reclamation,
-            persist,
             tracing,
             grpc_client: _grpc_client,
+            dyncfg_updates,
         } = params;
 
         if let Some(v) = max_result_size {
@@ -301,8 +301,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state.enable_operator_hydration_status_logging = v;
         }
 
-        persist.apply(self.compute_state.persist_clients.cfg());
         tracing.apply(self.compute_state.tracing_handle.as_ref());
+
+        dyncfg_updates.apply(&self.compute_state.persist_clients.cfg().configs);
     }
 
     fn handle_create_dataflow(&mut self, dataflow: DataflowDescription<Plan, CollectionMetadata>) {
