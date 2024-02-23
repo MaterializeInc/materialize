@@ -471,7 +471,7 @@ pub fn encode_copy_format<'a>(
 #[derive(Debug, Clone)]
 pub struct CopyTextFormatParams<'a> {
     pub null: Cow<'a, str>,
-    pub delimiter: Cow<'a, str>,
+    pub delimiter: Cow<'a, str>, // TODO (mouli): refactor delimiter to be a single u8
 }
 
 impl<'a> Default for CopyTextFormatParams<'a> {
