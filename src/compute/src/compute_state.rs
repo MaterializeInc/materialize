@@ -29,6 +29,7 @@ use mz_compute_client::protocol::response::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::{NodeId, Plan};
+use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
@@ -112,6 +113,18 @@ pub struct ComputeState {
     pub enable_operator_hydration_status_logging: bool,
     /// Other configuration for compute
     pub context: ComputeInstanceContext,
+    /// Per-worker dynamic configuration.
+    ///
+    /// This is separate from the process-global `ConfigSet` and contains config options that need
+    /// to be applied consistently with compute command order.
+    ///
+    /// For example, for options that influence dataflow rendering it is important that all workers
+    /// render the same dataflow with the same options. If these options were stored in a global
+    /// `ConfigSet`, we couldn't guarantee that all workers observe changes to them at the same
+    /// point in the stream of compute commands. Storing per-worker configuration ensures that
+    /// because each worker's configuration is only updated once that worker observes the
+    /// respective `UpdateConfiguration` command.
+    pub worker_config: ConfigSet,
 
     /// Receiver of operator hydration events.
     pub hydration_rx: mpsc::Receiver<HydrationEvent>,
@@ -134,6 +147,8 @@ impl ComputeState {
         let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
         let (hydration_tx, hydration_rx) = mpsc::channel();
 
+        let worker_config = ConfigSet::default();
+
         Self {
             collections: Default::default(),
             dropped_collections: Default::default(),
@@ -151,6 +166,7 @@ impl ComputeState {
             tracing_handle,
             enable_operator_hydration_status_logging: true,
             context,
+            worker_config,
             hydration_rx,
             hydration_tx,
         }
@@ -303,6 +319,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         tracing.apply(self.compute_state.tracing_handle.as_ref());
 
+        dyncfg_updates.apply(&self.compute_state.worker_config);
         dyncfg_updates.apply(&self.compute_state.persist_clients.cfg().configs);
     }
 

@@ -20,6 +20,7 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::AvailableCollections;
+use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
 use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
@@ -88,6 +89,8 @@ where
     pub(super) hydration_logger: Option<HydrationLogger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
+    /// Per-worker dynamic configuration.
+    pub(super) worker_config: ConfigSet,
     /// Whether to log operator hydration status.
     pub(super) enable_operator_hydration_status_logging: bool,
 }
@@ -131,6 +134,7 @@ where
             shutdown_token: Default::default(),
             hydration_logger,
             linear_join_spec: compute_state.linear_join_spec,
+            worker_config: compute_state.worker_config.clone(),
             enable_operator_hydration_status_logging: compute_state
                 .enable_operator_hydration_status_logging,
         }
