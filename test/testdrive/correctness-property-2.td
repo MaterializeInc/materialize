@@ -51,7 +51,7 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
-  WITH (RETAIN HISTORY = FOR '1 day');
+  WITH (RETAIN HISTORY = FOR '365000 days');
 
 # Prime tokio-postgres with the missing OIDs.
 > SELECT mz_now(), * FROM correctness_data WHERE false AS OF AT LEAST 0

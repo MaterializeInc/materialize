@@ -42,7 +42,7 @@ INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 
   IN CLUSTER storage
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES
-  WITH (RETAIN HISTORY = FOR '1 day');
+  WITH (RETAIN HISTORY = FOR '365000 days');
 
 # Grab a cursor at timestamp 0
 > BEGIN
