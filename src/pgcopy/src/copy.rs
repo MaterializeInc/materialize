@@ -12,6 +12,7 @@ use std::io;
 
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
+use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationType, Row, RowArena};
 
 static END_OF_COPY_MARKER: &[u8] = b"\\.";
@@ -67,15 +68,7 @@ pub fn encode_copy_row_text_default(
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
-    encode_copy_row_text(
-        row,
-        typ,
-        out,
-        CopyTextFormatParams {
-            delimiter: Cow::from("\t"),
-            null: Cow::from("\\N"),
-        },
-    )
+    encode_copy_row_text(row, typ, out, CopyTextFormatParams::default())
 }
 
 pub fn encode_copy_row_text(
@@ -84,7 +77,7 @@ pub fn encode_copy_row_text(
     out: &mut Vec<u8>,
     CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
 ) -> Result<(), io::Error> {
-    let delim = delimiter.as_bytes().first().expect("expect a single byte");
+    let delim = delimiter.as_bytes().into_element();
     let null = null.as_bytes();
     let mut buf = BytesMut::new();
     for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
@@ -481,6 +474,15 @@ pub struct CopyTextFormatParams<'a> {
     pub delimiter: Cow<'a, str>,
 }
 
+impl<'a> Default for CopyTextFormatParams<'a> {
+    fn default() -> Self {
+        CopyTextFormatParams {
+            delimiter: Cow::from("\t"),
+            null: Cow::from("\\N"),
+        }
+    }
+}
+
 pub fn decode_copy_format_text(
     data: &[u8],
     column_types: &[mz_pgrepr::Type],
@@ -526,6 +528,18 @@ pub struct CopyCsvFormatParams<'a> {
     pub null: Cow<'a, str>,
 }
 
+impl<'a> Default for CopyCsvFormatParams<'a> {
+    fn default() -> Self {
+        CopyCsvFormatParams {
+            delimiter: b',',
+            quote: b'"',
+            escape: b'"',
+            header: false,
+            null: Cow::from(""),
+        }
+    }
+}
+
 impl<'a> CopyCsvFormatParams<'a> {
     pub fn try_new(
         delimiter: Option<u8>,
@@ -534,13 +548,7 @@ impl<'a> CopyCsvFormatParams<'a> {
         header: Option<bool>,
         null: Option<String>,
     ) -> Result<CopyCsvFormatParams<'a>, String> {
-        let mut params = CopyCsvFormatParams {
-            delimiter: b',',
-            quote: b'"',
-            escape: b'"',
-            header: false,
-            null: Cow::from(""),
-        };
+        let mut params = CopyCsvFormatParams::default();
 
         if let Some(delimiter) = delimiter {
             params.delimiter = delimiter;
