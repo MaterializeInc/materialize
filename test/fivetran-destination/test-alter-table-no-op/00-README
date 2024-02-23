@@ -1,1 +1,0 @@
-Tests that alter table returns success, if it's a no-op.
