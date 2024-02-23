@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::time::Duration;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::soft_assert_or_log;
@@ -722,31 +721,6 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
         Ok(BuildDesc {
             id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
             plan: x.plan.into_rust_if_some("ProtoBuildDesc::plan")?,
-        })
-    }
-}
-
-/// Specification of a dataflow operator's yielding behavior.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
-pub struct YieldSpec {
-    /// Yield after the given amount of work was performed.
-    pub after_work: Option<usize>,
-    /// Yield after the given amount of time has elapsed.
-    pub after_time: Option<Duration>,
-}
-
-impl RustType<ProtoYieldSpec> for YieldSpec {
-    fn into_proto(&self) -> ProtoYieldSpec {
-        ProtoYieldSpec {
-            after_work: self.after_work.into_proto(),
-            after_time: self.after_time.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoYieldSpec) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            after_work: proto.after_work.into_rust()?,
-            after_time: proto.after_time.into_rust()?,
         })
     }
 }

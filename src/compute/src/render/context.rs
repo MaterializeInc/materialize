@@ -41,8 +41,7 @@ use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::compute_state::{ComputeState, HydrationEvent};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
-use crate::render::join::LinearJoinSpec;
-use crate::render::RenderTimestamp;
+use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::typedefs::{
     ErrAgent, ErrEnter, ErrSpine, RowAgent, RowEnter, RowRowAgent, RowRowEnter, RowRowSpine,
     RowSpine,

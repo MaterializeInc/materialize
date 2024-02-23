@@ -59,7 +59,7 @@ use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceMana
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
-use crate::render::{LinearJoinImpl, LinearJoinSpec};
+use crate::render::LinearJoinSpec;
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 /// Worker-local state that is maintained across dataflows.
@@ -147,8 +147,6 @@ impl ComputeState {
         let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
         let (hydration_tx, hydration_rx) = mpsc::channel();
 
-        let worker_config = ConfigSet::default();
-
         Self {
             collections: Default::default(),
             dropped_collections: Default::default(),
@@ -166,7 +164,7 @@ impl ComputeState {
             tracing_handle,
             enable_operator_hydration_status_logging: true,
             context,
-            worker_config,
+            worker_config: mz_dyncfgs::all_dyncfgs(),
             hydration_rx,
             hydration_tx,
         }
@@ -191,6 +189,13 @@ impl ComputeState {
         self.collections
             .get_mut(&id)
             .expect("collection must exist")
+    }
+
+    /// Apply the current `worker_config` to the compute state.
+    fn apply_worker_config(&mut self) {
+        let config = &self.worker_config;
+
+        self.linear_join_spec = LinearJoinSpec::from_config(config);
     }
 }
 
@@ -238,6 +243,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {
+        // Ensure the state is consistent with the config before we initialize anything.
+        self.compute_state.apply_worker_config();
+
         self.initialize_logging(&config.logging);
     }
 
@@ -247,8 +255,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            linear_join_yielding,
-            enable_mz_join_core,
             enable_columnation_lgalloc,
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
@@ -263,15 +269,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
-        }
-        if let Some(v) = linear_join_yielding {
-            self.compute_state.linear_join_spec.yielding = v;
-        }
-        if let Some(v) = enable_mz_join_core {
-            self.compute_state.linear_join_spec.implementation = match v {
-                false => LinearJoinImpl::DifferentialDataflow,
-                true => LinearJoinImpl::Materialize,
-            };
         }
 
         // TODO(mh): This has a potential problem that when `enable_columnation_lgalloc` and
@@ -321,6 +318,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         dyncfg_updates.apply(&self.compute_state.worker_config);
         dyncfg_updates.apply(&self.compute_state.persist_clients.cfg().configs);
+
+        self.compute_state.apply_worker_config();
     }
 
     fn handle_create_dataflow(&mut self, dataflow: DataflowDescription<Plan, CollectionMetadata>) {

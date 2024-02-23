@@ -10,7 +10,7 @@
 //! Compute protocol commands.
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
-use mz_compute_types::dataflows::{DataflowDescription, YieldSpec};
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -375,10 +375,6 @@ pub struct ComputeParameters {
     /// NB: This value is optional, so the outer option indicates if this update
     /// includes an override and the inner option is part of the config value.
     pub dataflow_max_inflight_bytes: Option<Option<usize>>,
-    /// The yielding behavior with which linear joins should be rendered.
-    pub linear_join_yielding: Option<YieldSpec>,
-    /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
-    pub enable_mz_join_core: Option<bool>,
     /// Enable lgalloc for columnation.
     pub enable_columnation_lgalloc: Option<bool>,
     /// Enable the chunked stack implementation.
@@ -402,8 +398,6 @@ impl ComputeParameters {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            linear_join_yielding,
-            enable_mz_join_core,
             enable_columnation_lgalloc,
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
@@ -418,12 +412,6 @@ impl ComputeParameters {
         }
         if dataflow_max_inflight_bytes.is_some() {
             self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
-        }
-        if linear_join_yielding.is_some() {
-            self.linear_join_yielding = linear_join_yielding;
-        }
-        if enable_mz_join_core.is_some() {
-            self.enable_mz_join_core = enable_mz_join_core;
         }
         if enable_columnation_lgalloc.is_some() {
             self.enable_columnation_lgalloc = enable_columnation_lgalloc;
@@ -462,8 +450,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                     dataflow_max_inflight_bytes: x.into_proto(),
                 }
             }),
-            linear_join_yielding: self.linear_join_yielding.into_proto(),
-            enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
             enable_chunked_stack: self.enable_chunked_stack.into_proto(),
             enable_operator_hydration_status_logging: self
@@ -483,8 +469,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                 .dataflow_max_inflight_bytes
                 .map(|x| x.dataflow_max_inflight_bytes.into_rust())
                 .transpose()?,
-            linear_join_yielding: proto.linear_join_yielding.into_rust()?,
-            enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
             enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
             enable_chunked_stack: proto.enable_chunked_stack.into_rust()?,
             enable_operator_hydration_status_logging: proto

@@ -1159,8 +1159,6 @@ impl SystemVars {
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
-            &ENABLE_MZ_JOIN_CORE,
-            &LINEAR_JOIN_YIELDING,
             &DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT,
             &DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
@@ -1916,16 +1914,6 @@ impl SystemVars {
         *self.expect_value(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
     }
 
-    /// Returns the `enable_mz_join_core` configuration parameter.
-    pub fn enable_mz_join_core(&self) -> bool {
-        *self.expect_value(&ENABLE_MZ_JOIN_CORE)
-    }
-
-    /// Returns the `linear_join_yielding` configuration parameter.
-    pub fn linear_join_yielding(&self) -> &Cow<'static, str> {
-        self.expect_value(&LINEAR_JOIN_YIELDING)
-    }
-
     /// Returns the `default_idle_arrangement_merge_effort` configuration parameter.
     pub fn default_idle_arrangement_merge_effort(&self) -> u32 {
         *self.expect_value(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
@@ -2141,8 +2129,6 @@ impl SystemVars {
     pub fn is_compute_config_var(&self, name: &str) -> bool {
         name == MAX_RESULT_SIZE.name()
             || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-            || name == LINEAR_JOIN_YIELDING.name()
-            || name == ENABLE_MZ_JOIN_CORE.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
             || name == ENABLE_COMPUTE_CHUNKED_STACK.name()
             || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()

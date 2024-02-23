@@ -66,8 +66,3 @@ message ProtoBuildDesc {
     mz_repr.global_id.ProtoGlobalId id = 1;
     plan.ProtoPlan plan = 2;
 }
-
-message ProtoYieldSpec {
-    optional uint64 after_work = 1;
-    optional mz_proto.ProtoDuration after_time = 2;
-}

@@ -1323,27 +1323,6 @@ pub static STATEMENT_LOGGING_SAMPLE_RATE: VarDefinition = VarDefinition::new_laz
     false,
 ).with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
-/// Whether compute rendering should use Materialize's custom linear join implementation rather
-/// than the one from Differential Dataflow.
-pub static ENABLE_MZ_JOIN_CORE: VarDefinition = VarDefinition::new(
-    "enable_mz_join_core",
-    value!(bool; true),
-    "Feature flag indicating whether compute rendering should use Materialize's custom linear \
-        join implementation rather than the one from Differential Dataflow. (Materialize).",
-    true,
-);
-
-pub const DEFAULT_LINEAR_JOIN_YIELDING: Cow<'static, str> = Cow::Borrowed("work:1000000,time:100");
-pub static LINEAR_JOIN_YIELDING: VarDefinition = VarDefinition::new(
-    "linear_join_yielding",
-    value!(Cow<'static, str>; DEFAULT_LINEAR_JOIN_YIELDING),
-    "The yielding behavior compute rendering should apply for linear join operators. Either \
-        'work:<amount>' or 'time:<milliseconds>' or 'work:<amount>,time:<milliseconds>'. Note \
-        that omitting one of 'work' or 'time' will entirely disable join yielding by time or \
-        work, respectively, rather than falling back to some default.",
-    true,
-);
-
 pub static DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: VarDefinition = VarDefinition::new(
     "default_idle_arrangement_merge_effort",
     value!(u32; 0),

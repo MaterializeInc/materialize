@@ -153,7 +153,7 @@ mod threshold;
 mod top_k;
 
 pub use context::CollectionBundle;
-pub use join::{LinearJoinImpl, LinearJoinSpec};
+pub use join::LinearJoinSpec;
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///

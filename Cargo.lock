@@ -4090,6 +4090,7 @@ dependencies = [
  "mz-compute-client",
  "mz-compute-types",
  "mz-dyncfg",
+ "mz-dyncfgs",
  "mz-expr",
  "mz-ore",
  "mz-persist-client",
@@ -4171,6 +4172,7 @@ dependencies = [
  "columnation",
  "differential-dataflow",
  "itertools",
+ "mz-dyncfg",
  "mz-expr",
  "mz-ore",
  "mz-proto",
@@ -4254,6 +4256,7 @@ dependencies = [
 name = "mz-dyncfgs"
 version = "0.0.0"
 dependencies = [
+ "mz-compute-types",
  "mz-dyncfg",
  "mz-persist-client",
  "mz-persist-txn",

@@ -17,9 +17,10 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
-use mz_compute_types::dataflows::YieldSpec;
+use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
+use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::IntoRowByTypes;
 use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
@@ -42,7 +43,7 @@ use crate::typedefs::{RowAgent, RowEnter, RowRowAgent, RowRowEnter};
 ///
 /// See the `mz_join_core` module docs for our rationale for providing two join implementations.
 #[derive(Clone, Copy)]
-pub enum LinearJoinImpl {
+enum LinearJoinImpl {
     Materialize,
     DifferentialDataflow,
 }
@@ -55,23 +56,39 @@ pub enum LinearJoinImpl {
 /// [#390]: https://github.com/TimelyDataflow/differential-dataflow/pull/390
 #[derive(Clone, Copy)]
 pub struct LinearJoinSpec {
-    pub implementation: LinearJoinImpl,
-    pub yielding: YieldSpec,
+    implementation: LinearJoinImpl,
+    yielding: YieldSpec,
 }
 
 impl Default for LinearJoinSpec {
     fn default() -> Self {
         Self {
             implementation: LinearJoinImpl::Materialize,
-            yielding: YieldSpec {
-                after_work: Some(1_000_000),
-                after_time: Some(Duration::from_millis(100)),
-            },
+            yielding: Default::default(),
         }
     }
 }
 
 impl LinearJoinSpec {
+    /// Create a `LinearJoinSpec` based on the given config.
+    pub fn from_config(config: &ConfigSet) -> Self {
+        let implementation = match ENABLE_MZ_JOIN_CORE.get(config) {
+            true => LinearJoinImpl::Materialize,
+            false => LinearJoinImpl::DifferentialDataflow,
+        };
+
+        let yielding_raw = LINEAR_JOIN_YIELDING.get(config);
+        let yielding = YieldSpec::try_from_str(&yielding_raw).unwrap_or_else(|| {
+            tracing::error!("invalid LINEAR_JOIN_YIELDING config: {yielding_raw}");
+            YieldSpec::default()
+        });
+
+        Self {
+            implementation,
+            yielding,
+        }
+    }
+
     /// Render a join operator according to this specification.
     fn render<G, Tr1, Tr2, L, I>(
         &self,
@@ -117,6 +134,53 @@ impl LinearJoinSpec {
                 mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
             }
         }
+    }
+}
+
+/// Specification of a dataflow operator's yielding behavior.
+#[derive(Clone, Copy)]
+struct YieldSpec {
+    /// Yield after the given amount of work was performed.
+    after_work: Option<usize>,
+    /// Yield after the given amount of time has elapsed.
+    after_time: Option<Duration>,
+}
+
+impl Default for YieldSpec {
+    fn default() -> Self {
+        Self {
+            after_work: Some(1_000_000),
+            after_time: Some(Duration::from_millis(100)),
+        }
+    }
+}
+
+impl YieldSpec {
+    fn try_from_str(s: &str) -> Option<Self> {
+        let mut after_work = None;
+        let mut after_time = None;
+
+        let options = s.split(',').map(|o| o.trim());
+        for option in options {
+            let parts: Vec<_> = option.split(':').map(|p| p.trim()).collect();
+            match &parts[..] {
+                ["work", amount] => {
+                    let amount = amount.parse().ok()?;
+                    after_work = Some(amount);
+                }
+                ["time", millis] => {
+                    let millis = millis.parse().ok()?;
+                    let duration = Duration::from_millis(millis);
+                    after_time = Some(duration);
+                }
+                _ => return None,
+            }
+        }
+
+        Some(Self {
+            after_work,
+            after_time,
+        })
     }
 }
 
