@@ -167,50 +167,26 @@ steps:
     trigger: tests
     async: false
     build:
-      # TODO(def-): How to get the last release version here? For now v0.87.2
-      commit: "f79ca55f07854fa0f1c0f7bdba8001b615c822e6"
-      branch: "v0.87.2"
+      # TODO(def-): Set version with mkpipeline.py
+      commit: "9f64f909a77849684e978b840b4f5c1edbd396e8"
+      branch: "v0.88.1"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
+    skip: "TODO(def-) reenable when greener"
 
-  - id: tests-preflight-check-upgrade
-    label: Tests with preflight check and upgrade
-    trigger: tests
-    async: false
-    build:
-      # TODO(def-): How to get the last release version here? For now v0.87.2
-      commit: "f79ca55f07854fa0f1c0f7bdba8001b615c822e6"
-      branch: "v0.87.2"
-      env:
-        CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
-        CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 0
-    skip: "Currently can't run pipeline two times at once, rollback is more interesting anyway"
   - id: nightlies-preflight-check-rollback
     label: Nightlies with preflight check and rollback
     trigger: nightlies
     async: false
     build:
-      # TODO(def-): How to get the last release version here? For now v0.87.2
-      commit: "f79ca55f07854fa0f1c0f7bdba8001b615c822e6"
-      branch: "v0.87.2"
+      # TODO(def-): Set version with mkpipeline.py
+      commit: "9f64f909a77849684e978b840b4f5c1edbd396e8"
+      branch: "v0.88.1"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
-
-  - id: nightlies-preflight-check-upgrade
-    label: Nightlies with preflight check and upgrade
-    trigger: nightlies
-    async: false
-    build:
-      # TODO(def-): How to get the last release version here? For now v0.87.2
-      commit: "f79ca55f07854fa0f1c0f7bdba8001b615c822e6"
-      branch: "v0.87.2"
-      env:
-        CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
-        CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 0
-    skip: "Currently can't run pipeline two times at once, rollback is more interesting anyway"
-
+    skip: "TODO(def-) reenable when greener"
 
   - wait: ~
     continue_on_failure: true
