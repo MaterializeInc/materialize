@@ -263,8 +263,8 @@ impl TransactionalProducer {
         options.insert("transactional.id", transactional_id);
         // Allow Kafka monitoring tools to identify this producer.
         options.insert("client.id", client_id);
-        // We want to be notified frequently with statistics
-        options.insert("statistics.interval.ms", "500".into());
+        // We want to be notified regularly with statistics
+        options.insert("statistics.interval.ms", "1000".into());
 
         let ctx = MzClientContext::default();
 

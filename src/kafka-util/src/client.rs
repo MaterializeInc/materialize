@@ -248,7 +248,7 @@ impl ClientContext for MzClientContext {
     }
 
     fn stats(&self, statistics: Statistics) {
-        let _ = self.statistics_tx.send(statistics);
+        self.statistics_tx.send_replace(statistics);
     }
 
     fn error(&self, error: KafkaError, reason: &str) {
