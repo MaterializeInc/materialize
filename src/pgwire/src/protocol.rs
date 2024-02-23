@@ -1904,7 +1904,7 @@ where
         ))
     }
 
-    #[tracing::instrument(level = "debug", skip(self, stream))]
+    #[mz_ore::instrument(level = "debug")]
     async fn copy_rows(
         &mut self,
         format: CopyFormat,

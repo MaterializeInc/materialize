@@ -223,7 +223,7 @@ impl Coordinator {
         .boxed_local()
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx, secret_key, notice_tx))]
+    #[mz_ore::instrument(level = "debug")]
     async fn handle_startup(
         &mut self,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
@@ -860,7 +860,7 @@ impl Coordinator {
     /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned
     /// `ConnectionId` because this method gets called by external clients when
     /// they request to cancel a request.
-    #[tracing::instrument(level = "debug", skip(self, secret_key))]
+    #[mz_ore::instrument(level = "debug")]
     async fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         if let Some((id_handle, conn_meta)) = self.active_conns.get_key_value(&conn_id) {
             // If the secret key specified by the client doesn't match the
@@ -972,7 +972,7 @@ impl Coordinator {
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send
     /// rows.
-    #[tracing::instrument(level = "debug", skip(self, tx))]
+    #[mz_ore::instrument(level = "debug")]
     fn handle_get_webhook(
         &mut self,
         database: String,

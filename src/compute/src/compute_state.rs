@@ -603,7 +603,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     ///
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
-    #[tracing::instrument(level = "debug", skip(self, peek))]
+    #[mz_ore::instrument(level = "debug")]
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         let log_event = peek.as_log_event(false);
         // Respond with the response.

@@ -502,7 +502,7 @@ mod test {
         trace_plan(plan);
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(path.segment ="my_optimization"))]
+    #[mz_ore::instrument(level = "debug", fields(path.segment ="my_optimization"))]
     fn some_optimization(plan: &mut String) {
         let _ = plan.replace("42", "47");
         trace_plan(plan);

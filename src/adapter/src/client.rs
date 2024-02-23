@@ -494,7 +494,7 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
-    #[tracing::instrument(level = "debug", skip(self, cancel_future))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn execute(
         &mut self,
         portal_name: String,

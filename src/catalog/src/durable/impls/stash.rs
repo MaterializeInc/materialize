@@ -1233,7 +1233,7 @@ impl DurableCatalogState for Connection {
 // Debug methods.
 
 /// Manually update value of `key` in collection `T` to `value`.
-#[tracing::instrument(level = "info", skip(stash))]
+#[mz_ore::instrument]
 pub(crate) async fn debug_edit<T: Collection>(
     stash: &mut Stash,
     key: T::Key,
@@ -1251,7 +1251,7 @@ where
 }
 
 /// Manually delete `key` from collection `T`.
-#[tracing::instrument(level = "info", skip(stash))]
+#[mz_ore::instrument]
 pub(crate) async fn debug_delete<T: Collection>(
     stash: &mut Stash,
     key: T::Key,

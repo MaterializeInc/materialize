@@ -413,7 +413,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    #[mz_ore::instrument(level = "debug")]
     async fn message_purified_statement_ready(
         &mut self,
         PurifiedStatementReady {
@@ -541,7 +541,7 @@ impl Coordinator {
         };
     }
 
-    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    #[mz_ore::instrument(level = "debug")]
     async fn message_create_connection_validation_ready(
         &mut self,
         CreateConnectionValidationReady {
@@ -583,7 +583,7 @@ impl Coordinator {
         ctx.retire(result);
     }
 
-    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    #[mz_ore::instrument(level = "debug")]
     async fn message_alter_connection_validation_ready(
         &mut self,
         AlterConnectionValidationReady {
