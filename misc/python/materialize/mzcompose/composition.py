@@ -386,7 +386,7 @@ class Composition:
 
                 if retry < max_tries:
                     print("Retrying ...")
-                    time.sleep(1)
+                    time.sleep(3)
                     continue
                 else:
                     raise CommandFailureCausedUIError(
@@ -819,7 +819,7 @@ class Composition:
         detach: bool = True,
         wait: bool = True,
         persistent: bool = False,
-        max_tries: int = 2,
+        max_tries: int = 3,  # increased since quay.io returns 502 sometimes
     ) -> None:
         """Build, (re)create, and start the named services.
 
