@@ -14,11 +14,12 @@ use timely::container::columnation::{Columnation, TimelyStack};
 use timely::logging::WorkerIdentifier;
 use timely::logging_core::Logger;
 use timely::progress::{frontier::Antichain, Timestamp};
-use timely::Container;
+use timely::{Container, PartialOrder};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::logging::{BatcherEvent, DifferentialEvent};
 use differential_dataflow::trace::{Batcher, Builder};
+use timely::progress::frontier::AntichainRef;
 
 /// Creates batches from unordered tuples.
 pub struct ColumnatedMergeBatcher<K, V, T, D>
@@ -78,8 +79,7 @@ where
         &mut self,
         upper: Antichain<T>,
     ) -> B::Output {
-        let mut merged = Default::default();
-        self.sorter.finish_into(&mut merged);
+        let mut merged = self.sorter.extract_into(upper.borrow());
 
         // Determine the number of distinct keys, values, and updates,
         // and form a builder pre-sized for these numbers.
@@ -218,7 +218,7 @@ struct MergeSorterColumnation<
 
 impl<
         D: Ord + Columnation + 'static,
-        T: Ord + Columnation + 'static,
+        T: PartialOrder + Ord + Columnation + 'static,
         R: Semigroup + Columnation + 'static,
     > MergeSorterColumnation<D, T, R>
 {
@@ -330,19 +330,90 @@ impl<
         self.queue_push(list);
     }
 
-    fn finish_into(&mut self, target: &mut Vec<TimelyStack<(D, T, R)>>) {
+    fn extract_into(&mut self, frontier: AntichainRef<T>) -> Vec<TimelyStack<(D, T, R)>> {
         differential_dataflow::consolidation::consolidate_updates(&mut self.pending);
         self.flush_pending();
-        while self.queue.len() > 1 {
-            let list1 = self.queue_pop().unwrap();
-            let list2 = self.queue_pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.queue_push(merged);
+
+        let mut keep = self.empty();
+        let mut ship = self.empty();
+        let mut ship_list = Vec::default();
+
+        let len_before: usize = self.queue.iter().flatten().map(|e| e.len()).sum();
+
+        for mut chain in std::mem::take(&mut self.queue).drain(..) {
+            let mut block_list = Vec::default();
+            let mut keep_list = Vec::default();
+            for block in chain.drain(..) {
+                // Is all data ready to be shipped?
+                let all = block.iter().all(|(_, t, _)| !frontier.less_equal(t));
+                // Is any data ready to be shipped?
+                let any = block.iter().any(|(_, t, _)| !frontier.less_equal(t));
+
+                if all {
+                    // All data is ready, push what we accumulated, stash whole block.
+                    if !ship.is_empty() {
+                        block_list.push(std::mem::replace(&mut ship, self.empty()));
+                    }
+                    block_list.push(block);
+                } else if any {
+                    // Iterate block, sorting items into ship and keep
+                    for datum in block.iter() {
+                        if frontier.less_equal(&datum.1) {
+                            keep.copy(datum);
+                            if keep.capacity() == keep.len() {
+                                // remember keep
+                                keep_list.push(std::mem::replace(&mut keep, self.empty()));
+                            }
+                        } else {
+                            ship.copy(datum);
+                            if ship.capacity() == ship.len() {
+                                // Ship is full, push in on the block list, get an empty one.
+                                block_list.push(std::mem::replace(&mut ship, self.empty()));
+                            }
+                        }
+                    }
+                    // Recycle leftovers
+                    self.recycle(block);
+                } else {
+                    // Keep whole block
+                    if !keep.is_empty() {
+                        keep_list.push(std::mem::replace(&mut keep, self.empty()));
+                    }
+                    keep_list.push(block);
+                }
+            }
+
+            // Capture any residue left after iterating blocks.
+            if !ship.is_empty() {
+                block_list.push(std::mem::replace(&mut ship, self.empty()));
+            }
+            if !keep.is_empty() {
+                keep_list.push(std::mem::replace(&mut keep, self.empty()));
+            }
+
+            // Collect finished chains
+            if !block_list.is_empty() {
+                ship_list.push(block_list);
+            }
+            if !keep_list.is_empty() {
+                self.queue.push(keep_list);
+            }
         }
 
-        if let Some(mut last) = self.queue_pop() {
-            std::mem::swap(&mut last, target);
+        while ship_list.len() > 1 {
+            let list1 = ship_list.pop().unwrap();
+            let list2 = ship_list.pop().unwrap();
+            ship_list.push(self.merge_by(list1, list2));
         }
+
+        let len_after = self.queue.iter().flatten().map(|e| e.len()).sum::<usize>()
+            + ship_list
+                .get(0)
+                .map(|l| l.iter().map(|e| e.len()).sum::<usize>())
+                .unwrap_or(0);
+        assert_eq!(len_before, len_after);
+
+        ship_list.pop().unwrap_or_default()
     }
 
     // merges two sorted input lists into one sorted output list.
