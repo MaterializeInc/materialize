@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::CompactionWindow;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
-use tracing::{info, instrument, trace};
+use tracing::{info, trace};
 use uuid::Uuid;
 
 use mz_adapter_types::connection::ConnectionId;
@@ -50,6 +50,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::option::FallibleMapExt;
@@ -1177,7 +1178,7 @@ impl Catalog {
         }
     }
 
-    #[instrument(name = "catalog::transact", skip_all)]
+    #[instrument(name = "catalog::transact")]
     pub async fn transact<F, R>(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
@@ -1265,7 +1266,7 @@ impl Catalog {
         })
     }
 
-    #[instrument(name = "catalog::transact_inner", skip_all)]
+    #[instrument(name = "catalog::transact_inner")]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,

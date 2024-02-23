@@ -24,10 +24,9 @@ use crate::{TransformCtx, TransformError};
 pub struct NonNullable;
 
 impl crate::Transform for NonNullable {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "non_nullable")
     )]
     fn transform(

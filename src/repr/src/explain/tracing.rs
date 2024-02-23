@@ -439,7 +439,8 @@ impl subscriber::Subscriber for DelegateSubscriber {
 
 #[cfg(test)]
 mod test {
-    use tracing::{dispatcher, instrument};
+    use mz_ore::instrument;
+    use tracing::dispatcher;
     use tracing_subscriber::prelude::*;
 
     use super::{trace_plan, PlanTrace};
@@ -480,7 +481,7 @@ mod test {
         }
     }
 
-    #[instrument(level = "info", skip_all)]
+    #[instrument(level = "info")]
     fn optimize() {
         let mut plan = constant_plan(42);
         trace_plan(&plan);
@@ -489,14 +490,14 @@ mod test {
         trace_plan(&plan);
     }
 
-    #[instrument(level = "info", name = "logical", skip_all)]
+    #[instrument(level = "info", name = "logical")]
     fn logical_optimizer(plan: &mut String) {
         some_optimization(plan);
         let _ = plan.replace("RawPlan", "LogicalPlan");
         trace_plan(plan);
     }
 
-    #[instrument(level = "info", name = "physical", skip_all)]
+    #[instrument(level = "info", name = "physical")]
     fn physical_optimizer(plan: &mut String) {
         let _ = plan.replace("LogicalPlan", "PhysicalPlan");
         trace_plan(plan);

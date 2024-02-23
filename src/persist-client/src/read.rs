@@ -21,6 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
 use mz_dyncfg::Config;
+use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
@@ -30,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::cfg::RetryParameters;
@@ -132,7 +133,7 @@ where
     ///
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.listen.handle.machine.shard_id()))]
     pub async fn next(
         &mut self,
         // If Some, an override for the default listen sleep retry parameters.
@@ -149,7 +150,7 @@ where
 
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
     /// fetches and returns the data from within it.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.listen.handle.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.listen.handle.machine.shard_id()))]
     pub async fn fetch_next(
         &mut self,
     ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
@@ -393,7 +394,7 @@ where
     ///
     /// If you have a use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
-    #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.handle.machine.shard_id()))]
+    #[instrument(level = "debug", name = "listen::next", fields(shard = %self.handle.machine.shard_id()))]
     pub async fn fetch_next(
         &mut self,
     ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
@@ -625,7 +626,7 @@ where
     /// This also acts as a heartbeat for the reader lease (including if called
     /// with `new_since` equal to something like `self.since()` or the minimum
     /// timestamp, making the call a no-op).
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
         // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
         let outstanding_seqno = self
@@ -693,7 +694,7 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
         let () = self.machine.verify_listen(&as_of)?;
         Ok(Listen::new(self, as_of).await)
@@ -712,7 +713,7 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
-    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot(
         &mut self,
         as_of: Antichain<T>,
@@ -738,7 +739,7 @@ where
     ///
     /// For more details on this operation's semantics, see [Self::snapshot] and
     /// [Self::listen].
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn subscribe(
         mut self,
         as_of: Antichain<T>,
@@ -816,7 +817,7 @@ where
 
     /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
     /// same `since`.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn clone(&self, purpose: &str) -> Self {
         let new_reader_id = LeasedReaderId::new();
         let mut machine = self.machine.clone();
@@ -922,7 +923,7 @@ where
     /// a tokio [Handle] being available in the TLC at the time of drop (which
     /// is a bit subtle). Also, explicit expiry allows for control over when it
     /// happens.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
         // We drop the unexpired state before expiring the reader to ensure the
         // heartbeat tasks can never observe the expired state. This doesn't

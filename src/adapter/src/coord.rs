@@ -99,6 +99,7 @@ use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
@@ -135,7 +136,7 @@ use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::{debug, info, info_span, instrument, span, warn, Instrument, Level, Span};
+use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
@@ -987,7 +988,7 @@ impl PendingRead {
     ///
     /// If it is necessary to finalize an execute, return the state necessary to do so
     /// (execution context and result)
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
         match self {
             PendingRead::Read {
@@ -1163,7 +1164,7 @@ impl ExecuteContext {
     }
 
     /// Retire the execution, by sending a message to the coordinator.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
         let Self {
             tx,
@@ -1346,7 +1347,7 @@ impl Coordinator {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
-    #[instrument(name = "coord::bootstrap", skip_all)]
+    #[instrument(name = "coord::bootstrap")]
     pub(crate) async fn bootstrap(
         &mut self,
         builtin_migration_metadata: BuiltinMigrationMetadata,
@@ -1864,7 +1865,7 @@ impl Coordinator {
     /// demand, is more efficient as it reduces the number of writes to durable storage. It also
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
-    #[instrument(skip_all)]
+    #[instrument]
     async fn bootstrap_storage_collections(&mut self) {
         // Reset the txns and table shards to a known set of invariants.
         //
@@ -1967,7 +1968,7 @@ impl Coordinator {
     ///
     /// This method does not perform timestamp selection for the dataflows, nor does it create them
     /// in the compute controller. Both of these steps happen later during bootstrapping.
-    #[instrument(skip_all)]
+    #[instrument]
     fn bootstrap_dataflow_plans(
         &mut self,
         ordered_catalog_entries: &[CatalogEntry],
@@ -2608,7 +2609,7 @@ impl Coordinator {
         &self.active_conns
     }
 
-    #[instrument(level = "debug", skip(self, ctx_extra))]
+    #[instrument(level = "debug")]
     pub(crate) fn retire_execution(
         &mut self,
         reason: StatementEndedExecutionReason,
@@ -2620,7 +2621,7 @@ impl Coordinator {
     }
 
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
             .instance_snapshot(instance)
@@ -3096,7 +3097,7 @@ async fn get_initial_oracle_timestamps(
     Ok(initial_timestamps)
 }
 
-#[instrument(skip_all)]
+#[instrument]
 pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,

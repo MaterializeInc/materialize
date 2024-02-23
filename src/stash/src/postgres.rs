@@ -820,7 +820,7 @@ impl Stash {
         ) -> BoxFuture<'a, Result<T, StashError>>,
     {
         // Use a function so we can instrument.
-        #[tracing::instrument(name = "stash::batch_execute", level = "debug", skip(client))]
+        #[mz_ore::instrument(name = "stash::batch_execute", level = "debug")]
         async fn batch_execute(client: &Client, stmt: &str) -> Result<(), tokio_postgres::Error> {
             client.batch_execute(stmt).await
         }

@@ -17,7 +17,7 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tracing::{info, instrument, warn, Instrument};
+use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
@@ -44,6 +44,7 @@ use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
@@ -823,7 +824,7 @@ impl Catalog {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 17KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    #[instrument(name = "catalog::open", skip_all)]
+    #[instrument(name = "catalog::open")]
     pub fn open(
         config: Config<'_>,
         boot_ts_not_linearizable: mz_repr::Timestamp,

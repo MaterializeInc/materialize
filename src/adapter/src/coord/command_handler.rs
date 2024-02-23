@@ -19,6 +19,7 @@ use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_catalog::SYSTEM_CONN_ID;
+use mz_ore::instrument;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -47,7 +48,7 @@ use mz_sql_parser::ast::{
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::{debug_span, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::{
@@ -340,7 +341,7 @@ impl Coordinator {
     }
 
     /// Handles an execute command.
-    #[instrument(name = "coord::handle_execute", skip_all, fields(session = session.uuid().to_string()))]
+    #[instrument(name = "coord::handle_execute", fields(session = session.uuid().to_string()))]
     pub(crate) async fn handle_execute(
         &mut self,
         portal_name: String,
@@ -442,7 +443,7 @@ impl Coordinator {
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[instrument(name = "coord::handle_execute_inner", skip_all, fields(stmt = stmt.to_ast_string_redacted()))]
+    #[instrument(name = "coord::handle_execute_inner", fields(stmt = stmt.to_ast_string_redacted()))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Arc<Statement<Raw>>,

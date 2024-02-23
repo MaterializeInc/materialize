@@ -1180,10 +1180,9 @@ impl RustType<ProtoLetRecLimit> for LetRecLimit {
 
 impl<T: timely::progress::Timestamp> Plan<T> {
     /// Convert the dataflow description into one that uses render plans.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "finalize_dataflow")
     )]
     pub fn finalize_dataflow(
@@ -1243,10 +1242,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     /// Lowers the dataflow description from MIR to LIR. To this end, the
     /// method collects all available arrangements and based on this information
     /// creates plans for every object to be built for the dataflow.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment ="mir_to_lir")
     )]
     fn lower_dataflow(
@@ -1263,10 +1261,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
     /// Refines the source instance descriptions for sources imported by `dataflow` to
     /// push down common MFP expressions.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "refine_source_mfps")
     )]
     fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
@@ -1320,10 +1317,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     }
 
     /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "refine_union_negate_consolidation")
     )]
     fn refine_union_negate_consolidation(dataflow: &mut DataflowDescription<Self>) {
@@ -1354,10 +1350,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     /// Refines the plans of objects to be built as part of `dataflow` to take advantage
     /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
     /// one-shot SELECT query.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "refine_single_time_operator_selection")
     )]
     fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
@@ -1406,10 +1401,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     /// Refines the plans of objects to be built as part of a single-time `dataflow` to relax
     /// the setting of the `must_consolidate` attribute of monotonic operators, if necessary,
     /// whenever the input is deemed to be physically monotonic.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "refine_single_time_consolidation")
     )]
     fn refine_single_time_consolidation(

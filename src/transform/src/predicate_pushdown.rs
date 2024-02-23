@@ -117,10 +117,9 @@ impl CheckedRecursion for PredicatePushdown {
 }
 
 impl crate::Transform for PredicatePushdown {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "predicate_pushdown")
     )]
     fn transform(

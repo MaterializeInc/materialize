@@ -20,10 +20,9 @@ use crate::TransformCtx;
 pub struct Project;
 
 impl crate::Transform for Project {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "project_fusion")
     )]
     fn transform(

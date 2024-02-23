@@ -19,10 +19,9 @@ use crate::TransformCtx;
 pub struct TopKElision;
 
 impl crate::Transform for TopKElision {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "topk_elision")
     )]
     fn transform(

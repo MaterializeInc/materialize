@@ -20,10 +20,9 @@ use crate::TransformCtx;
 pub struct ProjectionExtraction;
 
 impl crate::Transform for ProjectionExtraction {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "projection_extraction")
     )]
     fn transform(

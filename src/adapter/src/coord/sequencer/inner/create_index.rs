@@ -11,11 +11,12 @@ use std::collections::BTreeSet;
 
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
+use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
-use tracing::{instrument, Span};
+use tracing::Span;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -63,7 +64,7 @@ impl Staged for CreateIndexStage {
 }
 
 impl Coordinator {
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_create_index(
         &mut self,
         ctx: ExecuteContext,
@@ -77,7 +78,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn explain_create_index(
         &mut self,
         ctx: ExecuteContext,
@@ -122,7 +123,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn explain_replan_index(
         &mut self,
         ctx: ExecuteContext,
@@ -174,7 +175,7 @@ impl Coordinator {
 
     // `explain_ctx` is an optional context set iff the state machine is initiated from
     // sequencing an EXPALIN for this statement.
-    #[instrument(skip_all)]
+    #[instrument]
     fn create_index_validate(
         &mut self,
         session: &Session,
@@ -203,7 +204,7 @@ impl Coordinator {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_index_optimize(
         &mut self,
         CreateIndexOptimize {
@@ -313,7 +314,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_index_finish(
         &mut self,
         session: &mut Session,
@@ -437,7 +438,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn create_index_explain(
         &mut self,
         session: &Session,

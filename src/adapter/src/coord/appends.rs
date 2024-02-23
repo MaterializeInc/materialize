@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
@@ -23,7 +24,7 @@ use mz_sql::plan::Plan;
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_timestamp_oracle::WriteTimestamp;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
-use tracing::{instrument, warn, Instrument, Span};
+use tracing::{warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
@@ -156,7 +157,7 @@ impl Coordinator {
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug")]
     pub(crate) async fn try_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
         let timestamp = self.peek_local_write_ts().await;
         let now = Timestamp::from((self.catalog().config().now)());
@@ -209,7 +210,7 @@ impl Coordinator {
     /// All applicable pending writes will be combined into a single Append command and sent to
     /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
-    #[instrument(name = "coord::group_commit_initiate", skip_all)]
+    #[instrument(name = "coord::group_commit_initiate")]
     pub(crate) async fn group_commit_initiate(
         &mut self,
         write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
@@ -438,7 +439,7 @@ impl Coordinator {
     ///
     /// We also advance all other timelines and update the read holds of non-realtime
     /// timelines.
-    #[instrument(level = "debug", skip(self, responses))]
+    #[instrument(level = "debug")]
     pub(crate) async fn group_commit_apply(
         &mut self,
         timestamp: Timestamp,

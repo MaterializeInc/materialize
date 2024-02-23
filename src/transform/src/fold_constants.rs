@@ -34,10 +34,9 @@ pub struct FoldConstants {
 }
 
 impl crate::Transform for FoldConstants {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "fold_constants")
     )]
     fn transform(

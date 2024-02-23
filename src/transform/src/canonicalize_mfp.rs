@@ -38,10 +38,9 @@ use crate::{IndexOracle, TransformCtx};
 pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "canonicalize_mfp")
     )]
     fn transform(

@@ -19,6 +19,7 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::instrument;
 use mz_ore::metric;
 use mz_ore::metrics::{
     raw, ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
@@ -39,7 +40,7 @@ use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
 use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
-use tracing::{error, instrument};
+use tracing::error;
 
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
@@ -2413,7 +2414,7 @@ impl MetricsBlob {
 
 #[async_trait]
 impl Blob for MetricsBlob {
-    #[instrument(name = "blob::get", skip_all, fields(shard=blob_key_shard_id(key)))]
+    #[instrument(name = "blob::get", fields(shard=blob_key_shard_id(key)))]
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let res = self
             .metrics
@@ -2431,7 +2432,7 @@ impl Blob for MetricsBlob {
         res
     }
 
-    #[instrument(name = "blob::list_keys_and_metadata", skip_all, fields(shard=blob_key_shard_id(key_prefix)))]
+    #[instrument(name = "blob::list_keys_and_metadata", fields(shard=blob_key_shard_id(key_prefix)))]
     async fn list_keys_and_metadata(
         &self,
         key_prefix: &str,
@@ -2467,7 +2468,7 @@ impl Blob for MetricsBlob {
         res
     }
 
-    #[instrument(name = "blob::set", skip_all, fields(shard=blob_key_shard_id(key)))]
+    #[instrument(name = "blob::set", fields(shard=blob_key_shard_id(key)))]
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let bytes = value.len();
         let res = self
@@ -2483,7 +2484,7 @@ impl Blob for MetricsBlob {
         res
     }
 
-    #[instrument(name = "blob::delete", skip_all, fields(shard=blob_key_shard_id(key)))]
+    #[instrument(name = "blob::delete", fields(shard=blob_key_shard_id(key)))]
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let bytes = self
             .metrics
@@ -2551,7 +2552,7 @@ impl Consensus for MetricsConsensus {
         )
     }
 
-    #[instrument(name = "consensus::head", skip_all, fields(shard=key))]
+    #[instrument(name = "consensus::head", fields(shard=key))]
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let res = self
             .metrics
@@ -2569,7 +2570,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    #[instrument(name = "consensus::compare_and_set", skip_all, fields(shard=key))]
+    #[instrument(name = "consensus::compare_and_set", fields(shard=key))]
     async fn compare_and_set(
         &self,
         key: &str,
@@ -2598,7 +2599,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    #[instrument(name = "consensus::scan", skip_all, fields(shard=key))]
+    #[instrument(name = "consensus::scan", fields(shard=key))]
     async fn scan(
         &self,
         key: &str,
@@ -2622,7 +2623,7 @@ impl Consensus for MetricsConsensus {
         res
     }
 
-    #[instrument(name = "consensus::truncate", skip_all, fields(shard=key))]
+    #[instrument(name = "consensus::truncate", fields(shard=key))]
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let deleted = self
             .metrics
