@@ -135,7 +135,7 @@ impl Display for MapFilterProject {
         writeln!(f, "  predicates:")?;
         self.predicates
             .iter()
-            .try_for_each(|(before, p)| write!(f, "    <before: {}> {},", before, p))?;
+            .try_for_each(|(before, p)| writeln!(f, "    <before: {}> {},", before, p))?;
         writeln!(f, "  projection: {:?}", self.projection)?;
         writeln!(f, "  input_arity: {}", self.input_arity)?;
         writeln!(f, ")")
@@ -1054,6 +1054,11 @@ impl MapFilterProject {
         for proj in self.projection.iter_mut() {
             *proj = remaps[proj];
         }
+
+        // Restore predicate order invariants.
+        for (pos, pred) in self.predicates.iter_mut() {
+            *pos = pred.support().into_iter().max().map(|x| x + 1).unwrap_or(0);
+        }
     }
 
     /// This method inlines expressions with a single use.
@@ -1317,8 +1322,17 @@ pub fn memoize_expr(
         },
         &mut |e| {
             match e {
-                MirScalarExpr::Column(_) | MirScalarExpr::Literal(_, _) => {
+                MirScalarExpr::Literal(_, _) => {
                     // Literals do not need to be memoized.
+                }
+                MirScalarExpr::Column(col) => {
+                    // Column references do not need to be memoized, but may need to be
+                    // updated if they reference a column reference themselves.
+                    if *col > input_arity {
+                        if let MirScalarExpr::Column(col2) = memoized_parts[*col - input_arity] {
+                            *col = col2;
+                        }
+                    }
                 }
                 _ => {
                     if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
