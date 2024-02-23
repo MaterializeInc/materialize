@@ -26,6 +26,13 @@ from materialize.zippy.kafka_actions import (
 )
 from materialize.zippy.kafka_capabilities import Envelope
 from materialize.zippy.minio_actions import MinioRestart, MinioStart
+from materialize.zippy.mysql_actions import (
+    CreateMySqlTable,
+    MySqlDML,
+    MySqlRestart,
+    MySqlStart,
+)
+from materialize.zippy.mysql_cdc_actions import CreateMySqlCdcTable
 from materialize.zippy.mz_actions import (
     KillClusterd,
     MzRestart,
@@ -217,6 +224,26 @@ class PostgresCdc(Scenario):
         }
 
 
+class MySqlCdc(Scenario):
+    """A Zippy test using MySQL CDC exclusively."""
+
+    def bootstrap(self) -> list[ActionOrFactory]:
+        return super().bootstrap() + [MySqlStart]
+
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
+        return {
+            CreateMySqlTable: 10,
+            CreateMySqlCdcTable: 10,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
+            MySqlRestart: 10,
+            CreateViewParameterized(): 10,
+            ValidateView: 20,
+            MySqlDML: 100,
+        }
+
+
 class ClusterReplicas(Scenario):
     """A Zippy test that uses CREATE / DROP REPLICA and random killing."""
 
@@ -385,4 +412,23 @@ class PostgresCdcLarge(Scenario):
             CreateViewParameterized(): 10,
             ValidateView: 20,
             PostgresDML: 100,
+        }
+
+
+class MySqlCdcLarge(Scenario):
+    """A Zippy test using MySQL CDC exclusively (MySQL not killed)."""
+
+    def bootstrap(self) -> list[ActionOrFactory]:
+        return super().bootstrap() + [MySqlStart]
+
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
+        return {
+            CreateMySqlTable: 10,
+            CreateMySqlCdcTable: 10,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
+            CreateViewParameterized(): 10,
+            ValidateView: 20,
+            MySqlDML: 100,
         }
