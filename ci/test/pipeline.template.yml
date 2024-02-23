@@ -363,7 +363,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          queue: linux-aarch64 # TODO(def-) Switch to small when #24324 is fixed
+          queue: linux-aarch64-small
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption tests

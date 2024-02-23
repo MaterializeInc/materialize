@@ -304,7 +304,7 @@ impl ConnectionOptionExtracted {
                     password: self.password.map(|secret| secret.into()),
                 });
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some  https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
@@ -344,7 +344,7 @@ impl ConnectionOptionExtracted {
                     Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
                 };
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some  https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
@@ -417,7 +417,7 @@ impl ConnectionOptionExtracted {
                     Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
                 };
 
-                // TODO we should move to self.port being unsupported if aws_privatelink is some  https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977
+                // TODO we should move to self.port being unsupported if aws_privatelink is some, see <https://github.com/MaterializeInc/materialize/issues/24712#issuecomment-1925443977>
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!("invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka")
