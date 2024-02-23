@@ -135,7 +135,7 @@ impl Display for MapFilterProject {
         writeln!(f, "  predicates:")?;
         self.predicates
             .iter()
-            .try_for_each(|(before, p)| write!(f, "    <before: {}> {},", before, p))?;
+            .try_for_each(|(before, p)| writeln!(f, "    <before: {}> {},", before, p))?;
         writeln!(f, "  projection: {:?}", self.projection)?;
         writeln!(f, "  input_arity: {}", self.input_arity)?;
         writeln!(f, ")")
@@ -1053,6 +1053,11 @@ impl MapFilterProject {
         self.expressions = new_expressions;
         for proj in self.projection.iter_mut() {
             *proj = remaps[proj];
+        }
+
+        // Restore predicate order invariants.
+        for (pos, pred) in self.predicates.iter_mut() {
+            *pos = pred.support().into_iter().max().map(|x| x + 1).unwrap_or(0);
         }
     }
 
