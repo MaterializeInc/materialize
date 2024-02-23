@@ -125,6 +125,4 @@ def extract_error_chunks_from_output(output: str) -> list[str]:
     error_output = output[: output.index("+++ !!! Error Report") - 1]
     error_chunks = error_output.split("^^^ +++")
 
-    # The first part is uninteresting, contains only general testdrive
-    # executable output, not what actually failed, so cut it off.
-    return [chunk.strip() for chunk in error_chunks if len(chunk.strip()) > 0][1:]
+    return [chunk.strip() for chunk in error_chunks if len(chunk.strip()) > 0]

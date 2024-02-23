@@ -581,10 +581,6 @@ class Composition:
         ]
 
         if isinstance(e, CommandFailureCausedUIError):
-            if e.stderr is not None:
-                # This is to avoid that captured stderr is missing in the logs.
-                print(e.stderr, file=sys.stderr, flush=True)
-
             try:
                 extracted_errors = try_determine_errors_from_cmd_execution(e)
             except:
