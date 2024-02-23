@@ -50,11 +50,6 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         port="internal",
         user="mz_system",
     )
-    mz.environmentd.sql(
-        "ALTER SYSTEM SET enable_default_kafka_aws_private_link = true",
-        port="internal",
-        user="mz_system",
-    )
     mz.environmentd.sql(create_connection_statement)
 
     aws_connection_id = mz.environmentd.sql_query(
