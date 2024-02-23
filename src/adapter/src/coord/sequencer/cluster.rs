@@ -37,7 +37,7 @@ use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
 
 impl Coordinator {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_cluster(
         &mut self,
         session: &Session,
@@ -95,7 +95,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_managed_cluster(
         &mut self,
         session: &Session,
@@ -229,7 +229,7 @@ impl Coordinator {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_unmanaged_cluster(
         &mut self,
         session: &Session,
@@ -388,7 +388,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_cluster_replica(
         &mut self,
         session: &Session,

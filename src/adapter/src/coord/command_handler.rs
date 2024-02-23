@@ -879,7 +879,7 @@ impl Coordinator {
 
     /// Unconditionally instructs the dataflow layer to cancel any ongoing,
     /// interactive work for the named `conn_id`.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         // Cancel pending writes. There is at most one pending write per session.
         let mut maybe_ctx = None;
@@ -936,7 +936,7 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
         if self.active_conns.get(&conn_id).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.

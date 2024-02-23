@@ -139,7 +139,7 @@ impl Coordinator {
         .await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn explain_peek(
         &mut self,
         ctx: ExecuteContext,

@@ -577,7 +577,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), CatalogError> {
         CONFIG_COLLECTION
             .upsert_key(
@@ -632,7 +632,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         Ok(logs)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
         ID_ALLOCATOR_COLLECTION
             .peek_key_one(
@@ -667,7 +667,7 @@ impl ReadOnlyDurableCatalogState for Connection {
             .map(|value| value > 0))
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         let (
             databases,
@@ -759,7 +759,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         })
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn whole_migration_snapshot(
         &mut self,
     ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
@@ -1120,7 +1120,7 @@ impl DurableCatalogState for Connection {
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
         Ok(self.stash.confirm_leadership().await?)
     }
@@ -1182,7 +1182,7 @@ impl DurableCatalogState for Connection {
         Ok(events)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn set_timestamp(
         &mut self,
         timeline: &Timeline,
@@ -1207,7 +1207,7 @@ impl DurableCatalogState for Connection {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
         if amount == 0 {
             return Ok(Vec::new());

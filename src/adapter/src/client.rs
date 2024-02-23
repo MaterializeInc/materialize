@@ -154,7 +154,7 @@ impl Client {
     ///
     /// Returns a new client that is bound to the session and a response
     /// containing various details about the startup.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn startup(&self, session: Session) -> Result<SessionClient, AdapterError> {
         let user = session.user().clone();
         let conn_id = session.conn_id().clone();

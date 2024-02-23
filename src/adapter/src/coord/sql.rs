@@ -258,7 +258,7 @@ impl Coordinator {
     /// This is a low-level method. The caller is responsible for dropping the
     /// sink from the controller. Consider calling `drop_compute_sink` or
     /// `retire_compute_sink` instead.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn remove_active_compute_sink(
         &mut self,
         id: GlobalId,

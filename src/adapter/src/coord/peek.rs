@@ -433,7 +433,7 @@ impl FastPathPlan {
 
 impl crate::coord::Coordinator {
     /// Implements a peek plan produced by `create_plan` above.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn implement_peek_plan(
         &mut self,
         ctx_extra: &mut ExecuteContextExtra,
@@ -657,7 +657,7 @@ impl crate::coord::Coordinator {
     }
 
     /// Cancel and remove all pending peeks that were initiated by the client with `conn_id`.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) fn cancel_pending_peeks(&mut self, conn_id: &ConnectionId) {
         if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
             self.metrics

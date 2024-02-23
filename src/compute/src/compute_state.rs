@@ -200,7 +200,7 @@ impl SinkToken {
 
 impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
@@ -361,7 +361,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn handle_peek(&mut self, peek: Peek) {
         let pending = match &peek.target {
             PeekTarget::Index { id } => {

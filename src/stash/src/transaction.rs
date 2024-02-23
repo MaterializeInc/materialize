@@ -147,7 +147,7 @@ impl<'a> Transaction<'a> {
         res
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn collection<K, V>(&self, name: &str) -> Result<StashCollection<K, V>, StashError>
     where
         K: Data,
@@ -215,7 +215,7 @@ impl<'a> Transaction<'a> {
     }
 
     // TODO(jkosh44) Only used in tests.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn consolidate(&self, id: Id) -> Result<(), StashError> {
         let since = self.since(id).await?;
         self.consolidations
@@ -228,7 +228,7 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn upper(
         &self,
         collection_id: Id,

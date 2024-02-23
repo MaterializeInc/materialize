@@ -814,7 +814,7 @@ impl Coordinator {
     }
 
     /// Cancels all active compute sinks for the identified connection.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
@@ -822,7 +822,7 @@ impl Coordinator {
 
     /// Retires all active compute sinks for the identified connection with the
     /// specified reason.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn retire_compute_sinks_for_conn(
         &mut self,
         conn_id: &ConnectionId,
