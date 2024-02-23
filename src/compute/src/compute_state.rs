@@ -233,7 +233,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             dataflow_max_inflight_bytes,
             linear_join_yielding,
             enable_mz_join_core,
-            enable_jemalloc_profiling,
             enable_columnation_lgalloc,
             enable_operator_hydration_status_logging,
             persist,
@@ -255,21 +254,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 false => LinearJoinImpl::DifferentialDataflow,
                 true => LinearJoinImpl::Materialize,
             };
-        }
-        match enable_jemalloc_profiling {
-            Some(true) => {
-                mz_ore::task::spawn(
-                    || "activate-jemalloc-profiling",
-                    mz_prof::activate_jemalloc_profiling(),
-                );
-            }
-            Some(false) => {
-                mz_ore::task::spawn(
-                    || "deactivate-jemalloc-profiling",
-                    mz_prof::deactivate_jemalloc_profiling(),
-                );
-            }
-            None => (),
         }
         match enable_columnation_lgalloc {
             Some(true) => {
