@@ -41,16 +41,6 @@ ERROR_RE = re.compile(
     | fatal runtime error: # stack overflow
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
-    # From src/testdrive/src/action/sql.rs
-    | column\ name\ mismatch
-    | non-matching\ rows:
-    | wrong\ row\ count:
-    | wrong\ hash\ value:
-    | expected\ one\ statement
-    | query\ succeeded,\ but\ expected
-    | expected\ .*,\ got\ .*
-    | expected\ .*,\ but\ found\ none
-    | unsupported\ SQL\ type\ in\ testdrive:
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
