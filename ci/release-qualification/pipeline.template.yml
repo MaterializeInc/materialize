@@ -167,26 +167,18 @@ steps:
     trigger: tests
     async: false
     build:
-      # TODO(def-): Set version with mkpipeline.py
-      commit: "9f64f909a77849684e978b840b4f5c1edbd396e8"
-      branch: "v0.88.1"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
-    skip: "TODO(def-) reenable when greener"
 
   - id: nightlies-preflight-check-rollback
     label: Nightlies with preflight check and rollback
     trigger: nightlies
     async: false
     build:
-      # TODO(def-): Set version with mkpipeline.py
-      commit: "9f64f909a77849684e978b840b4f5c1edbd396e8"
-      branch: "v0.88.1"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
-    skip: "TODO(def-) reenable when greener"
 
   - wait: ~
     continue_on_failure: true
