@@ -24,8 +24,10 @@ mod spines {
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use timely::container::columnation::Columnation;
+    use std::rc::Rc;
+    use timely::container::columnation::{Columnation, TimelyStack};
 
+    use crate::arrangement::batcher::ColumnatedMergeBatcher;
     use crate::containers::stack::StackWrapper;
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
@@ -50,9 +52,11 @@ mod spines {
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
         phantom: std::marker::PhantomData<U>,
     }
+
     pub struct RowValLayout<U: Update<Key = Row>> {
         phantom: std::marker::PhantomData<U>,
     }
+
     pub struct RowLayout<U: Update<Key = Row, Val = ()>> {
         phantom: std::marker::PhantomData<U>,
     }
@@ -68,6 +72,7 @@ mod spines {
         type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
+
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
     where
         U::Val: Columnation,
@@ -80,6 +85,7 @@ mod spines {
         type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
+
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
     where
         U::Time: Columnation,
@@ -95,7 +101,6 @@ mod spines {
 
 /// A `Row`-specialized container using dictionary compression.
 mod container {
-
     use differential_dataflow::trace::cursor::MyTrait;
     use differential_dataflow::trace::implementations::BatchContainer;
     use differential_dataflow::trace::implementations::OffsetList;
@@ -230,6 +235,7 @@ mod container {
     }
 
     impl<'a> Copy for DatumSeq<'a> {}
+
     impl<'a> Clone for DatumSeq<'a> {
         fn clone(&self) -> Self {
             *self
@@ -237,17 +243,21 @@ mod container {
     }
 
     use std::cmp::Ordering;
+
     impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
         fn eq(&self, other: &DatumSeq<'a>) -> bool {
             self.bytes.eq(other.bytes)
         }
     }
+
     impl<'a> Eq for DatumSeq<'a> {}
+
     impl<'a, 'b> PartialOrd<DatumSeq<'a>> for DatumSeq<'b> {
         fn partial_cmp(&self, other: &DatumSeq<'a>) -> Option<Ordering> {
             Some(self.cmp(other))
         }
     }
+
     impl<'a> Ord for DatumSeq<'a> {
         fn cmp(&self, other: &Self) -> Ordering {
             match self.bytes.len().cmp(&other.bytes.len()) {
@@ -257,6 +267,7 @@ mod container {
             }
         }
     }
+
     impl<'a> MyTrait<'a> for DatumSeq<'a> {
         type Owned = Row;
         fn into_owned(self) -> Self::Owned {
@@ -292,6 +303,7 @@ mod container {
 
     use mz_repr::fixed_length::IntoRowByTypes;
     use mz_repr::ColumnType;
+
     impl<'long> IntoRowByTypes for DatumSeq<'long> {
         type DatumIter<'short> = DatumSeq<'short> where Self: 'short;
         fn into_datum_iter<'short>(
@@ -304,7 +316,6 @@ mod container {
 }
 
 mod offset_opt {
-
     use std::cmp::Ordering;
     use std::ops::Deref;
 

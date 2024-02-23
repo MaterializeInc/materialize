@@ -9,4 +9,5 @@
 
 //! Types related to the arrangement and management of collections.
 
+pub mod batcher;
 pub mod manager;
