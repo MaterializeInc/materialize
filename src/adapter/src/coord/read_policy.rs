@@ -195,7 +195,7 @@ impl crate::coord::Coordinator {
     /// This should be called only after a collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
-    #[instrument(name = "coord::initialize_read_policies", skip_all)]
+    #[instrument(name = "coord::initialize_read_policies")]
     pub(crate) async fn initialize_read_policies(
         &mut self,
         id_bundle: &CollectionIdBundle,

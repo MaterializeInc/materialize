@@ -37,15 +37,7 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     while let Some(tok) = iter.next() {
         match &tok {
             TokenTree::Ident(ident) => match ident.to_string().as_str() {
-                "skip_all" => {
-                    // If the next token is a comma, remove it.
-                    if let Some(next) = iter.peek() {
-                        if next.to_string() == "," {
-                            iter.next();
-                        }
-                    }
-                    continue;
-                }
+                "skip_all" => panic!("skip_all already included; remove it"),
                 "skip" => panic!("skip prohibited; use fields"),
                 _ => {}
             },

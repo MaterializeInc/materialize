@@ -299,7 +299,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         })
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         fn stringify<T: Collection>(
             values: Vec<((T::Key, T::Value), mz_stash::Timestamp, Diff)>,
@@ -608,7 +608,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         // Nothing to release in the stash.
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
         let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
         let timestamps = entries
@@ -620,7 +620,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         Ok(timestamps)
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         let entries = AUDIT_LOG_COLLECTION.peek_one(&mut self.stash).await?;
         let logs: Vec<_> = entries
@@ -1125,7 +1125,7 @@ impl DurableCatalogState for Connection {
         Ok(self.stash.confirm_leadership().await?)
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,

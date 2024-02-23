@@ -419,7 +419,7 @@ where
     T: Into<mz_repr::Timestamp>,
 {
     /// Creates a new controller.
-    #[instrument(name = "controller::new", skip_all)]
+    #[instrument(name = "controller::new")]
     pub async fn new(
         config: ControllerConfig,
         envd_epoch: NonZeroI64,

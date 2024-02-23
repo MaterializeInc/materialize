@@ -759,7 +759,7 @@ impl CatalogState {
 
     /// Parse a SQL string into a catalog view item with only a limited
     /// context.
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
         let mut session_catalog = self.for_system_session();
 
@@ -826,7 +826,7 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds)`.
-    #[tracing::instrument(skip_all)]
+    #[mz_ore::instrument]
     pub(crate) fn parse_plan(
         &self,
         create_sql: String,

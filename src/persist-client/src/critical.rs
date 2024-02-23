@@ -243,7 +243,7 @@ where
     /// };
     /// # }
     /// ```
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn maybe_compare_and_downgrade_since(
         &mut self,
         expected: &O,
@@ -276,7 +276,7 @@ where
     /// [Self::compare_and_downgrade_since] has "compare and set" semantics over an opaque value.
     /// If the `expected` opaque value does not match state, an `Err` is returned and the caller
     /// must decide how to handle it (likely a retry or a `halt!`).
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_downgrade_since(
         &mut self,
         expected: &O,
@@ -332,7 +332,7 @@ where
     }
 
     /// Politely expires this reader, releasing its since capability.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
         let (_, maintenance) = self.machine.expire_critical_reader(&self.reader_id).await;
         maintenance.start_performing(&self.machine, &self.gc);

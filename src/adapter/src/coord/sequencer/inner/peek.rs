@@ -23,10 +23,10 @@ use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
-use mz_ore::instrument;
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self, HirScalarExpr};
 use mz_transform::EmptyStatisticsOracle;
+use tracing::Instrument;
 use tracing::{event, warn, Level};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};

@@ -752,7 +752,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         })
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         self.sync_to_current_upper().await?;
         if self.is_initialized_inner() {

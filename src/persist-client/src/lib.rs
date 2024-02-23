@@ -362,7 +362,7 @@ impl PersistClient {
     /// The `schema` parameter is currently unused, but should be an object
     /// that represents the schema of the data in the shard. This will be required
     /// in the future.
-    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -397,7 +397,7 @@ impl PersistClient {
     /// The `_schema` parameter is currently unused, but should be an object
     /// that represents the schema of the data in the shard. This will be required
     /// in the future.
-    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn open_leased_reader<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -446,7 +446,7 @@ impl PersistClient {
     }
 
     /// Creates and returns a [BatchFetcher] for the given shard id.
-    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn create_batch_fetcher<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -538,7 +538,7 @@ impl PersistClient {
     /// If `shard_id` has never been used before, initializes a new shard and
     /// return a handle with its `since` frontier set to the initial value of
     /// `Antichain::from_elem(T::minimum())`.
-    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn open_critical_since<K, V, T, D, O>(
         &self,
         shard_id: ShardId,
@@ -578,7 +578,7 @@ impl PersistClient {
     /// The `_schema` parameter is currently unused, but should be an object
     /// that represents the schema of the data in the shard. This will be required
     /// in the future.
-    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn open_writer<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -642,7 +642,7 @@ impl PersistClient {
     ///
     /// Once `finalize_shard` has been called, the result of future operations on
     /// the shard are not defined. They may return errors or succeed as a noop.
-    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn finalize_shard<K, V, T, D>(
         &self,
         shard_id: ShardId,
