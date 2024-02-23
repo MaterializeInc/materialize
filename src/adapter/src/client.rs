@@ -463,7 +463,7 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn declare(
         &mut self,
         name: String,

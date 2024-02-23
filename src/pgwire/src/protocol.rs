@@ -103,7 +103,7 @@ pub struct RunParams<'a, A> {
 /// error to the client. It only returns `Err` if an unexpected I/O error occurs
 /// while communicating with the client, e.g., if the connection is severed in
 /// the middle of a request.
-#[tracing::instrument(level = "debug", skip_all)]
+#[mz_ore::instrument(level = "debug")]
 pub async fn run<'a, A>(
     RunParams {
         tls_mode,
@@ -425,7 +425,7 @@ where
     // error message is produced if there are problems with Send or other traits
     // somewhere within the Future.
     #[allow(clippy::manual_async_fn)]
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     fn run(mut self) -> impl Future<Output = Result<(), io::Error>> + Send + 'a {
         async move {
             let mut state = State::Ready;
@@ -1714,7 +1714,7 @@ where
 
     #[allow(clippy::too_many_arguments)]
     // TODO(guswynn): figure out how to get it to compile without skip_all
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn send_rows(
         &mut self,
         row_desc: RelationDesc,

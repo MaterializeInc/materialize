@@ -762,7 +762,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) fn send_diffs(
         session: &mut Session,
         mut plan: plan::SendDiffsPlan,

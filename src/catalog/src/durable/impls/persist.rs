@@ -953,7 +953,7 @@ impl PersistCatalogState {
         snapshot
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn sync_to_current_upper(&mut self) -> Result<(), CatalogError> {
         let upper = self.current_upper().await;
         if upper != self.upper {
@@ -991,7 +991,7 @@ impl PersistCatalogState {
     }
 
     /// Applies [`StateUpdate`]s to the in memory catalog cache.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     fn apply_updates(
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate>,

@@ -1193,7 +1193,7 @@ impl Consolidator {
         entry.1.extend(req.done);
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     async fn consolidate(
         &mut self,
         id: Id,

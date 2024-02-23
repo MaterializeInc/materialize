@@ -160,7 +160,7 @@ pub struct CatalogPlans {
 
 impl Catalog {
     /// Set the optimized plan for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
         &mut self,
         id: GlobalId,
@@ -170,7 +170,7 @@ impl Catalog {
     }
 
     /// Set the optimized plan for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
@@ -180,7 +180,7 @@ impl Catalog {
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn try_get_optimized_plan(
         &self,
         id: &GlobalId,
@@ -189,7 +189,7 @@ impl Catalog {
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
@@ -198,7 +198,7 @@ impl Catalog {
     }
 
     /// Set the `DataflowMetainfo` for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
@@ -216,7 +216,7 @@ impl Catalog {
     }
 
     /// Try to get the `DataflowMetainfo` for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn try_get_dataflow_metainfo(
         &self,
         id: &GlobalId,
@@ -232,7 +232,7 @@ impl Catalog {
     /// Return a set containing all dropped notices. Note that if for some
     /// reason we end up with two identical notices being dropped by the same
     /// call, the result will contain only one instance of that notice.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn drop_plans_and_metainfos(
         &mut self,
         drop_ids: &BTreeSet<GlobalId>,
@@ -3238,7 +3238,7 @@ impl Catalog {
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
         Ok(self.storage().await.confirm_leadership().await?)
     }

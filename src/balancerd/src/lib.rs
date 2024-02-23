@@ -365,7 +365,7 @@ struct PgwireBalancer {
 }
 
 impl PgwireBalancer {
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn run<'a, A>(
         conn: &'a mut FramedConn<A>,
         version: i32,
@@ -422,7 +422,7 @@ impl PgwireBalancer {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn stream<'a, A>(
         conn: &'a mut FramedConn<A>,
         envd_addr: SocketAddr,

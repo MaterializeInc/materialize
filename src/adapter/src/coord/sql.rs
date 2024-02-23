@@ -90,7 +90,7 @@ impl Coordinator {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) fn describe(
         catalog: &Catalog,
         session: &Session,

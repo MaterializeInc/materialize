@@ -1448,7 +1448,7 @@ impl<'a> Transaction<'a> {
     /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
     /// must be fatal to the calling process. We do not panic/halt inside this function itself so
     /// that errors can bubble up during initialization.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn commit(self) -> Result<(), CatalogError> {
         let (mut txn_batch, durable_catalog) = self.into_parts();
         let TransactionBatch {

@@ -1154,7 +1154,7 @@ impl CatalogState {
         self.entry_by_id.insert(entry.id(), entry.clone());
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub(super) fn drop_item(&mut self, id: GlobalId) {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         info!(

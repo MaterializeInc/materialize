@@ -204,7 +204,7 @@ impl Coordinator {
         .boxed_local()
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn storage_usage_fetch(&mut self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
@@ -258,7 +258,7 @@ impl Coordinator {
         });
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn storage_usage_update(&mut self, shards_usage: ShardsUsageReferenced) {
         // Similar to audit events, use the oracle ts so this is guaranteed to
         // increase. This is intentionally the timestamp of when collection
@@ -331,13 +331,13 @@ impl Coordinator {
         });
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn message_command(&mut self, cmd: Command) {
         event!(Level::TRACE, cmd = format!("{:?}", cmd));
         self.handle_command(cmd).await;
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn message_controller(&mut self, message: ControllerResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
@@ -618,7 +618,7 @@ impl Coordinator {
         ctx.retire(result);
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn message_write_lock_grant(
         &mut self,
         write_lock_guard: tokio::sync::OwnedMutexGuard<()>,
@@ -649,7 +649,7 @@ impl Coordinator {
         // here.
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
@@ -689,7 +689,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     /// Linearizes sending the results of a read transaction by,
     ///   1. Holding back any results that were executed at some point in the future, until the
     ///   containing timeline has advanced to that point in the future.
@@ -805,7 +805,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     /// Finishes sequencing a command that was waiting on a real time recency timestamp.
     async fn message_real_time_recency_timestamp(
         &mut self,

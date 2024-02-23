@@ -202,7 +202,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Returns the ids and names of all collections.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn collections(&self) -> Result<BTreeMap<Id, String>, StashError> {
         let rows = self
             .client
@@ -274,7 +274,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Iterates over a collection.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn iter<K, V>(
         &self,
         collection: StashCollection<K, V>,
@@ -301,7 +301,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Iterates over a collection, returning the raw data on disk, unconsolidated.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn iter_raw(
         &self,
         id: Id,
@@ -333,7 +333,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Iterates over the values of a key.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn iter_key<K, V>(
         &self,
         collection: StashCollection<K, V>,
@@ -377,7 +377,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Returns the most recent timestamp at which sealed entries can be read.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn peek_timestamp_id(&self, id: Id) -> Result<Timestamp, StashError> {
         let (since, upper) = try_join(self.since(id), self.upper(id)).await?;
         if PartialOrder::less_equal(&upper, &since) {
@@ -400,7 +400,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Returns the most recent timestamp at which sealed entries can be read.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn peek_timestamp<K, V>(
         &self,
         collection: StashCollection<K, V>,
@@ -419,7 +419,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Sealed entries are those with timestamps less than the collection's upper
     /// frontier.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn peek<K, V>(
         &self,
         collection: StashCollection<K, V>,
@@ -450,7 +450,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Sealed entries are those with timestamps less than the collection's upper
     /// frontier.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn peek_one<K, V>(
         &self,
         collection: StashCollection<K, V>,
@@ -477,7 +477,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Sealed entries are those with timestamps less than the collection's upper
     /// frontier.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn peek_key_one<K, V>(
         &self,
         collection: StashCollection<K, V>,
@@ -518,7 +518,7 @@ impl<'a> Transaction<'a> {
 
     /// Applies batches to the current transaction. If any batch fails and in
     /// error returned, all other applications are rolled back.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn append(
         &self,
         batches: Vec<AppendBatch>,
@@ -597,7 +597,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Like update, but starts a savepoint.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn update_savepoint<K, V>(
         &self,
         collection_id: Id,
@@ -629,7 +629,7 @@ impl<'a> Transaction<'a> {
     /// This function should not be called outside of the stash crate since it
     /// allows for arbitrary bytes, non-unit diffs in collections, and doesn't
     /// support transaction safety. Use `TypedCollection`'s methods instead.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn update(
         &self,
         collection_id: Id,
@@ -703,7 +703,7 @@ impl<'a> Transaction<'a> {
 
     /// Sets the since of a collection. The current upper can be `Some` if it is
     /// already known.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn compact<'ts>(
         &self,
         id: Id,
@@ -754,7 +754,7 @@ impl<'a> Transaction<'a> {
 
     /// Sets the upper of a collection. The current upper can be `Some` if it is
     /// already known.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn seal(
         &self,
         id: Id,
