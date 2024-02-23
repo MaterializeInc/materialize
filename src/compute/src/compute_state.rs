@@ -109,8 +109,6 @@ pub struct ComputeState {
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
-    /// Enable operator hydration status logging
-    pub enable_operator_hydration_status_logging: bool,
     /// Other configuration for compute
     pub context: ComputeInstanceContext,
     /// Per-worker dynamic configuration.
@@ -162,7 +160,6 @@ impl ComputeState {
             linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
-            enable_operator_hydration_status_logging: true,
             context,
             worker_config: mz_dyncfgs::all_dyncfgs(),
             hydration_rx,
@@ -193,9 +190,37 @@ impl ComputeState {
 
     /// Apply the current `worker_config` to the compute state.
     fn apply_worker_config(&mut self) {
+        use mz_compute_types::dyncfgs::*;
+
         let config = &self.worker_config;
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
+
+        if ENABLE_COLUMNATION_LGALLOC.get(config) {
+            if let Some(path) = &self.context.scratch_directory {
+                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
+                info!(?path, eager_return, "enabling lgalloc");
+                lgalloc::lgalloc_set_config(
+                    lgalloc::LgAlloc::new()
+                        .enable()
+                        .with_path(path.clone())
+                        .with_background_config(lgalloc::BackgroundWorkerConfig {
+                            interval: Duration::from_secs(1),
+                            batch: 32,
+                        })
+                        .eager_return(eager_return),
+                );
+            } else {
+                debug!("not enabling lgalloc, scratch directory not specified");
+            }
+        } else {
+            info!("disabling lgalloc");
+            lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
+        }
+
+        let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
+        info!("using chunked stack: {chunked_stack}");
+        crate::containers::stack::use_chunked_stack(chunked_stack);
     }
 }
 
@@ -255,10 +280,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            enable_columnation_lgalloc,
-            enable_chunked_stack,
-            enable_operator_hydration_status_logging,
-            enable_lgalloc_eager_reclamation,
             tracing,
             grpc_client: _grpc_client,
             dyncfg_updates,
@@ -269,49 +290,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
-        }
-
-        // TODO(mh): This has a potential problem that when `enable_columnation_lgalloc` and
-        // `enable_lgalloc_eager_reclamation` arrive at different times, we won't pick up
-        // the expected configuration. This works at the moment because we receive a whole
-        // copy of the parameters when any single one changes, but it's not a guarantee
-        // that's written down.
-        match enable_columnation_lgalloc {
-            Some(true) => {
-                if let Some(path) = self.compute_state.context.scratch_directory.as_ref() {
-                    info!(
-                        ?path,
-                        eager_return = enable_lgalloc_eager_reclamation,
-                        "Enabling lgalloc"
-                    );
-                    let mut config = lgalloc::LgAlloc::new();
-                    config
-                        .enable()
-                        .with_path(path.clone())
-                        .with_background_config(lgalloc::BackgroundWorkerConfig {
-                            interval: Duration::from_secs(1),
-                            batch: 32,
-                        });
-                    if let Some(eager_return) = enable_lgalloc_eager_reclamation {
-                        config.eager_return(eager_return);
-                    }
-                    lgalloc::lgalloc_set_config(&config);
-                } else {
-                    debug!("Not enabling lgalloc, scratch directory not specified");
-                }
-            }
-            Some(false) => {
-                info!("Disabling lgalloc");
-                lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
-            }
-            None => {}
-        }
-        if let Some(enabled) = enable_chunked_stack {
-            info!(enabled, "Chunked stack");
-            crate::containers::stack::use_chunked_stack(enabled);
-        }
-        if let Some(v) = enable_operator_hydration_status_logging {
-            self.compute_state.enable_operator_hydration_status_logging = v;
         }
 
         tracing.apply(self.compute_state.tracing_handle.as_ref());

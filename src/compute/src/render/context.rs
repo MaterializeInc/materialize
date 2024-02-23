@@ -90,8 +90,6 @@ where
     pub(super) linear_join_spec: LinearJoinSpec,
     /// Per-worker dynamic configuration.
     pub(super) worker_config: ConfigSet,
-    /// Whether to log operator hydration status.
-    pub(super) enable_operator_hydration_status_logging: bool,
 }
 
 impl<S: Scope> Context<S>
@@ -134,8 +132,6 @@ where
             hydration_logger,
             linear_join_spec: compute_state.linear_join_spec,
             worker_config: compute_state.worker_config.clone(),
-            enable_operator_hydration_status_logging: compute_state
-                .enable_operator_hydration_status_logging,
         }
     }
 }

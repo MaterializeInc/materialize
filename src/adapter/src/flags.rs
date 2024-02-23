@@ -28,12 +28,6 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
     ComputeParameters {
         max_result_size: Some(config.max_result_size()),
         dataflow_max_inflight_bytes: Some(config.compute_dataflow_max_inflight_bytes()),
-        enable_columnation_lgalloc: Some(config.enable_columnation_lgalloc()),
-        enable_chunked_stack: Some(config.enable_compute_chunked_stack()),
-        enable_operator_hydration_status_logging: Some(
-            config.enable_compute_operator_hydration_status_logging(),
-        ),
-        enable_lgalloc_eager_reclamation: Some(config.enable_lgalloc_eager_reclamation()),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
         dyncfg_updates: config.dyncfg_updates(),

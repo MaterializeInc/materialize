@@ -1465,27 +1465,6 @@ pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarD
     true,
 );
 
-pub static ENABLE_COLUMNATION_LGALLOC: VarDefinition = VarDefinition::new(
-    "enable_columnation_lgalloc",
-    value!(bool; false),
-    "Enable allocating regions from lgalloc",
-    true,
-);
-
-pub static ENABLE_COMPUTE_CHUNKED_STACK: VarDefinition = VarDefinition::new(
-    "enable_compute_chunked_stack",
-    value!(bool; false),
-    "Enable the chunked stack implementation in compute",
-    true,
-);
-
-pub static ENABLE_LGALLOC_EAGER_RECLAMATION: VarDefinition = VarDefinition::new(
-    "enable_lgalloc_eager_reclamation",
-    value!(bool; true),
-    "Enable lgalloc's eager return behavior.",
-    true,
-);
-
 pub static ENABLE_STATEMENT_LIFECYCLE_LOGGING: VarDefinition = VarDefinition::new(
     "enable_statement_lifecycle_logging",
     value!(bool; false),
@@ -2138,13 +2117,6 @@ feature_flags!(
         name: enable_session_timelines,
         desc: "strong session serializable isolation levels",
         default: false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_compute_operator_hydration_status_logging,
-        desc: "log the hydration status of compute operators",
-        default: true,
         internal: true,
         enable_for_item_parsing: false,
     },

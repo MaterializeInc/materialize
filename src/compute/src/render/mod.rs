@@ -112,6 +112,7 @@ use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::dyncfgs::ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING;
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
@@ -753,7 +754,7 @@ where
 
         let mut bundle = mz_ore::stack::maybe_grow(|| self.render_plan_inner(plan));
 
-        if self.enable_operator_hydration_status_logging {
+        if ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING.get(&self.worker_config) {
             self.log_operator_hydration(&mut bundle, lir_id);
         }
 

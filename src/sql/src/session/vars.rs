@@ -1195,9 +1195,6 @@ impl SystemVars {
             &OPTIMIZER_ONESHOT_STATS_TIMEOUT,
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
             &WEBHOOK_CONCURRENT_REQUEST_LIMIT,
-            &ENABLE_COLUMNATION_LGALLOC,
-            &ENABLE_COMPUTE_CHUNKED_STACK,
-            &ENABLE_LGALLOC_EAGER_RECLAMATION,
             &ENABLE_STATEMENT_LIFECYCLE_LOGGING,
             &ENABLE_DEPENDENCY_READ_HOLD_ASSERTS,
             &TIMESTAMP_ORACLE_IMPL,
@@ -2070,21 +2067,6 @@ impl SystemVars {
         *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
     }
 
-    /// Returns the `enable_columnation_lgalloc` configuration parameter.
-    pub fn enable_columnation_lgalloc(&self) -> bool {
-        *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
-    }
-
-    /// Returns the `enable_compute_chunked_stack` configuration parameter.
-    pub fn enable_compute_chunked_stack(&self) -> bool {
-        *self.expect_value(&ENABLE_COMPUTE_CHUNKED_STACK)
-    }
-
-    /// Returns the `enable_lgalloc_eager_reclamation` configuration parameter.
-    pub fn enable_lgalloc_eager_reclamation(&self) -> bool {
-        *self.expect_value(&ENABLE_LGALLOC_EAGER_RECLAMATION)
-    }
-
     pub fn enable_statement_lifecycle_logging(&self) -> bool {
         *self.expect_value(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
     }
@@ -2129,10 +2111,6 @@ impl SystemVars {
     pub fn is_compute_config_var(&self, name: &str) -> bool {
         name == MAX_RESULT_SIZE.name()
             || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-            || name == ENABLE_COLUMNATION_LGALLOC.name()
-            || name == ENABLE_COMPUTE_CHUNKED_STACK.name()
-            || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
-            || name == ENABLE_LGALLOC_EAGER_RECLAMATION.name()
             || self.is_dyncfg_var(name)
             || is_tracing_var(name)
     }

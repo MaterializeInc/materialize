@@ -375,14 +375,6 @@ pub struct ComputeParameters {
     /// NB: This value is optional, so the outer option indicates if this update
     /// includes an override and the inner option is part of the config value.
     pub dataflow_max_inflight_bytes: Option<Option<usize>>,
-    /// Enable lgalloc for columnation.
-    pub enable_columnation_lgalloc: Option<bool>,
-    /// Enable the chunked stack implementation.
-    pub enable_chunked_stack: Option<bool>,
-    /// Enable operator hydration status logging.
-    pub enable_operator_hydration_status_logging: Option<bool>,
-    /// Enable lgalloc's eager memory return/reclamation feature.
-    pub enable_lgalloc_eager_reclamation: Option<bool>,
     /// Tracing configuration.
     pub tracing: TracingParameters,
     /// gRPC client configuration.
@@ -398,10 +390,6 @@ impl ComputeParameters {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            enable_columnation_lgalloc,
-            enable_chunked_stack,
-            enable_operator_hydration_status_logging,
-            enable_lgalloc_eager_reclamation,
             tracing,
             grpc_client,
             dyncfg_updates,
@@ -412,19 +400,6 @@ impl ComputeParameters {
         }
         if dataflow_max_inflight_bytes.is_some() {
             self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
-        }
-        if enable_columnation_lgalloc.is_some() {
-            self.enable_columnation_lgalloc = enable_columnation_lgalloc;
-        }
-        if enable_chunked_stack.is_some() {
-            self.enable_chunked_stack = enable_chunked_stack;
-        }
-        if enable_operator_hydration_status_logging.is_some() {
-            self.enable_operator_hydration_status_logging =
-                enable_operator_hydration_status_logging;
-        }
-        if enable_lgalloc_eager_reclamation.is_some() {
-            self.enable_lgalloc_eager_reclamation = enable_lgalloc_eager_reclamation;
         }
 
         self.tracing.update(tracing);
@@ -450,12 +425,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                     dataflow_max_inflight_bytes: x.into_proto(),
                 }
             }),
-            enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
-            enable_chunked_stack: self.enable_chunked_stack.into_proto(),
-            enable_operator_hydration_status_logging: self
-                .enable_operator_hydration_status_logging
-                .into_proto(),
-            enable_lgalloc_eager_reclamation: self.enable_lgalloc_eager_reclamation.into_proto(),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
             dyncfg_updates: Some(self.dyncfg_updates.clone()),
@@ -469,12 +438,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                 .dataflow_max_inflight_bytes
                 .map(|x| x.dataflow_max_inflight_bytes.into_rust())
                 .transpose()?,
-            enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
-            enable_chunked_stack: proto.enable_chunked_stack.into_rust()?,
-            enable_operator_hydration_status_logging: proto
-                .enable_operator_hydration_status_logging
-                .into_rust()?,
-            enable_lgalloc_eager_reclamation: proto.enable_lgalloc_eager_reclamation.into_rust()?,
             tracing: proto
                 .tracing
                 .into_rust_if_some("ProtoComputeParameters::tracing")?,
