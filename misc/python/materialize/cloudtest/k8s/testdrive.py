@@ -9,6 +9,7 @@
 
 import os
 import subprocess
+import sys
 from inspect import Traceback
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
@@ -156,10 +157,13 @@ class TestdrivePod(K8sPod, TestdriveBase):
                 "--",
                 *command,
                 input=input,
-                capture_output=True,
                 suppress_command_error_output=suppress_command_error_output,
             )
         except subprocess.CalledProcessError as e:
+            if e.stdout is not None:
+                print(e.stdout, end="")
+            if e.stderr is not None:
+                print(e.stderr, file=sys.stderr, end="")
             error_chunks = extract_error_chunks_from_output(e.stderr or e.stdout)
             error_text = "\n".join(error_chunks)
             raise CommandFailureCausedUIError(
