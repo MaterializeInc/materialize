@@ -16,6 +16,7 @@ use mz_ore::error::ErrorExt;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 
 use std::net::{Ipv6Addr, SocketAddr};
@@ -74,8 +75,11 @@ async fn run(Args { port }: Args) -> Result<(), Box<dyn std::error::Error>> {
     let tcp_listener: std::net::TcpListener = socket.into();
     let tcp_listener = TcpListenerStream::new(TcpListener::from_std(tcp_listener)?);
 
+    let destination = DestinationServer::new(MaterializeDestination)
+        .accept_compressed(CompressionEncoding::Gzip)
+        .send_compressed(CompressionEncoding::Gzip);
     Server::builder()
-        .add_service(DestinationServer::new(MaterializeDestination))
+        .add_service(destination)
         .serve_with_incoming(tcp_listener)
         .await?;
     Ok(())
