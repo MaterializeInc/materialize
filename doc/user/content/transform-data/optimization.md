@@ -4,8 +4,8 @@ description: "Recommendations for query optimization in Materialize."
 menu:
   main:
     name: "Query optimization"
-    parent: transform
-    weight: 25
+    parent: transform-data
+    weight: 30
 aliases:
   - /ops/speed-up/
   - /ops/optimization/
