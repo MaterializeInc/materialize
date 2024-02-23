@@ -729,15 +729,14 @@ impl PlanValidity {
                 }
             }
         }
-        // It is sufficient to check that all the source_ids still exist because we assume:
+        // It is sufficient to check that all the dependency_ids still exist because we assume:
         // - Ids do not mutate.
         // - Ids are not reused.
         // - If an id was dropped, this will detect it and error.
         for id in &self.dependency_ids {
             if catalog.try_get_entry(id).is_none() {
                 return Err(AdapterError::ChangedPlan(format!(
-                    "dependency {} was removed",
-                    id
+                    "dependency was removed: {id}",
                 )));
             }
         }

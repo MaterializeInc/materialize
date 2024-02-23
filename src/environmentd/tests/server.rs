@@ -3556,3 +3556,81 @@ async fn test_connection_id() {
     let pid_envid = pid >> 19;
     assert_eq!(envid_lower, pid_envid);
 }
+
+// Test connection ID properties.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_github_25388() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start()
+        .await;
+    server
+        .enable_feature_flags(&["enable_unsafe_functions"])
+        .await;
+    let client1 = server.connect().await.unwrap();
+
+    client1
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+
+    // May be flakey/racey due to various sleeps.
+    Retry::default()
+        .retry_async(|_| async {
+            client1
+                .batch_execute("DROP INDEX IF EXISTS idx")
+                .await
+                .unwrap();
+            client1
+                .batch_execute("CREATE INDEX idx ON t(a)")
+                .await
+                .unwrap();
+
+            let client2 = server.connect().await.unwrap();
+            mz_ore::task::spawn(|| "test", async move {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                client2.batch_execute("DROP INDEX idx").await.unwrap();
+            });
+
+            match client1
+                .query("SUBSCRIBE (SELECT *, mz_unsafe.mz_sleep(2) FROM t)", &[])
+                .await
+            {
+                Ok(_) => Err("unexpected query success".to_string()),
+                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
+                Err(err) => Err(err.to_string()),
+            }
+        })
+        .await
+        .unwrap();
+
+    Retry::default()
+        .retry_async(|_| async {
+            client1
+                .batch_execute("DROP INDEX IF EXISTS idx")
+                .await
+                .unwrap();
+            client1
+                .batch_execute("CREATE INDEX idx ON t(a)")
+                .await
+                .unwrap();
+
+            let client2 = server.connect().await.unwrap();
+            mz_ore::task::spawn(|| "test", async move {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                client2.batch_execute("DROP INDEX idx").await.unwrap();
+            });
+
+            match client1
+                .query("SELECT *, mz_unsafe.mz_sleep(2) FROM t", &[])
+                .await
+            {
+                Ok(_) => Err("unexpected query success".to_string()),
+                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
+                Err(err) => Err(err.to_string()),
+            }
+        })
+        .await
+        .unwrap();
+}
