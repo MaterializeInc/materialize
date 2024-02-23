@@ -1317,8 +1317,17 @@ pub fn memoize_expr(
         },
         &mut |e| {
             match e {
-                MirScalarExpr::Column(_) | MirScalarExpr::Literal(_, _) => {
+                MirScalarExpr::Literal(_, _) => {
                     // Literals do not need to be memoized.
+                }
+                MirScalarExpr::Column(col) => {
+                    // Column references do not need to be memoized, but may need to be
+                    // updated if they reference a column reference themselves.
+                    if *col > input_arity {
+                        if let MirScalarExpr::Column(col2) = memoized_parts[*col - input_arity] {
+                            *col = col2;
+                        }
+                    }
                 }
                 _ => {
                     if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
