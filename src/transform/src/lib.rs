@@ -578,6 +578,8 @@ impl Optimizer {
                     Box::new(crate::threshold_elision::ThresholdElision),
                     // Projection pushdown may unblock fusing joins and unions.
                     Box::new(crate::fusion::join::Join),
+                    // Predicate pushdown required to tidy after join fusion.
+                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
                     Box::new(crate::redundant_join::RedundantJoin::default()),
                     // Redundant join produces projects that need to be fused.
                     Box::new(crate::fusion::Fusion),
