@@ -987,7 +987,7 @@ impl PersistGrpcPubSubServer {
 impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServer {
     type PubSubStream = Pin<Box<dyn Stream<Item = Result<ProtoPubSubMessage, Status>> + Send>>;
 
-    #[tracing::instrument(name = "persist::rpc::server", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "persist::rpc::server", level = "info")]
     async fn pub_sub(
         &self,
         request: Request<Streaming<ProtoPubSubMessage>>,

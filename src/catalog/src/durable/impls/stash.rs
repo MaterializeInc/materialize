@@ -204,7 +204,7 @@ impl OpenableConnection {
 
 #[async_trait]
 impl OpenableDurableCatalogState for OpenableConnection {
-    #[tracing::instrument(name = "storage::open_check", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "storage::open_check", level = "info")]
     async fn open_savepoint(
         mut self: Box<Self>,
         initial_ts: EpochMillis,
@@ -217,7 +217,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         retry_open(stash, initial_ts, bootstrap_args, deploy_generation).await
     }
 
-    #[tracing::instrument(name = "storage::open_read_only", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "storage::open_read_only", level = "info")]
     async fn open_read_only(
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
@@ -227,7 +227,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         retry_open(stash, EpochMillis::MIN, bootstrap_args, None).await
     }
 
-    #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "storage::open", level = "info")]
     async fn open(
         mut self: Box<Self>,
         initial_ts: EpochMillis,
@@ -240,7 +240,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         retry_open(stash, initial_ts, bootstrap_args, deploy_generation).await
     }
 
-    #[tracing::instrument(name = "storage::open_debug", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "storage::open_debug", level = "info")]
     async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
         self.open_stash(None).await?;
         let stash = self.stash.take().expect("opened above");
@@ -476,7 +476,7 @@ async fn retry_open(
     }
 }
 
-#[tracing::instrument(name = "storage::open_inner", level = "info", skip_all)]
+#[mz_ore::instrument(name = "storage::open_inner", level = "info")]
 async fn open_inner(
     mut stash: Stash,
     initial_ts: EpochMillis,
@@ -538,7 +538,7 @@ async fn open_inner(
 
 /// Returns whether this Stash is initialized. We consider a Stash to be initialized if
 /// it contains an entry in the [`CONFIG_COLLECTION`] with the key of [`USER_VERSION_KEY`].
-#[tracing::instrument(name = "stash::is_initialized", level = "debug", skip_all)]
+#[mz_ore::instrument(name = "stash::is_initialized", level = "debug")]
 pub async fn is_stash_initialized(stash: &mut Stash) -> Result<bool, StashError> {
     // Check to see what collections exist, this prevents us from unnecessarily creating a
     // config collection, if one doesn't yet exist.
@@ -881,7 +881,7 @@ impl DurableCatalogState for Connection {
         self.stash.is_readonly()
     }
 
-    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "storage::transaction", level = "debug")]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
@@ -896,7 +896,7 @@ impl DurableCatalogState for Connection {
         Ok((transaction, audit_events, storage_usages))
     }
 
-    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "storage::transaction", level = "debug")]
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,

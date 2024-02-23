@@ -197,7 +197,7 @@ pub(crate) mod stash {
     mod v44_to_v45;
     mod v45_to_v46;
 
-    #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "stash::upgrade", level = "debug")]
     pub(crate) async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
         // Run migrations until we're up-to-date.
         while run_upgrade(stash).await? < CATALOG_VERSION {}
@@ -334,7 +334,7 @@ pub(crate) mod persist {
     /// Upgrades the data in the catalog to version [`CATALOG_VERSION`].
     ///
     /// Returns the current upper after all migrations have executed.
-    #[tracing::instrument(name = "persist::upgrade", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "persist::upgrade", level = "debug")]
     pub(crate) async fn upgrade(
         persist_handle: &mut UnopenedPersistCatalogState,
     ) -> Result<(), CatalogError> {

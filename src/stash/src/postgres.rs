@@ -560,7 +560,7 @@ impl Stash {
     }
 
     /// Sets `client` to a new connection to the Postgres server.
-    #[tracing::instrument(name = "stash::connect", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "stash::connect", level = "debug")]
     async fn connect(&mut self, epoch_lower_bound: Option<NonZeroI64>) -> Result<(), StashError> {
         // Initialize a connection.
         let result = self.config.lock().await.connect(self.tls.clone()).await;
@@ -704,7 +704,7 @@ impl Stash {
     ///     .await
     ///  }
     /// ```
-    #[tracing::instrument(name = "stash::transact", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "stash::transact", level = "debug")]
     pub(crate) async fn transact<F, T>(&mut self, f: F) -> Result<T, StashError>
     where
         F: for<'a> Fn(
@@ -810,7 +810,7 @@ impl Stash {
         }
     }
 
-    #[tracing::instrument(name = "stash::transact_inner", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "stash::transact_inner", level = "debug")]
     async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, TransactionError<T>>
     where
         F: for<'a> Fn(
@@ -918,7 +918,7 @@ impl Stash {
     /// Reports whether a COMMIT that returned an error actually succeeded. An
     /// Err return from this function is retryable normally (if
     /// `!err.is_unrecoverable()`).
-    #[tracing::instrument(name = "stash::determine_commit", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "stash::determine_commit", level = "debug")]
     async fn determine_commit(&mut self, committed_if_version: i64) -> Result<bool, StashError> {
         // Always reconnect.
         self.connect(None).await?;
