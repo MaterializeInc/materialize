@@ -9,17 +9,16 @@
 
 //! A general purpose `Batcher` implementation based on radix sort for TimelyStack.
 
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::logging::{BatcherEvent, DifferentialEvent};
+use differential_dataflow::trace::{Batcher, Builder};
 use timely::communication::message::RefOrMut;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::logging::WorkerIdentifier;
 use timely::logging_core::Logger;
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{frontier::Antichain, Timestamp};
 use timely::{Container, PartialOrder};
-
-use differential_dataflow::difference::Semigroup;
-use differential_dataflow::logging::{BatcherEvent, DifferentialEvent};
-use differential_dataflow::trace::{Batcher, Builder};
-use timely::progress::frontier::AntichainRef;
 
 /// Creates batches from unordered tuples.
 pub struct ColumnatedMergeBatcher<K, V, T, D>
@@ -79,7 +78,8 @@ where
         &mut self,
         upper: Antichain<T>,
     ) -> B::Output {
-        let mut merged = self.sorter.extract_into(upper.borrow());
+        self.frontier.clear();
+        let merged = self.sorter.extract_into(upper.borrow(), &mut self.frontier);
 
         // Determine the number of distinct keys, values, and updates,
         // and form a builder pre-sized for these numbers.
@@ -88,62 +88,30 @@ where
             let mut vals = 0;
             let mut upds = 0;
             let mut prev_keyval = None;
-            for buffer in merged.iter() {
-                for ((key, val), time, _) in buffer.iter() {
-                    if !upper.less_equal(time) {
-                        if let Some((p_key, p_val)) = prev_keyval {
-                            if p_key != key {
-                                keys += 1;
-                                vals += 1;
-                            } else if p_val != val {
-                                vals += 1;
-                            }
-                            upds += 1;
-                        } else {
-                            keys += 1;
-                            vals += 1;
-                            upds += 1;
-                        }
-                        prev_keyval = Some((key, val));
+            for ((key, val), _time, _) in merged.iter().map(|t| t.iter()).flatten() {
+                if let Some((p_key, p_val)) = prev_keyval {
+                    if p_key != key {
+                        keys += 1;
+                        vals += 1;
+                    } else if p_val != val {
+                        vals += 1;
                     }
+                } else {
+                    keys += 1;
+                    vals += 1;
                 }
+                upds += 1;
+                prev_keyval = Some((key, val));
             }
             B::with_capacity(keys, vals, upds)
         };
 
-        let mut kept = Vec::new();
-        let mut keep = TimelyStack::default();
-
-        self.frontier.clear();
-
-        for buffer in merged.drain(..) {
-            for datum @ ((_key, _val), time, _diff) in &buffer[..] {
-                if upper.less_equal(time) {
-                    self.frontier.insert(time.clone());
-                    if keep.is_empty() {
-                        if keep.capacity() != MergeSorterColumnation::<(K, V), T, D>::buffer_size()
-                        {
-                            keep = self.sorter.empty();
-                        }
-                    } else if keep.len() == keep.capacity() {
-                        kept.push(keep);
-                        keep = self.sorter.empty();
-                    }
-                    keep.copy(datum);
-                } else {
-                    builder.copy(datum);
-                }
+        for buffer in merged.into_iter() {
+            for datum in &buffer[..] {
+                builder.copy(datum);
             }
             // Recycling buffer.
             self.sorter.recycle(buffer);
-        }
-
-        // Finish the kept data.
-        if !keep.is_empty() {
-            kept.push(keep);
-        }
-        if !kept.is_empty() {
-            self.sorter.push_list(kept);
         }
 
         // Drain buffers (fast reclamation).
@@ -218,7 +186,7 @@ struct MergeSorterColumnation<
 
 impl<
         D: Ord + Columnation + 'static,
-        T: PartialOrder + Ord + Columnation + 'static,
+        T: Clone + PartialOrder + Ord + Columnation + 'static,
         R: Semigroup + Columnation + 'static,
     > MergeSorterColumnation<D, T, R>
 {
@@ -318,19 +286,11 @@ impl<
         }
     }
 
-    // This is awkward, because it isn't a power-of-two length any more, and we don't want
-    // to break it down to be so.
-    fn push_list(&mut self, list: Vec<TimelyStack<(D, T, R)>>) {
-        while self.queue.len() > 1 && self.queue[self.queue.len() - 1].len() < list.len() {
-            let list1 = self.queue_pop().unwrap();
-            let list2 = self.queue_pop().unwrap();
-            let merged = self.merge_by(list1, list2);
-            self.queue_push(merged);
-        }
-        self.queue_push(list);
-    }
-
-    fn extract_into(&mut self, frontier: AntichainRef<T>) -> Vec<TimelyStack<(D, T, R)>> {
+    fn extract_into(
+        &mut self,
+        upper: AntichainRef<T>,
+        frontier: &mut Antichain<T>,
+    ) -> Vec<TimelyStack<(D, T, R)>> {
         differential_dataflow::consolidation::consolidate_updates(&mut self.pending);
         self.flush_pending();
 
@@ -338,16 +298,14 @@ impl<
         let mut ship = self.empty();
         let mut ship_list = Vec::default();
 
-        let len_before: usize = self.queue.iter().flatten().map(|e| e.len()).sum();
-
         for mut chain in std::mem::take(&mut self.queue).drain(..) {
             let mut block_list = Vec::default();
             let mut keep_list = Vec::default();
             for block in chain.drain(..) {
                 // Is all data ready to be shipped?
-                let all = block.iter().all(|(_, t, _)| !frontier.less_equal(t));
+                let all = block.iter().all(|(_, t, _)| !upper.less_equal(t));
                 // Is any data ready to be shipped?
-                let any = block.iter().any(|(_, t, _)| !frontier.less_equal(t));
+                let any = block.iter().any(|(_, t, _)| !upper.less_equal(t));
 
                 if all {
                     // All data is ready, push what we accumulated, stash whole block.
@@ -358,7 +316,8 @@ impl<
                 } else if any {
                     // Iterate block, sorting items into ship and keep
                     for datum in block.iter() {
-                        if frontier.less_equal(&datum.1) {
+                        if upper.less_equal(&datum.1) {
+                            frontier.insert_ref(&datum.1);
                             keep.copy(datum);
                             if keep.capacity() == keep.len() {
                                 // remember keep
@@ -375,6 +334,9 @@ impl<
                     // Recycle leftovers
                     self.recycle(block);
                 } else {
+                    for (_, t, _) in block.iter() {
+                        frontier.insert_ref(t);
+                    }
                     // Keep whole block
                     if !keep.is_empty() {
                         keep_list.push(std::mem::replace(&mut keep, self.empty()));
@@ -405,13 +367,6 @@ impl<
             let list2 = ship_list.pop().unwrap();
             ship_list.push(self.merge_by(list1, list2));
         }
-
-        let len_after = self.queue.iter().flatten().map(|e| e.len()).sum::<usize>()
-            + ship_list
-                .get(0)
-                .map(|l| l.iter().map(|e| e.len()).sum::<usize>())
-                .unwrap_or(0);
-        assert_eq!(len_before, len_after);
 
         ship_list.pop().unwrap_or_default()
     }
