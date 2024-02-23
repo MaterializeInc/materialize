@@ -106,7 +106,7 @@ def get_data(
 def print_data(
     step_infos: list[BuildStepOutcome],
     pipeline_slug: str,
-    build_step_keys: list[str],
+    build_step_keys: list[tuple[str, int | None]],
     output_type: str,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
@@ -140,7 +140,7 @@ def print_data(
 
 def print_stats(
     step_infos: list[BuildStepOutcome],
-    build_step_keys: list[str],
+    build_step_keys: list[tuple[str, int | None]],
 ) -> None:
     if len(step_infos) == 0:
         print(f"No data for jobs with keys {build_step_keys}!")
@@ -175,7 +175,7 @@ def print_stats(
 
 def main(
     pipeline_slug: str,
-    build_step_keys: list[str],
+    build_step_keys: list[tuple[str, int | None]],
     fetch_mode: str,
     max_fetches: int,
     branch: str | None,
@@ -196,6 +196,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
+    # TODO: Should also take --build-parallel-job
     parser.add_argument("--build-step-key", action="append", type=str)
     parser.add_argument(
         "--fetch",
@@ -224,7 +225,7 @@ if __name__ == "__main__":
 
     main(
         args.pipeline,
-        args.build_step_key or [],
+        [(build_step_key, None) for build_step_key in args.build_step_key] or [],
         args.fetch,
         args.max_fetches,
         args.branch if args.branch != "*" else None,

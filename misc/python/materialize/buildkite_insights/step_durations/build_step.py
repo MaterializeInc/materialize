@@ -24,11 +24,12 @@ class BuildStepOutcome:
     passed: bool
     exit_status: int | None
     retry_count: int
+    web_url: str
 
 
 def extract_build_step_data(
     builds_data: list[Any],
-    selected_build_steps: list[str],
+    selected_build_steps: list[tuple[str, int | None]],
 ) -> list[BuildStepOutcome]:
     result = []
     for build in builds_data:
@@ -39,7 +40,7 @@ def extract_build_step_data(
 
 
 def _extract_build_step_data_from_build(
-    build_data: Any, selected_build_steps: list[str]
+    build_data: Any, selected_build_steps: list[tuple[str, int | None]]
 ) -> list[BuildStepOutcome]:
     collected_steps = []
 
@@ -49,7 +50,8 @@ def _extract_build_step_data_from_build(
 
         if (
             len(selected_build_steps) > 0
-            and job["step_key"] not in selected_build_steps
+            and (job["step_key"], job.get("parallel_group_index"))
+            not in selected_build_steps
         ):
             continue
 
@@ -85,6 +87,7 @@ def _extract_build_step_data_from_build(
             job_passed,
             exit_status=exit_status,
             retry_count=retry_count,
+            web_url=f"{build_data['web_url']}#{job['id']}",
         )
         collected_steps.append(step_data)
 

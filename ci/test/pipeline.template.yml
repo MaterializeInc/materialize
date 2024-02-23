@@ -192,7 +192,6 @@ steps:
       - id: cargo-test
         label: Cargo test
         timeout_in_minutes: 45
-        artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
         inputs:
           - Cargo.lock
           - ".config/nextest.toml"
@@ -217,7 +216,6 @@ steps:
         inputs: [src]
         depends_on: []
         timeout_in_minutes: 45
-        artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/mzcompose:
@@ -233,8 +231,6 @@ steps:
     timeout_in_minutes: 40
     inputs: [test/testdrive]
     parallelism: 8
-    # Don't need the junit_mzcompose_*.xml for this
-    artifact_paths: [junit_testdrive_*.xml, test/testdrive/junit_testdrive_*.xml]
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
@@ -247,7 +243,6 @@ steps:
     label: Cluster tests %N
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
     inputs: [test/cluster]
     parallelism: 4
     plugins:
@@ -262,7 +257,6 @@ steps:
     timeout_in_minutes: 30
     parallelism: 6
     inputs: [test/sqllogictest]
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -274,7 +268,6 @@ steps:
     label: Restart test
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
@@ -285,7 +278,6 @@ steps:
     label: Legacy upgrade tests (last version from docs)
     depends_on: build-aarch64
     timeout_in_minutes: 60
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
@@ -301,7 +293,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: debezium
@@ -314,7 +305,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: debezium
@@ -328,7 +318,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: debezium
@@ -344,7 +333,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
@@ -372,7 +360,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
@@ -385,7 +372,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
@@ -400,7 +386,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         inputs: [test/ssh-connection]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
@@ -412,7 +397,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/fivetran-destination]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: fivetran-destination
@@ -426,7 +410,6 @@ steps:
         label: Kafka resumption tests
         depends_on: build-aarch64
         timeout_in_minutes: 30
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-resumption
@@ -438,7 +421,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/kafka-auth/smoketest.td]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
@@ -449,7 +431,6 @@ steps:
         label: Kafka exactly-once tests
         depends_on: build-aarch64
         timeout_in_minutes: 30
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-exactly-once
@@ -461,7 +442,6 @@ steps:
     depends_on: build-aarch64
     inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
     agents:
       queue: linux-aarch64-small
     plugins:
@@ -478,7 +458,6 @@ steps:
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
         parallelism: 5
-        artifact_paths: junit_*.xml
         agents:
           queue: linux-aarch64
         plugins:
@@ -492,7 +471,6 @@ steps:
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
         parallelism: 4
-        artifact_paths: junit_*.xml
         agents:
           queue: linux-aarch64
         plugins:
@@ -505,7 +483,6 @@ steps:
     depends_on: build-aarch64
     parallelism: 8
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
     inputs:
       - test/cloudtest
       - misc/python/materialize/cloudtest
@@ -521,7 +498,6 @@ steps:
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
-    artifact_paths: junit_*.xml
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
@@ -532,7 +508,6 @@ steps:
 
   - id: backup-restore
     label: "CRDB / Persist backup and restore"
-    artifact_paths: junit_*.xml
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
@@ -545,7 +520,6 @@ steps:
     label: "Feature benchmark (Kafka only)"
     depends_on: build-aarch64
     timeout_in_minutes: 45
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -561,7 +535,6 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/replica-isolation]
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: replica-isolation
@@ -572,7 +545,6 @@ steps:
     label: Persistence tests
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
@@ -584,7 +556,6 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 20
     inputs: [test/cluster-isolation]
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
@@ -594,7 +565,6 @@ steps:
   - id: chbench-demo
     label: chbench smoke test
     depends_on: build-aarch64
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: chbench
@@ -608,7 +578,6 @@ steps:
     label: Metabase smoke test
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: metabase
@@ -620,7 +589,6 @@ steps:
     label: dbt-materialize tests
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
@@ -629,7 +597,6 @@ steps:
 
   - id: storage-usage
     label: "Storage Usage Table Test"
-    artifact_paths: junit_*.xml
     depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
@@ -643,7 +610,6 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/tracing]
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: tracing
@@ -654,7 +620,6 @@ steps:
     label: "Persist Catalog Migration"
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist-catalog-migration
@@ -761,20 +726,6 @@ steps:
 
   - wait: ~
     continue_on_failure: true
-
-  - id: analyze
-    label: Analyze tests
-    timeout_in_minutes: 15
-    inputs: ["*"]
-    plugins:
-      - junit-annotate#v2.0.2:
-          artifacts: "*junit_*.xml"
-          job-uuid-file-pattern: _([^_]*).xml
-    priority: 1
-    agents:
-      queue: linux-aarch64-small
-
-  - wait: ~
 
   - id: deploy
     label: Deploy

@@ -83,7 +83,7 @@ kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log || tr
 # shellcheck disable=SC2024
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 
-artifacts=(run.log kubectl-*.log journalctl-merge.log kail-output.log)
+mapfile -t artifacts < <(printf "run.log\nkubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\njournalctl-merge.log\nkail-output.log\n"; find . -name 'junit_*.xml')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
-bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"
+bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}"

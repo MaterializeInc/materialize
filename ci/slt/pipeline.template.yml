@@ -21,7 +21,6 @@ steps:
     label: ":bulb: SQL logic tests %N"
     timeout_in_minutes: 180
     parallelism: 10
-    artifact_paths: junit_*.xml
     agents:
       queue: linux-aarch64
     plugins:
@@ -33,7 +32,6 @@ steps:
     label: ":bulb: SQL logic tests 1 replica %N"
     timeout_in_minutes: 180
     parallelism: 10
-    artifact_paths: junit_*.xml
     agents:
       queue: linux-aarch64
     plugins:
@@ -42,17 +40,3 @@ steps:
           run: slow-tests
           args: [--replicas=1]
     skip: "Too expensive, didn't find anything interesting yet"
-
-  - wait: ~
-    continue_on_failure: true
-
-  - id: analyze
-    label: Analyze tests
-    timeout_in_minutes: 15
-    plugins:
-      - junit-annotate#v2.0.2:
-          artifacts: "*junit_*.xml"
-          job-uuid-file-pattern: _([^_]*).xml
-    priority: 1
-    agents:
-      queue: linux-aarch64-small
