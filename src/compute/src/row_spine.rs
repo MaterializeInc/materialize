@@ -9,38 +9,40 @@
 
 pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
+pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
+use differential_dataflow::trace::implementations::OffsetList;
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
+    use std::rc::Rc;
 
-    use differential_dataflow::trace::implementations::merge_batcher_col::ColumnatedMergeBatcher;
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
-    use std::rc::Rc;
-    use timely::container::columnation::{Columnation, TimelyStack};
-
-    use super::offset_opt::OffsetOptimized;
-    use super::DatumContainer;
     use mz_repr::Row;
+    use timely::container::columnation::Columnation;
+
+    use crate::containers::stack::StackWrapper;
+    use crate::row_spine::{DatumContainer, OffsetOptimized};
+    use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
     pub type RowRowSpine<T, R> = Spine<
         Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>,
-        ColumnatedMergeBatcher<Row, Row, T, R>,
+        KeyValBatcher<Row, Row, T, R>,
         RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>>>,
     >;
     pub type RowValSpine<V, T, R> = Spine<
         Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>,
-        ColumnatedMergeBatcher<Row, V, T, R>,
+        KeyValBatcher<Row, V, T, R>,
         RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>>>,
     >;
     pub type RowSpine<T, R> = Spine<
         Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>,
-        ColumnatedMergeBatcher<Row, (), T, R>,
+        KeyBatcher<Row, T, R>,
         RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>>>,
     >;
 
@@ -63,7 +65,7 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -74,8 +76,8 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = TimelyStack<U::Val>;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type ValContainer = StackWrapper<U::Val>;
+        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -85,8 +87,8 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = TimelyStack<()>;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type ValContainer = StackWrapper<()>;
+        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
 }
@@ -115,8 +117,7 @@ mod container {
                 self.batches.capacity() * std::mem::size_of::<DatumBatch>(),
             );
             for batch in self.batches.iter() {
-                use crate::extensions::arrange;
-                arrange::offset_list_size(&batch.offsets, &mut callback);
+                crate::row_spine::offset_list_size(&batch.offsets, &mut callback);
                 callback(batch.storage.len(), batch.storage.capacity());
             }
         }
@@ -432,8 +433,7 @@ mod offset_opt {
 
     impl OffsetOptimized {
         pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-            use crate::extensions::arrange::offset_list_size;
-            offset_list_size(&self.spilled, callback);
+            crate::row_spine::offset_list_size(&self.spilled, callback);
         }
     }
 
@@ -468,4 +468,19 @@ mod offset_opt {
             Self(*other)
         }
     }
+}
+
+/// Helper to compute the size of an [`OffsetList`] in memory.
+#[inline]
+pub(crate) fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
+    // Private `vec_size` because we should only use it where data isn't region-allocated.
+    // `T: Copy` makes sure the implementation is correct even if types change!
+    #[inline(always)]
+    fn vec_size<T: Copy>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
+        let size_of_t = std::mem::size_of::<T>();
+        callback(data.len() * size_of_t, data.capacity() * size_of_t);
+    }
+
+    vec_size(&data.smol, &mut callback);
+    vec_size(&data.chonk, callback);
 }

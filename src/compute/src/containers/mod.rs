@@ -7,18 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+//! Reusable containers.
 
-//! Materialize's compute layer.
-
-pub(crate) mod arrangement;
-pub mod compute_state;
-pub(crate) mod containers;
-pub(crate) mod extensions;
-pub(crate) mod logging;
-pub(crate) mod metrics;
-pub(crate) mod render;
-pub(crate) mod row_spine;
-pub mod server;
-pub(crate) mod sink;
-mod typedefs;
+pub mod array;
+pub mod stack;

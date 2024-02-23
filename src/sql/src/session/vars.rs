@@ -1501,6 +1501,13 @@ pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_COMPUTE_CHUNKED_STACK: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_compute_chunked_stack"),
+    value: false,
+    description: "Enable the chunked stack implementation in compute",
+    internal: true,
+};
+
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_statement_lifecycle_logging"),
     value: false,
@@ -2978,6 +2985,7 @@ impl SystemVars {
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
+            .with_var(&ENABLE_COMPUTE_CHUNKED_STACK)
             .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
             .with_var(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
             .with_var(&TIMESTAMP_ORACLE_IMPL)
@@ -3848,6 +3856,11 @@ impl SystemVars {
     /// Returns the `enable_columnation_lgalloc` configuration parameter.
     pub fn enable_columnation_lgalloc(&self) -> bool {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
+    }
+
+    /// Returns the `enable_compute_chunked_stack` configuration parameter.
+    pub fn enable_compute_chunked_stack(&self) -> bool {
+        *self.expect_value(&ENABLE_COMPUTE_CHUNKED_STACK)
     }
 
     pub fn enable_statement_lifecycle_logging(&self) -> bool {
