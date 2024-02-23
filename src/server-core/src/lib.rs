@@ -14,7 +14,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -218,7 +218,7 @@ pub struct TlsCertConfig {
 
 impl TlsCertConfig {
     /// Returns the SSL context to use in TlsConfigs.
-    pub fn context(&self) -> Result<SslContext, anyhow::Error> {
+    pub fn load_context(&self) -> Result<SslContext, anyhow::Error> {
         // Mozilla publishes three presets: old, intermediate, and modern. They
         // recommend the intermediate preset for general purpose servers, which
         // is what we use, as it is compatible with nearly every client released
@@ -240,12 +240,12 @@ impl TlsCertConfig {
         &self,
         mut ticker: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
     ) -> Result<ReloadingSslContext, anyhow::Error> {
-        let context = Arc::new(RwLock::new(self.context()?));
+        let context = Arc::new(RwLock::new(self.load_context()?));
         let updater_context = Arc::clone(&context);
         let config = self.clone();
         mz_ore::task::spawn(|| "TlsCertConfig reloading_context", async move {
             while let Some(chan) = ticker.next().await {
-                let result = match config.context() {
+                let result = match config.load_context() {
                     Ok(ctx) => {
                         *updater_context.write().expect("poisoned") = ctx;
                         Ok(())
@@ -269,7 +269,13 @@ impl TlsCertConfig {
 #[derive(Clone, Debug)]
 pub struct ReloadingSslContext {
     /// The current SSL context.
-    pub context: Arc<RwLock<SslContext>>,
+    context: Arc<RwLock<SslContext>>,
+}
+
+impl ReloadingSslContext {
+    pub fn get(&self) -> RwLockReadGuard<SslContext> {
+        self.context.read().expect("poisoned")
+    }
 }
 
 /// Configures a server's TLS encryption and authentication with reloading.

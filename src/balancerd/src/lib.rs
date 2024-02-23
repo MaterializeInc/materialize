@@ -541,10 +541,7 @@ impl mz_server_core::Server for PgwireBalancer {
                         Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
                             (Conn::Unencrypted(mut conn), Some(tls)) => {
                                 conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                                let mut ssl_stream = SslStream::new(
-                                    Ssl::new(&tls.context.context.read().expect("poisoned"))?,
-                                    conn,
-                                )?;
+                                let mut ssl_stream = SslStream::new(Ssl::new(&tls.get())?, conn)?;
                                 if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                                     let _ = ssl_stream.get_mut().shutdown().await;
                                     return Err(e.into());
@@ -642,10 +639,8 @@ impl mz_server_core::Server for HttpsBalancer {
                 let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
                     match tls_context {
                         Some(tls_context) => {
-                            let mut ssl_stream = SslStream::new(
-                                Ssl::new(&tls_context.context.read().expect("poisoned"))?,
-                                conn,
-                            )?;
+                            let mut ssl_stream =
+                                SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
                             if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                                 let _ = ssl_stream.get_mut().shutdown().await;
                                 return Err(e.into());

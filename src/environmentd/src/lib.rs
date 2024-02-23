@@ -309,7 +309,7 @@ impl Listeners {
         let (pgwire_tls, http_tls) = match &config.tls {
             None => (None, None),
             Some(tls_config) => {
-                let context = tls_config.context()?;
+                let context = tls_config.load_context()?;
                 let pgwire_tls = mz_server_core::TlsConfig {
                     context: context.clone(),
                     mode: mz_server_core::TlsMode::Require,
