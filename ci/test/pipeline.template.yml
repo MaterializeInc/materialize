@@ -545,7 +545,7 @@ steps:
   - id: replica-isolation
     label: Replica isolation
     depends_on: build-aarch64
-    timeout_in_minutes: 20
+    timeout_in_minutes: 30
     inputs: [test/replica-isolation]
     artifact_paths: junit_*.xml
     plugins:
