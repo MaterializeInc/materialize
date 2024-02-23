@@ -128,10 +128,10 @@ Explained Query:
                   ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
                     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
                       ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
-                  ArrangeBy keys=[[#0]] // { types: "(double precision)" }
-                    Union // { types: "(double precision)" }
-                      Project (#1) // { types: "(double precision)" }
-                        Filter (#1) IS NOT NULL // { types: "(integer?, double precision)" }
+                  ArrangeBy keys=[[#0]] // { types: "(double precision?)" }
+                    Union // { types: "(double precision?)" }
+                      Project (#1) // { types: "(double precision?)" }
+                        Filter (#0) IS NOT NULL // { types: "(integer, double precision?)" }
                           Map (integer_to_double(#0)) // { types: "(integer?, double precision?)" }
                             ReadStorage materialize.public.u // { types: "(integer?)" }
                       Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
