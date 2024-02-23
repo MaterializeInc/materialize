@@ -260,11 +260,6 @@ impl ConnectionOptionExtracted {
                     )?;
                 }
 
-                if self.aws_privatelink.is_some() {
-                    scx.require_feature_flag(
-                        &crate::session::vars::ENABLE_DEFAULT_KAFKA_AWS_PRIVATE_LINK,
-                    )?;
-                }
                 let (tls, sasl) = plan_kafka_security(&self)?;
 
                 Connection::Kafka(KafkaConnection {
