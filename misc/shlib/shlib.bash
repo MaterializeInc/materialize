@@ -204,8 +204,18 @@ red() {
 
 # in_ci
 #
-# Returns 1 if in CI and 0 otherwise
+# Returns 0 if in CI and 1 otherwise
 in_ci() {
     [ -z "${BUILDKITE-}" ] && return 1
+    return 0
+}
+
+# is_truthy VAR
+#
+# Returns 0 if the parameter is not one of: 0, '', no, false; and 1 otherwise
+is_truthy() {
+    if [[ "$1" == "0" || "$1" == "" || "$1" == "no" || "$1" == "false" ]]; then
+        return 1
+    fi
     return 0
 }
