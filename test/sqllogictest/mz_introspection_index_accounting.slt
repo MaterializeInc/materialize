@@ -376,6 +376,7 @@ mz_recent_activity_log_thinned  execution_timestamp
 mz_recent_activity_log_thinned  finished_at
 mz_recent_activity_log_thinned  finished_status
 mz_recent_activity_log_thinned  initial_application_name
+mz_recent_activity_log_thinned  mz_version
 mz_recent_activity_log_thinned  params
 mz_recent_activity_log_thinned  prepared_at
 mz_recent_activity_log_thinned  prepared_statement_id
