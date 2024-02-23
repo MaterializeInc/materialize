@@ -889,23 +889,39 @@ impl MapFilterProject {
     /// );
     /// ```
     pub fn optimize(&mut self) {
-        // Optimization memoizes individual `ScalarExpr` expressions that
-        // are sure to be evaluated, canonicalizes references to the first
-        // occurrence of each, inlines expressions that have a reference
-        // count of one, and then removes any expressions that are not
-        // referenced.
-        self.memoize_expressions();
-        self.predicates.sort();
-        self.predicates.dedup();
-        self.inline_expressions();
-        self.remove_undemanded();
+        // Track sizes and iterate as long as they decrease.
+        let mut prev_size = None;
+        let mut self_size = 0;
+        // Continue as long as strict improvements occur.
+        while prev_size.map(|p| self_size < p).unwrap_or(true) {
+            // Lock in current size.
+            prev_size = Some(self_size);
+            // Optimization memoizes individual `ScalarExpr` expressions that
+            // are sure to be evaluated, canonicalizes references to the first
+            // occurrence of each, inlines expressions that have a reference
+            // count of one, and then removes any expressions that are not
+            // referenced.
+            self.memoize_expressions();
+            self.predicates.sort();
+            self.predicates.dedup();
+            self.inline_expressions();
+            self.remove_undemanded();
 
-        // Re-build `self` from parts to restore evaluation order invariants.
-        let (map, filter, project) = self.as_map_filter_project();
-        *self = Self::new(self.input_arity)
-            .map(map)
-            .filter(filter)
-            .project(project);
+            // Re-build `self` from parts to restore evaluation order invariants.
+            let (map, filter, project) = self.as_map_filter_project();
+            *self = Self::new(self.input_arity)
+                .map(map)
+                .filter(filter)
+                .project(project);
+
+            self_size = self.size();
+        }
+    }
+
+    /// Total expression sizes across all expressions.
+    pub fn size(&self) -> usize {
+        self.expressions.iter().map(|e| e.size()).sum::<usize>()
+            + self.predicates.iter().map(|(_, e)| e.size()).sum::<usize>()
     }
 
     /// Place each certainly evaluated expression in its own column.
