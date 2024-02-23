@@ -26,7 +26,7 @@ mod spines {
     use mz_repr::Row;
     use timely::container::columnation::Columnation;
 
-    use crate::containers::stack::ChunkedStack;
+    use crate::containers::stack::StackWrapper;
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
@@ -65,7 +65,7 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
-        type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
+        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -76,8 +76,8 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = ChunkedStack<U::Val>;
-        type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
+        type ValContainer = StackWrapper<U::Val>;
+        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -87,8 +87,8 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = ChunkedStack<()>;
-        type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
+        type ValContainer = StackWrapper<()>;
+        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
 }

@@ -34,7 +34,7 @@ pub(crate) mod spines {
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use timely::container::columnation::Columnation;
 
-    use crate::containers::stack::ChunkedStack;
+    use crate::containers::stack::StackWrapper;
     use crate::row_spine::OffsetOptimized;
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
@@ -65,9 +65,9 @@ pub(crate) mod spines {
         U::Diff: Columnation,
     {
         type Target = U;
-        type KeyContainer = ChunkedStack<U::Key>;
-        type ValContainer = ChunkedStack<U::Val>;
-        type UpdContainer = ChunkedStack<(U::Time, U::Diff)>;
+        type KeyContainer = StackWrapper<U::Key>;
+        type ValContainer = StackWrapper<U::Val>;
+        type UpdContainer = StackWrapper<(U::Time, U::Diff)>;
         type OffsetContainer = OffsetOptimized;
     }
 }

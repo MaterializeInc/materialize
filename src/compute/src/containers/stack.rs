@@ -12,11 +12,128 @@
 
 use std::collections::Bound;
 use std::ops::{Index, RangeBounds};
+use std::sync::atomic::AtomicBool;
 
 use differential_dataflow::trace::implementations::BatchContainer;
-use timely::container::columnation::{Columnation, Region};
+use timely::container::columnation::{Columnation, Region, TimelyStack};
 
 use crate::containers::array::Array;
+
+static ENABLE_CHUNKED_STACK: AtomicBool = AtomicBool::new(false);
+
+/// A runtime-configurable wrapper around timely stacks and chunked stacks.
+pub enum StackWrapper<T: Columnation> {
+    Legacy(TimelyStack<T>),
+    Chunked(ChunkedStack<T>),
+}
+
+/// Runtime switch to select the stack implementation. `true` to use [`ChunkedStac`],
+/// `false` to select [`TimelyStack`].
+pub fn use_chunked_stack(enable: bool) {
+    ENABLE_CHUNKED_STACK.store(enable, std::sync::atomic::Ordering::Relaxed);
+}
+
+impl<T: Columnation> StackWrapper<T> {
+    /// Estimate the memory capacity in bytes.
+    #[inline]
+    pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+        match self {
+            StackWrapper::Legacy(stack) => stack.heap_size(callback),
+            StackWrapper::Chunked(stack) => stack.heap_size(callback),
+        }
+    }
+}
+
+// The `ToOwned` requirement exists to satisfy `self.reserve_items`, who must for now
+// be presented with the actual contained type, rather than a type that borrows into it.
+impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for StackWrapper<T> {
+    type PushItem = T;
+    type ReadItem<'a> = &'a Self::PushItem;
+
+    #[inline]
+    fn copy(&mut self, item: &T) {
+        match self {
+            StackWrapper::Legacy(stack) => stack.copy(item),
+            StackWrapper::Chunked(stack) => stack.copy(item),
+        }
+    }
+    #[inline]
+    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+        use StackWrapper::*;
+        match (self, other) {
+            (Legacy(stack), Legacy(other)) => stack.copy_range(other, start, end),
+            (Chunked(stack), Chunked(other)) => {
+                let range = other.range(start..end);
+                stack.reserve_items(range);
+                for item in range {
+                    stack.copy(item);
+                }
+            }
+            (stack, other) => {
+                // Two different implementations. Default to simple and inefficient
+                // implementation because this should be a rare event.
+                for index in start..end {
+                    stack.copy(other.index(index));
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn with_capacity(size: usize) -> Self {
+        if ENABLE_CHUNKED_STACK.load(std::sync::atomic::Ordering::Relaxed) {
+            Self::Chunked(ChunkedStack::with_capacity(size))
+        } else {
+            Self::Legacy(TimelyStack::with_capacity(size))
+        }
+    }
+
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+        use StackWrapper::*;
+        match (cont1, cont2) {
+            (Legacy(cont1), Legacy(cont2)) => {
+                let mut new = TimelyStack::with_capacity(cont1.len() + cont2.len());
+                new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
+                Self::Legacy(new)
+            }
+            (Chunked(cont1), Chunked(cont2)) => {
+                let mut new = ChunkedStack::with_capacity(cont1.len() + cont2.len());
+                new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
+                Self::Chunked(new)
+            }
+            (cont1, cont2) => {
+                // We don't have a good way to estimate the result region size
+                // if the two inputs are different. This should only happen after
+                // toggling the flag at runtime, which mh@ assumes to be a rare
+                // event.
+                Self::with_capacity(cont1.len() + cont2.len())
+            }
+        }
+    }
+
+    #[inline]
+    fn index(&self, index: usize) -> Self::ReadItem<'_> {
+        match self {
+            StackWrapper::Legacy(stack) => stack.index(index),
+            StackWrapper::Chunked(stack) => stack.index(index),
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            StackWrapper::Legacy(stack) => stack.len(),
+            StackWrapper::Chunked(stack) => stack.length,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            StackWrapper::Legacy(stack) => stack.is_empty(),
+            StackWrapper::Chunked(stack) => stack.is_empty(),
+        }
+    }
+}
 
 /// An append-only vector that store records as columns.
 ///
@@ -207,19 +324,6 @@ impl<T: Columnation> Index<usize> for ChunkedStack<T> {
 impl<T: Columnation> Default for ChunkedStack<T> {
     fn default() -> Self {
         Self::with_capacity(0)
-    }
-}
-
-impl<A: Columnation, B: Columnation, C: Columnation> ChunkedStack<(A, B, C)> {
-    /// Copies a destructured tuple `(A, B, C)` into this column stack.
-    ///
-    /// This serves situations where a tuple should be constructed from its constituents but
-    /// not all elements are available as owned data.
-    ///
-    /// The element can be read by indexing
-    pub fn copy_destructured(&mut self, r0: &A, r1: &B, r2: &C) {
-        let copy = unsafe { self.inner.copy_destructured(r0, r1, r2) };
-        self.push(copy);
     }
 }
 

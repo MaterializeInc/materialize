@@ -235,6 +235,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             enable_mz_join_core,
             enable_jemalloc_profiling,
             enable_columnation_lgalloc,
+            enable_chunked_stack,
             enable_operator_hydration_status_logging,
             persist,
             tracing,
@@ -292,6 +293,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 info!("Disabling lgalloc");
                 lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
             }
+            None => {}
+        }
+        match enable_chunked_stack {
+            Some(setting) => crate::containers::stack::use_chunked_stack(setting),
             None => {}
         }
         if let Some(v) = enable_operator_hydration_status_logging {

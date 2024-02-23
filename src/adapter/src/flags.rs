@@ -39,6 +39,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         enable_mz_join_core: Some(config.enable_mz_join_core()),
         enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),
         enable_columnation_lgalloc: Some(config.enable_columnation_lgalloc()),
+        enable_chunked_stack: Some(config.enable_compute_chunked_stack()),
         enable_operator_hydration_status_logging: Some(
             config.enable_compute_operator_hydration_status_logging(),
         ),
