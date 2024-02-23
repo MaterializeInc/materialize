@@ -234,11 +234,11 @@ impl TlsCertConfig {
     /// Like [Self::context] but attempts to reload the files each time `ticker` yields an item.
     /// Returns an error based on the files currently on disk. When `ticker` receives, the
     /// certificates are reloaded from the context. The result of the reloading is returned on the
-    /// oneshot, and an Ok result means new connections will use the new certificates. An Err result
-    /// will not change the current certificates.
+    /// oneshot if present, and an Ok result means new connections will use the new certificates. An
+    /// Err result will not change the current certificates.
     pub fn reloading_context(
         &self,
-        mut ticker: BoxStream<'static, oneshot::Sender<Result<(), anyhow::Error>>>,
+        mut ticker: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
     ) -> Result<ReloadingSslContext, anyhow::Error> {
         let context = Arc::new(RwLock::new(self.context()?));
         let updater_context = Arc::clone(&context);
@@ -250,9 +250,14 @@ impl TlsCertConfig {
                         *updater_context.write().expect("poisoned") = ctx;
                         Ok(())
                     }
-                    Err(err) => Err(err),
+                    Err(err) => {
+                        tracing::error!("failed to reload SSL certificate: {err}");
+                        Err(err)
+                    }
                 };
-                let _ = chan.send(result);
+                if let Some(chan) = chan {
+                    let _ = chan.send(result);
+                }
             }
             tracing::warn!("TlsCertConfig reloading_context updater closed");
         });

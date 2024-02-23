@@ -78,7 +78,7 @@ pub struct BalancerConfig {
     https_addr_template: String,
     tls: Option<TlsCertConfig>,
     metrics_registry: MetricsRegistry,
-    reload_certs: BoxStream<'static, oneshot::Sender<Result<(), anyhow::Error>>>,
+    reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
 }
 
 impl BalancerConfig {
@@ -93,7 +93,7 @@ impl BalancerConfig {
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
         metrics_registry: MetricsRegistry,
-        reload_certs: BoxStream<'static, oneshot::Sender<Result<(), anyhow::Error>>>,
+        reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),

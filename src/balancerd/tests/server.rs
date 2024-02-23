@@ -213,7 +213,7 @@ async fn test_balancer() {
         assert_ne!(next_x509, server_x509);
         std::fs::copy(next_key, &server_key).unwrap();
         let (tx, rx) = oneshot::channel();
-        reload_tx.try_send(tx).unwrap();
+        reload_tx.try_send(Some(tx)).unwrap();
         let res = rx.await.unwrap();
         assert!(res.is_err());
 
@@ -234,7 +234,7 @@ async fn test_balancer() {
         // cert.
         std::fs::copy(next_cert, &server_cert).unwrap();
         let (tx, rx) = oneshot::channel();
-        reload_tx.try_send(tx).unwrap();
+        reload_tx.try_send(Some(tx)).unwrap();
         let res = rx.await.unwrap();
         assert!(res.is_ok());
         let resp = client

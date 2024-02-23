@@ -20,7 +20,6 @@ use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, 
 use mz_frontegg_auth::{Authentication, AuthenticationConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_server_core::TlsCliArgs;
-use tokio::sync::oneshot;
 use tokio_stream::wrappers::IntervalStream;
 use tracing::warn;
 
@@ -136,16 +135,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         ),
     };
     let ticker = IntervalStream::new(tokio::time::interval(Duration::from_secs(60 * 60)));
-    let ticker = ticker.map(|_| {
-        let (tx, rx) = oneshot::channel();
-        mz_ore::task::spawn(|| "balancer ssl reload", async {
-            let Ok(res) = rx.await else { return };
-            if let Err(err) = res {
-                tracing::error!("failed to reload SSL certificate: {err}");
-            }
-        });
-        tx
-    });
+    let ticker = ticker.map(|_| None);
     let ticker = Box::pin(ticker);
     let config = BalancerConfig::new(
         &BUILD_INFO,
