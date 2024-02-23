@@ -61,7 +61,7 @@ IGNORE_RE = re.compile(
     r"""
     ( discussion\ of\ this\ in
     | discussed\ in
-    | See\ \<
+    | [sS]ee\ \<
     # is_null_propagation.slt
     | isnull\(\#0\)
     # src/transform/tests/test_transforms/column_knowledge.spec
