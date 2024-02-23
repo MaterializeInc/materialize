@@ -60,17 +60,36 @@ pub fn encode_copy_row_binary(
     Ok(())
 }
 
-pub fn encode_copy_row_text(
+/// Encodes given `row` into bytes with default param values
+/// in `CopyTextFormatParams`.
+pub fn encode_copy_row_text_default(
     row: Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
-    let delim = b'\t';
-    let null = b"\\N";
+    encode_copy_row_text(
+        row,
+        typ,
+        out,
+        CopyTextFormatParams {
+            delimiter: Cow::from("\t"),
+            null: Cow::from("\\N"),
+        },
+    )
+}
+
+pub fn encode_copy_row_text(
+    row: Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+    CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
+) -> Result<(), io::Error> {
+    let delim = delimiter.as_bytes().first().expect("expect a single byte");
+    let null = null.as_bytes();
     let mut buf = BytesMut::new();
     for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
         if idx > 0 {
-            out.push(delim);
+            out.push(*delim);
         }
         match field {
             None => out.extend(null),
@@ -85,6 +104,62 @@ pub fn encode_copy_row_text(
                         b'\t' => out.extend(b"\\t"),
                         _ => out.push(*b),
                     }
+                }
+            }
+        }
+    }
+    out.push(b'\n');
+    Ok(())
+}
+
+pub fn encode_copy_row_csv(
+    row: Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+    CopyCsvFormatParams {
+        delimiter: delim,
+        quote,
+        escape,
+        header: _,
+        null,
+    }: CopyCsvFormatParams,
+) -> Result<(), io::Error> {
+    let null = null.as_bytes();
+    let is_special = |c: &u8| *c == delim || *c == quote || *c == b'\r' || *c == b'\n';
+    let mut buf = BytesMut::new();
+    for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
+        if idx > 0 {
+            out.push(delim);
+        }
+        match field {
+            None => out.extend(null),
+            Some(field) => {
+                buf.clear();
+                field.encode_text(&mut buf);
+                // A field needs quoting if:
+                //   * It is the only field and the value is exactly the end
+                //     of copy marker.
+                //   * The field contains a special character.
+                //   * The field is exactly the NULL sentinel.
+                if (typ.column_types.len() == 1 && buf == END_OF_COPY_MARKER)
+                    || buf.iter().any(is_special)
+                    || &*buf == null
+                {
+                    // Quote the value by wrapping it in the quote character and
+                    // emitting the escape character before any quote or escape
+                    // characters within.
+                    out.push(quote);
+                    for b in &buf {
+                        if *b == quote || *b == escape {
+                            out.push(escape);
+                        }
+                        out.push(*b);
+                    }
+                    out.push(quote);
+                } else {
+                    // The value does not need quoting and can be emitted
+                    // directly.
+                    out.extend(&buf);
                 }
             }
         }
@@ -374,6 +449,7 @@ pub enum CopyFormatParams<'a> {
     Csv(CopyCsvFormatParams<'a>),
 }
 
+/// Decodes the given bytes into `Row`-s based on the given `CopyFormatParams`.
 pub fn decode_copy_format<'a>(
     data: &[u8],
     column_types: &[mz_pgrepr::Type],
@@ -382,6 +458,20 @@ pub fn decode_copy_format<'a>(
     match params {
         CopyFormatParams::Text(params) => decode_copy_format_text(data, column_types, params),
         CopyFormatParams::Csv(params) => decode_copy_format_csv(data, column_types, params),
+    }
+}
+
+/// Encodes the given `Row` into bytes based on the given `CopyFormatParams`.
+pub fn encode_copy_format<'a>(
+    row: Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+    params: CopyFormatParams<'a>,
+) -> Result<(), io::Error> {
+    match params {
+        CopyFormatParams::Text(params) => encode_copy_row_text(row, typ, out, params),
+        CopyFormatParams::Csv(params) => encode_copy_row_csv(row, typ, out, params),
+        // TODO (mouli): Handle Binary format here as well?
     }
 }
 

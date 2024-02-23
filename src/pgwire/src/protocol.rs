@@ -1915,7 +1915,9 @@ where
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
             Format,
         ) = match format {
-            CopyFormat::Text => (mz_pgcopy::encode_copy_row_text, Format::Text),
+            // TODO (mouli): refactor to use `mz_pgcopy::encode_copy_format` and
+            // handle `Binary` there as well.
+            CopyFormat::Text => (mz_pgcopy::encode_copy_row_text_default, Format::Text),
             CopyFormat::Binary => (mz_pgcopy::encode_copy_row_binary, Format::Binary),
             _ => {
                 let msg = format!("COPY TO format {:?} not supported", format);
