@@ -45,7 +45,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         enable_lgalloc_eager_reclamation: Some(config.enable_lgalloc_eager_reclamation()),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
-        dyncfg_updates: config.persist_configs(),
+        dyncfg_updates: config.dyncfg_updates(),
     }
 }
 
@@ -79,7 +79,9 @@ fn parse_yield_spec(s: &str) -> Option<YieldSpec> {
 /// Return the current storage configuration, derived from the system configuration.
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
-        persist: persist_config(config),
+        persist: PersistParameters {
+            config_updates: config.dyncfg_updates(),
+        },
         pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig {
             connect_timeout: Some(config.pg_source_connect_timeout()),
             keepalives_retries: Some(config.pg_source_keepalives_retries()),
@@ -211,12 +213,6 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
     mz_secrets::CachingPolicy {
         enabled: ttl_secs > 0,
         ttl: Duration::from_secs(u64::cast_from(ttl_secs)),
-    }
-}
-
-fn persist_config(config: &SystemVars) -> PersistParameters {
-    PersistParameters {
-        config_updates: config.persist_configs(),
     }
 }
 

@@ -74,7 +74,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use im::OrdMap;
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates as PersistConfigUpdates, ConfigVal};
+use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::{CRDB_CONNECT_TIMEOUT, CRDB_TCP_USER_TIMEOUT};
 use mz_repr::adt::numeric::Numeric;
@@ -1036,13 +1036,10 @@ pub struct SystemVars {
 
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
     /// NB: This is intentionally disconnected from the one that is plumbed
-    /// around to various components (initially, just persist). This is so we
-    /// can explictly control and reason about when changes to config values are
-    /// propagated to the rest of the system.
-    ///
-    /// TODO(cfg): Rename this when components other than persist are pulled
-    /// into it.
-    persist_configs: ConfigSet,
+    /// around to various components. This is so we can explictly control and
+    /// reason about when changes to config values are propagated to the rest
+    /// of the system.
+    dyncfgs: ConfigSet,
 }
 
 impl Default for SystemVars {
@@ -1213,8 +1210,8 @@ impl SystemVars {
             &USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION,
         ];
 
-        let persist_configs = mz_dyncfgs::all_dyncfgs();
-        let persist_vars: Vec<_> = persist_configs
+        let dyncfgs = mz_dyncfgs::all_dyncfgs();
+        let dyncfg_vars: Vec<_> = dyncfgs
             .entries()
             .map(|cfg| match cfg.default() {
                 ConfigVal::Bool(default) => VarDefinition::new_runtime(
@@ -1258,7 +1255,7 @@ impl SystemVars {
             .chain(Self::SESSION_VARS.values().copied())
             .cloned()
             // Include Persist configs.
-            .chain(persist_vars.into_iter())
+            .chain(dyncfg_vars.into_iter())
             .map(|var| (var.name, SystemVar::new(var)))
             .collect();
 
@@ -1266,7 +1263,7 @@ impl SystemVars {
             vars,
             active_connection_count,
             allow_unsafe: false,
-            persist_configs,
+            dyncfgs,
         };
         vars.refresh_internal_state();
 
@@ -1856,9 +1853,9 @@ impl SystemVars {
         ))
     }
 
-    pub fn persist_configs(&self) -> PersistConfigUpdates {
-        let mut updates = PersistConfigUpdates::default();
-        for entry in self.persist_configs.entries() {
+    pub fn dyncfg_updates(&self) -> ConfigUpdates {
+        let mut updates = ConfigUpdates::default();
+        for entry in self.dyncfgs.entries() {
             let name = UncasedStr::new(entry.name());
             match entry.val() {
                 ConfigVal::Bool(x) => {
@@ -2150,7 +2147,7 @@ impl SystemVars {
             || name == ENABLE_COMPUTE_CHUNKED_STACK.name()
             || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
             || name == ENABLE_LGALLOC_EAGER_RECLAMATION.name()
-            || self.is_persist_config_var(name)
+            || self.is_dyncfg_var(name)
             || is_tracing_var(name)
     }
 
@@ -2189,13 +2186,13 @@ impl SystemVars {
             || name == STORAGE_STATISTICS_COLLECTION_INTERVAL.name()
             || name == USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION.name()
             || is_upsert_rocksdb_config_var(name)
-            || self.is_persist_config_var(name)
+            || self.is_dyncfg_var(name)
             || is_tracing_var(name)
     }
 
     /// Returns whether the named variable is a persist configuration parameter.
-    fn is_persist_config_var(&self, name: &str) -> bool {
-        self.persist_configs.entries().any(|e| name == e.name())
+    fn is_dyncfg_var(&self, name: &str) -> bool {
+        self.dyncfgs.entries().any(|e| name == e.name())
     }
 }
 
