@@ -24,10 +24,8 @@ mod spines {
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use std::rc::Rc;
-    use timely::container::columnation::{Columnation, TimelyStack};
+    use timely::container::columnation::Columnation;
 
-    use crate::arrangement::batcher::ColumnatedMergeBatcher;
     use crate::containers::stack::StackWrapper;
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
