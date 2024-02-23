@@ -411,6 +411,3 @@ mv_wmr_stuck hydrated_test_4 false
 mv_wmr       hydrated_test_4 true
 mv_wmr_const hydrated_test_4 true
 mv_wmr_stuck hydrated_test_4 false
-
-# Cleanup
-> DROP CLUSTER test CASCADE;

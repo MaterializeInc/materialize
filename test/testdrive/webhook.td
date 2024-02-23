@@ -519,11 +519,6 @@ SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 > SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 0
 
-# Cleanup.
-> DROP CLUSTER webhook_cluster CASCADE;
-
-> DROP CLUSTER webhook_compute CASCADE;
-
 # Creating a webhook source without specifying the cluster.
 $ skip-if
 SELECT ${arg.replicas} > 1;
@@ -535,5 +530,3 @@ SHOW cluster;
 
 > SELECT c.name = '${current-cluster}' FROM mz_clusters c JOIN mz_sources s ON c.id = s.cluster_id WHERE s.name = 'webhook_in_current';
 true
-
-> DROP SOURCE webhook_in_current;

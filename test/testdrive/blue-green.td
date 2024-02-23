@@ -154,10 +154,3 @@ SELECT id FROM mz_clusters WHERE name = 'green_serving';
 
 > EXPLAIN SELECT * FROM blue.mv1;
 "Explained Query (fast path):\n  ReadIndex on=materialize.blue.mv1 mv1_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.blue.mv1_primary_idx (*** full scan ***)\n"
-
-# Cleanup.
-
-> SET CLUSTER TO quickstart;
-
-> DROP CLUSTER blue_compute CASCADE;
-> DROP CLUSTER blue_serving CASCADE;
