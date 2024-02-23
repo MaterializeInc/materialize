@@ -890,13 +890,12 @@ impl MapFilterProject {
     /// ```
     pub fn optimize(&mut self) {
         // Track sizes and iterate as long as they decrease.
-        let mut prev_size = usize::max_value();
-        let mut self_size = self.size();
-
+        let mut prev_size = None;
+        let mut self_size = 0;
         // Continue as long as strict improvements occur.
-        while self_size < prev_size {
+        while prev_size.map(|p| self_size < p).unwrap_or(true) {
             // Lock in current size.
-            prev_size = self_size;
+            prev_size = Some(self_size);
             // Optimization memoizes individual `ScalarExpr` expressions that
             // are sure to be evaluated, canonicalizes references to the first
             // occurrence of each, inlines expressions that have a reference
@@ -919,7 +918,7 @@ impl MapFilterProject {
         }
     }
 
-    /// Accumulate expression sizes across all expressions.
+    /// Total expression sizes across all expressions.
     pub fn size(&self) -> usize {
         self.expressions.iter().map(|e| e.size()).sum::<usize>()
             + self.predicates.iter().map(|(_, e)| e.size()).sum::<usize>()
