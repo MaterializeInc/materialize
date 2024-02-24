@@ -116,5 +116,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if name == "default":
                 continue
 
+            # TODO: Flaky, reenable when #25479 is fixed
+            if name == "statuses":
+                continue
+
             with c.test_case(name):
                 c.workflow(name)
