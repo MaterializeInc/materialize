@@ -1625,6 +1625,16 @@ SELECT 1 AS "FOO"
 SELECT 1 AS "FOO"
 
 parse-statement roundtrip
+SELECT 'foo' LIKE ANY (SELECT 'f%')
+----
+SELECT 'foo' ~~ ANY (SELECT 'f%')
+
+parse-statement roundtrip
+SELECT 'foo' ~~ ANY (SELECT 'f%')
+----
+SELECT 'foo' ~~ ANY (SELECT 'f%')
+
+parse-statement roundtrip
 SELECT 1 < ANY (SELECT 1)
 ----
 SELECT 1 < ANY (SELECT 1)

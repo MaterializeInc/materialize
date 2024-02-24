@@ -811,6 +811,11 @@ impl<'a> Desugarer<'a> {
                         }
                         *expr = new;
                     }
+                    _ if left.len() == 1 && right.len() == 1 => {
+                        let left = left.remove(0);
+                        let right = right.remove(0);
+                        *expr = left.binop(op.clone(), right);
+                    }
                     _ => (),
                 }
             }

@@ -133,6 +133,41 @@ select 'hello'::text <= ANY(ARRAY['there'::text])
 ----
 true
 
+query B
+select 'apple' like any (VALUES('a%'), ('b%'));
+----
+true
+
+query B
+select 'apple' not like any (VALUES('a%'), ('b%'));
+----
+true
+
+query B
+select 'apple' ilike any (VALUES('A%'), ('B%'));
+----
+true
+
+query B
+select 'apple' like any (VALUES('A%'), ('B%'));
+----
+false
+
+query B
+select 'apple' ~~ any (VALUES('a%'), ('b%'));
+----
+true
+
+query B
+select 'apple' !~~ any (VALUES('a%'), ('b%'));
+----
+true
+
+query B
+select 'apple' ~~* any (VALUES('A%'), ('B%'));
+----
+true
+
 # Test ALL
 
 query B
@@ -144,6 +179,31 @@ query B
 SELECT 5 <> ALL(ARRAY[ARRAY[1, 2], ARRAY[3,4]])
 ----
 true
+
+query B
+select 'apple' like all (VALUES('a%'), ('b%'));
+----
+false
+
+query B
+select 'apple' like all (VALUES('a%'), ('appl%'));
+----
+true
+
+query B
+select 'apple' not like all (VALUES('a%'), ('b%'));
+----
+false
+
+query B
+select 'apple' ilike all (VALUES('A%'), ('B%'));
+----
+false
+
+query B
+select 'apple' like all (VALUES('A%'), ('B%'));
+----
+false
 
 # 🔬🔬 unnest
 
