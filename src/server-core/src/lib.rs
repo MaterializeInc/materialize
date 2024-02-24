@@ -231,7 +231,7 @@ impl TlsCertConfig {
         Ok(builder.build().into_context())
     }
 
-    /// Like [Self::context] but attempts to reload the files each time `ticker` yields an item.
+    /// Like [Self::load_context] but attempts to reload the files each time `ticker` yields an item.
     /// Returns an error based on the files currently on disk. When `ticker` receives, the
     /// certificates are reloaded from the context. The result of the reloading is returned on the
     /// oneshot if present, and an Ok result means new connections will use the new certificates. An
