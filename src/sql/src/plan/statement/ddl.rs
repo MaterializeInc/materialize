@@ -3464,7 +3464,7 @@ fn plan_replica_config(
                 disk = true;
             }
 
-            Ok(ReplicaConfig::Managed {
+            Ok(ReplicaConfig::Orchestrated {
                 size,
                 availability_zone,
                 compute,
@@ -3484,7 +3484,7 @@ fn plan_replica_config(
             compute_addresses,
             workers,
         ) => {
-            scx.require_feature_flag(&vars::ENABLE_UNMANAGED_CLUSTER_REPLICAS)?;
+            scx.require_feature_flag(&vars::ENABLE_UNORCHESTRATED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce
@@ -3520,10 +3520,10 @@ fn plan_replica_config(
             }
 
             if disk_in.is_some() {
-                sql_bail!("DISK can't be specified for unmanaged clusters");
+                sql_bail!("DISK can't be specified for unorchestrated clusters");
             }
 
-            Ok(ReplicaConfig::Unmanaged {
+            Ok(ReplicaConfig::Unorchestrated {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -3535,7 +3535,7 @@ fn plan_replica_config(
         _ => {
             // We don't bother trying to produce a more helpful error message
             // here because no user is likely to hit this path.
-            sql_bail!("invalid mixture of managed and unmanaged replica options");
+            sql_bail!("invalid mixture of orchestrated and unorchestrated replica options");
         }
     }
 }
@@ -3594,7 +3594,7 @@ pub fn plan_create_cluster_replica(
 
     let config = plan_replica_config(scx, options)?;
 
-    if let ReplicaConfig::Managed { internal: true, .. } = &config {
+    if let ReplicaConfig::Orchestrated { internal: true, .. } = &config {
         if MANAGED_REPLICA_PATTERN.is_match(name.as_str()) {
             return Err(PlanError::MangedReplicaName(name.into_string()));
         }

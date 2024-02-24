@@ -231,7 +231,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.up(*[n.name for n in nodes])
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )

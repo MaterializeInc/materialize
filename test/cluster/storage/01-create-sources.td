@@ -11,7 +11,7 @@
 $ set-sql-timeout duration=180s
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 
 # Create sources and verify they can ingest data while `environmentd` is online.
 
