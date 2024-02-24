@@ -50,6 +50,9 @@ pub const MAX_STATEMENT_BATCH_SIZE: usize = 1_000_000;
 /// Keywords that indicate the start of a (sub)query.
 const QUERY_START_KEYWORDS: &[Keyword] = &[WITH, SELECT, SHOW, TABLE, VALUES];
 
+/// Keywords that indicate the start of an `ANY` or `ALL` subquery operation.
+const ANY_ALL_KEYWORDS: &[Keyword] = &[ANY, ALL, SOME];
+
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
     ($parser:expr, $pos:expr, $MSG:expr) => {
@@ -1119,53 +1122,8 @@ impl<'a> Parser<'a> {
         };
 
         if let Some(op) = regular_binary_operator {
-            if let Some(kw) = self.parse_one_of_keywords(&[ANY, SOME, ALL]) {
-                self.expect_token(&Token::LParen)?;
-
-                let expr = match self.parse_parenthesized_fragment()? {
-                    ParenthesizedFragment::Exprs(exprs) => {
-                        if exprs.len() > 1 {
-                            return parser_err!(
-                                self,
-                                self.peek_pos(),
-                                "{kw} requires a single expression or subquery, not an expression list",
-                            );
-                        }
-                        let right = exprs.into_element();
-                        if kw == ALL {
-                            Expr::AllExpr {
-                                left: Box::new(expr),
-                                op,
-                                right: Box::new(right),
-                            }
-                        } else {
-                            Expr::AnyExpr {
-                                left: Box::new(expr),
-                                op,
-                                right: Box::new(right),
-                            }
-                        }
-                    }
-                    ParenthesizedFragment::Query(subquery) => {
-                        if kw == ALL {
-                            Expr::AllSubquery {
-                                left: Box::new(expr),
-                                op,
-                                right: Box::new(subquery),
-                            }
-                        } else {
-                            Expr::AnySubquery {
-                                left: Box::new(expr),
-                                op,
-                                right: Box::new(subquery),
-                            }
-                        }
-                    }
-                };
-
-                self.expect_token(&Token::RParen)?;
-
-                Ok(expr)
+            if let Some(kw) = self.parse_one_of_keywords(ANY_ALL_KEYWORDS) {
+                self.parse_any_all(expr, op, kw)
             } else {
                 Ok(Expr::Op {
                     op,
@@ -1397,6 +1355,62 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parses an `ANY`, `ALL`, or `SOME` operation, starting after the `ANY`,
+    /// `ALL`, or `SOME` keyword.
+    fn parse_any_all(
+        &mut self,
+        left: Expr<Raw>,
+        op: Op,
+        kw: Keyword,
+    ) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+
+        let expr = match self.parse_parenthesized_fragment()? {
+            ParenthesizedFragment::Exprs(exprs) => {
+                if exprs.len() > 1 {
+                    return parser_err!(
+                        self,
+                        self.peek_pos(),
+                        "{kw} requires a single expression or subquery, not an expression list",
+                    );
+                }
+                let right = exprs.into_element();
+                if kw == ALL {
+                    Expr::AllExpr {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    }
+                } else {
+                    Expr::AnyExpr {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    }
+                }
+            }
+            ParenthesizedFragment::Query(subquery) => {
+                if kw == ALL {
+                    Expr::AllSubquery {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(subquery),
+                    }
+                } else {
+                    Expr::AnySubquery {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(subquery),
+                    }
+                }
+            }
+        };
+
+        self.expect_token(&Token::RParen)?;
+
+        Ok(expr)
+    }
+
     /// Parses the parens following the `[ NOT ] IN` operator
     fn parse_in(&mut self, expr: Expr<Raw>, negated: bool) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
@@ -1438,6 +1452,15 @@ impl<'a> Parser<'a> {
         case_insensitive: bool,
         negated: bool,
     ) -> Result<Expr<Raw>, ParserError> {
+        if let Some(kw) = self.parse_one_of_keywords(ANY_ALL_KEYWORDS) {
+            let op = match (case_insensitive, negated) {
+                (false, false) => "~~",
+                (false, true) => "!~~",
+                (true, false) => "~~*",
+                (true, true) => "!~~*",
+            };
+            return self.parse_any_all(expr, Op::bare(op), kw);
+        }
         let pattern = self.parse_subexpr(Precedence::Like)?;
         let escape = if self.parse_keyword(ESCAPE) {
             Some(Box::new(self.parse_subexpr(Precedence::Like)?))
