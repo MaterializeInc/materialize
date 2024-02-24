@@ -156,7 +156,7 @@ steps:
           - Cargo.lock
           - misc/cargo-vet/config.toml
         depends_on: []
-        timeout_in_minutes: 5
+        timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
         coverage: skip
