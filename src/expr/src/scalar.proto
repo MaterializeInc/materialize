@@ -268,7 +268,9 @@ message ProtoUnaryFunc {
         mz_repr.relation_and_scalar.ProtoScalarType cast_record_to_string = 132;
         ProtoCastRecord1ToRecord2 cast_record1_to_record2 = 133;
         mz_repr.relation_and_scalar.ProtoScalarType cast_array_to_string = 134;
+        ProtoMirScalarExpr cast_array_to_jsonb = 318;
         mz_repr.relation_and_scalar.ProtoScalarType cast_list_to_string = 135;
+        ProtoMirScalarExpr cast_list_to_jsonb = 319;
         ProtoCastToVariableType cast_list1_to_list2 = 136;
         google.protobuf.Empty cast_array_to_list_one_dim = 137;
         mz_repr.relation_and_scalar.ProtoScalarType cast_map_to_string = 138;
