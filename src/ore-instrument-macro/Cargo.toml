@@ -1,5 +1,5 @@
 [package]
-name = "mz-instrument-macro"
+name = "mz-ore-instrument-macro"
 description = "instrument macro with improved default safety."
 version = "0.1.0"
 license = "Apache-2.0"

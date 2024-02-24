@@ -95,7 +95,7 @@ pub mod thread;
 pub mod tracing;
 pub mod vec;
 
-pub use mz_instrument_macro::instrument;
+pub use mz_ore_instrument_macro::instrument;
 pub use mz_test_macro::test;
 
 #[doc(hidden)]

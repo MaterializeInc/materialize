@@ -4556,14 +4556,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-instrument-macro"
-version = "0.1.0"
-dependencies = [
- "tracing",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-interchange"
 version = "0.0.0"
 dependencies = [
@@ -4862,8 +4854,8 @@ dependencies = [
  "hyper",
  "hyper-tls",
  "lgalloc",
- "mz-instrument-macro",
  "mz-ore",
+ "mz-ore-instrument-macro",
  "mz-test-macro",
  "native-tls",
  "num",
@@ -4895,6 +4887,14 @@ dependencies = [
  "uuid",
  "workspace-hack",
  "yansi",
+]
+
+[[package]]
+name = "mz-ore-instrument-macro"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
