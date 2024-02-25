@@ -47,6 +47,7 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
         delim = "";
         args.push_str(&tok.to_string());
     }
-    let res = format!("#[::tracing::instrument({args})]\n{item}");
+    let res =
+        format!("#[allow(clippy::disallowed_macros)]\n#[::tracing::instrument({args})]\n{item}");
     res.parse().unwrap()
 }
