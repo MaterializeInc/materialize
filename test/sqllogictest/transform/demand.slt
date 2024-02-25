@@ -31,7 +31,7 @@ select x from (select x, 1/a from (select 2 as x), t);
 # Demand creates the `#0 + #0` from `#0 + #2`.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
   c0(key int, a int) AS (
     SELECT * FROM c2

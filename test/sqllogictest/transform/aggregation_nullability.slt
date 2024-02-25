@@ -20,7 +20,7 @@ INSERT INTO t1 VALUES (1, 2)
 
 # regression test for #7049: a filter on COUNT aggregation must not trigger the outer to inner join conversion
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having count(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having count(t2.f1) >= 0;
 ----
 Explained Query:
   Return // { arity: 2 }
@@ -73,7 +73,7 @@ select t1.f1, count(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 
 
 # ... but a filter on any other aggregation should convert a left join into an inner join if its parameter comes from the non-preserving side
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
 ----
 Explained Query:
   Filter (#1 >= 0) // { arity: 2 }
@@ -104,7 +104,7 @@ select t1.f1, sum(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 ha
 
 # multiple aggregations
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
+EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
 ----
 Explained Query:
   Return // { arity: 9 }
@@ -146,7 +146,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t1.f2) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t1.f2) >= 0;
 ----
 Explained Query:
   Return // { arity: 9 }
@@ -189,7 +189,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f1), sum(t2.f1), max(t2.f1), min(t2.f1), count(t1.f2), sum(t1.f2), min(t1.f2), max(t1.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having sum(t2.f1) >= 0;
 ----
 Explained Query:
   Return // { arity: 9 }
@@ -233,7 +233,7 @@ EOF
 
 # count is never null, predicate removed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, count(t1.f2) from t1 group by t1.f1 having count(t1.f2) is not null;
+EXPLAIN WITH(arity, join implementations) select t1.f1, count(t1.f2) from t1 group by t1.f1 having count(t1.f2) is not null;
 ----
 Explained Query:
   Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
@@ -242,7 +242,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t1.f2) from t1 group by t1.f1 having sum(t1.f2) is not null;
+EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t1.f2) from t1 group by t1.f1 having sum(t1.f2) is not null;
 ----
 Explained Query:
   Filter (#1) IS NOT NULL // { arity: 2 }
@@ -253,7 +253,7 @@ EOF
 
 # outer-to-inner-join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   Filter (#2 >= 0) // { arity: 3 }
@@ -280,7 +280,7 @@ EOF
 
 # outer-to-inner-join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0 and sum(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0 and sum(t2.f1) >= 0;
 ----
 Explained Query:
   Filter (#1 >= 0) AND (#2 >= 0) // { arity: 3 }
@@ -307,7 +307,7 @@ EOF
 
 # outer-to-inner-join conversion allowed, but we fail to detect this case
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   Return // { arity: 3 }
@@ -354,7 +354,7 @@ EOF
 
 # outer-to-inner-join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t2.f1 + t2.f2), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   Filter (#2 >= 0) // { arity: 3 }
@@ -380,7 +380,7 @@ EOF
 
 # outer-to-inner-join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t1.f1 + t2.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   Filter (#2 >= 0) // { arity: 3 }
@@ -407,7 +407,7 @@ EOF
 
 # outer-to-inner-join conversion not allowed since that would alter the result of sum(t1.f1)
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, sum(t1.f1), max(t2.f1) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f1) >= 0;
 ----
 Explained Query:
   Return // { arity: 3 }
@@ -454,7 +454,7 @@ EOF
 
 # outer join to inner join conversion not allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
+EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
 ----
 Explained Query:
   Return // { arity: 2 }
@@ -499,7 +499,7 @@ EOF
 
 # outer join to inner join conversion not allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
+EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1;
 ----
 Explained Query:
   Return // { arity: 3 }
@@ -544,7 +544,7 @@ EOF
 
 # outer join to inner join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f2) > 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, count(t2.f2), max(t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t2.f2) > 0;
 ----
 Explained Query:
   Filter (#2 > 0) // { arity: 3 }
@@ -570,7 +570,7 @@ EOF
 
 # outer join to inner join conversion allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) select t1.f1, max(t1.f1 + t2.f2), sum(t1.f2 + t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t1.f1 + t2.f2) > 0;
+EXPLAIN WITH(arity, join implementations) select t1.f1, max(t1.f1 + t2.f2), sum(t1.f2 + t2.f2) from t1 LEFT JOIN t2 ON t1.f1 = t2.f1 group by t1.f1 having max(t1.f1 + t2.f2) > 0;
 ----
 Explained Query:
   Filter (#1 > 0) // { arity: 3 }
@@ -623,7 +623,7 @@ select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 gro
 1  3  2
 
 query T multiline
-explain with(arity, join_impls) select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1
+explain with(arity, join implementations) select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1
 ----
 Explained Query:
   Return // { arity: 3 }
@@ -663,7 +663,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-explain with(arity, join_impls) select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+explain with(arity, join implementations) select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
 ----
 Explained Query:
   Return // { arity: 3 }
@@ -705,7 +705,7 @@ EOF
 
 # if the count is removed, the outer join can be safely converted into an inner join
 query T multiline
-explain with(arity, join_impls) select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+explain with(arity, join implementations) select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
 ----
 Explained Query:
   Filter (#1 > 0) // { arity: 2 }
@@ -739,7 +739,7 @@ statement ok
 insert into t1 values (0), (1)
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM (SELECT 123, COUNT(right_table.f1) AS aggregate FROM t1 AS left_table LEFT JOIN t1 AS right_table ON FALSE GROUP BY 1) AS subquery, t1 AS outer_table WHERE outer_table.f1 = subquery.aggregate;
 ----
 Explained Query:
   Project (#1, #2, #0) // { arity: 3 }
@@ -797,7 +797,7 @@ WHERE t1.f2 = derived.agg2;
 
 # the count aggregation prevents the outer-to-inner join conversion
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT derived.agg1 FROM t1
+EXPLAIN WITH(arity, join implementations) SELECT derived.agg1 FROM t1
 JOIN (
     SELECT COUNT(*) AS agg1 , MAX(t2.f2) AS agg2
     FROM t2
@@ -874,7 +874,7 @@ INSERT INTO t2 VALUES (2);
 
 # outer-to-inner join conversion not allowed
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT SUM(t1.f1 + t2.f1), SUM(t2.f1 + 0)
+EXPLAIN WITH(arity, join implementations) SELECT SUM(t1.f1 + t2.f1), SUM(t2.f1 + 0)
 FROM t2
 LEFT JOIN t1
 ON t1.f1 < t2.f1

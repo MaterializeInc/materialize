@@ -22,7 +22,7 @@ CREATE TABLE edges(src INTEGER NOT NULL, dst INTEGER NOT NULL);
 # See https://github.com/MaterializeInc/materialize/issues/12963 .
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT count(*) FROM billion;
+EXPLAIN WITH(arity, join implementations) SELECT count(*) FROM billion;
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -65,7 +65,7 @@ SELECT  (a1.f1) AS c1, (a2.f1) AS c2, (a1.f2) AS c3, (MIN ( 4 )) AS agg1 , (AVG 
 # that all initial LetRec bindings are empty. If do this, the `l0` binding
 # below will simplify to a constant.
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
   c0(src INT, dst INT) AS (
     SELECT * FROM c0
@@ -118,7 +118,7 @@ EOF
 
 # Replace subtrees rooted at `Filter false` with `Constant <empty>`
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
   c0(n INT) AS (
     SELECT src FROM edges WHERE false -- literal false

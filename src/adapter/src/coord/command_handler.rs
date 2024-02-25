@@ -738,7 +738,7 @@ impl Coordinator {
 
             Statement::ExplainPlan(ExplainPlanStatement {
                 stage,
-                config_flags,
+                with_options,
                 format,
                 explainee: Explainee::CreateMaterializedView(box_cmvs, broken),
             }) => {
@@ -768,7 +768,7 @@ impl Coordinator {
 
                 let purified_stmt = Statement::ExplainPlan(ExplainPlanStatement {
                     stage,
-                    config_flags,
+                    with_options,
                     format,
                     explainee: Explainee::CreateMaterializedView(Box::new(cmvs), broken),
                 });

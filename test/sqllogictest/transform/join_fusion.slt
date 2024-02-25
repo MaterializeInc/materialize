@@ -28,7 +28,7 @@ statement ok
 INSERT INTO t3 VALUES (2, 3), (5, 5);
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 INNER JOIN t2 ON t2.f2 = t1.f2 INNER JOIN t3 ON t1.f1 = t3.f1 WHERE t1.f1 <= t2.f1 AND t3.f1 > 0;
 ----
 Explained Query:
   Project (#0..=#2, #1, #0, #5) // { arity: 6 }
@@ -107,7 +107,7 @@ statement ok
 CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC);
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM lineitem
+EXPLAIN WITH(arity, join implementations) SELECT * FROM lineitem
   JOIN orders ON ( l_orderkey = o_orderkey )
   JOIN customer ON ( c_acctbal >= o_totalprice )
   WHERE l_shipDATE <> o_orderdate
@@ -137,7 +137,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT  MIN( o_orderkey  )
+EXPLAIN WITH(arity, join implementations) SELECT  MIN( o_orderkey  )
   FROM lineitem  JOIN orders  ON ( l_extendedprice  = o_totalprice  )
   WHERE l_commitDATE  = '1997-01-25'
   AND o_orderkey  BETWEEN  38  AND  195
@@ -192,7 +192,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col24845
+EXPLAIN WITH(arity, join implementations) SELECT l_partkey AS col24843 , l_orderkey AS col24844 , l_partkey AS col24845
   FROM lineitem JOIN orders ON ( l_commitDATE = o_orderdate )
   JOIN customer ON ( o_custkey = c_custkey )
   WHERE l_extendedprice = o_totalprice
@@ -232,7 +232,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT *
+EXPLAIN WITH(arity, join implementations) SELECT *
   FROM lineitem JOIN orders ON ( l_extendedprice = o_totalprice )
   JOIN customer ON ( o_custkey = c_custkey )
   WHERE o_custkey = 229
@@ -274,7 +274,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 AS a1, t1 AS a2
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 AS a1, t1 AS a2
 WHERE a2.f1 + a1.f2 = (SELECT 1)
 AND a2.f1 IS NULL;
 ----

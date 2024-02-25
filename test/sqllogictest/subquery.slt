@@ -249,7 +249,7 @@ mode standard
 # Verify that the plans for some simple non-correlated subqueries are sane.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 1 }
@@ -265,7 +265,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
+EXPLAIN WITH(arity, join implementations) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
 Explained Query:
   Project (#0, #0, #2) // { arity: 3 }
@@ -286,7 +286,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
+EXPLAIN WITH(arity, join implementations) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
 Explained Query:
   Project (#0, #0, #2) // { arity: 3 }
@@ -310,7 +310,7 @@ EOF
 # 4 scalars that refer to other scalars in the map. If query planning optimizes away
 # this particular case, replace with another query that generates such a plan
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT age, ascii_num * 2 as result FROM (
   SELECT age, ascii(letter) AS ascii_num FROM (
     SELECT age, substr(replaced, 2, 1) AS letter FROM (
@@ -452,7 +452,7 @@ false
 true
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT b IN (SELECT a FROM x) FROM y
+EXPLAIN WITH(arity, join implementations) SELECT b IN (SELECT a FROM x) FROM y
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -489,7 +489,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT b != ALL(SELECT a FROM x) FROM y
+EXPLAIN WITH(arity, join implementations) SELECT b != ALL(SELECT a FROM x) FROM y
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -528,7 +528,7 @@ EOF
 
 # Check that we correctly invert the filter here via De Morgan.
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT b > ALL(SELECT a FROM x) FROM y
+EXPLAIN WITH(arity, join implementations) SELECT b > ALL(SELECT a FROM x) FROM y
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -653,7 +653,7 @@ WHERE a IN (9, 0)
 1
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
+EXPLAIN WITH(arity, join implementations) SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
 WHERE a IN (9, 0)
   OR 0  <  ALL (
       SELECT agg1  NULL

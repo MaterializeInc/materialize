@@ -41,6 +41,7 @@ use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
+use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
@@ -516,6 +517,7 @@ pub struct CreateClusterManagedPlan {
     pub availability_zones: Vec<String>,
     pub compute: ComputeReplicaConfig,
     pub disk: bool,
+    pub optimizer_feature_overrides: OptimizerFeatureOverrides,
 }
 
 #[derive(Debug)]

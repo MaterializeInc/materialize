@@ -31,7 +31,7 @@ CREATE TABLE events (
 );
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT count(*)
 FROM events
 WHERE mz_now() >= insert_ms
@@ -62,7 +62,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear in only one interval of duration `10000`.
@@ -85,7 +85,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear in `6` intervals each of width `10000`.
@@ -108,7 +108,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear inside the interval that begins at
@@ -130,7 +130,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE mz_now() >= insert_ms + 60000
@@ -152,7 +152,7 @@ EOF
 # function _does_ report pushdown even when the argument list is long.
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE COALESCE(delete_ms, insert_ms) < mz_now();
@@ -168,7 +168,7 @@ Source materialize.public.events
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE mz_now() < delete_ms + 10000
@@ -199,7 +199,7 @@ CREATE TABLE events_timestamped (
 );
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT content, inserted_at
 FROM events_timestamped
 WHERE EXTRACT(YEAR FROM inserted_at) = 2021;
@@ -224,7 +224,7 @@ ALTER SYSTEM SET enable_try_parse_monotonic_iso8601_timestamp = true;
 COMPLETE 0
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, filter_pushdown)
+EXPLAIN WITH(humanized expressions, filter pushdown)
 SELECT content, inserted_at
 FROM events_timestamped
 WHERE mz_now() < try_parse_monotonic_iso8601_timestamp(content);
@@ -246,7 +246,7 @@ statement ok
 create table t(x int, t timestamp);
 
 query T multiline
-explain with(filter_pushdown)
+explain with(filter pushdown)
 select * from t
 where t < '2023-10-02 15:55:31.918 UTC';
 ----
@@ -261,7 +261,7 @@ Source materialize.public.t
 EOF
 
 query T multiline
-explain with(filter_pushdown)
+explain with(filter pushdown)
 select * from t
 where case when x=0 then t < '2023-10-02 15:55:31.918 UTC' else t > '2023-10-02 15:55:31.918 UTC' end;
 ----
@@ -276,7 +276,7 @@ Source materialize.public.t
 EOF
 
 query T multiline
-explain with(filter_pushdown)
+explain with(filter pushdown)
 with cte as (
   select x, t, case when x=0 then t - INTERVAL '1' day else t - INTERVAL '2' day end as case_statement from t
 )
@@ -295,7 +295,7 @@ Source materialize.public.t
 EOF
 
 query T multiline
-explain with(filter_pushdown)
+explain with(filter pushdown)
 with cte as (
   select x, t, case when x=0 then t - INTERVAL '1' day else t - INTERVAL '2' day end as case_statement from t
 )
@@ -319,7 +319,7 @@ statement ok
 CREATE TABLE items(id int, ship_time timestamp);
 
 query T multiline
-EXPLAIN WITH(filter_pushdown)
+EXPLAIN WITH(filter pushdown)
 SELECT * from items
 WHERE mz_now() <= date_trunc(
     'month',
@@ -344,7 +344,7 @@ Source materialize.public.items
 EOF
 
 query T multiline
-explain with(filter_pushdown)
+explain with(filter pushdown)
 SELECT * from items
 WHERE CASE WHEN id = 10 THEN EXTRACT(MONTH FROM ship_time) ELSE 0 END < mz_now();
 ----
@@ -358,7 +358,7 @@ Source materialize.public.items
 EOF
 
 query T multiline
-explain with(filter_pushdown)
+explain with(filter pushdown)
 SELECT * from items
 WHERE CASE WHEN EXTRACT(MONTH FROM ship_time) >= 6 THEN 12 ELSE 0 END < mz_now();
 ----

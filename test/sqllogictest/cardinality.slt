@@ -154,7 +154,7 @@ statement ok
 INSERT INTO t (x, y) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 
 query T multiline
-EXPLAIN WITH(join_impls) SELECT * FROM t as l, t as r WHERE l.x = r.x;
+EXPLAIN WITH(join implementations) SELECT * FROM t as l, t as r WHERE l.x = r.x;
 ----
 Explained Query:
   Return
@@ -178,7 +178,7 @@ statement ok
 INSERT INTO t2 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 200)) AS l, (SELECT generate_series(1, 50)) AS r
 
 query T multiline
-EXPLAIN WITH(join_impls) SELECT * FROM t, t2 WHERE t.x = t2.x;
+EXPLAIN WITH(join implementations) SELECT * FROM t, t2 WHERE t.x = t2.x;
 ----
 Explained Query:
   Project (#0, #1, #0, #3)
@@ -496,7 +496,7 @@ INSERT INTO t10 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 20)) AS l
 
 # TODO(mgree): Make this reproducible
 # query T multiline
-# EXPLAIN WITH(join_impls) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
+# EXPLAIN WITH(join implementations) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
 # ----
 # Explained Query:
 #   Project (#0, #1, #0, #3, #0, #5, #0, #7, #0, #9, #0, #11, #0, #13, #0, #15, #0, #17, #0, #19)
@@ -552,7 +552,7 @@ SHOW optimizer_oneshot_stats_timeout;
 COMPLETE 1
 
 query T multiline
-EXPLAIN WITH(join_impls) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
+EXPLAIN WITH(join implementations) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #0, #5, #0, #7, #0, #9, #0, #11, #0, #13, #0, #15, #0, #17, #0, #19)

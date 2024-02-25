@@ -30,7 +30,7 @@ CREATE TABLE t3 (f1 INTEGER PRIMARY KEY, f2 INTEGER);
 # No propagation for single tables
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
 ----
 Explained Query:
   Filter (#0 = 123) AND (#0 = #1) // { arity: 2 }
@@ -44,7 +44,7 @@ EOF
 # Inner joins
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f1 = t2.f1
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f1 = t2.f1
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
@@ -68,7 +68,7 @@ EOF
 
 # TODO the second join should be removed as redundant and replaced with `Get(l1)`.
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 ----
 Explained Query:
   Return // { arity: 4 }
@@ -102,7 +102,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 ----
 Explained Query:
   Return // { arity: 3 }
@@ -137,7 +137,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1.f1 = t2.f1 AND t1.f1 = 123;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1.f1 = t2.f1 AND t1.f1 = 123;
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
@@ -160,7 +160,7 @@ EOF
 # Transitive application
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t1.f1 = t2.f1 AND t2.f1 = t3.f1;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t1.f1 = t2.f1 AND t2.f1 = t3.f1;
 ----
 Explained Query:
   CrossJoin type=delta // { arity: 6 }
@@ -190,7 +190,7 @@ EOF
 # HAVING clause
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
+EXPLAIN WITH(arity, join implementations) SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
 ----
 Explained Query:
   Map (123) // { arity: 1 }
@@ -218,7 +218,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 123;
+EXPLAIN WITH(arity, join implementations) SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 123;
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -262,7 +262,7 @@ EOF
 
 # This case is currently not optimized
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
+EXPLAIN WITH(arity, join implementations) SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 ----
 Explained Query:
   Return // { arity: 1 }
@@ -304,7 +304,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1);
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1);
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 2 }
@@ -326,7 +326,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1) AND EXISTS (SELECT * FROM t3 WHERE t3.f1 = t1.f1);
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1) AND EXISTS (SELECT * FROM t3 WHERE t3.f1 = t1.f1);
 ----
 Explained Query:
   CrossJoin type=delta // { arity: 2 }
@@ -356,7 +356,7 @@ Source materialize.public.t3
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND t1.f1 = 123;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND t1.f1 = 123;
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 3 }
@@ -378,7 +378,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 2 }
@@ -400,7 +400,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 2 }
@@ -434,7 +434,7 @@ statement ok
 CREATE TABLE t4 (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1, f2));
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t4 AS a1, t4 AS a2 WHERE a1.f1 = 123 AND a1.f2 = 234 AND a1.f1 = a2.f1 AND a1.f2 = a2.f2;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t4 AS a1, t4 AS a2 WHERE a1.f1 = 123 AND a1.f2 = 234 AND a1.f1 = a2.f1 AND a1.f2 = a2.f2;
 ----
 Explained Query:
   Project (#0, #1, #0, #1) // { arity: 4 }
@@ -447,7 +447,7 @@ Source materialize.public.t4
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
 ----
 Explained Query:
   Return // { arity: 2 }
@@ -473,7 +473,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
 ----
 Explained Query:
   Filter (#0 = 123) AND (#1 = 234) // { arity: 2 }
@@ -489,7 +489,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -501,7 +501,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 FULL OUTER JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -511,7 +511,7 @@ EOF
 # Inequality between columns
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
@@ -540,7 +540,7 @@ create table int_table(int_col integer NOT NULL);
 # TODO: get rid of the unnecessary !isnull at the end of this plan
 
 query T multiline
-explain with(arity, join_impls) select * from int_table, double_table where int_table.int_col = double_table.double_col;
+explain with(arity, join implementations) select * from int_table, double_table where int_table.int_col = double_table.double_col;
 ----
 Explained Query:
   Join on=(#1 = integer_to_double(#0)) type=differential // { arity: 2 }

@@ -63,7 +63,7 @@ INSERT INTO band_members VALUES
 
 # Simple case: EXCEPT ALL with a const literal constraint.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 (
     SELECT id FROM people
 )
@@ -86,7 +86,7 @@ EOF
 
 # Simple case: EXCEPT ALL with an IS NOT NULL filter.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 (
     SELECT id FROM people
 )
@@ -108,7 +108,7 @@ EOF
 
 # Simple case: EXCEPT.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 SELECT name FROM people
 EXCEPT
 SELECT name FROM people WHERE id > 1
@@ -129,7 +129,7 @@ EOF
 # Negative example: EXCEPT ALL that should not be confused for an EXCEPT
 # the two inputs have a Reduce *with aggregates*.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 SELECT MAX(id) FROM people GROUP BY name
 EXCEPT ALL
 SELECT MAX(id) FROM (SELECT * FROM people WHERE id > 1) GROUP BY name
@@ -155,7 +155,7 @@ EOF
 # and for some reason (TBD later) this means that we need to run it at the
 # end of the physical pass.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 (
     SELECT
         id, name
@@ -194,7 +194,7 @@ EOF
 # and for some reason (TBD later) this means that we need to run it at the
 # end of the physical pass.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 (
     SELECT
         id, name
@@ -230,7 +230,7 @@ EOF
 
 # Complex example: CTE with a join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH cte AS (SELECT people.id FROM people, bands)
 SELECT * FROM cte EXCEPT ALL SELECT * FROM cte where id > 5;
 ----
@@ -255,7 +255,7 @@ EOF
 
 # Complex example: CTE with a DISTINCT.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH cte AS (SELECT DISTINCT name FROM people)
 SELECT * FROM cte EXCEPT ALL SELECT * FROM cte WHERE name LIKE 'J%'
 ----
@@ -276,7 +276,7 @@ EOF
 
 # Complex example: CTE with a GROUP BY.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH a(birth_year, no_people_born) AS (
     SELECT EXTRACT(year from born), COUNT(*)
     FROM people
@@ -304,10 +304,10 @@ EOF
 # (2) a non-pushable operation (Distinct) in the cte2,
 # (3) an EXCEPT in the final result,
 # The optimization still removes the Threshold operators in both
-# (1) and (3) because the non_negative value inferred for cte1
+# (1) and (3) because the non negative value inferred for cte1
 # prior to the rewrite is maintained for downstream rewrites.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH cte1 AS (
     SELECT * FROM people
     EXCEPT ALL
@@ -339,7 +339,7 @@ EOF
 
 # Complex example (unsupported): A - (σ(p)(A) ⊎ σ(q)(A)).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 SELECT name FROM people
 EXCEPT ALL
 (
@@ -370,7 +370,7 @@ EOF
 # WMR -- Threshold in the loop-invariant part
 # The "Very basic" implementation from #18175 should handle this.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH MUTUALLY RECURSIVE
   c0(id int, name text) as (
     SELECT id, name FROM people
@@ -412,7 +412,7 @@ EOF
 # the first one is obviously non-negative.
 # The "Basic" implementation from #18175 should handle this.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH MUTUALLY RECURSIVE
   c1(id int, name text) as (
     (SELECT id, name || '_init' FROM people)
@@ -462,7 +462,7 @@ EOF
 # Currently a negative example.
 # The "Advanced" implementation from #18175 should handle this.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(non_negative) FOR
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 WITH MUTUALLY RECURSIVE
   c0(id int, name text) as (
     (SELECT id, name || '_init' FROM people)

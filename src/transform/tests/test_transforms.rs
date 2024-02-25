@@ -48,7 +48,7 @@ fn handle_explain(
     };
 
     // Create the ExplainConfig from the given `with` set of strings.
-    let config = match ExplainConfig::try_from(with) {
+    let config = match parse_explain_config(with) {
         Ok(config) => config,
         Err(e) => return format!("ExplainConfig::try_from error\n{}\n", e.to_string().trim()),
     };
@@ -241,6 +241,30 @@ fn apply_transform<T: mz_transform::Transform>(
 
     // Serialize and return the transformed relation.
     Ok(relation.explain(&ExplainConfig::default(), Some(catalog)))
+}
+
+fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, String> {
+    let result = ExplainConfig {
+        arity: flags.remove("arity"),
+        humanized_exprs: flags.remove("humanized_exprs"),
+        column_names: flags.remove("column_names"),
+        types: flags.remove("types"),
+        redacted: false,
+        join_impls: false,
+        no_fast_path: false,
+        raw_plans: false,
+        ..ExplainConfig::default()
+    };
+
+    if flags.is_empty() {
+        Ok(result)
+    } else {
+        let err = format!(
+            "parse_explain_config\n\
+             unsupported 'with' option: {flags:?}\n"
+        );
+        Err(err)
+    }
 }
 
 #[derive(Debug, Default)]

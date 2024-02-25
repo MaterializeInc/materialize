@@ -13,7 +13,7 @@
 //! `INSERT`, `SELECT`, `SUBSCRIBE`, and `COPY`.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 
@@ -26,9 +26,9 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
-    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput,
-    UnresolvedItemName,
+    CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
+    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
+    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection};
@@ -325,6 +325,74 @@ pub fn describe_explain_schema(
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
+generate_extracted_config!(
+    ExplainPlanOption,
+    (Arity, bool, Default(false)),
+    (Cardinality, bool, Default(false)),
+    (ColumnNames, bool, Default(false)),
+    (FilterPushdown, bool, Default(false)),
+    (HumanizedExpressions, bool, Default(false)),
+    (JoinImplementations, bool, Default(false)),
+    (Keys, bool, Default(false)),
+    (LinearChains, bool, Default(false)),
+    (NoFastPath, bool, Default(false)),
+    (NonNegative, bool, Default(false)),
+    (NoNotices, bool, Default(false)),
+    (NodeIdentifiers, bool, Default(false)),
+    (Raw, bool, Default(false)),
+    (RawPlans, bool, Default(false)),
+    (RawSyntax, bool, Default(false)),
+    (Redacted, bool, Default(false)),
+    (SubtreeSize, bool, Default(false)),
+    (Timing, bool, Default(false)),
+    (Types, bool, Default(false)),
+    (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
+    (EnableEagerDeltaJoins, Option<bool>, Default(None))
+);
+
+impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
+    type Error = PlanError;
+
+    fn try_from(mut v: ExplainPlanOptionExtracted) -> Result<Self, Self::Error> {
+        use mz_ore::assert::SOFT_ASSERTIONS;
+        use std::sync::atomic::Ordering;
+
+        // If `WITH(raw)` is specified, ensure that the config will be as
+        // representative for the original plan as possible.
+        if v.raw {
+            v.raw_plans = true;
+            v.raw_syntax = true;
+        }
+
+        // Certain config should always be enabled in release builds running on
+        // staging or prod (where SOFT_ASSERTIONS are turned off).
+        let enable_on_prod = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+
+        Ok(ExplainConfig {
+            arity: v.arity || enable_on_prod,
+            cardinality: v.cardinality,
+            column_names: v.column_names,
+            filter_pushdown: v.filter_pushdown || enable_on_prod,
+            humanized_exprs: !v.raw_plans && (v.humanized_expressions || enable_on_prod),
+            join_impls: v.join_implementations,
+            keys: v.keys,
+            linear_chains: !v.raw_plans && v.linear_chains,
+            no_fast_path: v.no_fast_path,
+            no_notices: v.no_notices,
+            node_ids: v.node_identifiers,
+            non_negative: v.non_negative,
+            raw_plans: v.raw_plans,
+            raw_syntax: v.raw_syntax,
+            redacted: v.redacted,
+            subtree_size: v.subtree_size,
+            timing: v.timing,
+            types: v.types,
+            enable_eager_delta_joins: v.enable_eager_delta_joins,
+            enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
+        })
+    }
+}
+
 fn plan_explainee(
     scx: &StatementContext,
     explainee: Explainee<Aug>,
@@ -429,7 +497,7 @@ pub fn plan_explain_plan(
     scx: &StatementContext,
     ExplainPlanStatement {
         stage,
-        config_flags,
+        with_options,
         format,
         explainee,
     }: ExplainPlanStatement<Aug>,
@@ -441,21 +509,17 @@ pub fn plan_explain_plan(
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
 
+    // Plan ExplainConfig.
     let config = {
-        let config_flags = config_flags
-            .iter()
-            .map(|ident| ident.to_string().to_lowercase())
-            .collect::<BTreeSet<_>>();
+        let mut with_options = ExplainPlanOptionExtracted::try_from(with_options)?;
 
-        let mut config = ExplainConfig::try_from(config_flags)?;
-
-        if config.filter_pushdown {
+        if with_options.filter_pushdown {
             scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
             // If filtering is disabled, explain plans should not include pushdown info.
-            config.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
+            with_options.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
         }
 
-        config
+        ExplainConfig::try_from(with_options)?
     };
 
     let explainee = plan_explainee(scx, explainee, params)?;

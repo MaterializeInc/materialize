@@ -46,7 +46,7 @@ EOF
 # all columns that have unique values are unique keys of an ok constant
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(keys, no_fast_path) AS TEXT FOR SELECT * FROM (VALUES (1, 2, 3), (4, 2, 4));
+EXPLAIN OPTIMIZED PLAN WITH(keys, no fast path) AS TEXT FOR SELECT * FROM (VALUES (1, 2, 3), (4, 2, 4));
 ----
 Explained Query:
   Constant // { keys: "([0], [2])" }

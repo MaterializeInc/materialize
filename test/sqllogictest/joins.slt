@@ -110,7 +110,7 @@ WHERE l1.la IN (
 
 # Test that scalar expressions are introduced to join plans.
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT l1.la, l2.lb, l3.lb
 FROM l as l1, l as l2, l as l3
 WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
@@ -148,7 +148,7 @@ EOF
 # if it improves (i.e. the cross join is removed).
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT l1.la, l1.lb
 FROM l as l1
 WHERE l1.la IN (
@@ -319,7 +319,7 @@ foo  true  1
 
 # Test for outer join planning.
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 ----
 Explained Query:
@@ -360,7 +360,7 @@ Source materialize.public.r
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 ----
 Explained Query:
@@ -402,7 +402,7 @@ Source materialize.public.l
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT * FROM l FULL JOIN r ON l.la = r.ra
 ----
 Explained Query:
@@ -465,7 +465,7 @@ SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 # Test that when both keys are expressions, the join is not planned as a cross
 # join. Protects against regression of #4170.
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
+EXPLAIN WITH(arity, join implementations) SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 ----
 Explained Query:
   Join on=((#0 % 2) = (#2 % 2)) type=differential // { arity: 4 }
@@ -521,7 +521,7 @@ mode standard
 # below, likely the test is no longer testing for the bug.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
+EXPLAIN WITH(arity, join implementations) SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
 ----
 Explained Query:
   Return // { arity: 2 }
@@ -593,7 +593,7 @@ statement ok
 INSERT INTO r3 VALUES (1, 'r1'), (3, 'r3'), (4, 'r4'), (NULL, 'r5')
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra
+EXPLAIN WITH(arity, join implementations) SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
@@ -621,7 +621,7 @@ l1  r1
 l3  r3
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra OR (ra IS NULL AND la IS NULL)
+EXPLAIN WITH(arity, join implementations) SELECT lb, rb FROM l3 INNER JOIN r3 ON la = ra OR (ra IS NULL AND la IS NULL)
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
@@ -643,7 +643,7 @@ l3  r3
 l4  r5
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT lb, rb FROM l3 INNER JOIN r3 ON (la IS NULL AND ra IS NULL) OR la = ra
+EXPLAIN WITH(arity, join implementations) SELECT lb, rb FROM l3 INNER JOIN r3 ON (la IS NULL AND ra IS NULL) OR la = ra
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
@@ -1116,7 +1116,7 @@ statement ok
 CREATE TABLE IF NOT EXISTS c (data jsonb);
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT (SELECT NULL FROM a) AS c1, ref_0."?column?" AS c4 FROM b AS ref_0
 WHERE EXISTS (SELECT FROM c AS ref_7 WHERE EXISTS (SELECT ref_0."?column?" AS c2)) OR ref_0."?column?" IS NOT NULL;
 ----

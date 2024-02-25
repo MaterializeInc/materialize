@@ -32,7 +32,7 @@ INSERT INTO bar VALUES (1, 3), (-1, null), (null, 5)
 
 # no indexes other than the default foo(a,b) and bar(a,b)
 query T multiline
-EXPLAIN WITH(arity, join_impls) select * from foo inner join bar on foo.a = bar.a where foo.a = 1
+EXPLAIN WITH(arity, join implementations) select * from foo inner join bar on foo.a = bar.a where foo.a = 1
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
@@ -62,7 +62,7 @@ select * from foo inner join bar on foo.a = bar.a where foo.a = 1
 
 # no indexes other than the default foo(a,b) and bar(a,b)
 query T multiline
-EXPLAIN WITH(arity, join_impls) select * from foo inner join bar on foo.a = abs(bar.a) where mod(foo.a, 2) = 1
+EXPLAIN WITH(arity, join implementations) select * from foo inner join bar on foo.a = abs(bar.a) where mod(foo.a, 2) = 1
 ----
 Explained Query:
   Join on=(#0 = abs(#2)) type=differential // { arity: 4 }
@@ -97,7 +97,7 @@ NULL
 # Test that column knowledge can propagate across inputs of a join.
 # no indexes other than the default foo(a,b) and bar(a,b)
 query T multiline
-EXPLAIN WITH(arity, join_impls) select * from (select * from foo where a = 1) filtered_foo, bar where filtered_foo.a = bar.a
+EXPLAIN WITH(arity, join implementations) select * from (select * from foo where a = 1) filtered_foo, bar where filtered_foo.a = bar.a
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
@@ -139,7 +139,7 @@ INSERT INTO baz VALUES (3, 0), (5, 2)
 
 # indexes exist on foo(a), bar(a), and baz(a). baz(a) is a unique key
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select foo.a, baz.b
 from foo, bar, baz
 where foo.a = bar.a
@@ -190,7 +190,7 @@ CREATE INDEX baz_idx on baz(a);
 
 # indexes exist on foo(a), bar(a), and baz(a)
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select foo.a, baz.b
 from foo, bar, baz
 where foo.a = bar.a
@@ -237,7 +237,7 @@ CREATE INDEX bar_idx2 on bar(-a);
 # Test that when join planning uses indexes on expressions.
 # Protects against regression of #4170.
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select foo.b, bar.b
 from foo, bar
 where nullif(foo.a, 0) = -bar.a
@@ -279,7 +279,7 @@ CREATE INDEX bar_idx3 on bar(a + 4);
 # but not bar(a). Check that bar(a+4) is not inappropriately
 # substituted for bar(a) in the first equivalence.
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select foo.b, bar.b, baz.b
 FROM bar, foo, baz
 where foo.a = bar.a
@@ -324,7 +324,7 @@ NULL
 # tests that equalities involving multi-input equalities become join conditions.
 
 query T multiline
-explain with(arity, join_impls) select foo.b, bar.b from foo, bar, (select 1 as a) const where foo.a / bar.a = const.a
+explain with(arity, join implementations) select foo.b, bar.b from foo, bar, (select 1 as a) const where foo.a / bar.a = const.a
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
@@ -351,7 +351,7 @@ NULL
 3
 
 query T multiline
-explain with(arity, join_impls)
+explain with(arity, join implementations)
 select foo.b, bar.b
 from foo, bar, (select -1 as a) const
 where foo.a / bar.a = const.a
@@ -388,7 +388,7 @@ DROP INDEX baz_idx
 # materialize#8002: it would be nice if this join used the indexes on bar(a+4)
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select foo.b, bar.b, baz.b
 FROM foo, bar, baz
 where foo.a = bar.a
@@ -585,7 +585,7 @@ CREATE INDEX big_idx_y on big(y);
 # - %2 to %4 are all in the any_filter category.
 # - %0 and %1 don't have any filters.
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM big as t0, big as t1, big as t2, big as t3, big as t4, big as t5, big as t6, big as t7, big as t8, big as t9, big as t10
+EXPLAIN WITH(arity, join implementations) SELECT * FROM big as t0, big as t1, big as t2, big as t3, big as t4, big as t5, big as t6, big as t7, big as t8, big as t9, big as t10
 WHERE
 t0.a = t1.b AND
 t1.b = t2.c AND
@@ -665,7 +665,7 @@ EOF
 # - come before like (i.e., same category as literal_equality)
 # - not prevent planning a Delta join
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM big as t0, big as t1, big as t2
+EXPLAIN WITH(arity, join implementations) SELECT * FROM big as t0, big as t1, big as t2
 WHERE
 t0.a = t1.b AND
 t1.b = t2.c AND
@@ -701,7 +701,7 @@ EOF
 # - inline_mfp has to be true on the last RelationCSE call before JoinImplementation (i.e., in logical_cleanup_pass);
 # - There shouldn't be a RelationCSE between the CanonicalizeMfp that is before JoinImplementation and JoinImplementation.
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 WITH t(x) AS (
   SELECT a
   FROM big

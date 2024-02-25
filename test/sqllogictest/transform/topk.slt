@@ -22,7 +22,7 @@ CREATE TABLE test1(a int, b int, c int, d int)
 # check that the extra project caused by the CSE is lifted
 # through the TopK
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT avg(d), sumc, sumd FROM (
 SELECT a + b + c as sumc, a + b + d as sumd, d
 FROM test1
@@ -53,7 +53,7 @@ GROUP BY sumc, sumd
 ORDER BY sumc
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM plan_test1
+EXPLAIN WITH(arity, join implementations) SELECT * FROM plan_test1
 ----
 Explained Query:
   Project (#4, #0, #1) // { arity: 3 }
@@ -65,7 +65,7 @@ EOF
 
 # Test that chained unions get planned with a single union operator.
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM test1 UNION ALL SELECT * FROM test1 UNION ALL SELECT * FROM test1
+EXPLAIN WITH(arity, join implementations) SELECT * FROM test1 UNION ALL SELECT * FROM test1 UNION ALL SELECT * FROM test1
 ----
 Explained Query:
   Union // { arity: 4 }
@@ -98,7 +98,7 @@ create materialized view mv1 as select * from (select * from t1 order by f1 limi
 ----
 
 query T multiline
-explain with(arity, join_impls) materialized view mv1;
+explain with(arity, join implementations) materialized view mv1;
 ----
 materialize.public.mv1:
   TopK order_by=[#0 asc nulls_last] limit=3 offset=3 // { arity: 2 }

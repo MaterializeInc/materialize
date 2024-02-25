@@ -95,7 +95,7 @@ SELECT DISTINCT ON(dim02_k01) * FROM left_joins_raw.dim02;
 #
 # Projection pushdown is blocked unless the `Join` is removed.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions, arity) FOR
 SELECT
   facts.facts_k01,
   facts.facts_d01,
@@ -152,7 +152,7 @@ EOF
 #
 # Projection pushdown is always possible.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions, arity) FOR
 SELECT
   facts.facts_k01,
   facts.facts_d01,
@@ -197,7 +197,7 @@ EOF
 # ON predicates with non-trivial equi-join conjuncts were previously planned using
 # the fallback lowering strategy.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(disable_new_outer_join_lowering, humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(enable new outer join lowering = false, humanized expressions, arity) FOR
 SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
   SELECT
     facts.facts_k01,
@@ -256,7 +256,7 @@ EOF
 # ON predicates with non-trivial equi-join conjuncts are planned using the
 # optimized lowering strategy.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions, arity) FOR
 SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
   SELECT
     facts.facts_k01,
@@ -314,7 +314,7 @@ EOF
 # ON predicates with non-trivial equi-join conjuncts are planned using the
 # optimized lowering strategy. Same as above, but a RIGHT JOIN.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions, arity) FOR
 SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
   SELECT
     facts.facts_k01,
@@ -373,7 +373,7 @@ EOF
 # ON predicates with at least one equi-join conjunct were previouisly planned
 # using the fallback lowering strategy.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(disable_new_outer_join_lowering, humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(enable new outer join lowering = false, humanized expressions, arity) FOR
 SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
   SELECT
     facts.facts_k01,
@@ -436,7 +436,7 @@ EOF
 # ON predicates with at least one equi-join conjunct are planned using the
 # optimized lowering strategy.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions, arity) FOR
 SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
   SELECT
     facts.facts_k01,
@@ -499,7 +499,7 @@ EOF
 # ON predicates with at least one equi-join conjunct are planned using the
 # optimized lowering strategy. Same as above, but a RIGHT JOIN.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions, arity) FOR
 SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
   SELECT
     facts.facts_k01,
@@ -563,7 +563,7 @@ EOF
 # ON predicates with non-trivial equi-join conjuncts and local predicates are
 # planned using the optimized lowering strategy (FULL OUTER JOIN).
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions, arity) FOR
 SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
   SELECT
     dim01_k01,
@@ -639,7 +639,7 @@ EOF
 # ON predicates with subqueries are still planned using the fallback lowering
 # strategy.
 query T multiline
-EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+EXPLAIN DECORRELATED PLAN WITH(humanized expressions, arity) FOR
 SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
   SELECT
     facts.facts_k01,
@@ -757,7 +757,7 @@ COMPLETE 0
 
 # EXPLAIN a SELECT with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable_new_outer_join_lowering, humanized_exprs, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) FOR
 SELECT
   facts.facts_k01,
   facts.facts_d01,
@@ -827,7 +827,7 @@ FROM
 
 # EXPLAIN a SELECT * FROM <view> with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable_new_outer_join_lowering, humanized_exprs, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) FOR
 SELECT * FROM v;
 ----
 Explained Query:
@@ -868,7 +868,7 @@ EOF
 
 # EXPLAIN a CREATE INDEX with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable_new_outer_join_lowering, humanized_exprs, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) FOR
 CREATE INDEX ON v(facts_k01);
 ----
 materialize.public.v_facts_k01_idx:
@@ -913,7 +913,7 @@ EOF
 
 # EXPLAIN a CREATE MATERIALIZED VIEW with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable_new_outer_join_lowering, humanized_exprs, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) FOR
 CREATE MATERIALIZED VIEW mv AS
 SELECT
   facts.facts_k01,

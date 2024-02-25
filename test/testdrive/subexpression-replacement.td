@@ -24,99 +24,99 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 
 # The simplest expression there could be
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_null IS NULL AND (col_null IS NULL AND col_not_null = 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL AND (col_null IS NULL AND col_not_null = 5);
 "Explained Query (fast path):  Filter (#0) IS NULL AND (#1 = 5)    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
 "Explained Query (fast path):  Project (#0, #1)    ReadIndex on=t1 t1_primary_idx=[lookup value=(5, 1)]Used Indexes:  - t1_primary_idx (lookup)"
 
 # NULL-able expressions are dedupped
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_null = 1 AND (col_null = 1 AND col_not_null = 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null = 1 AND (col_null = 1 AND col_not_null = 5);
 "Explained Query (fast path):  Project (#0, #1)    ReadIndex on=t1 t1_primary_idx=[lookup value=(1, 5)]Used Indexes:  - t1_primary_idx (lookup)"
 
 # OR/disjunction at the top level
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL AND col_not_null = 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL AND col_not_null = 5);
 "Explained Query (fast path):  Filter (#0) IS NULL    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_null IS NULL OR col_null IS NULL OR (col_null IS NULL AND col_not_null = 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL OR col_null IS NULL OR (col_null IS NULL AND col_not_null = 5);
 "Explained Query (fast path):  Filter (#0) IS NULL    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL AND col_not_null = 5) OR (col_null IS NULL AND col_not_null = 6);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL AND col_not_null = 5) OR (col_null IS NULL AND col_not_null = 6);
 "Explained Query (fast path):  Filter (#0) IS NULL    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # OR/disjunction at the lower level
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_null IS NULL AND (col_null IS NULL OR col_not_null = 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL AND (col_null IS NULL OR col_not_null = 5);
 "Explained Query (fast path):  Filter (#0) IS NULL    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # Nested OR/disjunction
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL OR col_not_null = 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_null IS NULL OR (col_null IS NULL OR col_not_null = 5);
 "Explained Query (fast path):  Filter ((#0) IS NULL OR (#1 = 5))    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # A more complex expression
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE (col_not_null + 1 / col_not_null) = 5 AND ((col_not_null + 1 / col_not_null) = 5 AND col_null = 6);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE (col_not_null + 1 / col_not_null) = 5 AND ((col_not_null + 1 / col_not_null) = 5 AND col_null = 6);
 "Explained Query (fast path):  Filter (#0 = 6) AND (5 = (#1 + (1 / #1)))    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # More nesting
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_not_null + col_not_null + col_not_null = 5 AND (col_not_null + col_not_null + col_not_null = 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null + col_not_null + col_not_null = 5 AND (col_not_null + col_not_null + col_not_null = 5);
 "Explained Query (fast path):  Filter (5 = ((#1 + #1) + #1))    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # The common expression contains an AND/conjunction itself
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE ((col_not_null > 3) AND (col_not_null < 5)) AND ((col_not_null > 3) AND (col_not_null < 5) OR col_not_null = 10);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE ((col_not_null > 3) AND (col_not_null < 5)) AND ((col_not_null > 3) AND (col_not_null < 5) OR col_not_null = 10);
 "Explained Query (fast path):  Filter (#1 < 5) AND (#1 > 3)    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # The common expression contains an OR/disjunction
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE ((col_not_null > 3) OR (col_not_null < 5)) OR ((col_not_null > 3) OR (col_not_null < 5));
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE ((col_not_null > 3) OR (col_not_null < 5)) OR ((col_not_null > 3) OR (col_not_null < 5));
 "Explained Query (fast path):  Filter ((#1 < 5) OR (#1 > 3))    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # Use of a deterministic function
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_not_null % 2 = 5 AND (col_not_null % 2 = 5 IS NULL);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null % 2 = 5 AND (col_not_null % 2 = 5 IS NULL);
 "Explained Query (fast path):  Constant <empty>"
 
 # This is not optimized
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE (col_not_null % 2) = 1 AND (((col_not_null % 2) = 1) = TRUE);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE (col_not_null % 2) = 1 AND (((col_not_null % 2) = 1) = TRUE);
 "Explained Query (fast path):  Filter (1 = (#1 % 2))    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # Column used on both sides of the expression
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE (col_not_null = col_not_null + 1) AND (col_not_null = col_not_null + 1);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE (col_not_null = col_not_null + 1) AND (col_not_null = col_not_null + 1);
 "Explained Query (fast path):  Filter (#1 = (#1 + 1))    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # TODO (https://github.com/MaterializeInc/materialize/issues/6262):  Avoid simplifying mz_sleep.
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1
+> EXPLAIN WITH(no notices) SELECT * FROM t1
   WHERE mz_unsafe.mz_sleep(col_not_null) > mz_unsafe.mz_sleep(col_not_null)
   AND (mz_unsafe.mz_sleep(col_not_null) > mz_unsafe.mz_sleep(col_not_null) = true);
 "Explained Query (fast path):  Project (#0, #1)    Filter (#2 > #2)      Map (mz_sleep(integer_to_double(#1)))        ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # IN list inside the expression
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (2, 3);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (2, 3);
 "Explained Query (fast path):  Filter ((#1 = 2) OR (#1 = 3))    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # Partial matches
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (3, 4);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (3, 4);
 "Explained Query (fast path):  Filter (#1 = 3)    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (4, 5);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null IN (2, 3) AND col_not_null IN (4, 5);
 "Explained Query (fast path):  Constant <empty>"
 
 # Expression inside an IN list
 
 # Optimized in AND/conjunctions
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_not_null = 1 AND TRUE IN (col_not_null = 1, col_not_null = 2);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null = 1 AND TRUE IN (col_not_null = 1, col_not_null = 2);
 "Explained Query (fast path):  Filter (#1 = 1)    ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # Not optimized in OR/disjunctions
 
-> EXPLAIN WITH(no_notices) SELECT * FROM t1 WHERE col_not_null = 1 OR TRUE IN (col_not_null = 1, col_not_null = 2);
+> EXPLAIN WITH(no notices) SELECT * FROM t1 WHERE col_not_null = 1 OR TRUE IN (col_not_null = 1, col_not_null = 2);
 "Explained Query (fast path):  Project (#0, #1)    Filter (#2 OR (#2 = true) OR (true = (#1 = 2)))      Map ((#1 = 1))        ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"

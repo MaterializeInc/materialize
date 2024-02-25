@@ -252,7 +252,7 @@ CREATE TABLE x (a int, u int, j jsonb, b bool)
 
 # Ensure the NOT gets pushed into the binary operation.
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
   NOT(a = u),
   NOT(a != u),
   NOT(a < u),
@@ -276,7 +276,7 @@ CREATE TABLE y (a boolean, b bool)
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
   CASE WHEN b THEN a ELSE a END
 FROM y
 ----
@@ -288,7 +288,7 @@ EOF
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
   CASE WHEN b THEN NULL ELSE true END
 FROM y
 ----
@@ -302,7 +302,7 @@ EOF
 
 # Bypass if statements with identical branches
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
   CASE WHEN b THEN NULL ELSE false END
 FROM y
 ----
@@ -315,7 +315,7 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
   CASE WHEN b THEN true ELSE NULL END
 FROM y
 ----
@@ -328,7 +328,7 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
   CASE WHEN b THEN false ELSE NULL END
 FROM y
 ----
@@ -340,7 +340,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
   CASE WHEN b THEN false ELSE TRUE END
 FROM y
 ----
@@ -358,7 +358,7 @@ statement ok
 insert into z values (null, null), (1, null), (null, 2), (1, 2), (2, 1)
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT *
+EXPLAIN WITH(arity, join implementations) SELECT *
 FROM z
 WHERE CASE WHEN a > b THEN FALSE ELSE TRUE END
 ----

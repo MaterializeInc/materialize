@@ -1,0 +1,21 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test the ability to catch plan changes using the `enable eager delta joins`
+# config flag in EXPLAIN. This test can be deleted when the feature flag is
+# removed.
+
+mode cockroach
+
+# Role-based restrictions
+# -----------------------------------------------------------
+
+# Regular users cannot create clusters with FEATURES yet.
+statement error db error: ERROR: FEATURES not supported for non\-system users
+CREATE CLUSTER foo SIZE = '1' FEATURES (enable eager delta joins = true);

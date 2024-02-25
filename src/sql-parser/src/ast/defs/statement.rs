@@ -1709,7 +1709,7 @@ impl AstDisplay for ClusterOptionName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CLUSTER` ostatement.
+/// An option in a `CREATE CLUSTER` statement.
 pub struct ClusterOption<T: AstInfo> {
     pub name: ClusterOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -1725,6 +1725,30 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     }
 }
 
+// Note: the `AstDisplay` implementation and `Parser::parse_` method for this
+// enum are generated automatically by this crate's `build.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ClusterFeatureName {
+    EnableNewOuterJoinLowering,
+    EnableEagerDeltaJoins,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClusterFeature<T: AstInfo> {
+    pub name: ClusterFeatureName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ClusterFeature<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// `CREATE CLUSTER ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateClusterStatement<T: AstInfo> {
@@ -1732,6 +1756,8 @@ pub struct CreateClusterStatement<T: AstInfo> {
     pub name: Ident,
     /// The comma-separated options.
     pub options: Vec<ClusterOption<T>>,
+    /// The comma-separated features enabled on the cluster.
+    pub features: Vec<ClusterFeature<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
@@ -1741,6 +1767,11 @@ impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
         if !self.options.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
+        }
+        if !self.features.is_empty() {
+            f.write_str(" FEATURES (");
+            f.write_node(&display::comma_separated(&self.features));
             f.write_str(")");
         }
     }
@@ -3013,7 +3044,7 @@ impl_display_t!(SubscribeRelation);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainPlanStatement<T: AstInfo> {
     pub stage: ExplainStage,
-    pub config_flags: Vec<Ident>,
+    pub with_options: Vec<ExplainPlanOption<T>>,
     pub format: ExplainFormat,
     pub explainee: Explainee<T>,
 }
@@ -3022,9 +3053,9 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ");
         f.write_node(&self.stage);
-        if !self.config_flags.is_empty() {
-            f.write_str(" WITH(");
-            f.write_node(&display::comma_separated(&self.config_flags));
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
         f.write_str(" AS ");
@@ -3034,6 +3065,49 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     }
 }
 impl_display_t!(ExplainPlanStatement);
+
+// Note: the `AstDisplay` implementation and `Parser::parse_` method for this
+// enum are generated automatically by this crate's `build.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ExplainPlanOptionName {
+    Arity,
+    Cardinality,
+    ColumnNames,
+    FilterPushdown,
+    HumanizedExpressions,
+    JoinImplementations,
+    Keys,
+    LinearChains,
+    NonNegative,
+    NoFastPath,
+    NoNotices,
+    NodeIdentifiers,
+    RawPlans,
+    RawSyntax,
+    Raw, // Listed after the `Raw~` variants to keep the parser happy!
+    Redacted,
+    SubtreeSize,
+    Timing,
+    Types,
+    EnableNewOuterJoinLowering,
+    EnableEagerDeltaJoins,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ExplainPlanOption<T: AstInfo> {
+    pub name: ExplainPlanOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainPlanOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExplainSinkSchemaFor {
@@ -4428,3 +4502,7 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
 }
 
 impl_display_t!(CommentObjectType);
+
+// Include the `AstDisplay` implementations for simple options derived by the
+// crate's build.rs script.
+include!(concat!(env!("OUT_DIR"), "/display.simple_options.rs"));
