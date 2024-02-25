@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_instrument_macro::instrument;
+use mz_ore_instrument_macro::instrument;
 
-#[instrument(name = "my_span", level = "trace", ret, fields(next = 1, shard = %"abc"), skip_all)]
+#[instrument(name = "my_span", level = "trace", ret, fields(next = 1, shard = %"abc"))]
 fn test_instrument() {}
 
-#[instrument(skip_all)]
+#[instrument]
 fn test_instrument_skipall() {}
 
 #[instrument]
