@@ -22,7 +22,7 @@ CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 # Simplify non-nullable trees with multiple non-recursive bindings defined under
 # a single`WITH MUTUALLY RECURSIVE` block
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT, z INT) AS (
     SELECT *, null::int FROM t1

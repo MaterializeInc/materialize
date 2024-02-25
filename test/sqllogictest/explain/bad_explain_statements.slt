@@ -13,5 +13,5 @@ CREATE VIEW v as SELECT (1, 2)
 statement error db error: ERROR: EXPLAIN \.\.\. VIEW <view_name> is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/explain\-plan
 EXPLAIN VIEW v
 
-statement error unsupported 'EXPLAIN ... WITH' unknown flags: \{"foo"\}
+statement error db error: ERROR: a valid `EXPLAIN` option
 EXPLAIN RAW PLAN WITH (foo, types) AS TEXT FOR SELECT 1

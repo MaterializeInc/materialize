@@ -16,7 +16,7 @@ statement ok
 CREATE TABLE t2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT FROM ( SELECT FROM t2 a1 RIGHT JOIN t2 ON a1.f1 IS NULL WHERE TRUE AND a1.f1 = a1.f2 )
+EXPLAIN WITH(arity, join implementations) SELECT FROM ( SELECT FROM t2 a1 RIGHT JOIN t2 ON a1.f1 IS NULL WHERE TRUE AND a1.f1 = a1.f2 )
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -25,7 +25,7 @@ EOF
 
 # TODO missing !isnull(#0) in %1
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
+EXPLAIN WITH(arity, join implementations) SELECT FROM t1, t2 WHERE t1.f2 + t2.f1 = t1.f1 AND t2.f1 IS NOT NULL
 ----
 Explained Query:
   Project () // { arity: 0 }
@@ -45,7 +45,7 @@ Source materialize.public.t1
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
+EXPLAIN WITH(arity, join implementations) SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
 ----
 Explained Query:
   Return // { arity: 0 }

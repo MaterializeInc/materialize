@@ -240,7 +240,7 @@ CREATE TABLE date_trunc_timestamps (
 )
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT date_trunc('day', ts) FROM date_trunc_timestamps
+EXPLAIN WITH(arity, join implementations) SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
@@ -250,7 +250,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
+EXPLAIN WITH(arity, join implementations) SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -732,7 +732,7 @@ CREATE TABLE t (
 )
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT a IS NULL FROM t
+EXPLAIN WITH(arity, join implementations) SELECT a IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -742,7 +742,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT a + a + a + a + a IS NULL FROM t
+EXPLAIN WITH(arity, join implementations) SELECT a + a + a + a + a IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -752,7 +752,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT a + b IS NULL FROM t
+EXPLAIN WITH(arity, join implementations) SELECT a + b IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -766,7 +766,7 @@ EOF
 # exist, but we do not support them yet. Similarly for OR.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT (a::bool AND b::bool) IS NULL FROM t
+EXPLAIN WITH(arity, join implementations) SELECT (a::bool AND b::bool) IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }

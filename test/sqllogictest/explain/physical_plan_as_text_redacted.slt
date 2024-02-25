@@ -104,7 +104,7 @@ mode cockroach
 
 # Test constant error.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path, redacted) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path, redacted) AS TEXT FOR
 SELECT 1 / 0
 ----
 Explained Query:
@@ -114,7 +114,7 @@ EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path, redacted) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path, redacted) AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 Explained Query:
@@ -129,7 +129,7 @@ EOF
 
 # PassArrangements plan (identity transform on an arranged input).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path, redacted) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path, redacted) AS TEXT FOR
 SELECT * FROM t
 ----
 Explained Query:
@@ -145,7 +145,7 @@ EOF
 
 # PassArrangements plan (identity transform on a raw input).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path, redacted) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path, redacted) AS TEXT FOR
 SELECT * FROM u
 ----
 Explained Query:
@@ -156,7 +156,7 @@ EOF
 
 # GetArrangement plan (linear transform of an arranged input).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path, redacted) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path, redacted) AS TEXT FOR
 SELECT a + b, 1 FROM t
 ----
 Explained Query:
@@ -175,7 +175,7 @@ EOF
 
 # GetCollection plan (linear transform of a raw input).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path, redacted) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path, redacted) AS TEXT FOR
 SELECT c + d, 1 FROM u
 ----
 Explained Query:
@@ -190,7 +190,7 @@ EOF
 
 # TopKBasic plan.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path, redacted) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path, redacted) AS TEXT FOR
 INDEX ov_a_idx
 ----
 materialize.public.ov_a_idx:
@@ -218,7 +218,7 @@ EOF
 
 # MonotonicTopK plan.
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path, redacted) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(no fast path, redacted) AS TEXT FOR
 SELECT * FROM (SELECT * FROM t ORDER BY b asc, a desc LIMIT 5)
 ----
 Explained Query:
@@ -965,7 +965,7 @@ EOF
 
 # Test Join::Differential (acyclic).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
 SELECT b + d, c + e, a + e
 FROM t, u, v
 WHERE a = c AND d = e AND b + d > 42
@@ -1064,7 +1064,7 @@ CREATE INDEX v_e_idx ON V(e);
 
 # Test Join::Differential (cyclic).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c AND d = e AND f = a
@@ -1150,7 +1150,7 @@ EOF
 
 # Test Join::Delta (star).
 query T multiline
-EXPLAIN PHYSICAL PLAN WITH(non_negative) AS TEXT FOR
+EXPLAIN PHYSICAL PLAN WITH(non negative) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and a = e

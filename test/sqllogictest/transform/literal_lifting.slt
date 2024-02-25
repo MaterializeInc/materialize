@@ -21,7 +21,7 @@ CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 
 # Single non-recursive binding under `WITH MUTUALLY RECURSIVE`
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT * FROM c0
@@ -53,7 +53,7 @@ EOF
 
 # Multiple bindings under `WITH MUTUALLY RECURSIVE`
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT f1, 42 FROM t1

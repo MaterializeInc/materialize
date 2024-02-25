@@ -32,7 +32,7 @@ INSERT INTO json_table VALUES(null, '{}');
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1;
+EXPLAIN WITH(types, no fast path) SELECT 1;
 ----
 Explained Query:
   Constant // { types: "(integer)" }
@@ -43,7 +43,7 @@ EOF
 # NULL literal is NULL-able
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT NULL;
+EXPLAIN WITH(types, no fast path) SELECT NULL;
 ----
 Explained Query:
   Constant // { types: "(text?)" }
@@ -56,7 +56,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT * FROM (VALUES(1), (2));
+EXPLAIN WITH(types, no fast path) SELECT * FROM (VALUES(1), (2));
 ----
 Explained Query:
   Constant // { types: "(integer)" }
@@ -67,7 +67,7 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT * FROM (VALUES(1), (NULL));
+EXPLAIN WITH(types, no fast path) SELECT * FROM (VALUES(1), (NULL));
 ----
 Explained Query:
   Constant // { types: "(integer?)" }
@@ -82,7 +82,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(bigint?, bigint)" }
@@ -96,7 +96,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
@@ -106,7 +106,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
+EXPLAIN WITH(types, no fast path) SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
@@ -116,7 +116,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
+EXPLAIN WITH(types, no fast path) SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
@@ -130,7 +130,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
 ----
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer, integer)" }
@@ -145,7 +145,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
 ----
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer?, integer?)" }
@@ -155,7 +155,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
 ----
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer?, integer?)" }
@@ -165,7 +165,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
 ----
 Explained Query:
   Project (#1, #1, #1, #0) // { types: "(integer, integer, integer, integer?)" }
@@ -179,7 +179,7 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
 ----
 Explained Query:
   Project (#3, #1, #0, #2) // { types: "(integer?, integer, integer?, integer?)" }
@@ -193,7 +193,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null = 1 FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null = 1 FROM int_table;
 ----
 Explained Query:
   Project (#2) // { types: "(boolean)" }
@@ -203,7 +203,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
 ----
 Explained Query:
   Project (#1, #1) // { types: "(boolean, boolean)" }
@@ -212,7 +212,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
+EXPLAIN WITH(types, no fast path) SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean?, boolean?)" }
@@ -222,7 +222,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT NOT col_null , NOT col_not_null FROM bool_table;
+EXPLAIN WITH(types, no fast path) SELECT NOT col_null , NOT col_not_null FROM bool_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean?, boolean)" }
@@ -236,7 +236,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
 ----
 Explained Query:
   Project (#2, #4..=#7) // { types: "(integer, double precision, double precision, double precision, integer)" }
@@ -250,7 +250,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
@@ -278,7 +278,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(bigint, bigint)" }
@@ -304,7 +304,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
 ----
 Explained Query:
   Project (#2..=#4) // { types: "(boolean, boolean?, boolean?)" }
@@ -316,7 +316,7 @@ EOF
 # VARIADIC FUNCTIONS
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null || col_not_null, substr(col_not_null, 3, 2), regexp_match(col_not_null, col_not_null), lpad(col_not_null, 3, col_not_null) FROM str_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null || col_not_null, substr(col_not_null, 3, 2), regexp_match(col_not_null, col_not_null), lpad(col_not_null, 3, col_not_null) FROM str_table;
 ----
 Explained Query:
   Project (#2..=#5) // { types: "(text, text, text[]?, text)" }
@@ -345,7 +345,7 @@ true  true  true  true  true  true  true  true  true
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
+EXPLAIN WITH(types, no fast path) SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(text[]?, text[]?)" }
@@ -359,7 +359,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
+EXPLAIN WITH(types, no fast path) SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
 ----
 Explained Query:
   Project (#2..=#4) // { types: "(text, text, text)" }
@@ -373,7 +373,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
 ----
 Explained Query:
   Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
@@ -383,7 +383,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
 ----
 Explained Query:
   Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
@@ -397,7 +397,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
@@ -429,7 +429,7 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
@@ -457,7 +457,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
@@ -485,7 +485,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME(VALUES(1), (NULL::int)), 1 = ALL (VALUES(1), (NULL::int)) , 1 = ANY (VALUES(1), (NULL::int));
+EXPLAIN WITH(types, no fast path) SELECT 1 = SOME(VALUES(1), (NULL::int)), 1 = ALL (VALUES(1), (NULL::int)) , 1 = ANY (VALUES(1), (NULL::int));
 ----
 Explained Query:
   Constant // { types: "(boolean, boolean?, boolean)" }
@@ -494,7 +494,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = ALL (VALUES(NULL::int), (1)) , 1 = ANY (VALUES(NULL::int), (1));
+EXPLAIN WITH(types, no fast path) SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = ALL (VALUES(NULL::int), (1)) , 1 = ANY (VALUES(NULL::int), (1));
 ----
 Explained Query:
   Constant // { types: "(boolean, boolean?, boolean)" }
@@ -503,7 +503,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(boolean?, boolean?, boolean?)" }
@@ -571,7 +571,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(integer?)" }
@@ -610,7 +610,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(boolean, boolean)" }
@@ -643,7 +643,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(boolean, boolean)" }
@@ -672,7 +672,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
 ----
 Explained Query:
   Return // { types: "(boolean, boolean, boolean?)" }
@@ -750,7 +750,7 @@ EOF
 # DATE / TIME functions
 #
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
+EXPLAIN WITH(types, no fast path) SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(timestamp without time zone?, timestamp without time zone)" }
@@ -760,7 +760,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
+EXPLAIN WITH(types, no fast path) SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(interval?, interval?)" }
@@ -775,7 +775,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
+EXPLAIN WITH(types, no fast path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
 ----
 Explained Query:
   Return // { types: "(integer, integer)" }
@@ -795,7 +795,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
+EXPLAIN WITH(types, no fast path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
 ----
 Explained Query:
   Return // { types: "(integer, integer?)" }
@@ -827,7 +827,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
+EXPLAIN WITH(types, no fast path) SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
 ----
 Explained Query:
   Return // { types: "(integer?, integer?)" }
@@ -879,7 +879,7 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
 ----
 Explained Query:
   Return // { types: "(integer)" }
@@ -894,7 +894,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
+EXPLAIN WITH(types, no fast path) SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
 ----
 Explained Query:
   Union // { types: "(integer?)" }
@@ -910,7 +910,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(types, no_fast_path) SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
+EXPLAIN WITH(types, no fast path) SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
 ----
 Explained Query:
   Project (#2) // { types: "(integer)" }

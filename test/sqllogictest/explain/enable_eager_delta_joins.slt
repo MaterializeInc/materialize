@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test the ability to catch plan changes using the `enable_eager_delta_joins`
+# Test the ability to catch plan changes using the `enable eager delta joins`
 # config flag in EXPLAIN. This test can be deleted when the feature flag is
 # removed.
 
@@ -40,7 +40,7 @@ CREATE TABLE t3 (
 # -----------------------
 
 # A query that will produce different plans depending on the value of the
-# `enable_eager_delta_joins` feature flag.
+# `enable eager delta joins` feature flag.
 statement ok
 CREATE MATERIALIZED VIEW mv AS
 SELECT
@@ -55,7 +55,7 @@ where
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN WITH(join_impls)
+EXPLAIN WITH(join implementations)
 MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -85,7 +85,7 @@ EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN WITH(join_impls)
+EXPLAIN WITH(join implementations)
 REPLAN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -113,9 +113,9 @@ Source materialize.public.t3
 
 EOF
 
-# EXPLAIN REPLAN WITH(enable_eager_delta_joins) should differ.
+# EXPLAIN REPLAN WITH(enable eager delta joins) should differ.
 query T multiline
-EXPLAIN WITH(join_impls, enable_eager_delta_joins)
+EXPLAIN WITH(join implementations, enable eager delta joins)
 REPLAN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -166,7 +166,7 @@ CREATE INDEX v_idx ON v(c1);
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN WITH(join_impls)
+EXPLAIN WITH(join implementations)
 INDEX v_idx;
 ----
 materialize.public.v_idx:
@@ -200,7 +200,7 @@ EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN WITH(join_impls)
+EXPLAIN WITH(join implementations)
 REPLAN INDEX v_idx;
 ----
 materialize.public.v_idx:
@@ -232,9 +232,9 @@ Source materialize.public.t3
 
 EOF
 
-# EXPLAIN REPLAN WITH(enable_eager_delta_joins) should differ.
+# EXPLAIN REPLAN WITH(enable eager delta joins) should differ.
 query T multiline
-EXPLAIN WITH(join_impls, enable_eager_delta_joins)
+EXPLAIN WITH(join implementations, enable eager delta joins)
 REPLAN INDEX v_idx;
 ----
 materialize.public.v_idx:

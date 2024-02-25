@@ -103,7 +103,7 @@ CallTable generate_series(-2, 2, 1)
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT generate_series FROM generate_series(-2, 2)
+EXPLAIN WITH(arity, join implementations) SELECT generate_series FROM generate_series(-2, 2)
 ----
 Explained Query (fast path):
   Constant
@@ -211,7 +211,7 @@ CrossJoin
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM x, generate_series(1, 10)
+EXPLAIN WITH(arity, join implementations) SELECT * FROM x, generate_series(1, 10)
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 3 }
@@ -235,7 +235,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM x, generate_series(1, a)
+EXPLAIN WITH(arity, join implementations) SELECT * FROM x, generate_series(1, a)
 ----
 Explained Query:
   FlatMap generate_series(1, #0, 1) // { arity: 3 }
@@ -244,7 +244,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+EXPLAIN WITH(arity, join implementations) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 Explained Query:
   Return // { arity: 5 }
@@ -268,7 +268,7 @@ Source materialize.public.x
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+EXPLAIN WITH(arity, join implementations) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 Explained Query:
   Return // { arity: 5 }
@@ -294,7 +294,7 @@ EOF
 # Regression test for #5520: crash when a filter references an output column of
 # a table function around a join
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
+EXPLAIN WITH(arity, join implementations) SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
 Explained Query:
   Return // { arity: 5 }
@@ -457,7 +457,7 @@ CallTable generate_series(integer_to_bigint(-2), integer_to_bigint(2), integer_t
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT generate_series FROM generate_series(-2, 2, 2)
+EXPLAIN WITH(arity, join implementations) SELECT generate_series FROM generate_series(-2, 2, 2)
 ----
 Explained Query (fast path):
   Constant
@@ -468,7 +468,7 @@ Explained Query (fast path):
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
+EXPLAIN WITH(arity, join implementations) SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
 ----
 Explained Query (fast path):
   Constant
@@ -1392,7 +1392,7 @@ WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY genera
 # Plan should be just a simple FlatMap + Project
 # Regression test for #10801
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT jsonb_object_keys(a) FROM y;
+EXPLAIN WITH(arity, join implementations) SELECT jsonb_object_keys(a) FROM y;
 ----
 Explained Query:
   Project (#1) // { arity: 1 }

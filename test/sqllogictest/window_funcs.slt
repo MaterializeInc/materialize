@@ -218,7 +218,7 @@ With
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT f1 FROM t1
+EXPLAIN WITH(arity, join implementations) SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
 Explained Query:

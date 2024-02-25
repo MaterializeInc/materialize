@@ -35,7 +35,7 @@ CREATE INDEX t_idx_empty_key ON t();
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN WITH(humanized_exprs) INDEX t_idx_empty_key;
+EXPLAIN WITH(humanized expressions) INDEX t_idx_empty_key;
 ----
 materialize.public.t_idx_empty_key:
   ArrangeBy keys=[[]]

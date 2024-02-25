@@ -22,7 +22,7 @@ statement ok
 CREATE VIEW foo3 as select b from foo2 where b = 6;
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * from foo3
+EXPLAIN WITH(arity, join implementations) SELECT * from foo3
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
@@ -38,7 +38,7 @@ statement ok
 CREATE DEFAULT INDEX ON foo2
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * from foo3
+EXPLAIN WITH(arity, join implementations) SELECT * from foo3
 ----
 Explained Query (fast path):
   Project (#0)

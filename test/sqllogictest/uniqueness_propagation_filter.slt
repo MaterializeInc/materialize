@@ -31,7 +31,7 @@ CREATE DEFAULT INDEX ON v1
 #
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
 ----
 Explained Query (fast path):
   Project (#0, #1)
@@ -44,7 +44,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1, f2;
+EXPLAIN WITH(arity, join implementations) SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1, f2;
 ----
 Explained Query (fast path):
   Project (#0, #1)
@@ -57,7 +57,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
 ----
 Explained Query (fast path):
   Project (#0, #2)
@@ -70,7 +70,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -83,7 +83,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 Explained Query (fast path):
   Project (#0)
@@ -96,7 +96,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 Explained Query (fast path):
   Project (#0, #2)
@@ -109,7 +109,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -122,7 +122,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -139,7 +139,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
   Distinct project=[#0] // { arity: 1 }
@@ -153,7 +153,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 + 1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 + 1 = f3;
 ----
 Explained Query:
   Distinct project=[#0, #1] // { arity: 2 }
@@ -167,7 +167,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 > f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f2 FROM v1 WHERE f1 > f3;
 ----
 Explained Query:
   Distinct project=[#0, #1] // { arity: 2 }
@@ -181,7 +181,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 + 1, f2 FROM v1 WHERE f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 + 1, f2 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
   Distinct project=[(#0 + 1), #1] // { arity: 2 }
@@ -195,7 +195,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 OR f1 = f3;
 ----
 Explained Query:
   Distinct project=[#0, #1] // { arity: 2 }
@@ -209,7 +209,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
 ----
 Explained Query:
   Distinct project=[(#0 + 1), #1] // { arity: 2 }
@@ -223,7 +223,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 FROM v1 WHERE f1 = f3;
 ----
 Explained Query:
   Distinct project=[#0] // { arity: 1 }
@@ -244,7 +244,7 @@ statement ok
 CREATE TABLE t2 (f1 INTEGER, f2 INTEGER, f3 INTEGER, f4 INTEGER, PRIMARY KEY (f1, f2));
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
 ----
 Explained Query:
   Project (#0, #2) // { arity: 2 }
@@ -257,7 +257,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 = f3;
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -270,7 +270,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 = f2;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 = f2;
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
@@ -283,7 +283,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f1, f2, f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f2, f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
 ----
 Explained Query:
   Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
@@ -296,7 +296,7 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
 ----
 Explained Query:
   Project (#2, #3) // { arity: 2 }
@@ -313,7 +313,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2, f3 FROM t2 WHERE f3 = f4;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM t2 WHERE f3 = f4;
 ----
 Explained Query:
   Distinct project=[#0, #1] // { arity: 2 }
@@ -327,7 +327,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3;
 ----
 Explained Query:
   Distinct project=[#0] // { arity: 1 }
@@ -341,7 +341,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3;
 ----
 Explained Query:
   Distinct project=[#0, #1] // { arity: 2 }
@@ -355,7 +355,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2;
+EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2;
 ----
 Explained Query:
   Distinct project=[#0] // { arity: 1 }

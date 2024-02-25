@@ -653,9 +653,9 @@ Used Indexes:
 
 EOF
 
-# Test a differential join WITH(join_impls).
+# Test a differential join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and d = e and b = f
@@ -690,7 +690,7 @@ EOF
 statement ok
 CREATE INDEX t_b_idx ON T(b);
 
-# Test a delta join without WITH(join_impls).
+# Test a delta join without WITH(join implementations).
 query T multiline
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a, b, c, d, e, f
@@ -716,9 +716,9 @@ Used Indexes:
 
 EOF
 
-# Test a delta join WITH(join_impls).
+# Test a delta join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE b = c and d = e
@@ -771,9 +771,9 @@ EOF
 statement ok
 CREATE INDEX t_a_b_idx ON T(a,b)
 
-# Test an IndexedFilter join WITH(join_impls).
+# Test an IndexedFilter join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -789,9 +789,9 @@ Used Indexes:
 
 EOF
 
-# Test an IndexedFilter join on fast path WITH(join_impls).
+# Test an IndexedFilter join on fast path WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
 SELECT *
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -844,9 +844,9 @@ Source materialize.public.r
 
 EOF
 
-## linear_chains is currently disabled for WMR.
+## linear chains is currently disabled for WMR.
 statement error not supported
-EXPLAIN WITH(linear_chains)
+EXPLAIN WITH(linear chains)
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)

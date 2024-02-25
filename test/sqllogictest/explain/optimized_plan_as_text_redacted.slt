@@ -58,7 +58,7 @@ mode cockroach
 
 # Test constant error.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT 1 / 0
 ----
 Explained Query (fast path):
@@ -68,7 +68,7 @@ EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 Explained Query (fast path):
@@ -93,7 +93,7 @@ EOF
 
 # Test basic linear chains (fast path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT 1, a + b as c FROM t WHERE a = 5 and b < 0 and a + b > 0
 ----
 Explained Query (fast path):
@@ -109,7 +109,7 @@ EOF
 
 # Test basic linear chains (slow path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
 ----
 Explained Query:
@@ -125,7 +125,7 @@ EOF
 
 # Test table functions in the select clause (FlatMap).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT generate_series(a, b) from t
 ----
 Explained Query:
@@ -140,7 +140,7 @@ EOF
 
 # Test TopK.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT * FROM ov
 ----
 Explained Query:
@@ -154,7 +154,7 @@ EOF
 
 # Test Finish.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 Explained Query (fast path):
@@ -168,7 +168,7 @@ EOF
 
 # Test Reduce (global).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
 Explained Query:
@@ -197,7 +197,7 @@ EOF
 
 # Test Reduce (local).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 Explained Query:
@@ -213,7 +213,7 @@ EOF
 
 # Test EXISTS subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 Explained Query:
@@ -260,7 +260,7 @@ EOF
 
 # Test SELECT subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Explained Query:
@@ -326,7 +326,7 @@ EOF
 
 # Test outer joins (ON syntax).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT t1.a, t2.a
 FROM t as t1
 LEFT JOIN t as t2 ON t1.b = t2.b
@@ -374,7 +374,7 @@ EOF
 
 # Test an IndexedFilter join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs, redacted) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE a = 0
@@ -397,9 +397,9 @@ EOF
 statement ok
 CREATE INDEX t_a_b_idx ON T(a,b)
 
-# Test an IndexedFilter join WITH(join_impls).
+# Test an IndexedFilter join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -415,9 +415,9 @@ Used Indexes:
 
 EOF
 
-# Test an IndexedFilter join on fast path WITH(join_impls).
+# Test an IndexedFilter join on fast path WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join_impls) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
 SELECT *
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -470,9 +470,9 @@ Source materialize.public.r
 
 EOF
 
-## linear_chains is currently disabled for WMR.
+## linear chains is currently disabled for WMR.
 statement error not supported
-EXPLAIN WITH(linear_chains)
+EXPLAIN WITH(linear chains)
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
@@ -531,7 +531,7 @@ statement ok
 EXPLAIN SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT lag(x, 3, 'default') IGNORE NULLS OVER (ORDER BY x || x)
 FROM t1;
 ----
@@ -545,7 +545,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT first_value(x) OVER (ORDER BY x || x ROWS BETWEEN 5 preceding AND CURRENT ROW)
 FROM t1;
 ----
@@ -581,7 +581,7 @@ statement ok
 CREATE INDEX u_d ON u(d);
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT *
 FROM t, u
 WHERE t.b = u.c;
@@ -605,7 +605,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT *
 FROM t, u
 WHERE t.b = u.d;
@@ -640,7 +640,7 @@ statement ok
 CREATE INDEX t_a_idx_2 ON t(a);
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT *
 FROM t, u
 WHERE t.a = u.c
@@ -663,7 +663,7 @@ EOF
 
 # An index is used two times by the same (self) join. We should show a 1st input and a non-1st input usage.
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT *
 FROM t AS t1, t AS t2, t AS t3
 WHERE t1.a = t2.a AND t2.a = t3.a;
@@ -688,7 +688,7 @@ EOF
 
 # An index is used in both a join and a full scan.
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t AS t1, t AS t2
  WHERE t1.a = t2.a)
@@ -721,7 +721,7 @@ EOF
 
 # An index exists that can't be used for the join because of having the wrong key.
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t AS t1, t AS t2
  WHERE t1.b = t2.b)
@@ -765,7 +765,7 @@ statement ok
 CREATE INDEX t_non_null_a_idx ON t_non_null(a);
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t_non_null AS t1, t_non_null AS t2
  WHERE t1.b = t2.b)
@@ -798,7 +798,7 @@ EOF
 # This has 1 more full scan than the previous test, because the join needs 2 different arrangements.
 # (But we print only one full scan due to deduplication.)
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t_non_null AS t1, t_non_null AS t2
  WHERE t1.b = t2.b + 1)
@@ -827,7 +827,7 @@ EOF
 
 # An index is used in both a lookup and a full scan.
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT * FROM t
 UNION
 SELECT * FROM t WHERE a = 5;
@@ -850,7 +850,7 @@ statement ok
 CREATE INDEX t_b_idx ON t(b);
 
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT * FROM t
 UNION ALL
 SELECT * FROM t WHERE b = 7
@@ -882,7 +882,7 @@ EOF
 
 # Fast path with a LIMIT and no ORDER BY. This is not a full scan.
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT a+b as x
 FROM t
 WHERE a < 7
@@ -902,7 +902,7 @@ EOF
 
 # Same query without a LIMIT, so full scan
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT a+b as x
 FROM t
 WHERE a < 7;
@@ -920,7 +920,7 @@ EOF
 
 # Same query with a LIMIT + ORDER BY, so full scan
 query T multiline
-EXPLAIN WITH(humanized_exprs, redacted)
+EXPLAIN WITH(humanized expressions, redacted)
 SELECT a+b as x
 FROM t
 WHERE a < 7

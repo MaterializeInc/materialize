@@ -14,7 +14,7 @@ statement ok
 create table t1(f1 int, f2 int);
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE 1 in (SELECT 1 FROM (VALUES (0)) CONSTANT WHERE f1 > 1);
+EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE 1 in (SELECT 1 FROM (VALUES (0)) CONSTANT WHERE f1 > 1);
 ----
 Explained Query:
   Project (#0, #1) // { arity: 2 }
@@ -33,7 +33,7 @@ EOF
 
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT jsonb_array_elements('[1,2,3]'::jsonb);
+EXPLAIN WITH(arity, join implementations) SELECT jsonb_array_elements('[1,2,3]'::jsonb);
 ----
 Explained Query (fast path):
   Constant

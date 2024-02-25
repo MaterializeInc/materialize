@@ -241,6 +241,7 @@ impl ExplainConfig {
     }
 }
 
+// TODO(aalexandrov): remove this
 impl TryFrom<BTreeSet<String>> for ExplainConfig {
     type Error = anyhow::Error;
     fn try_from(mut flags: BTreeSet<String>) -> Result<Self, anyhow::Error> {
@@ -250,20 +251,23 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             flags.insert("raw_plans".into());
             flags.insert("raw_syntax".into());
         }
+
+        let enable_on_prod = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+
         let result = ExplainConfig {
             redacted: flags.remove("redacted"),
-            arity: flags.remove("arity") || !SOFT_ASSERTIONS.load(Ordering::Relaxed),
+            arity: flags.remove("arity") || enable_on_prod,
             cardinality: flags.remove("cardinality"),
             column_names: flags.remove("column_names"),
             filter_pushdown: flags.remove("filter_pushdown")
                 || flags.remove("mfp_pushdown")
-                || !SOFT_ASSERTIONS.load(Ordering::Relaxed),
+                || enable_on_prod,
             humanized_exprs: !flags.contains("raw_plans")
-                && (flags.remove("humanized_exprs") || !SOFT_ASSERTIONS.load(Ordering::Relaxed)),
+                && (flags.remove("humanized_exprs") || enable_on_prod),
             join_impls: flags.remove("join_impls"),
             keys: flags.remove("keys"),
             linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),
-            no_fast_path: flags.remove("no_fast_path") || flags.contains("timing"),
+            no_fast_path: flags.remove("no_fast_path"),
             no_notices: flags.remove("no_notices"),
             node_ids: flags.remove("node_ids"),
             non_negative: flags.remove("non_negative"),

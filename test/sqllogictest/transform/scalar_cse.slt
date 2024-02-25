@@ -13,7 +13,7 @@ statement ok
 CREATE TABLE x (a string, b int not null)
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT b*b*b, b*b FROM x
+EXPLAIN WITH(arity, join implementations) SELECT b*b*b, b*b FROM x
 ----
 Explained Query:
   Project (#3, #2) // { arity: 2 }
@@ -23,7 +23,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT b*b*b, b*b+1 FROM x
+EXPLAIN WITH(arity, join implementations) SELECT b*b*b, b*b+1 FROM x
 ----
 Explained Query:
   Project (#3, #4) // { arity: 2 }
@@ -33,7 +33,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
     a::json->'Field1',
     a::json->'Field2',
     a::json->'Field3'
@@ -47,7 +47,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
     a::json->'Field1'->'Foo',
     a::json->'Field1'->'Bar',
     a::json->'Field2'->'Baz',
@@ -64,7 +64,7 @@ EOF
 
 # Ensure we don't inline if-guarded expressions
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
     CASE WHEN b = 0 THEN 0 ELSE 1/b END,
     CASE WHEN b != 0 THEN 1/b ELSE 0 END
 FROM x
@@ -80,7 +80,7 @@ EOF
 
 # Ensure we update columns references in if-guarded expressions
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
     CASE WHEN b = 0 THEN 0 ELSE 1/b END,
     CASE WHEN b != 0 THEN 1/b ELSE 0 END
 FROM

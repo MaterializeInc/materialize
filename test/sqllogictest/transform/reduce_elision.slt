@@ -31,7 +31,7 @@ CREATE TABLE y (f0 int2, f1 string primary key);
 # `ReductionPushdown` pushes the Distinct from after the Join into both join inputs.
 # Then, `ReduceElision` eliminates the Distinct from the 2nd join input.
 query T multiline
-EXPLAIN WITH(arity, join_impls, keys)
+EXPLAIN WITH(arity, join implementations, keys)
 SELECT DISTINCT *
 FROM x, y
 WHERE x.f1 = y.f1
@@ -58,7 +58,7 @@ EOF
 # `ReductionPushdown` pushes the Distinct from after the Join into both join inputs.
 # Then, `ReduceElision` eliminates the Distinct from the 2nd join input.
 query T multiline
-EXPLAIN WITH(arity, join_impls, keys)
+EXPLAIN WITH(arity, join implementations, keys)
 WITH MUTUALLY RECURSIVE
   c0(f0 int4, f1 string, f2 int2, f3 string) AS (
     (SELECT DISTINCT *
@@ -98,7 +98,7 @@ EOF
 #  - The second input of the UNION has a DISTINCT. This should be eliminated later by `ReduceElision` after we make the
 #    unique key inference smarter for `LetRec`.
 query T multiline
-EXPLAIN WITH(arity, join_impls, keys)
+EXPLAIN WITH(arity, join implementations, keys)
 WITH MUTUALLY RECURSIVE
   c0(f0 int4, f1 string, f2 int2, f3 string) AS (
     (SELECT DISTINCT *

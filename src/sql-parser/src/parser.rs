@@ -7344,11 +7344,11 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
 
-        let config_flags = if self.parse_keyword(WITH) {
+        let with_options = if self.parse_keyword(WITH) {
             if self.consume_token(&Token::LParen) {
-                let config_flags = self.parse_comma_separated(Self::parse_identifier)?;
+                let options = self.parse_comma_separated(Parser::parse_explain_plan_option)?;
                 self.expect_token(&Token::RParen)?;
-                config_flags
+                options
             } else {
                 self.prev_token(); // push back WITH in case it's actually a CTE
                 vec![]
@@ -7377,10 +7377,20 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
-            config_flags,
+            with_options,
             format,
             explainee,
         }))
+    }
+
+    fn parse_explain_plan_option(&mut self) -> Result<ExplainPlanOption<Raw>, ParserError> {
+        Ok(ExplainPlanOption {
+            name: self.parse_explain_plan_option_name().map_err(|err| {
+                let msg = "a valid `EXPLAIN` option";
+                self.error(err.pos, msg.to_string())
+            })?,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     /// Parse an `EXPLAIN FILTER PUSHDOWN` statement, assuming that the `EXPLAIN
