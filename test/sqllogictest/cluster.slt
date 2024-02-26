@@ -15,7 +15,7 @@ mode cockroach
 reset-server
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
+ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = on;
 ----
 COMPLETE 0
 
@@ -100,13 +100,13 @@ quickstart
 
 # Test invalid option combinations.
 
-statement error invalid mixture of managed and unmanaged replica options
+statement error invalid mixture of orchestrated and unorchestrated replica options
 CREATE CLUSTER baz REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1234'], SIZE 'small'))
 
-statement error invalid mixture of managed and unmanaged replica options
+statement error invalid mixture of orchestrated and unorchestrated replica options
 CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', WORKERS 1))
 
-statement error invalid mixture of managed and unmanaged replica options
+statement error invalid mixture of orchestrated and unorchestrated replica options
 CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', COMPUTE ADDRESSES ['localhost:1234']))
 
 statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
@@ -622,13 +622,13 @@ CREATE CLUSTER REPLICA quickstart.replica SIZE '1', AVAILABILITY ZONE 'a'
 statement error AVAILABILITY ZONE specified more than once
 CREATE CLUSTER REPLICA quickstart.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 
-statement error invalid mixture of managed and unmanaged replica options
+statement error invalid mixture of orchestrated and unorchestrated replica options
 CREATE CLUSTER REPLICA quickstart.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
 
-statement error invalid mixture of managed and unmanaged replica options
+statement error invalid mixture of orchestrated and unorchestrated replica options
 CREATE CLUSTER REPLICA quickstart.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
 
-statement error invalid mixture of managed and unmanaged replica options
+statement error invalid mixture of orchestrated and unorchestrated replica options
 CREATE CLUSTER REPLICA quickstart.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESSES ['host']
 
 # Test that the contents of mz_cluster_replicas look sensible

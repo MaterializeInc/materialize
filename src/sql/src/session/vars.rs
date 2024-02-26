@@ -1919,8 +1919,8 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unmanaged_cluster_replicas,
-        desc: "unmanaged cluster replicas",
+        name: enable_unorchestrated_cluster_replicas,
+        desc: "unorchestrated cluster replicas",
         default: false,
         internal: true,
         enable_for_item_parsing: true,

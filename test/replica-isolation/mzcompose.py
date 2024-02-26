@@ -221,7 +221,7 @@ def restart_environmentd(c: Composition) -> None:
 def drop_create_replica(c: Composition) -> None:
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -242,7 +242,7 @@ def drop_create_replica(c: Composition) -> None:
 
 def create_invalid_replica(c: Composition) -> None:
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -424,7 +424,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.up("materialized", *[n.name for n in nodes])
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )

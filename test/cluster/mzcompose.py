@@ -102,7 +102,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     # between testdrive runs.
     c.sql(
         """
-        ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
 
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
 
@@ -130,7 +130,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.sql(
         """
-        ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
 
         CREATE CLUSTER REPLICA cluster1.replica2
             STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
@@ -166,7 +166,7 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -303,7 +303,7 @@ def workflow_test_github_15531(c: Composition) -> None:
         )
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -408,7 +408,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -470,7 +470,7 @@ def workflow_test_github_15799(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -524,7 +524,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -628,7 +628,7 @@ def workflow_test_github_15496(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -701,7 +701,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -780,7 +780,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -954,7 +954,7 @@ def workflow_test_github_17509(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1048,7 +1048,7 @@ def workflow_test_github_19610(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1156,7 +1156,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1480,7 +1480,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1569,7 +1569,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1686,7 +1686,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1778,7 +1778,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1862,7 +1862,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     c.up("materialized", "clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1961,7 +1961,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -2032,7 +2032,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         input=dedent(
             """
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 
             $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
             {
@@ -2215,7 +2215,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         return Metrics(resp)
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
