@@ -213,11 +213,11 @@ def execute_workload(
                 ):
                     cur.execute("SET REAL_TIME_RECENCY TO TRUE")
                 cur.execute(f"SELECT * FROM {executor.table} ORDER BY {order_str}")
+                actual_result = cur.fetchall()
                 if isinstance(executor, KafkaExecutor) or isinstance(
                     executor, KafkaRoundtripExecutor
                 ):
                     cur.execute("SET REAL_TIME_RECENCY TO FALSE")
-                actual_result = cur.fetchall()
             conn.autocommit = False
             if actual_result == expected_result:
                 if correct_once:
