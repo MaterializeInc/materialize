@@ -273,24 +273,69 @@ impl<
             for tuple in self.pending.drain(..) {
                 stack.copy(&tuple);
             }
-            self.queue_push(vec![stack]);
-            while self.queue.len() > 1
-                && (self.queue[self.queue.len() - 1].len()
-                    >= self.queue[self.queue.len() - 2].len() / 2)
-            {
-                let list1 = self.queue_pop().unwrap();
-                let list2 = self.queue_pop().unwrap();
-                let merged = self.merge_by(list1, list2);
-                self.queue_push(merged);
-            }
+            let batch = vec![stack];
+            self.account(&batch, 1);
+            self.queue.push(batch);
+            self.maintain();
         }
     }
 
+    /// Maintain the internal chain structure. Ensures that:
+    /// * All chains are sorted by size.
+    /// * Within each chain, adjacent blocks are reduced, i.e., their combined length is larger than
+    ///   the block size.
+    /// * All chains are of geometrically increasing length.
+    fn maintain(&mut self) {
+        self.account(self.queue.iter().flatten(), -1);
+
+        // Step 1: Canonicalize each chain by adjacent blocks that combined fit into a single block.
+        for chain in &mut self.queue {
+            let mut target: Vec<TimelyStack<_>> = Vec::with_capacity(chain.len());
+            for block in chain.drain(..) {
+                if target.last().map_or(false, |last| {
+                    last.len() + block.len() <= Self::buffer_size()
+                }) {
+                    // merge `target.last()` with `block`
+                    let last = target.last_mut().unwrap();
+                    for item in block.iter() {
+                        last.copy(item);
+                    }
+                } else {
+                    target.push(block);
+                }
+            }
+            *chain = target;
+        }
+
+        // Step 2: Sort queue by chain length.
+        self.queue.sort_by_key(|chain| chain.len());
+
+        // Step 3: Merge chains that are within a power of two.
+        let mut index = 0;
+        while index + 1 < self.queue.len() {
+            if self.queue[index].len() > self.queue[index + 1].len() / 2 {
+                // Chains at `index` and `index+1` are within a factor of two, merge them.
+                let list1 = self.queue.remove(index);
+                let list2 = std::mem::take(&mut self.queue[index]);
+                self.queue[index] = self.merge_by(list1, list2);
+                // Ensure chains are sorted by length.
+                self.queue.sort_by_key(|chain| chain.len());
+            } else {
+                index += 1;
+            }
+        }
+
+        self.account(self.queue.iter().flatten(), 1);
+    }
+
+    /// Extract all data that is not in advance of `upper`. Record the lower bound of the remaining
+    /// data's time in `frontier`.
     fn extract_into(
         &mut self,
         upper: AntichainRef<T>,
         frontier: &mut Antichain<T>,
     ) -> Vec<TimelyStack<(D, T, R)>> {
+        // Flush pending data
         differential_dataflow::consolidation::consolidate_updates(&mut self.pending);
         self.flush_pending();
 
@@ -298,6 +343,9 @@ impl<
         let mut ship = self.empty();
         let mut ship_list = Vec::default();
 
+        self.account(self.queue.iter().flatten(), -1);
+
+        /// Walk all chains, separate ready data from data to keep.
         for mut chain in std::mem::take(&mut self.queue).drain(..) {
             let mut block_list = Vec::default();
             let mut keep_list = Vec::default();
@@ -334,10 +382,11 @@ impl<
                     // Recycle leftovers
                     self.recycle(block);
                 } else {
+                    // Keep the entire block.
+
                     for (_, t, _) in block.iter() {
                         frontier.insert_ref(t);
                     }
-                    // Keep whole block
                     if !keep.is_empty() {
                         keep_list.push(std::mem::replace(&mut keep, self.empty()));
                     }
@@ -362,12 +411,17 @@ impl<
             }
         }
 
+        self.account(self.queue.iter().flatten(), 1);
+
+        self.maintain();
+
         while ship_list.len() > 1 {
             let list1 = ship_list.pop().unwrap();
             let list2 = ship_list.pop().unwrap();
             ship_list.push(self.merge_by(list1, list2));
         }
 
+        // Pop the last element, or return an empty chain.
         ship_list.pop().unwrap_or_default()
     }
 
@@ -464,21 +518,6 @@ impl<
 impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'static>
     MergeSorterColumnation<D, T, R>
 {
-    /// Pop a batch from `self.queue` and account size changes.
-    #[inline]
-    fn queue_pop(&mut self) -> Option<Vec<TimelyStack<(D, T, R)>>> {
-        let batch = self.queue.pop();
-        self.account(batch.iter().flatten(), -1);
-        batch
-    }
-
-    /// Push a batch to `self.queue` and account size changes.
-    #[inline]
-    fn queue_push(&mut self, batch: Vec<TimelyStack<(D, T, R)>>) {
-        self.account(&batch, 1);
-        self.queue.push(batch);
-    }
-
     /// Account size changes. Only performs work if a logger exists.
     ///
     /// Calculate the size based on the [`TimelyStack`]s passed along, with each attribute
@@ -514,6 +553,6 @@ impl<D: Columnation + 'static, T: Columnation + 'static, R: Columnation + 'stati
     for MergeSorterColumnation<D, T, R>
 {
     fn drop(&mut self) {
-        while self.queue_pop().is_some() {}
+        self.account(self.queue.iter().flatten(), -1);
     }
 }
