@@ -24,6 +24,7 @@ use mz_frontegg_auth::{
 };
 use mz_frontegg_mock::FronteggMockServer;
 use mz_ore::cast::CastFrom;
+use mz_ore::id_gen::{conn_id_org_uuid, org_id_conn_bits};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
@@ -82,13 +83,13 @@ async fn test_balancer() {
     let frontegg_user = "user@_.com";
     let frontegg_password = format!("mzp_{client_id}{secret}");
 
-    let envd_server = test_util::TestHarness::default()
+    let config = test_util::TestHarness::default()
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
         .with_tls(server_cert.clone(), server_key.clone())
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry)
-        .start()
-        .await;
+        .with_metrics_registry(metrics_registry);
+    let envid = config.environment_id.clone();
+    let envd_server = config.start().await;
 
     // Ensure we could connect directly to envd without SSL on the balancer port.
     let pg_client_envd = envd_server
@@ -127,6 +128,18 @@ async fn test_balancer() {
         .tls_info(true)
         .build()
         .unwrap();
+    let cancel_dir = tempfile::tempdir().unwrap();
+    let cancel_name = conn_id_org_uuid(org_id_conn_bits(&envid.organization_id()));
+    std::fs::write(
+        cancel_dir.path().join(cancel_name),
+        format!(
+            "{}\n{}",
+            envd_server.inner.sql_local_addr(),
+            // Ensure that multiline files and non-existent addresses both work.
+            "non-existent-addr:1234",
+        ),
+    )
+    .unwrap();
 
     for resolver in resolvers {
         let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
@@ -138,7 +151,7 @@ async fn test_balancer() {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            Some(envd_server.inner.balancer_sql_local_addr().to_string()),
+            Some(cancel_dir.path().to_path_buf()),
             resolver,
             envd_server.inner.balancer_http_local_addr().to_string(),
             cert_config.clone(),
