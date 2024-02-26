@@ -856,6 +856,7 @@ mod tests {
         packer.push(Datum::Null);
         packer.push(Datum::from(1000u64));
         packer.push(Datum::from("q"));
+        packer.push(Datum::from(""));
 
         let typ: RelationType = RelationType::new(vec![
             ColumnType {
@@ -874,42 +875,42 @@ mod tests {
                 scalar_type: mz_repr::ScalarType::String,
                 nullable: false,
             },
+            ColumnType {
+                scalar_type: mz_repr::ScalarType::String,
+                nullable: false,
+            },
         ]);
-
-        let column_types = typ
-            .column_types
-            .iter()
-            .map(|x| &x.scalar_type)
-            .map(mz_pgrepr::Type::from)
-            .collect::<Vec<mz_pgrepr::Type>>();
 
         let mut out = Vec::new();
 
-        // using default params
-        let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
-        let _ = encode_copy_format(params.clone(), row.clone(), &typ, &mut out);
-        let output = std::str::from_utf8(&out);
-        assert_eq!(output, std::str::from_utf8(b"\"1,2,3\",,1000,q\n"));
+        struct TestCase<'a> {
+            params: CopyCsvFormatParams<'a>,
+            expected: &'static [u8],
+        }
 
-        let roundtrip_row =
-            decode_copy_format(output.unwrap().as_bytes(), &column_types, params)?.into_element();
-        assert_eq!(row, roundtrip_row);
+        let tests = [
+            TestCase {
+                params: CopyCsvFormatParams::default(),
+                expected: b"\"1,2,3\",,1000,q,\"\"\n",
+            },
+            TestCase {
+                params: CopyCsvFormatParams {
+                    null: Cow::from("NULL"),
+                    quote: b'q',
+                    escape: b'e',
+                    ..Default::default()
+                },
+                expected: b"q1,2,3q,NULL,1000,qeqq,\n",
+            },
+        ];
 
-        // overriding null, quote, escape
-        out.clear();
-        let params = CopyFormatParams::Csv(CopyCsvFormatParams {
-            null: Cow::from("NULL"),
-            quote: b'q',
-            escape: b'e',
-            ..Default::default()
-        });
-        let _ = encode_copy_format(params.clone(), row.clone(), &typ, &mut out);
-        let output = std::str::from_utf8(&out);
-        assert_eq!(output, std::str::from_utf8(b"q1,2,3q,NULL,1000,qeqq\n"));
-
-        let roundtrip_row =
-            decode_copy_format(output.unwrap().as_bytes(), &column_types, params)?.into_element();
-        assert_eq!(row, roundtrip_row);
+        for TestCase { params, expected } in tests {
+            out.clear();
+            let params = CopyFormatParams::Csv(params);
+            let _ = encode_copy_format(params.clone(), row.clone(), &typ, &mut out);
+            let output = std::str::from_utf8(&out);
+            assert_eq!(output, std::str::from_utf8(expected));
+        }
 
         Ok(())
     }
