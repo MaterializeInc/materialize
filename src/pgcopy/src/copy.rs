@@ -68,14 +68,14 @@ pub fn encode_copy_row_text_default(
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
-    encode_copy_row_text(row, typ, out, CopyTextFormatParams::default())
+    encode_copy_row_text(CopyTextFormatParams::default(), row, typ, out)
 }
 
 pub fn encode_copy_row_text(
+    CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
     row: Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
-    CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
 ) -> Result<(), io::Error> {
     let delim = delimiter.as_bytes().into_element();
     let null = null.as_bytes();
@@ -106,9 +106,6 @@ pub fn encode_copy_row_text(
 }
 
 pub fn encode_copy_row_csv(
-    row: Row,
-    typ: &RelationType,
-    out: &mut Vec<u8>,
     CopyCsvFormatParams {
         delimiter: delim,
         quote,
@@ -116,6 +113,9 @@ pub fn encode_copy_row_csv(
         header: _,
         null,
     }: CopyCsvFormatParams,
+    row: Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
     let is_special = |c: &u8| *c == delim || *c == quote || *c == b'\r' || *c == b'\n';
@@ -456,14 +456,14 @@ pub fn decode_copy_format<'a>(
 
 /// Encodes the given `Row` into bytes based on the given `CopyFormatParams`.
 pub fn encode_copy_format<'a>(
+    params: CopyFormatParams<'a>,
     row: Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
-    params: CopyFormatParams<'a>,
 ) -> Result<(), io::Error> {
     match params {
-        CopyFormatParams::Text(params) => encode_copy_row_text(row, typ, out, params),
-        CopyFormatParams::Csv(params) => encode_copy_row_csv(row, typ, out, params),
+        CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out),
+        CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out),
         // TODO (mouli): Handle Binary format here as well?
     }
 }
@@ -897,7 +897,7 @@ mod tests {
 
         // using default params
         let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
-        let _ = encode_copy_format(row.clone(), &typ, &mut out, params.clone());
+        let _ = encode_copy_format(params.clone(), row.clone(), &typ, &mut out);
         let output = std::str::from_utf8(&out);
         assert_eq!(output, std::str::from_utf8(b"\"1,2,3\",,1000,q\n"));
 
@@ -913,7 +913,7 @@ mod tests {
             escape: b'e',
             ..Default::default()
         });
-        let _ = encode_copy_format(row.clone(), &typ, &mut out, params.clone());
+        let _ = encode_copy_format(params.clone(), row.clone(), &typ, &mut out);
         let output = std::str::from_utf8(&out);
         assert_eq!(output, std::str::from_utf8(b"q1,2,3q,NULL,1000,qeqq\n"));
 
