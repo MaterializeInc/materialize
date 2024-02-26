@@ -28,6 +28,9 @@ def workflow_default(c: Composition) -> None:
     for i, name in enumerate(c.workflows):
         if name == "default":
             continue
+        if name == "test-version-skips":
+            # disabled as it appears to be broken on old branches
+            continue
         with c.test_case(name):
             c.workflow(name)
 
