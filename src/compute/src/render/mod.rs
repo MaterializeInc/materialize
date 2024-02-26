@@ -751,7 +751,17 @@ where
     pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
         let lir_id = plan.node_id();
 
-        let mut bundle = match plan {
+        let mut bundle = mz_ore::stack::maybe_grow(|| self.render_plan_inner(plan));
+
+        if self.enable_operator_hydration_status_logging {
+            self.log_operator_hydration(&mut bundle, lir_id);
+        }
+
+        bundle
+    }
+
+    fn render_plan_inner(&mut self, plan: Plan) -> CollectionBundle<G> {
+        match plan {
             Plan::Constant { rows, node_id: _ } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
@@ -960,13 +970,7 @@ where
                 let input = self.render_plan(*input);
                 input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
             }
-        };
-
-        if self.enable_operator_hydration_status_logging {
-            self.log_operator_hydration(&mut bundle, lir_id);
         }
-
-        bundle
     }
 
     fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: u64) {
