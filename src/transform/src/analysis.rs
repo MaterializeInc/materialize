@@ -123,6 +123,7 @@ pub mod common {
     ///
     /// This is best thought of as a node in a tree rather
     #[allow(missing_debug_implementations)]
+    #[derive(Copy, Clone)]
     pub struct DerivedView<'a> {
         derived: &'a Derived,
         lower: usize,
