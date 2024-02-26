@@ -61,16 +61,6 @@ pub fn encode_copy_row_binary(
     Ok(())
 }
 
-/// Encodes given `row` into bytes with default param values
-/// in `CopyTextFormatParams`.
-pub fn encode_copy_row_text_default(
-    row: Row,
-    typ: &RelationType,
-    out: &mut Vec<u8>,
-) -> Result<(), io::Error> {
-    encode_copy_row_text(CopyTextFormatParams::default(), row, typ, out)
-}
-
 pub fn encode_copy_row_text(
     CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
     row: Row,

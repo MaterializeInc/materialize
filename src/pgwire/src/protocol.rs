@@ -32,7 +32,7 @@ use mz_frontegg_auth::{
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
-use mz_pgcopy::CopyFormatParams;
+use mz_pgcopy::{CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_server_core::TlsMode;
@@ -1917,7 +1917,12 @@ where
         ) = match format {
             // TODO (mouli): refactor to use `mz_pgcopy::encode_copy_format` and
             // handle `Binary` there as well.
-            CopyFormat::Text => (mz_pgcopy::encode_copy_row_text_default, Format::Text),
+            CopyFormat::Text => {
+                let encode_fn = |row: Row, typ: &RelationType, out: &mut Vec<u8>| {
+                    mz_pgcopy::encode_copy_row_text(CopyTextFormatParams::default(), row, typ, out)
+                };
+                (encode_fn, Format::Text)
+            }
             CopyFormat::Binary => (mz_pgcopy::encode_copy_row_binary, Format::Binary),
             _ => {
                 let msg = format!("COPY TO format {:?} not supported", format);
