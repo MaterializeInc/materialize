@@ -14,6 +14,14 @@
 -- limitations under the License.
 
 {% materialization source, adapter='materialize' %}
+  {% if var('deploy', False) %}
+      {{ exceptions.CompilationError(
+        """
+        dbt-materialize does not support deployments for sources.
+        """
+    )}}
+  {% endif %}
+
   {%- set identifier = model['alias'] -%}
   {%- set old_relation = adapter.get_relation(identifier=identifier,
                                               schema=schema,
