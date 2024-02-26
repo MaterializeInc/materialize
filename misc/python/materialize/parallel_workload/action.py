@@ -230,6 +230,7 @@ class SelectAction(Action):
             [
                 "in the same timedomain",
                 'is not allowed from the "mz_introspection" cluster',
+                "timed out before ingesting the source's visible frontier when real-time-recency query issued",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
