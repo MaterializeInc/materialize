@@ -852,10 +852,10 @@ mod tests {
     fn test_copy_csv_row() -> Result<(), io::Error> {
         let mut row = Row::default();
         let mut packer = row.packer();
-        packer.push(Datum::from("1,2,3"));
+        packer.push(Datum::from("1,2,\"3\""));
         packer.push(Datum::Null);
         packer.push(Datum::from(1000u64));
-        packer.push(Datum::from("q"));
+        packer.push(Datum::from("qe")); // overridden quote and escape character in test below
         packer.push(Datum::from(""));
 
         let typ: RelationType = RelationType::new(vec![
@@ -891,7 +891,7 @@ mod tests {
         let tests = [
             TestCase {
                 params: CopyCsvFormatParams::default(),
-                expected: b"\"1,2,3\",,1000,q,\"\"\n",
+                expected: b"\"1,2,\"\"3\"\"\",,1000,qe,\"\"\n",
             },
             TestCase {
                 params: CopyCsvFormatParams {
@@ -900,7 +900,7 @@ mod tests {
                     escape: b'e',
                     ..Default::default()
                 },
-                expected: b"q1,2,3q,NULL,1000,qeqq,\n",
+                expected: b"q1,2,\"3\"q,NULL,1000,qeqeeq,\n",
             },
         ];
 
