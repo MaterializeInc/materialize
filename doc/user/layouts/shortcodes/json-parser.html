@@ -37,11 +37,20 @@ view with the individual fields mapped to columns.
 /* Helper Methods */
 
 function escapeString(s) {
-    return s.replace(`'`, `''`);
+    return s.replace(/'/g, `''`);
 }
 
 function escapeIdent(s) {
-    return s.replace(`"`, `""`);
+    return `"${s.replace(/"/g, `""`)}"`;
+}
+
+function isDate(value) {
+    var dateParsed = new Date(Date.parse(value));
+    if (isNaN(dateParsed.getTime())) {
+        return false;
+    }
+    var isoString = dateParsed.toISOString();
+    return isoString === value;
 }
 
 /* JSON Parsing and SQL conversion */
@@ -73,43 +82,65 @@ function handleJson(source, sample, columnName) {
 /// Recursively iterates through the provided object, tracking the chain
 /// of parent fields for later use in naming and desctructuring.
 function expandObject(object, parents, columns) {
-    for (const [name, value] of Object.entries(object)) {
-        const subscript = escapeString(name);
-        const columnName = escapeIdent(name);
-
-        let cast = "";
-        let wrapping_function = "";
-        let isNull = value === null;
-        switch (true) {
-            case isNull:
-                cast = "";
-                break;
-            case typeof value === "boolean":
-                cast = "::bool";
-                break;
-            case typeof value === "number":
-                cast = "::numeric";
-                break;
-            case typeof value === "string":
-                if (Date.parse(value)) {
-                    wrapping_function = "try_parse_monotonic_iso8601_timestamp";
-                }
-                break;
-            case typeof value === "object":
-                parents.push(name);
-                expandObject(value, parents, columns);
-                parents.pop();
-                continue;
-        }
-
-        columns.push([name, wrapping_function, cast, _.clone(parents), isNull]);
+    if (Array.isArray(object)) {
+        handleArray(object, parents, columns);
+    } else if (isObject(object)) {
+        handleObject(object, parents, columns);
+    } else {
+        handlePrimitive(object, parents, columns);
     }
 }
 
-/// Given a list of fields/select items, forms a SQL query.
-function formSql(selectItems, viewName, sourceName, objectType) {
-    const FIELD_SEPARATOR = "\n    ";
+/// Handles arrays within the JSON structure, including empty arrays.
+function handleArray(array, parents, columns) {
+    if (array.length === 0) {
+        // Specifically handles empty arrays to add placeholder values rather than skipping them.
+        handleEmptyArray(parents, columns);
+    } else {
+        // For non-empty arrays, iterate over each item, expanding it.
+        array.forEach((item, index) => {
+            const newParents = parents.concat(index.toString());
+            expandObject(item, newParents, columns);
+        });
+    }
+}
 
+/// Handles objects by iterating over each property and recursively expanding it.
+function handleObject(obj, parents, columns) {
+    Object.entries(obj).forEach(([key, value]) => {
+        const newParents = parents.concat(key);
+        expandObject(value, newParents, columns);
+    });
+}
+
+// Handles primitive values by determining their SQL data type and adding them to the columns list.
+function handlePrimitive(value, parents, columns) {
+    // Determine the appropriate SQL cast and function wrapper for the value.
+    const { cast, wrapping_function, isNull } = determineCast(value);
+    // Uses the last part of the path as the column name.
+    const columnName = parents.slice(-1)[0];
+    // Generate an alias for the column based on its path, excluding the root.
+    const columnAlias = parents.slice(1).join("_");
+    // Add the column definition to the list of columns.
+    columns.push([columnName, wrapping_function, cast, parents, isNull, value]);
+}
+
+/// Handles the specific case of an empty array by adding a placeholder column definition.
+function handleEmptyArray(parents, columns) {
+    // Generates a column name and alias based on the path to the empty array.
+    const columnName = parents.join("_");
+    const columnAlias = parents.slice(1).join("_");
+    // Adds a placeholder column for the empty array.
+    columns.push([columnAlias, "", "text", parents, true, "''"]);
+}
+
+/// Utility function to check if a given value is an object.
+function isObject(value) {
+    // Returns true if the value is an object and not null.
+    return typeof value === 'object' && value !== null;
+}
+
+function formSql(selectItems, viewName, sourceName, objectType, columnName) {
     if (!viewName) {
         viewName = "my_view";
     }
@@ -122,35 +153,53 @@ function formSql(selectItems, viewName, sourceName, objectType) {
         type = "MATERIALIZED VIEW";
     }
 
-    let selects = selectItems.map(([name, wrapping_function, cast, parents]) => {
-        // Note: The first "parent" is the JSON column.
-        const formattedName = [...parents.slice(1), _.snakeCase(name)].join("_").toLowerCase();
+    let sqlParts = selectItems.map(([name, wrapping_function, cast, parents, isNull, value]) => {
+        let path = columnName || "body";
 
-        const parentPath = [parents[0], ...parents.slice(1).map((p) => `'${p}'`)].join("->");
-        const formattedPath = parentPath.concat(`->>'${name}'`);
+        // Iterate over parents to build the path, skipping the columnName/base if it's included
+        parents.slice(columnName ? 1 : 0, parents.length - 1).forEach(parent => {
+            path += isNaN(parent) ? `->'${parent}'` : `->${parent}`;
+        });
 
-        let item = formattedPath;
-        if (cast || wrapping_function) {
-            item = `(${item})`;
-        }
-        if (cast) {
-            item = `${item}${cast}`;
-        }
+        // Determine the final part of the path
+        let finalPart = path + (isNaN(name) ? `->>'${name}'` : `->${name}`);
+
+        // Wrap the final part in parentheses if casting is applied
+        let sqlItem = cast ? `(${finalPart})::${cast}` : finalPart;
         if (wrapping_function) {
-            item = `${wrapping_function}${item}`;
+            sqlItem = `${wrapping_function}(${sqlItem})`;
         }
 
-        return `${item} AS ${formattedName}`;
-    })
-    .join(`,${FIELD_SEPARATOR}`);
+        // Construct column alias without redundant name appending
+        let columnAliasParts = parents.slice(columnName ? 1 : 0);
+        let columnAlias = columnAliasParts.join("_");
 
-    if (selectItems.length > 1) {
-        selects = `${FIELD_SEPARATOR}${selects}`;
+        return `${sqlItem} AS ${columnAlias}`;
+    }).join(",\n    ");
+
+    return `CREATE ${type} ${viewName} AS SELECT\n    ${sqlParts}\nFROM ${sourceName};`;
+}
+
+/// Helper to determine cast and wrapping function based on value type
+function determineCast(value) {
+    let cast = "";
+    let wrapping_function = "";
+    let isNull = value === null;
+
+    if (!isNull) {
+        if (typeof value === "boolean") {
+            cast = "bool";
+        } else if (typeof value === "number") {
+            cast = "numeric";
+        } else if (typeof value === "string") {
+            if (isDate(value)) {
+                // If the string is a valid ISO8601 date, cast it to a timestamp
+                // TODO: This could be improved to handle other date formats
+                wrapping_function = "try_parse_monotonic_iso8601_timestamp";
+            }
+        }
     }
-
-    const sql = `CREATE ${type} ${viewName} AS SELECT ${selects}\nFROM ${sourceName};`
-
-    return sql;
+    return { cast, wrapping_function, isNull };
 }
 
 function errorClear() {
@@ -183,7 +232,7 @@ function render() {
 
     try {
         const items = handleJson(sourceName, jsonSample, columnName);
-        const sql = formSql(items, viewName, sourceName, objectType);
+        const sql = formSql(items, viewName, sourceName, objectType, columnName);
         sqlSet(sql);
 
         errorClear();
