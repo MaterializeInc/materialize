@@ -403,11 +403,12 @@ impl Coordinator {
                 }
             }
             ControllerResponse::WatchSetFinished(sets) => {
+                let now = self.now();
                 for set in sets {
                     let (id, ev) = set
                         .downcast_ref::<(StatementLoggingId, StatementLifecycleEvent)>()
                         .expect("we currently log all watch sets with this type");
-                    self.record_statement_lifecycle_event(id, ev);
+                    self.record_statement_lifecycle_event(id, ev, now);
                 }
             }
         }
