@@ -52,11 +52,11 @@ use std::fmt;
 pub const STACK_RED_ZONE: usize = {
     #[cfg(debug_assertions)]
     {
-        256 << 10 // 256KiB
+        512 << 10 // 512KiB
     }
     #[cfg(not(debug_assertions))]
     {
-        32 << 10 // 32KiB
+        64 << 10 // 64KiB
     }
 };
 
