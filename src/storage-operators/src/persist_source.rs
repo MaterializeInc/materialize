@@ -546,8 +546,9 @@ impl PendingWork {
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
-                            if let Some(stats) = is_filter_pushdown_audit {
-                                panic!("persist filter pushdown correctness violation! {} val={:?} mfp={:?} stats={:?}", name, result, map_filter_project, stats);
+                            if let Some(_stats) = is_filter_pushdown_audit {
+                                // TODO: include more (redacted) information here.
+                                panic!("persist filter pushdown correctness violation! {}", name);
                             }
                             match result {
                                 Ok((row, time, diff)) => {
