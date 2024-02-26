@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
+use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_expr::{func, VariadicFunc};
 use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 use once_cell::sync::Lazy;
@@ -930,6 +931,46 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                 func: VariadicFunc::JsonbBuildObject,
                 exprs,
             }
+        }
+        ref ty @ List {
+            ref element_type, ..
+        }
+        | ref ty @ Array(ref element_type) => {
+            // Construct a new expression context with one column whose type
+            // is the container's element type.
+            let qcx = QueryContext::root(ecx.qcx.scx, ecx.qcx.lifetime);
+            let ecx = ExprContext {
+                qcx: &qcx,
+                name: "to_jsonb",
+                scope: &Scope::empty(),
+                relation_type: &RelationType::new(vec![element_type.clone().nullable(true)]),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+
+            // Create an element-casting expression by calling `to_jsonb` on
+            // an expression that references the first column in a row.
+            let cast_element = to_jsonb(&ecx, HirScalarExpr::column(0));
+            let cast_element = cast_element
+                .lower_uncorrelated()
+                .expect("to_jsonb does not produce correlated expressions on uncorrelated input");
+
+            // The `Cast{Array|List}ToJsonb` functions take the element-casting
+            // expression as an argument and evaluate the expression against
+            // each element of the container at runtime.
+            let func = match ty {
+                List { .. } => UnaryFunc::CastListToJsonb(CastListToJsonb {
+                    cast_element: Box::new(cast_element),
+                }),
+                Array { .. } => UnaryFunc::CastArrayToJsonb(CastArrayToJsonb {
+                    cast_element: Box::new(cast_element),
+                }),
+                _ => unreachable!("validated above"),
+            };
+
+            expr.call_unary(func)
         }
         _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
             func::CastJsonbOrNullToJsonb,
