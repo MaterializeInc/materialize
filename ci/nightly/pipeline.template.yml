@@ -456,6 +456,10 @@ steps:
       - id: aws-real
         label: AWS (Real)
         timeout_in_minutes: 30
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
         agents:
           queue: linux-aarch64-small
         artifact_paths: junit_*.xml
