@@ -452,10 +452,11 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM t4 AS a1 LEFT JOIN t4 AS
 Explained Query:
   Return // { arity: 2 }
     Union // { arity: 2 }
-      Map (123, 234) // { arity: 2 }
-        Negate // { arity: 0 }
-          Project () // { arity: 0 }
-            Get l0 // { arity: 2 }
+      Negate // { arity: 2 }
+        Project (#2, #3) // { arity: 2 }
+          Filter (#0 = 123) AND (#1 = 234) // { arity: 4 }
+            Map (123, 234) // { arity: 4 }
+              ReadStorage materialize.public.t4 // { arity: 2 }
       Get l0 // { arity: 2 }
       Get l0 // { arity: 2 }
   With

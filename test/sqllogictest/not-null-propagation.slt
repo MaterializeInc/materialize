@@ -414,10 +414,10 @@ Explained Query:
                     Get l0 // { types: "(integer?, integer)" }
               Map (false) // { types: "(integer?, integer, boolean)" }
                 Union // { types: "(integer?, integer)" }
-                  Map (1) // { types: "(integer?, integer)" }
-                    Negate // { types: "(integer?)" }
-                      Project (#0) // { types: "(integer?)" }
-                        Filter (#1 = 1) // { types: "(integer?, integer)" }
+                  Negate // { types: "(integer?, integer)" }
+                    Project (#0, #2) // { types: "(integer?, integer)" }
+                      Filter (#1 = 1) // { types: "(integer?, integer, integer)" }
+                        Map (1) // { types: "(integer?, integer, integer)" }
                           Get l0 // { types: "(integer?, integer)" }
                   Get l0 // { types: "(integer?, integer)" }
   With
@@ -698,10 +698,10 @@ Explained Query:
                   Get l1 // { types: "(integer?, integer)" }
             Map (false) // { types: "(integer?, integer, boolean)" }
               Union // { types: "(integer?, integer)" }
-                Map (1) // { types: "(integer?, integer)" }
-                  Negate // { types: "(integer?)" }
-                    Project (#0) // { types: "(integer?)" }
-                      Filter (#1 = 1) // { types: "(integer?, integer)" }
+                Negate // { types: "(integer?, integer)" }
+                  Project (#0, #2) // { types: "(integer?, integer)" }
+                    Filter (#1 = 1) // { types: "(integer?, integer, integer)" }
+                      Map (1) // { types: "(integer?, integer, integer)" }
                         Get l1 // { types: "(integer?, integer)" }
                 Get l1 // { types: "(integer?, integer)" }
         ArrangeBy keys=[[#0]] // { types: "(integer?, boolean?)" }
