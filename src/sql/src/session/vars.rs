@@ -2024,13 +2024,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_jemalloc_profiling,
-        desc: "jemalloc heap memory profiling",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_comment,
         desc: "the COMMENT ON feature for objects",
         default: true,
@@ -5515,7 +5508,6 @@ impl SystemVars {
             || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
             || name == LINEAR_JOIN_YIELDING.name()
             || name == ENABLE_MZ_JOIN_CORE.name()
-            || name == ENABLE_JEMALLOC_PROFILING.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
             || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
             || self.is_persist_config_var(name)
