@@ -10,8 +10,8 @@
 import random
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
