@@ -75,7 +75,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "cargo",
                 "llvm-cov",
                 "run",
-                "--workspace",
                 "--bin",
                 "clusterd",
                 "--release",
