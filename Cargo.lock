@@ -4067,6 +4067,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-txn",
  "mz-persist-types",
+ "mz-pgcopy",
  "mz-pid-file",
  "mz-repr",
  "mz-service",
