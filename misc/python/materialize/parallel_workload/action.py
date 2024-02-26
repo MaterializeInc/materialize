@@ -225,8 +225,12 @@ class SelectAction(Action):
 
         query += " LIMIT 1"
 
+        if isinstance(obj, KafkaSource) and (not join or isinstance(obj2, KafkaSource)):
+            exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
         exe.execute(query, explainable=True)
         exe.cur.fetchall()
+        if isinstance(obj, KafkaSource) and (not join or isinstance(obj2, KafkaSource)):
+            exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
         return True
 
 
