@@ -127,6 +127,7 @@ mz_activity_log_thinned  execution_timestamp
 mz_activity_log_thinned  finished_at
 mz_activity_log_thinned  finished_status
 mz_activity_log_thinned  initial_application_name
+mz_activity_log_thinned  mz_version
 mz_activity_log_thinned  params
 mz_activity_log_thinned  prepared_at
 mz_activity_log_thinned  prepared_statement_id
@@ -554,6 +555,7 @@ mz_statement_execution_history  execution_timestamp
 mz_statement_execution_history  finished_at
 mz_statement_execution_history  finished_status
 mz_statement_execution_history  id
+mz_statement_execution_history  mz_version
 mz_statement_execution_history  params
 mz_statement_execution_history  prepared_statement_id
 mz_statement_execution_history  rows_returned
