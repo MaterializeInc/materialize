@@ -51,20 +51,14 @@ class Scenario:
         filtered_check_classes = []
 
         for check_class in self.checks():
-            if (
-                self.requires_external_idempotence()
-                and not check_class.externally_idempotent
-            ):
-                continue
-            filtered_check_classes.append(check_class)
+            if self._include_check_class(check_class):
+                filtered_check_classes.append(check_class)
 
         # Use base_version() here instead of _base_version so that overwriting
         # upgrade scenarios can specify another base version.
         self.check_objects = [
             check_class(self.base_version(), self.rng)
             for check_class in filtered_check_classes
-            # TODO: improve
-            if not check_class.__name__.endswith("Base")
         ]
 
     def checks(self) -> list[type[Check]]:
@@ -102,6 +96,12 @@ class Scenario:
 
     def requires_external_idempotence(self) -> bool:
         return False
+
+    def _include_check_class(self, check_class: type[Check]) -> bool:
+        return not check_class.__name__.endswith("Base") and (
+            not self.requires_external_idempotence()
+            or check_class.externally_idempotent
+        )
 
 
 class NoRestartNoUpgrade(Scenario):
