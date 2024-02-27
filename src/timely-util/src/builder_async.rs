@@ -11,7 +11,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::fmt;
 use std::future::Future;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,15 +23,13 @@ use std::task::{Context, Poll, Waker};
 use futures_util::task::ArcWake;
 use timely::communication::{Message, Pull, Push};
 use timely::dataflow::channels::pact::ParallelizationContractCore;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::counter::CounterCore as PushCounter;
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
 };
-use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
+use timely::dataflow::operators::{Capability, DowngradeError, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
@@ -49,6 +49,8 @@ pub struct OperatorBuilder<G: Scope> {
     /// Holds type erased closures that flush an output handle when called. These handles will be
     /// automatically drained when the operator is scheduled after the logic future has been polled
     output_flushes: Vec<Box<dyn FnMut()>>,
+    /// A list of capabilities that the operator logic dropped.
+    capability_drops: Rc<RefCell<Vec<Capability<G::Timestamp>>>>,
     /// A handle to check whether all workers have pressed the shutdown button.
     shutdown_handle: ButtonHandle,
     /// A button to coordinate shutdown of this operator among workers.
@@ -59,7 +61,7 @@ pub struct OperatorBuilder<G: Scope> {
 /// handles for each of the operator inputs.
 trait InputQueue<T: Timestamp> {
     /// Accepts all available input into local queues.
-    fn accept_input(&mut self);
+    fn accept_input(&mut self, drop_queue: &Rc<RefCell<Vec<Capability<T>>>>);
 
     /// Drains all available input and empties the local queue.
     fn drain_input(&mut self);
@@ -75,12 +77,12 @@ where
     C: InputConnection<T> + 'static,
     P: Pull<BundleCore<T, D>> + 'static,
 {
-    fn accept_input(&mut self) {
+    fn accept_input(&mut self, drop_queue: &Rc<RefCell<Vec<Capability<T>>>>) {
         let mut queue = self.queue.borrow_mut();
         let mut new_data = false;
         while let Some((cap, data)) = self.handle.next() {
             new_data = true;
-            let cap = self.connection.accept(cap);
+            let cap = self.connection.accept(cap, drop_queue);
             queue.push_back(Event::Data(cap, data.take()));
         }
         if new_data {
@@ -189,45 +191,6 @@ pub enum Event<T: Timestamp, C, D> {
     Progress(Antichain<T>),
 }
 
-// TODO: delete and use CapabilityTrait instead once TimelyDataflow/timely-dataflow#512 gets merged
-pub trait CapabilityTrait<T: Timestamp> {
-    fn session<'a, D, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, D, P>,
-    ) -> Session<'a, T, D, PushCounter<T, D, P>>
-    where
-        D: Container,
-        P: Push<BundleCore<T, D>>;
-}
-
-impl<T: Timestamp> CapabilityTrait<T> for InputCapability<T> {
-    #[inline]
-    fn session<'a, D, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, D, P>,
-    ) -> Session<'a, T, D, PushCounter<T, D, P>>
-    where
-        D: Container,
-        P: Push<BundleCore<T, D>>,
-    {
-        handle.session(self)
-    }
-}
-
-impl<T: Timestamp> CapabilityTrait<T> for Capability<T> {
-    #[inline]
-    fn session<'a, D, P>(
-        &'a self,
-        handle: &'a mut OutputHandleCore<'_, T, D, P>,
-    ) -> Session<'a, T, D, PushCounter<T, D, P>>
-    where
-        D: Container,
-        P: Push<BundleCore<T, D>>,
-    {
-        handle.session(self)
-    }
-}
-
 pub struct AsyncOutputHandle<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> {
     // The field order is important here as the handle is borrowing from the wrapper. See also the
     // safety argument in the constructor
@@ -270,9 +233,11 @@ where
 
     #[allow(clippy::unused_async)]
     #[inline]
-    pub async fn give_container<C: CapabilityTrait<T>>(&mut self, cap: &C, container: &mut D) {
+    pub async fn give_container(&mut self, cap: &AsyncCapability<T>, container: &mut D) {
         let mut handle = self.handle.borrow_mut();
-        cap.session(&mut handle).give_container(container);
+        handle
+            .session(cap.capability.as_ref().unwrap())
+            .give_container(container)
     }
 
     fn cease(&mut self) {
@@ -287,9 +252,9 @@ where
     P: Push<BundleCore<T, Vec<D>>> + 'static,
 {
     #[allow(clippy::unused_async)]
-    pub async fn give<C: CapabilityTrait<T>>(&mut self, cap: &C, data: D) {
+    pub async fn give(&mut self, cap: &AsyncCapability<T>, data: D) {
         let mut handle = self.handle.borrow_mut();
-        cap.session(&mut handle).give(data);
+        handle.session(cap.capability.as_ref().unwrap()).give(data)
     }
 }
 
@@ -315,7 +280,11 @@ pub trait InputConnection<T: Timestamp> {
     fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>>;
 
     /// Accepts an input capability.
-    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability;
+    fn accept(
+        &self,
+        input_cap: InputCapability<T>,
+        capability_drops: &Rc<RefCell<Vec<Capability<T>>>>,
+    ) -> Self::Capability;
 }
 
 /// A marker type representing a disconnected input.
@@ -328,7 +297,11 @@ impl<T: Timestamp> InputConnection<T> for Disconnected {
         vec![Antichain::new(); outputs]
     }
 
-    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
+    fn accept(
+        &self,
+        input_cap: InputCapability<T>,
+        _: &Rc<RefCell<Vec<Capability<T>>>>,
+    ) -> Self::Capability {
         input_cap.time().clone()
     }
 }
@@ -337,7 +310,7 @@ impl<T: Timestamp> InputConnection<T> for Disconnected {
 pub struct ConnectedToOne(usize);
 
 impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
-    type Capability = Capability<T>;
+    type Capability = AsyncCapability<T>;
 
     fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
         let mut summary = vec![Antichain::new(); outputs];
@@ -345,8 +318,15 @@ impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
         summary
     }
 
-    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        input_cap.retain_for_output(self.0)
+    fn accept(
+        &self,
+        input_cap: InputCapability<T>,
+        drop_queue: &Rc<RefCell<Vec<Capability<T>>>>,
+    ) -> Self::Capability {
+        AsyncCapability {
+            capability: Some(input_cap.retain_for_output(self.0)),
+            drop_queue: Rc::clone(drop_queue),
+        }
     }
 }
 
@@ -354,7 +334,7 @@ impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
 pub struct ConnectedToMany<const N: usize>([usize; N]);
 
 impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
-    type Capability = [Capability<T>; N];
+    type Capability = [AsyncCapability<T>; N];
 
     fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
         let mut summary = vec![Antichain::new(); outputs];
@@ -364,12 +344,192 @@ impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
         summary
     }
 
-    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
-        self.0
-            .map(|output| input_cap.delayed_for_output(input_cap.time(), output))
+    fn accept(
+        &self,
+        input_cap: InputCapability<T>,
+        drop_queue: &Rc<RefCell<Vec<Capability<T>>>>,
+    ) -> Self::Capability {
+        self.0.map(|output| AsyncCapability {
+            capability: Some(input_cap.delayed_for_output(input_cap.time(), output)),
+            drop_queue: Rc::clone(drop_queue),
+        })
     }
 }
 
+/// A permission to send data from an async operator. This type differs from the real capability
+/// type by the fact that on drop the capability is moved into a drop queue so that the effects of
+/// dropping can be deferred to a later time.
+#[derive(Clone, Eq, PartialEq)]
+pub struct AsyncCapability<T: Timestamp> {
+    capability: Option<Capability<T>>,
+    drop_queue: Rc<RefCell<Vec<Capability<T>>>>,
+}
+
+impl<T: Timestamp> AsyncCapability<T> {
+    pub fn time(&self) -> &T {
+        self.capability.as_ref().unwrap().time()
+    }
+
+    pub fn delayed(&self, time: &T) -> AsyncCapability<T> {
+        let capability = self.capability.as_ref().unwrap().delayed(time);
+        Self {
+            capability: Some(capability),
+            drop_queue: Rc::clone(&self.drop_queue),
+        }
+    }
+
+    pub fn try_delayed(&self, time: &T) -> Option<AsyncCapability<T>> {
+        let capability = self.capability.as_ref().unwrap().try_delayed(time)?;
+        Some(Self {
+            capability: Some(capability),
+            drop_queue: Rc::clone(&self.drop_queue),
+        })
+    }
+
+    pub fn downgrade(&mut self, new_time: &T) {
+        self.capability.as_mut().unwrap().downgrade(new_time)
+    }
+
+    pub fn try_downgrade(&mut self, new_time: &T) -> Result<(), DowngradeError> {
+        self.capability.as_mut().unwrap().try_downgrade(new_time)
+    }
+}
+
+impl<T: Timestamp> Deref for AsyncCapability<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.capability.as_deref().unwrap()
+    }
+}
+
+impl<T: Timestamp> fmt::Debug for AsyncCapability<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AsyncCapability")
+            .field("time", self.time())
+            .finish()
+    }
+}
+
+impl<T: Timestamp> PartialOrder for AsyncCapability<T> {
+    fn less_equal(&self, other: &Self) -> bool {
+        PartialOrder::less_equal(
+            self.capability.as_ref().unwrap(),
+            other.capability.as_ref().unwrap(),
+        )
+    }
+}
+
+impl<T: Timestamp> Drop for AsyncCapability<T> {
+    fn drop(&mut self) {
+        self.drop_queue
+            .borrow_mut()
+            .push(self.capability.take().unwrap())
+    }
+}
+
+/// A permission to send data from an async operator. This type differs from the real capability
+/// type by the fact that on drop the capability is moved into a drop queue so that the effects of
+/// dropping can be deferred to a later time.
+#[derive(Debug)]
+pub struct AsyncCapabilitySet<T: Timestamp> {
+    elements: Antichain<AsyncCapability<T>>,
+}
+
+impl<T: Timestamp> AsyncCapabilitySet<T> {
+    pub fn new() -> Self {
+        Self {
+            elements: Antichain::new(),
+        }
+    }
+
+    pub fn from_elem(cap: AsyncCapability<T>) -> Self {
+        Self {
+            elements: Antichain::from_elem(cap),
+        }
+    }
+
+    pub fn delayed(&self, time: &T) -> AsyncCapability<T> {
+        /// Makes the panic branch cold & outlined to decrease code bloat & give
+        /// the inner function the best chance possible of being inlined with
+        /// minimal code bloat
+        #[cold]
+        #[inline(never)]
+        fn delayed_panic(invalid_time: &dyn fmt::Debug) -> ! {
+            // Formatting & panic machinery is relatively expensive in terms of code bloat, so
+            // we outline it
+            panic!(
+                "failed to create a delayed capability, the current set does not \
+                have an element less than or equal to {:?}",
+                invalid_time,
+            )
+        }
+
+        self.try_delayed(time)
+            .unwrap_or_else(|| delayed_panic(time))
+    }
+
+    pub fn try_delayed(&self, time: &T) -> Option<AsyncCapability<T>> {
+        self.elements
+            .iter()
+            .find(|capability| capability.time().less_equal(time))
+            .and_then(|capability| capability.try_delayed(time))
+    }
+
+    pub fn downgrade<B, F>(&mut self, frontier: F)
+    where
+        B: std::borrow::Borrow<T>,
+        F: IntoIterator<Item = B>,
+    {
+        /// Makes the panic branch cold & outlined to decrease code bloat & give
+        /// the inner function the best chance possible of being inlined with
+        /// minimal code bloat
+        #[cold]
+        #[inline(never)]
+        fn downgrade_panic() -> ! {
+            // Formatting & panic machinery is relatively expensive in terms of code bloat, so
+            // we outline it
+            panic!(
+                "Attempted to downgrade a CapabilitySet with a frontier containing an element \
+                that was not beyond an element within the set"
+            )
+        }
+
+        self.try_downgrade(frontier)
+            .unwrap_or_else(|_| downgrade_panic())
+    }
+
+    pub fn try_downgrade<B, F>(&mut self, frontier: F) -> Result<(), ()>
+    where
+        B: std::borrow::Borrow<T>,
+        F: IntoIterator<Item = B>,
+    {
+        let mut new_elements = Antichain::new();
+        for time in frontier.into_iter() {
+            let capability = self.try_delayed(time.borrow()).ok_or(())?;
+            new_elements.insert(capability);
+        }
+        self.elements = new_elements;
+
+        Ok(())
+    }
+}
+
+impl<T: Timestamp> Deref for AsyncCapabilitySet<T> {
+    type Target = [AsyncCapability<T>];
+
+    fn deref(&self) -> &Self::Target {
+        &*self.elements
+    }
+}
+
+impl<T: Timestamp> From<Vec<AsyncCapability<T>>> for AsyncCapabilitySet<T> {
+    fn from(caps: Vec<AsyncCapability<T>>) -> Self {
+        Self {
+            elements: caps.into(),
+        }
+    }
+}
 /// A helper trait abstracting over an output handle. It facilitates passing type erased
 /// output handles during operator construction.
 /// It is not meant to be implemented by users.
@@ -405,6 +565,7 @@ impl<G: Scope> OperatorBuilder<G> {
             input_frontiers: Default::default(),
             input_queues: Default::default(),
             output_flushes: Default::default(),
+            capability_drops: Default::default(),
             shutdown_handle,
             shutdown_button,
         }
@@ -511,21 +672,32 @@ impl<G: Scope> OperatorBuilder<G> {
         (handle, stream)
     }
 
-    /// Creates an operator implementation from supplied logic constructor. It returns a shutdown
-    /// button that when pressed it will cause the logic future to be dropped and input handles to
-    /// be drained. The button can be converted into a token by using
-    /// [`Button::press_on_drop`]
-    pub fn build<B, L>(self, constructor: B) -> Button
+    /// Creates a fallible operator implementation from supplied logic constructor. If the `Future`
+    /// resolves to an error it will be emitted in the returned error stream and then the operator
+    /// will wait indefinitely until the shutdown button is pressed.
+    pub fn build_fallible<E, B, L>(mut self, constructor: B) -> (Button, StreamCore<G, Vec<Rc<E>>>)
     where
-        B: FnOnce(Vec<Capability<G::Timestamp>>) -> L,
-        L: Future + 'static,
+        E: 'static,
+        B: FnOnce(Vec<AsyncCapability<G::Timestamp>>) -> L,
+        L: Future<Output = Result<(), E>> + 'static,
     {
+        // // Create a new completely disconnected output to communicate errors
+        let (mut error_output, error_stream) = self.new_output();
+
         let operator_waker = self.operator_waker;
         let mut input_frontiers = self.input_frontiers;
         let mut input_queues = self.input_queues;
         let mut output_flushes = self.output_flushes;
+        let mut capability_drops = self.capability_drops;
         let mut shutdown_handle = self.shutdown_handle;
         self.builder.build_reschedule(move |caps| {
+            let caps = caps
+                .into_iter()
+                .map(|cap| AsyncCapability {
+                    capability: Some(cap),
+                    drop_queue: Rc::clone(&capability_drops),
+                })
+                .collect();
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             move |new_frontiers| {
                 operator_waker.active.store(true, Ordering::SeqCst);
@@ -539,7 +711,7 @@ impl<G: Scope> OperatorBuilder<G> {
                     }
                     // Then accept all input into local queues. This step registers the received
                     // messages with progress tracking.
-                    queue.accept_input();
+                    queue.accept_input(&capability_drops);
                 }
                 operator_waker.active.store(false, Ordering::SeqCst);
 
@@ -551,6 +723,7 @@ impl<G: Scope> OperatorBuilder<G> {
                     // draining the input handles.
                     if shutdown_handle.all_pressed() {
                         logic_fut = None;
+                        capability_drops.borrow_mut().clear();
                         for queue in input_queues.iter_mut() {
                             queue.drain_input();
                         }
@@ -565,9 +738,20 @@ impl<G: Scope> OperatorBuilder<G> {
                             let waker = futures_util::task::waker_ref(&operator_waker);
                             let mut cx = Context::from_waker(&waker);
                             operator_waker.task_ready.store(false, Ordering::SeqCst);
-                            if Pin::new(fut).poll(&mut cx).is_ready() {
-                                // We're done with logic so deallocate the task
-                                logic_fut = None;
+                            match Pin::new(fut).poll(&mut cx) {
+                                Poll::Ready(Ok(())) => {
+                                    // We're done with logic so deallocate the task
+                                    logic_fut = None;
+                                    capability_drops.borrow_mut().clear();
+                                },
+                                Poll::Ready(Err(err)) => {
+                                    // An error happened so we need to keep the operator intact and
+                                    // ignore all dropped capabilities until the button is pressed.
+                                    // error_handle.give()
+                                }
+                                Poll::Pending => {
+                                    capability_drops.borrow_mut().clear();
+                                }
                             }
                             // Flush all the outputs before exiting
                             for flush in output_flushes.iter_mut() {
@@ -590,72 +774,27 @@ impl<G: Scope> OperatorBuilder<G> {
             }
         });
 
-        self.shutdown_button
+        (self.shutdown_button, error_stream)
     }
 
-    /// Creates a fallible operator implementation from supplied logic constructor. If the `Future`
-    /// resolves to an error it will be emitted in the returned error stream and then the operator
-    /// will wait indefinitely until the shutdown button is pressed.
-    ///
-    /// # Capability handling
-    ///
-    /// Unlike [`OperatorBuilder::build`], this method does not give owned capabilities to the
-    /// constructor. All initial capabilities are wrapped in a `CapabilitySet` and a mutable
-    /// reference to them is given instead. This is done to avoid storing owned capabilities in the
-    /// state of the logic future which would make using the `?` operator unsafe, since the
-    /// frontiers would incorrectly advance, potentially causing incorrect actions downstream.
-    ///
-    /// ```ignore
-    /// builder.build_fallible(|caps| Box::pin(async move {
-    ///     // Assert that we have the number of capabilities we expect
-    ///     // `cap` will be a `&mut Option<Capability<T>>`:
-    ///     let [cap_set]: &mut [_; 1] = caps.try_into().unwrap();
-    ///
-    ///     // Using cap to send data:
-    ///     output.give(&cap_set[0], 42);
-    ///
-    ///     // Using cap_set to downgrade it:
-    ///     cap_set.downgrade([]);
-    ///
-    ///     // Explicitly dropping the capability:
-    ///     // Simply running `drop(cap_set)` will only drop the reference and not the capability set itself!
-    ///     *cap_set = CapabilitySet::new();
-    ///
-    ///     // !! BIG WARNING !!:
-    ///     // It is tempting to `take` the capability out of the set for convenience. This will
-    ///     // move the capability into the future state, tying its lifetime to it, which will get
-    ///     // dropped when an error is hit, causing incorrect progress statements.
-    ///     let cap = cap_set.delayed(&Timestamp::minimum());
-    ///     *cap_set = CapabilitySet::new(); // DO NOT DO THIS
-    /// }));
-    /// ```
-    pub fn build_fallible<E: 'static, F>(
-        mut self,
-        constructor: F,
-    ) -> (Button, StreamCore<G, Vec<Rc<E>>>)
+    /// Creates an operator implementation from supplied logic constructor. It returns a shutdown
+    /// button that when pressed it will cause the logic future to be dropped and input handles to
+    /// be drained. The button can be converted into a token by using
+    /// [`Button::press_on_drop`]
+    pub fn build<B, L>(self, constructor: B) -> Button
     where
-        F: for<'a> FnOnce(
-                &'a mut [CapabilitySet<G::Timestamp>],
-            ) -> Pin<Box<dyn Future<Output = Result<(), E>> + 'a>>
-            + 'static,
+        B: FnOnce(Vec<AsyncCapability<G::Timestamp>>) -> L,
+        L: Future + 'static,
     {
-        // Create a new completely disconnected output
-        let (mut error_output, error_stream) = self.new_output();
-        let button = self.build(|mut caps| async move {
-            let error_cap = caps.pop().unwrap();
-            let mut caps = caps
-                .into_iter()
-                .map(CapabilitySet::from_elem)
-                .collect::<Vec<_>>();
-            if let Err(err) = constructor(&mut *caps).await {
-                error_output.give(&error_cap, Rc::new(err)).await;
-                drop(error_cap);
-                // IMPORTANT: wedge this operator until the button is pressed. Returning would drop
-                // the capabilities and could produce incorrect progress statements.
-                std::future::pending().await
+        let (button, _err_stream) = self.build_fallible(move |caps| {
+            let logic = constructor(caps);
+            async move {
+                logic.await;
+                Ok::<(), ()>(())
             }
         });
-        (button, error_stream)
+
+        button
     }
 
     /// Creates operator info for the operator.

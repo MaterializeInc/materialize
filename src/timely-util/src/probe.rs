@@ -17,14 +17,14 @@ use std::cell::RefCell;
 use std::convert::Infallible;
 use std::rc::Rc;
 
-use timely::dataflow::operators::{CapabilitySet, InspectCore};
+use timely::dataflow::operators::InspectCore;
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
 use timely::{Container, PartialOrder};
 use tokio::sync::Notify;
 
-use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
+use crate::builder_async::{AsyncCapabilitySet, OperatorBuilder as AsyncOperatorBuilder};
 
 /// Monitors progress at a `Stream`.
 pub trait ProbeNotify<G: Scope> {
@@ -166,7 +166,7 @@ where
     let (_output, output_stream) = builder.new_output();
 
     builder.build(move |capabilities| async move {
-        let mut cap_set = CapabilitySet::from(capabilities);
+        let mut cap_set = AsyncCapabilitySet::from(capabilities);
         let mut frontier = Antichain::from_elem(T::minimum());
 
         let mut downgrade_capability = |f: AntichainRef<T>| {

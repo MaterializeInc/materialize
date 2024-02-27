@@ -36,7 +36,7 @@ use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{
-    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncCapabilitySet, Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::probe::ProbeNotify;
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Capability, Leave, OkErr};
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
+use timely::dataflow::operators::{ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::ScopeParent;
 use timely::dataflow::{Scope, Stream};
@@ -754,7 +754,7 @@ where
     });
     let shutdown_button = builder.build(move |caps| async move {
         // The output capability.
-        let mut cap_set = CapabilitySet::from_elem(caps.into_element());
+        let mut cap_set = AsyncCapabilitySet::from_elem(caps.into_element());
 
         // The frontier of our output. This matches the `CapabilitySet` above.
         let mut output_frontier = Antichain::from_elem(TimelyTimestamp::minimum());

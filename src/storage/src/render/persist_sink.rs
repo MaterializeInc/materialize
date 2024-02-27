@@ -110,11 +110,12 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{
-    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncCapability, AsyncCapabilitySet, Event, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
+use timely::dataflow::operators::{Broadcast, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -440,7 +441,7 @@ where
         // The data-passthrough output should will use the data capabilities, so we drop
         // its capability here.
         let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
-        let mut cap_set = CapabilitySet::from_elem(desc_cap);
+        let mut cap_set = AsyncCapabilitySet::from_elem(desc_cap);
 
         // Initialize this operators's `upper` to the `upper` of the persist shard we are writing
         // to. Data from the source not beyond this time will be dropped, as it has already
@@ -616,7 +617,7 @@ where
         #[allow(clippy::disallowed_types)]
         let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>),
-            Capability<mz_repr::Timestamp>,
+            AsyncCapability<mz_repr::Timestamp>,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.

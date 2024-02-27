@@ -29,12 +29,12 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    AsyncCapability, AsyncCapabilitySet, Event, OperatorBuilder as AsyncOperatorBuilder,
+};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{
-    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
-};
+use timely::dataflow::operators::{Broadcast, ConnectLoop, Feedback, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
@@ -322,7 +322,7 @@ where
         // The data-passthrough output will use the data capabilities, so we drop
         // its capability here.
         let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
-        let mut cap_set = CapabilitySet::from_elem(desc_cap);
+        let mut cap_set = AsyncCapabilitySet::from_elem(desc_cap);
 
         // TODO(aljoscha): We need to figure out what to do with error
         // results from these calls.
@@ -630,7 +630,7 @@ where
         #[allow(clippy::disallowed_types)]
         let mut in_flight_batches = std::collections::HashMap::<
             (Antichain<Timestamp>, Antichain<Timestamp>),
-            Capability<Timestamp>,
+            AsyncCapability<Timestamp>,
         >::new();
 
         // TODO(aljoscha): We need to figure out what to do with error results from these calls.
@@ -964,7 +964,7 @@ where
             return;
         }
 
-        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+        let mut cap_set = AsyncCapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that

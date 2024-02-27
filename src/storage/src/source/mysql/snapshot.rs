@@ -92,7 +92,7 @@ use futures::TryStreamExt;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_timely_util::antichain::AntichainExt;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map};
+use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{error, trace};
@@ -105,7 +105,9 @@ use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{
+    AsyncCapabilitySet, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::types::ProgressStatisticsUpdate;
@@ -397,7 +399,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     };
                     rewinds_handle.give(&rewind_cap_set[0], req).await;
                 }
-                *rewind_cap_set = CapabilitySet::new();
+                *rewind_cap_set = AsyncCapabilitySet::new();
 
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();

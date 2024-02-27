@@ -58,7 +58,7 @@ use std::rc::Rc;
 use differential_dataflow::Collection;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map};
+use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use uuid::Uuid;
@@ -73,7 +73,7 @@ use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
-use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
+use mz_timely_util::builder_async::{AsyncCapabilitySet, AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -281,13 +281,13 @@ async fn return_definite_error(
         Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
         TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
     >,
-    data_cap_set: &CapabilitySet<GtidPartition>,
+    data_cap_set: &AsyncCapabilitySet<GtidPartition>,
     definite_error_handle: &mut AsyncOutputHandle<
         GtidPartition,
         Vec<ReplicationError>,
         TeeCore<GtidPartition, Vec<ReplicationError>>,
     >,
-    definite_error_cap_set: &CapabilitySet<GtidPartition>,
+    definite_error_cap_set: &AsyncCapabilitySet<GtidPartition>,
 ) -> () {
     for output_index in outputs {
         let update = (

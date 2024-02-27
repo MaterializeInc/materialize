@@ -29,7 +29,7 @@ use timely::{Data, ExchangeData, PartialOrder};
 
 use crate::buffer::ConsolidateBuffer;
 use crate::builder_async::{
-    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
+    AsyncCapability, AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
     OperatorBuilder as OperatorBuilderAsync,
 };
 
@@ -77,7 +77,7 @@ where
     where
         D2: Data,
         B: FnOnce(
-            Capability<G::Timestamp>,
+            AsyncCapability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
@@ -100,7 +100,7 @@ where
         D2: Data,
         D3: Data,
         B: FnOnce(
-            Capability<G::Timestamp>,
+            AsyncCapability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
@@ -297,7 +297,7 @@ where
     where
         D2: Data,
         B: FnOnce(
-            Capability<G::Timestamp>,
+            AsyncCapability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
@@ -332,7 +332,7 @@ where
         D2: Data,
         D3: Data,
         B: FnOnce(
-            Capability<G::Timestamp>,
+            AsyncCapability<G::Timestamp>,
             OperatorInfo,
             AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
@@ -617,7 +617,7 @@ pub fn source_async<G: Scope, D, B, BFut>(scope: &G, name: String, constructor: 
 where
     D: Data,
     B: FnOnce(
-        Capability<G::Timestamp>,
+        AsyncCapability<G::Timestamp>,
         OperatorInfo,
         AsyncOutputHandle<G::Timestamp, Vec<D>, Tee<G::Timestamp, D>>,
     ) -> BFut,

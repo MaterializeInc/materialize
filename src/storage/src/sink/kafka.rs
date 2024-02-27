@@ -96,7 +96,7 @@ use mz_storage_types::sinks::{
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
-    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncCapabilitySet, Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use rdkafka::error::KafkaError;
 use rdkafka::message::{Header, OwnedHeaders};
@@ -104,7 +104,7 @@ use rdkafka::metadata::Metadata;
 use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
 use rdkafka::types::RDKafkaErrorCode;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
+use timely::dataflow::operators::{Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
@@ -735,7 +735,7 @@ fn encode_collection<G: Scope>(
             // point. This is a temporary workaround of build_fallible's bad interaction of owned
             // capabilities and errors.
             // TODO(petrosagg): Make the fallible async operator safe
-            *capset = CapabilitySet::new();
+            *capset = AsyncCapabilitySet::new();
 
             while let Some(event) = input.next().await {
                 if let Event::Data(cap, rows) = event {

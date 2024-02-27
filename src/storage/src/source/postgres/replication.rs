@@ -89,8 +89,8 @@ use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    AsyncCapability, AsyncOutputHandle, Event as AsyncEvent,
+    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use once_cell::sync::Lazy;
@@ -100,7 +100,6 @@ use postgres_protocol::message::backend::{
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -464,7 +463,7 @@ async fn raw_stream<'a>(
         Vec<ProgressStatisticsUpdate>,
         TeeCore<MzOffset, Vec<ProgressStatisticsUpdate>>,
     >,
-    stats_cap: &'a Capability<MzOffset>,
+    stats_cap: &'a AsyncCapability<MzOffset>,
 ) -> Result<
     Result<
         impl AsyncStream<
