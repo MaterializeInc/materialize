@@ -916,7 +916,7 @@ async fn execute_request<S: ResultSender>(
         stmt: &Statement<Raw>,
     ) -> Result<(), Error> {
         let kind: StatementKind = stmt.into();
-        let execute_responses = Plan::generated_from(kind)
+        let execute_responses = Plan::generated_from(&kind)
             .into_iter()
             .map(ExecuteResponse::generated_from)
             .flatten()

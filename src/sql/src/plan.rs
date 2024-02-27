@@ -194,104 +194,92 @@ pub enum Plan {
 impl Plan {
     /// Expresses which [`StatementKind`] can generate which set of
     /// [`PlanKind`].
-    pub fn generated_from(stmt: StatementKind) -> Vec<PlanKind> {
+    pub fn generated_from(stmt: &StatementKind) -> &'static [PlanKind] {
         match stmt {
-            StatementKind::AlterCluster => {
-                vec![PlanKind::AlterNoop, PlanKind::AlterCluster]
-            }
-            StatementKind::AlterConnection => vec![PlanKind::AlterNoop, PlanKind::AlterConnection],
-            StatementKind::AlterDefaultPrivileges => vec![PlanKind::AlterDefaultPrivileges],
-            StatementKind::AlterIndex => vec![
+            StatementKind::AlterCluster => &[PlanKind::AlterNoop, PlanKind::AlterCluster],
+            StatementKind::AlterConnection => &[PlanKind::AlterNoop, PlanKind::AlterConnection],
+            StatementKind::AlterDefaultPrivileges => &[PlanKind::AlterDefaultPrivileges],
+            StatementKind::AlterIndex => &[
                 PlanKind::AlterIndexResetOptions,
                 PlanKind::AlterIndexSetOptions,
                 PlanKind::AlterNoop,
             ],
-            StatementKind::AlterObjectRename => {
-                vec![
-                    PlanKind::AlterClusterRename,
-                    PlanKind::AlterClusterReplicaRename,
-                    PlanKind::AlterItemRename,
-                    PlanKind::AlterSchemaRename,
-                    PlanKind::AlterNoop,
-                ]
-            }
-            StatementKind::AlterObjectSwap => {
-                vec![
-                    PlanKind::AlterClusterSwap,
-                    PlanKind::AlterItemSwap,
-                    PlanKind::AlterSchemaSwap,
-                    PlanKind::AlterNoop,
-                ]
-            }
-            StatementKind::AlterRole => vec![PlanKind::AlterRole],
-            StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
-            StatementKind::AlterSetCluster => {
-                vec![PlanKind::AlterNoop, PlanKind::AlterSetCluster]
-            }
+            StatementKind::AlterObjectRename => &[
+                PlanKind::AlterClusterRename,
+                PlanKind::AlterClusterReplicaRename,
+                PlanKind::AlterItemRename,
+                PlanKind::AlterSchemaRename,
+                PlanKind::AlterNoop,
+            ],
+            StatementKind::AlterObjectSwap => &[
+                PlanKind::AlterClusterSwap,
+                PlanKind::AlterItemSwap,
+                PlanKind::AlterSchemaSwap,
+                PlanKind::AlterNoop,
+            ],
+            StatementKind::AlterRole => &[PlanKind::AlterRole],
+            StatementKind::AlterSecret => &[PlanKind::AlterNoop, PlanKind::AlterSecret],
+            StatementKind::AlterSetCluster => &[PlanKind::AlterNoop, PlanKind::AlterSetCluster],
             // TODO: If we ever support ALTER SINK again, this will need to be changed
-            StatementKind::AlterSink => vec![PlanKind::AlterNoop],
-            StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
-            StatementKind::AlterSystemReset => {
-                vec![PlanKind::AlterNoop, PlanKind::AlterSystemReset]
-            }
+            StatementKind::AlterSink => &[PlanKind::AlterNoop],
+            StatementKind::AlterSource => &[PlanKind::AlterNoop, PlanKind::AlterSource],
+            StatementKind::AlterSystemReset => &[PlanKind::AlterNoop, PlanKind::AlterSystemReset],
             StatementKind::AlterSystemResetAll => {
-                vec![PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
+                &[PlanKind::AlterNoop, PlanKind::AlterSystemResetAll]
             }
-            StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
-            StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
-            StatementKind::Close => vec![PlanKind::Close],
-            StatementKind::Comment => vec![PlanKind::Comment],
-            StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![
+            StatementKind::AlterSystemSet => &[PlanKind::AlterNoop, PlanKind::AlterSystemSet],
+            StatementKind::AlterOwner => &[PlanKind::AlterNoop, PlanKind::AlterOwner],
+            StatementKind::Close => &[PlanKind::Close],
+            StatementKind::Comment => &[PlanKind::Comment],
+            StatementKind::Commit => &[PlanKind::CommitTransaction],
+            StatementKind::Copy => &[
                 PlanKind::CopyFrom,
                 PlanKind::Select,
                 PlanKind::Subscribe,
                 PlanKind::CopyTo,
             ],
-            StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
-            StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
-            StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
-            StatementKind::CreateDatabase => vec![PlanKind::CreateDatabase],
-            StatementKind::CreateIndex => vec![PlanKind::CreateIndex],
-            StatementKind::CreateMaterializedView => vec![PlanKind::CreateMaterializedView],
-            StatementKind::CreateRole => vec![PlanKind::CreateRole],
-            StatementKind::CreateSchema => vec![PlanKind::CreateSchema],
-            StatementKind::CreateSecret => vec![PlanKind::CreateSecret],
-            StatementKind::CreateSink => vec![PlanKind::CreateSink],
+            StatementKind::CreateCluster => &[PlanKind::CreateCluster],
+            StatementKind::CreateClusterReplica => &[PlanKind::CreateClusterReplica],
+            StatementKind::CreateConnection => &[PlanKind::CreateConnection],
+            StatementKind::CreateDatabase => &[PlanKind::CreateDatabase],
+            StatementKind::CreateIndex => &[PlanKind::CreateIndex],
+            StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
+            StatementKind::CreateRole => &[PlanKind::CreateRole],
+            StatementKind::CreateSchema => &[PlanKind::CreateSchema],
+            StatementKind::CreateSecret => &[PlanKind::CreateSecret],
+            StatementKind::CreateSink => &[PlanKind::CreateSink],
             StatementKind::CreateSource
             | StatementKind::CreateSubsource
-            | StatementKind::CreateWebhookSource => {
-                vec![PlanKind::CreateSource]
-            }
-            StatementKind::CreateTable => vec![PlanKind::CreateTable],
-            StatementKind::CreateType => vec![PlanKind::CreateType],
-            StatementKind::CreateView => vec![PlanKind::CreateView],
-            StatementKind::Deallocate => vec![PlanKind::Deallocate],
-            StatementKind::Declare => vec![PlanKind::Declare],
-            StatementKind::Delete => vec![PlanKind::ReadThenWrite],
-            StatementKind::Discard => vec![PlanKind::DiscardAll, PlanKind::DiscardTemp],
-            StatementKind::DropObjects => vec![PlanKind::DropObjects],
-            StatementKind::DropOwned => vec![PlanKind::DropOwned],
-            StatementKind::Execute => vec![PlanKind::Execute],
-            StatementKind::ExplainPlan => vec![PlanKind::ExplainPlan],
-            StatementKind::ExplainPushdown => vec![PlanKind::ExplainPushdown],
-            StatementKind::ExplainTimestamp => vec![PlanKind::ExplainTimestamp],
-            StatementKind::ExplainSinkSchema => vec![PlanKind::ExplainSinkSchema],
-            StatementKind::Fetch => vec![PlanKind::Fetch],
-            StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
-            StatementKind::GrantRole => vec![PlanKind::GrantRole],
-            StatementKind::Insert => vec![PlanKind::Insert],
-            StatementKind::Prepare => vec![PlanKind::Prepare],
-            StatementKind::Raise => vec![PlanKind::Raise],
-            StatementKind::ReassignOwned => vec![PlanKind::ReassignOwned],
-            StatementKind::ResetVariable => vec![PlanKind::ResetVariable],
-            StatementKind::RevokePrivileges => vec![PlanKind::RevokePrivileges],
-            StatementKind::RevokeRole => vec![PlanKind::RevokeRole],
-            StatementKind::Rollback => vec![PlanKind::AbortTransaction],
-            StatementKind::Select => vec![PlanKind::Select, PlanKind::SideEffectingFunc],
-            StatementKind::SetTransaction => vec![PlanKind::SetTransaction],
-            StatementKind::SetVariable => vec![PlanKind::SetVariable],
-            StatementKind::Show => vec![
+            | StatementKind::CreateWebhookSource => &[PlanKind::CreateSource],
+            StatementKind::CreateTable => &[PlanKind::CreateTable],
+            StatementKind::CreateType => &[PlanKind::CreateType],
+            StatementKind::CreateView => &[PlanKind::CreateView],
+            StatementKind::Deallocate => &[PlanKind::Deallocate],
+            StatementKind::Declare => &[PlanKind::Declare],
+            StatementKind::Delete => &[PlanKind::ReadThenWrite],
+            StatementKind::Discard => &[PlanKind::DiscardAll, PlanKind::DiscardTemp],
+            StatementKind::DropObjects => &[PlanKind::DropObjects],
+            StatementKind::DropOwned => &[PlanKind::DropOwned],
+            StatementKind::Execute => &[PlanKind::Execute],
+            StatementKind::ExplainPlan => &[PlanKind::ExplainPlan],
+            StatementKind::ExplainPushdown => &[PlanKind::ExplainPushdown],
+            StatementKind::ExplainTimestamp => &[PlanKind::ExplainTimestamp],
+            StatementKind::ExplainSinkSchema => &[PlanKind::ExplainSinkSchema],
+            StatementKind::Fetch => &[PlanKind::Fetch],
+            StatementKind::GrantPrivileges => &[PlanKind::GrantPrivileges],
+            StatementKind::GrantRole => &[PlanKind::GrantRole],
+            StatementKind::Insert => &[PlanKind::Insert],
+            StatementKind::Prepare => &[PlanKind::Prepare],
+            StatementKind::Raise => &[PlanKind::Raise],
+            StatementKind::ReassignOwned => &[PlanKind::ReassignOwned],
+            StatementKind::ResetVariable => &[PlanKind::ResetVariable],
+            StatementKind::RevokePrivileges => &[PlanKind::RevokePrivileges],
+            StatementKind::RevokeRole => &[PlanKind::RevokeRole],
+            StatementKind::Rollback => &[PlanKind::AbortTransaction],
+            StatementKind::Select => &[PlanKind::Select, PlanKind::SideEffectingFunc],
+            StatementKind::SetTransaction => &[PlanKind::SetTransaction],
+            StatementKind::SetVariable => &[PlanKind::SetVariable],
+            StatementKind::Show => &[
                 PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
@@ -299,10 +287,10 @@ impl Plan {
                 PlanKind::ShowAllVariables,
                 PlanKind::InspectShard,
             ],
-            StatementKind::StartTransaction => vec![PlanKind::StartTransaction],
-            StatementKind::Subscribe => vec![PlanKind::Subscribe],
-            StatementKind::Update => vec![PlanKind::ReadThenWrite],
-            StatementKind::ValidateConnection => vec![PlanKind::ValidateConnection],
+            StatementKind::StartTransaction => &[PlanKind::StartTransaction],
+            StatementKind::Subscribe => &[PlanKind::Subscribe],
+            StatementKind::Update => &[PlanKind::ReadThenWrite],
+            StatementKind::ValidateConnection => &[PlanKind::ValidateConnection],
         }
     }
 

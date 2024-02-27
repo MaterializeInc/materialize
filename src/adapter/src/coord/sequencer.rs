@@ -74,7 +74,7 @@ impl Coordinator {
     ) -> LocalBoxFuture<'_, ()> {
         async move {
             event!(Level::TRACE, plan = format!("{:?}", plan));
-            let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+            let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.

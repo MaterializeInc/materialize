@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement, RawItemName,
-    ShowStatement, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
+    ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
@@ -272,7 +272,8 @@ pub fn plan(
         .map(|(i, ty)| (i + 1, ty.clone()))
         .collect();
 
-    let permitted_plans = Plan::generated_from((&stmt).into());
+    let kind: StatementKind = (&stmt).into();
+    let permitted_plans = Plan::generated_from(&kind);
 
     let scx = &mut StatementContext {
         pcx,
