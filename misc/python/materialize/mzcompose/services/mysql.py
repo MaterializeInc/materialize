@@ -15,6 +15,7 @@ from materialize.mzcompose.service import (
 
 class MySql(Service):
     DEFAULT_ROOT_PASSWORD = "p@ssw0rd"
+    DEFAULT_VERSION = "8.0.35"
 
     DEFAULT_ADDITIONAL_ARGS = [
         "--log-bin=mysql-bin",
@@ -30,7 +31,7 @@ class MySql(Service):
         self,
         root_password: str = DEFAULT_ROOT_PASSWORD,
         name: str = "mysql",
-        version: str = "8.0.35",
+        version: str = DEFAULT_VERSION,
         port: int = 3306,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
         additional_args: list[str] = DEFAULT_ADDITIONAL_ARGS,

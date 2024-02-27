@@ -20,6 +20,7 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 
+# changes to the setup will likely need to be applied in test/mysql-matrix as well
 SERVICES = [
     Materialized(
         additional_system_parameter_defaults={
