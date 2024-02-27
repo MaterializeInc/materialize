@@ -57,10 +57,9 @@ use crate::TransformCtx;
 pub struct Filter;
 
 impl crate::Transform for Filter {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "filter_fusion")
     )]
     fn transform(

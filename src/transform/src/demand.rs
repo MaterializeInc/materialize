@@ -69,10 +69,9 @@ impl CheckedRecursion for Demand {
 }
 
 impl crate::Transform for Demand {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "demand")
     )]
     fn transform(

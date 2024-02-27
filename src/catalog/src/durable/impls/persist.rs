@@ -202,7 +202,7 @@ impl UnopenedPersistCatalogState {
     ///
     /// All usages of the persist catalog must go through this function. That includes the
     /// catalog-debug tool, the adapter's catalog, etc.
-    #[tracing::instrument(level = "info", skip(persist_client, metrics))]
+    #[mz_ore::instrument]
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
@@ -338,7 +338,7 @@ impl UnopenedPersistCatalogState {
         Some(upgrade_version)
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn open_inner(
         mut self,
         mode: Mode,
@@ -460,7 +460,7 @@ impl UnopenedPersistCatalogState {
     }
 
     /// Listen and apply all updates up to `target_upper`.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     pub(crate) async fn sync(
         &mut self,
         target_upper: Timestamp,
@@ -532,7 +532,7 @@ impl UnopenedPersistCatalogState {
     }
 
     /// Listen and apply all updates that are currently in persist.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
         let upper = self.current_upper().await;
         self.sync(upper).await
@@ -540,7 +540,7 @@ impl UnopenedPersistCatalogState {
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
     /// catalog state up to, and including, `as_of`.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn snapshot_unconsolidated(&mut self) -> Vec<StateUpdate<StateUpdateKind>> {
         let current_upper = self.current_upper().await;
 
@@ -565,7 +565,7 @@ impl UnopenedPersistCatalogState {
             .collect()
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     pub(crate) fn consolidate(&mut self) {
         let snapshot = std::mem::take(&mut self.snapshot);
         let ts = snapshot
@@ -603,12 +603,12 @@ impl UnopenedPersistCatalogState {
     ///
     /// NOTE: This is the answer as of the last call to [`Self::sync`] or [`Self::sync_to_current_upper`],
     /// not necessarily what is currently in persist.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     fn is_initialized_inner(&self) -> bool {
         !self.configs.is_empty()
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn current_upper(&mut self) -> Timestamp {
         current_upper(&mut self.write_handle).await
     }
@@ -616,7 +616,7 @@ impl UnopenedPersistCatalogState {
     /// Get the current value of config `key`.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, CatalogError> {
         self.sync_to_current_upper().await?;
         Ok(self.configs.get(key).cloned())
@@ -625,14 +625,14 @@ impl UnopenedPersistCatalogState {
     /// Get the user version of this instance.
     ///
     /// The user version is used to determine if a migration is needed.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     pub(crate) async fn get_user_version(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_current_config(USER_VERSION_KEY).await
     }
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
     /// iff the current global upper of the catalog is `current_upper`.
-    #[tracing::instrument(level = "info", skip(self, updates))]
+    #[mz_ore::instrument]
     pub(crate) async fn compare_and_append<T: IntoStateUpdateKindRaw>(
         &mut self,
         updates: Vec<(T, Diff)>,
@@ -661,7 +661,7 @@ impl UnopenedPersistCatalogState {
 
 #[async_trait]
 impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn open_savepoint(
         mut self: Box<Self>,
         initial_ts: EpochMillis,
@@ -680,7 +680,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         .await
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn open_read_only(
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
@@ -690,7 +690,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .await
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn open(
         mut self: Box<Self>,
         initial_ts: EpochMillis,
@@ -709,18 +709,18 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
         Ok(DebugCatalogState::Persist(*self))
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         self.sync_to_current_upper().await?;
         Ok(!self.configs.is_empty())
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
         self.sync_to_current_upper().await?;
         self.epoch
@@ -728,12 +728,12 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_current_config(DEPLOY_GENERATION).await
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
         self.get_current_config(SYSTEM_CONFIG_SYNCED_KEY)
             .await
@@ -744,7 +744,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         panic!("Persist implementation does not have a tombstone")
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
         let value = self.get_current_config(CATALOG_KIND_KEY).await?;
         value.map(CatalogKind::try_from).transpose().map_err(|err| {
@@ -752,7 +752,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         })
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         self.sync_to_current_upper().await?;
         if self.is_initialized_inner() {
@@ -767,7 +767,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         error!("unable to set catalog kind to {catalog_kind:?}");
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn expire(self: Box<Self>) {
         self.listen.expire().await;
         self.write_handle.expire().await;
@@ -942,7 +942,7 @@ impl PersistCatalogState {
     /// state.
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn persist_snapshot(
         &mut self,
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
@@ -953,7 +953,7 @@ impl PersistCatalogState {
         snapshot
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn sync_to_current_upper(&mut self) -> Result<(), CatalogError> {
         let upper = self.current_upper().await;
         if upper != self.upper {
@@ -973,7 +973,7 @@ impl PersistCatalogState {
     }
 
     /// Listen and apply all updates up to `target_upper`.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn sync(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
         self.metrics.syncs.inc();
         let counter = self.metrics.sync_latency_seconds.clone();
@@ -983,7 +983,7 @@ impl PersistCatalogState {
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), CatalogError> {
         let updates = sync(&mut self.listen, &mut self.upper, target_upper).await;
         self.apply_updates(updates)?;
@@ -991,7 +991,7 @@ impl PersistCatalogState {
     }
 
     /// Applies [`StateUpdate`]s to the in memory catalog cache.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     fn apply_updates(
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate>,
@@ -1143,13 +1143,13 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         self.epoch
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn expire(self: Box<Self>) {
         self.write_handle.expire().await;
         self.listen.expire().await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
         self.with_snapshot(|snapshot| {
             Ok(snapshot
@@ -1163,7 +1163,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.sync_to_current_upper().await?;
         let audit_logs = match self.audit_logs.take() {
@@ -1194,7 +1194,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         Ok(audit_logs)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
         let key = proto::IdAllocKey {
             name: id_type.to_string(),
@@ -1205,7 +1205,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn get_persist_txn_tables(
         &mut self,
     ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
@@ -1232,12 +1232,12 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         panic!("Persist implementation does not have a tombstone")
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(|snapshot| Ok(snapshot.clone())).await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn whole_migration_snapshot(
         &mut self,
     ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
@@ -1293,14 +1293,14 @@ impl DurableCatalogState for PersistCatalogState {
         matches!(self.mode, Mode::Readonly)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn whole_migration_transaction(
         &mut self,
     ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
@@ -1310,7 +1310,7 @@ impl DurableCatalogState for PersistCatalogState {
         Ok((transaction, audit_events, storage_usages))
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
@@ -1356,7 +1356,7 @@ impl DurableCatalogState for PersistCatalogState {
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
         // Read only catalog does not care about leadership.
         if self.is_read_only() {
@@ -1380,7 +1380,7 @@ impl DurableCatalogState for PersistCatalogState {
     // only need one part of the snapshot. A Potential mitigation against these performance hits is
     // to utilize `CoW`s in `Transaction`s to avoid cloning unnecessary state.
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
@@ -1444,7 +1444,7 @@ impl DurableCatalogState for PersistCatalogState {
         Ok(events)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn set_timestamp(
         &mut self,
         timeline: &Timeline,
@@ -1455,7 +1455,7 @@ impl DurableCatalogState for PersistCatalogState {
         txn.commit().await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
         if amount == 0 {
             return Ok(Vec::new());
@@ -1551,7 +1551,7 @@ async fn compare_and_append<T: IntoStateUpdateKindRaw>(
     Ok(())
 }
 
-#[tracing::instrument(level = "debug", skip(read_handle))]
+#[mz_ore::instrument(level = "debug")]
 async fn snapshot(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
@@ -1566,7 +1566,7 @@ async fn snapshot(
 /// state up to, and including, `as_of`.
 ///
 /// The output is consolidated and sorted by timestamp in ascending order.
-#[tracing::instrument(level = "debug", skip(read_handle, metrics))]
+#[mz_ore::instrument(level = "debug")]
 async fn snapshot_binary(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
@@ -1584,7 +1584,7 @@ async fn snapshot_binary(
 /// state up to, and including, `as_of`.
 ///
 /// The output is consolidated and sorted by timestamp in ascending order.
-#[tracing::instrument(level = "debug", skip(read_handle))]
+#[mz_ore::instrument(level = "debug")]
 async fn snapshot_binary_inner(
     read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
     as_of: Timestamp,
@@ -1606,7 +1606,7 @@ async fn snapshot_binary_inner(
 /// Listen for all updates up to `target_upper`.
 ///
 /// Results are guaranteed to be consolidated and sorted by timestamp then diff.
-#[tracing::instrument(level = "debug", skip(listen))]
+#[mz_ore::instrument(level = "debug")]
 async fn sync<T: IntoStateUpdateKindRaw>(
     listen: &mut Listen<SourceData, (), Timestamp, Diff>,
     current_upper: &mut Timestamp,
@@ -1735,7 +1735,7 @@ impl Trace {
 
 impl UnopenedPersistCatalogState {
     /// Manually update value of `key` in collection `T` to `value`.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     pub(crate) async fn debug_edit<T: Collection>(
         &mut self,
         key: T::Key,
@@ -1757,7 +1757,7 @@ impl UnopenedPersistCatalogState {
         prev
     }
 
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     pub(crate) async fn debug_edit_inner<T: Collection>(
         &mut self,
         key: T::Key,
@@ -1795,7 +1795,7 @@ impl UnopenedPersistCatalogState {
     }
 
     /// Manually delete `key` from collection `T`.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     pub(crate) async fn debug_delete<T: Collection>(
         &mut self,
         key: T::Key,
@@ -1816,7 +1816,7 @@ impl UnopenedPersistCatalogState {
     }
 
     /// Manually delete `key` from collection `T`.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[mz_ore::instrument]
     async fn debug_delete_inner<T: Collection>(&mut self, key: T::Key) -> Result<(), CatalogError>
     where
         T::Key: PartialEq + Eq + Debug,

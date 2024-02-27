@@ -158,7 +158,7 @@ mod tests {
         }
     }
 
-    #[tracing::instrument(skip(cat, args, test_type))]
+    #[mz_ore::instrument(fields(s))]
     fn run_single_view_testcase(
         s: &str,
         cat: &TestCatalog,

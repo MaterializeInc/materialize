@@ -26,10 +26,9 @@ use crate::TransformCtx;
 pub struct ThresholdElision;
 
 impl crate::Transform for ThresholdElision {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "threshold_elision")
     )]
     fn transform(

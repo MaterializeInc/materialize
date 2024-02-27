@@ -133,22 +133,22 @@ impl<T> TimestampOracle<T> for BatchingTimestampOracle<T>
 where
     T: Send + Sync + 'static,
 {
-    #[tracing::instrument(name = "oracle::write_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::write_ts", level = "debug")]
     async fn write_ts(&mut self) -> WriteTimestamp<T> {
         ShareableTimestampOracle::write_ts(self).await
     }
 
-    #[tracing::instrument(name = "oracle::peek_write_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::peek_write_ts", level = "debug")]
     async fn peek_write_ts(&self) -> T {
         ShareableTimestampOracle::peek_write_ts(self).await
     }
 
-    #[tracing::instrument(name = "oracle::read_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::read_ts", level = "debug")]
     async fn read_ts(&self) -> T {
         ShareableTimestampOracle::read_ts(self).await
     }
 
-    #[tracing::instrument(name = "oracle::apply_write", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::apply_write", level = "debug")]
     async fn apply_write(&mut self, write_ts: T) {
         ShareableTimestampOracle::apply_write(self, write_ts).await
     }

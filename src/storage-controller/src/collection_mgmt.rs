@@ -109,7 +109,7 @@ where
     ///
     /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
     /// it has stopped referencing the provided `id`.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) fn unregister_collection(&self, id: GlobalId) -> BoxFuture<'static, ()> {
         let prev = self
             .collections

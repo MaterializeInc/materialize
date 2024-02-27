@@ -30,6 +30,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -75,7 +76,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::oneshot;
 use tokio::sync::watch::{channel, Sender};
 use tokio_stream::StreamMap;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, warn};
 
 use crate::command_wals::ProtoShardId;
 
@@ -351,7 +352,7 @@ where
     //   or only executing some migrations when encountering certain versions.
     // - Migrations must preserve backwards compatibility with all past releases
     //   of Materialize.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     async fn migrate_collections(
         &mut self,
         _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
@@ -366,7 +367,7 @@ where
 
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
     // a method/move individual parts to their own methods.
-    #[instrument(name = "storage::create_collections", skip_all)]
+    #[instrument(name = "storage::create_collections")]
     async fn create_collections(
         &mut self,
         register_ts: Option<Self::Timestamp>,
@@ -1173,7 +1174,7 @@ where
         }
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     fn append_table(
         &mut self,
         write_ts: Self::Timestamp,
@@ -1324,7 +1325,7 @@ where
         self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug")]
     fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
         let mut read_capability_changes = BTreeMap::default();
 
@@ -1357,7 +1358,7 @@ where
         }
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", fields(updates))]
     fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<Self::Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
@@ -1416,7 +1417,7 @@ where
         }
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", fields(updates))]
     fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
@@ -1568,7 +1569,7 @@ where
         self.stashed_response = Some(msg);
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug")]
     async fn process(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
         let mut updated_frontiers = None;
         match self.stashed_response.take() {
@@ -2357,7 +2358,7 @@ where
     }
 
     /// Install read capabilities on the given `storage_dependencies`.
-    #[instrument(level = "info", skip(self))]
+    #[instrument(level = "info", fields(from_id, storage_dependencies, read_capability))]
     fn install_read_capabilities(
         &mut self,
         from_id: GlobalId,
@@ -2552,7 +2553,7 @@ where
     ///
     /// # Panics
     /// - If `id` is not registered as a managed collection.
-    #[instrument(level = "debug", skip(self, updates))]
+    #[instrument(level = "debug", fields(id))]
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         assert!(self.txns_init_run);
         self.collection_manager
@@ -2760,7 +2761,7 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     async fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
     where
         I: Iterator<Item = GlobalId>,
@@ -2930,7 +2931,7 @@ where
 
     /// Attempts to close all shards marked for finalization.
     #[allow(dead_code)]
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug")]
     async fn finalize_shards(&mut self) {
         let shards = self
             .stash

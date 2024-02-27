@@ -17,13 +17,14 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use mz_ore::instrument;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
@@ -208,7 +209,7 @@ where
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
     /// undefined behavior, and (potentially sticky) panics.
-    #[instrument(level = "debug", skip_all, fields(ts = ?register_ts))]
+    #[instrument(level = "debug", fields(ts = ?register_ts))]
     pub async fn register(
         &mut self,
         register_ts: T,
@@ -316,7 +317,7 @@ where
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
     /// undefined behavior, and (potentially sticky) panics.
-    #[instrument(level = "debug", skip_all, fields(ts = ?forget_ts, shard = %data_id))]
+    #[instrument(level = "debug", fields(ts = ?forget_ts, shard = %data_id))]
     pub async fn forget(&mut self, forget_ts: T, data_id: ShardId) -> Result<Tidy, T> {
         let op = &Arc::clone(&self.metrics).forget;
         op.run(async {
@@ -408,7 +409,7 @@ where
 
     /// Forgets, at the given timestamp, every data shard that is registered.
     /// Returns the ids of the forgotten shards. See [Self::forget].
-    #[instrument(level = "debug", skip_all, fields(ts = ?forget_ts))]
+    #[instrument(level = "debug", fields(ts = ?forget_ts))]
     pub async fn forget_all(&mut self, forget_ts: T) -> Result<(Vec<ShardId>, Tidy), T> {
         let op = &Arc::clone(&self.metrics).forget_all;
         op.run(async {
@@ -514,7 +515,7 @@ where
     /// for an unbounded amount of time.
     ///
     /// This method is idempotent.
-    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
+    #[instrument(level = "debug", fields(ts = ?ts))]
     pub async fn apply_le(&mut self, ts: &T) -> Tidy {
         let op = &self.metrics.apply_le;
         op.run(async {
@@ -588,7 +589,7 @@ where
 
     /// [Self::apply_le] but also advances the physical upper of every data
     /// shard registered at the timestamp past the timestamp.
-    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
+    #[instrument(level = "debug", fields(ts = ?ts))]
     pub async fn apply_eager_le(&mut self, ts: &T) -> Tidy {
         let op = &Arc::clone(&self.metrics).apply_eager_le;
         op.run(async {

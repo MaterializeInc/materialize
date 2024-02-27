@@ -551,7 +551,7 @@ impl Coordinator {
     }
 
     /// Determines the timestamp for a query.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn determine_timestamp(
         &self,
         session: &Session,

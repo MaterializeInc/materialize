@@ -13,6 +13,7 @@ use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
+use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
@@ -22,7 +23,7 @@ use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
-use tracing::{instrument, Span};
+use tracing::Span;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -78,7 +79,7 @@ impl Staged for CreateMaterializedViewStage {
 }
 
 impl Coordinator {
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_create_materialized_view(
         &mut self,
         ctx: ExecuteContext,
@@ -97,7 +98,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn explain_create_materialized_view(
         &mut self,
         ctx: ExecuteContext,
@@ -142,7 +143,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn explain_replan_materialized_view(
         &mut self,
         ctx: ExecuteContext,
@@ -192,7 +193,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn create_materialized_view_validate(
         &mut self,
         session: &Session,
@@ -280,7 +281,7 @@ impl Coordinator {
         ))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_materialized_view_optimize(
         &mut self,
         CreateMaterializedViewOptimize {
@@ -413,7 +414,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_materialized_view_finish(
         &mut self,
         session: &Session,
@@ -631,7 +632,7 @@ impl Coordinator {
         Ok((as_of, until))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn create_materialized_view_explain(
         &mut self,
         session: &Session,

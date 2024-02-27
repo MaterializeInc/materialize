@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
+use mz_ore::instrument;
 use mz_persist_client::fetch::LeasedBatchPart;
 use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
@@ -28,7 +29,7 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataSnapshot};
@@ -745,7 +746,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
-    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
+    #[instrument(level = "debug", fields(ts = ?ts))]
     pub async fn update_gt(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive > ts)
             .await;
@@ -754,7 +755,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     /// Invariant: afterward, self.progress_exclusive will be >= ts
-    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
+    #[instrument(level = "debug", fields(ts = ?ts))]
     pub async fn update_ge(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive >= ts)
             .await;

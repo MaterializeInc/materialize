@@ -25,10 +25,9 @@ use crate::TransformCtx;
 pub struct UnionNegateFusion;
 
 impl crate::Transform for UnionNegateFusion {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "union_negate")
     )]
     fn transform(

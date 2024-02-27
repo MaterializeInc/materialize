@@ -48,6 +48,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
+use mz_ore::instrument;
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, IndexOption, MutationKind,
     Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
@@ -73,7 +74,7 @@ use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizer
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, OwnedMutexGuard};
-use tracing::{instrument, warn, Instrument, Span};
+use tracing::{warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
@@ -254,7 +255,7 @@ impl Coordinator {
         })
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
@@ -359,7 +360,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
@@ -447,7 +448,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
@@ -507,7 +508,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_database(
         &mut self,
         session: &mut Session,
@@ -534,7 +535,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_schema(
         &mut self,
         session: &mut Session,
@@ -562,7 +563,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_role(
         &mut self,
         conn_id: Option<&ConnectionId>,
@@ -579,7 +580,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_table(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -664,7 +665,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_secret(
         &mut self,
         session: &mut Session,
@@ -718,7 +719,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_sink(
         &mut self,
         ctx: ExecuteContext,
@@ -854,7 +855,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_type(
         &mut self,
         session: &Session,
@@ -886,7 +887,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_comment_on(
         &mut self,
         session: &Session,
@@ -901,7 +902,7 @@ impl Coordinator {
         Ok(ExecuteResponse::Comment)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_drop_objects(
         &mut self,
         session: &Session,
@@ -1123,7 +1124,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_drop_owned(
         &mut self,
         session: &Session,
@@ -1482,7 +1483,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(vec![row]))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_inspect_shard(
         &self,
         session: &Session,
@@ -1506,7 +1507,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) fn sequence_set_variable(
         &self,
         session: &mut Session,
@@ -1635,7 +1636,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1747,7 +1748,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
@@ -1851,7 +1852,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_explain_plan(
         &mut self,
         ctx: ExecuteContext,
@@ -2009,7 +2010,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub async fn sequence_explain_timestamp(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2180,7 +2181,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_explain_timestamp_finish_inner(
         &mut self,
         session: &mut Session,
@@ -2227,7 +2228,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_insert(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2330,7 +2331,7 @@ impl Coordinator {
     /// read. This works by doing a Peek then queuing a SendDiffs. No writes
     /// or read-then-writes can occur between the Peek and SendDiff otherwise a
     /// serializability violation could occur.
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_read_then_write(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2672,7 +2673,7 @@ impl Coordinator {
         });
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
         session: &mut Session,
@@ -2692,7 +2693,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
         session: &mut Session,
@@ -2714,7 +2715,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_schema_swap(
         &mut self,
         session: &mut Session,
@@ -2770,7 +2771,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) fn sequence_alter_index_reset_options(
         &mut self,
         plan: plan::AlterIndexResetOptionsPlan,
@@ -2785,7 +2786,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) fn set_index_compaction_window(
         &mut self,
         id: GlobalId,
@@ -2802,7 +2803,7 @@ impl Coordinator {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_role(
         &mut self,
         session: &Session,
@@ -2884,7 +2885,7 @@ impl Coordinator {
         Ok(response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_secret(
         &mut self,
         session: &Session,
@@ -2899,7 +2900,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_connection(
         &mut self,
         ctx: ExecuteContext,
@@ -2921,7 +2922,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn sequence_rotate_keys(
         &mut self,
         session: &Session,
@@ -2946,7 +2947,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn sequence_alter_connection_options(
         &mut self,
         mut ctx: ExecuteContext,
@@ -3088,7 +3089,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_alter_connection_stage_finish(
         &mut self,
         session: &mut Session,
@@ -3195,7 +3196,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_source(
         &mut self,
         session: &Session,
@@ -3751,7 +3752,7 @@ impl Coordinator {
         Ok(Vec::from(payload))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_system_set(
         &mut self,
         session: &Session,
@@ -3776,7 +3777,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_system_reset(
         &mut self,
         session: &Session,
@@ -3792,7 +3793,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_system_reset_all(
         &mut self,
         session: &Session,
@@ -3848,7 +3849,7 @@ impl Coordinator {
     }
 
     // Returns the name of the portal to execute.
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) fn sequence_execute(
         &mut self,
         session: &mut Session,
@@ -3866,7 +3867,7 @@ impl Coordinator {
         session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), revision)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_grant_privileges(
         &mut self,
         session: &Session,
@@ -3884,7 +3885,7 @@ impl Coordinator {
         .await
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_revoke_privileges(
         &mut self,
         session: &Session,
@@ -3902,7 +3903,7 @@ impl Coordinator {
         .await
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn sequence_update_privileges(
         &mut self,
         session: &Session,
@@ -4011,7 +4012,7 @@ impl Coordinator {
         res
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_default_privileges(
         &mut self,
         session: &Session,
@@ -4058,7 +4059,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredDefaultPrivileges)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_grant_role(
         &mut self,
         session: &Session,
@@ -4103,7 +4104,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::GrantedRole)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_revoke_role(
         &mut self,
         session: &Session,
@@ -4148,7 +4149,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::RevokedRole)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_owner(
         &mut self,
         session: &Session,
@@ -4217,7 +4218,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::AlteredObject(object_type))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_reassign_owned(
         &mut self,
         session: &Session,

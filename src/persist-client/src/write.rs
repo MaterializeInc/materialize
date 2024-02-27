@@ -16,6 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
@@ -26,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, info, instrument, warn, Instrument};
+use tracing::{debug_span, info, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{
@@ -219,7 +220,7 @@ where
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn fetch_recent_upper(&mut self) -> &Antichain<T> {
         // TODO: Do we even need to track self.upper on WriteHandle or could
         // WriteHandle::upper just get the one out of machine?
@@ -259,7 +260,7 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
@@ -307,7 +308,7 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
@@ -367,7 +368,7 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
     pub async fn append_batch(
         &mut self,
         mut batch: Batch<K, V, T, D>,
@@ -443,7 +444,7 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,
         batches: &mut [&mut Batch<K, V, T, D>],
@@ -590,7 +591,7 @@ where
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
     /// a handle to the batch.
-    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "trace", fields(shard = %self.machine.shard_id()))]
     pub async fn batch<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
@@ -642,7 +643,7 @@ where
     /// a tokio [Handle] being available in the TLC at the time of drop (which
     /// is a bit subtle). Also, explicit expiry allows for control over when it
     /// happens.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
         let (_, maintenance) = self.machine.expire_writer(&self.writer_id).await;
         maintenance.start_performing(&self.machine, &self.gc);

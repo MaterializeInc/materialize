@@ -593,7 +593,7 @@ impl Coordinator {
         .boxed_local()
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_execute_single_statement_transaction(
         &mut self,
         ctx: ExecuteContext,
@@ -665,7 +665,7 @@ impl Coordinator {
     /// Creates a role during connection startup.
     ///
     /// This should not be called from anywhere except connection startup.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_create_role_for_startup(
         &mut self,
         plan: CreateRolePlan,
@@ -762,7 +762,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) fn send_diffs(
         session: &mut Session,
         mut plan: plan::SendDiffsPlan,

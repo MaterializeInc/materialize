@@ -36,10 +36,9 @@ use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformCtx, TransformErr
 /// Inlines views, performs a full optimization pass including physical
 /// planning using the supplied indexes, propagates filtering and projection
 /// information to dataflow sources and lifts monotonicity information.
-#[tracing::instrument(
+#[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
-    skip_all,
     fields(path.segment ="global")
 )]
 pub fn optimize_dataflow(
@@ -105,10 +104,9 @@ pub fn optimize_dataflow(
 }
 
 /// Inline views used in one other view, and in no exported objects.
-#[tracing::instrument(
+#[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
-    skip_all,
     fields(path.segment = "inline_views")
 )]
 fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
@@ -211,10 +209,9 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 
 /// Performs either the logical or the physical optimization pass on the
 /// dataflow using the supplied set of indexes.
-#[tracing::instrument(
+#[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
-    skip_all,
     fields(path.segment = optimizer.name)
 )]
 fn optimize_dataflow_relations(
@@ -254,10 +251,9 @@ fn optimize_dataflow_relations(
 /// Dataflows that exist for the sake of generating plan explanations do not
 /// have published outputs. In this case, we push demand information from views
 /// not depended on by other views to dataflow inputs.
-#[tracing::instrument(
+#[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
-    skip_all,
     fields(path.segment ="demand")
 )]
 fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
@@ -353,10 +349,9 @@ where
 }
 
 /// Pushes predicate to dataflow inputs.
-#[tracing::instrument(
+#[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
-    skip_all,
     fields(path.segment ="filters")
 )]
 fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
@@ -423,10 +418,9 @@ where
 }
 
 /// Propagates information about monotonic inputs through operators.
-#[tracing::instrument(
+#[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
-    skip_all,
     fields(path.segment ="monotonic")
 )]
 pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
@@ -475,10 +469,9 @@ pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), Tr
 ///
 /// The input plans should be normalized with `NormalizeLets`! Otherwise we might find dangling
 /// `ArrangeBy`s at the top of unused Let bindings.
-#[tracing::instrument(
+#[mz_ore::instrument(
     target = "optimizer",
     level = "debug",
-    skip_all,
     fields(path.segment = "index_imports")
 )]
 fn prune_and_annotate_dataflow_index_imports(

@@ -60,10 +60,9 @@ use crate::TransformCtx;
 pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "reduction_pushdown")
     )]
     fn transform(

@@ -109,7 +109,7 @@ pub struct PlannedRootQuery<E> {
 ///
 /// Note that the returned `RelationDesc` describes the expression after
 /// applying the returned `RowSetFinishing`.
-#[tracing::instrument(target = "compiler", level = "trace", name = "ast_to_hir", skip_all)]
+#[mz_ore::instrument(target = "compiler", level = "trace", name = "ast_to_hir")]
 pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query<Aug>,

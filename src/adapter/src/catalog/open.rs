@@ -17,7 +17,7 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tracing::{info, instrument, warn, Instrument};
+use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
@@ -44,6 +44,7 @@ use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
@@ -823,7 +824,7 @@ impl Catalog {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 17KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    #[instrument(name = "catalog::open", skip_all)]
+    #[instrument(name = "catalog::open")]
     pub fn open(
         config: Config<'_>,
         boot_ts_not_linearizable: mz_repr::Timestamp,
@@ -1032,7 +1033,7 @@ impl Catalog {
     ///    (if present).
     ///
     /// # Errors
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     fn load_system_configuration(
         state: &mut CatalogState,
         txn: &mut Transaction<'_>,
@@ -1078,7 +1079,7 @@ impl Catalog {
     /// references are circular. This makes loading built-in types more complicated than other
     /// built-in objects, and requires us to make multiple passes over the types to correctly
     /// resolve all references.
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     fn load_builtin_types(state: &mut CatalogState, txn: &mut Transaction) -> Result<(), Error> {
         let persisted_builtin_ids: BTreeMap<_, _> = txn
             .get_system_items()
@@ -1386,7 +1387,7 @@ impl Catalog {
         Ok(())
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     fn apply_persisted_builtin_migration(
         state: &CatalogState,
         txn: &mut Transaction<'_>,
@@ -1434,7 +1435,7 @@ impl Catalog {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     pub fn load_catalog_items<'a>(
         tx: &mut Transaction<'a>,
         state: &CatalogState,

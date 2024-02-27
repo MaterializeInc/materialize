@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::instrument;
 use mz_sql::plan::{self, QueryWhen};
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::{instrument, Span};
+use tracing::Span;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
@@ -60,7 +61,7 @@ impl Staged for SubscribeStage {
 }
 
 impl Coordinator {
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_subscribe(
         &mut self,
         mut ctx: ExecuteContext,
@@ -74,7 +75,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn subscribe_validate(
         &mut self,
         session: &mut Session,
@@ -144,7 +145,7 @@ impl Coordinator {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn subscribe_optimize_mir(
         &mut self,
         session: &Session,
@@ -209,7 +210,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn subscribe_timestamp_optimize_lir(
         &mut self,
         ctx: &ExecuteContext,
@@ -279,7 +280,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn subscribe_finish(
         &mut self,
         ctx: &mut ExecuteContext,

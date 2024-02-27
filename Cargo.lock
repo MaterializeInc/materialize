@@ -4857,6 +4857,7 @@ dependencies = [
  "hyper-tls",
  "lgalloc",
  "mz-ore",
+ "mz-ore-instrument-macro",
  "mz-test-macro",
  "native-tls",
  "num",
@@ -4888,6 +4889,14 @@ dependencies = [
  "uuid",
  "workspace-hack",
  "yansi",
+]
+
+[[package]]
+name = "mz-ore-instrument-macro"
+version = "0.0.0"
+dependencies = [
+ "tracing",
+ "workspace-hack",
 ]
 
 [[package]]

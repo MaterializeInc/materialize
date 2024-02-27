@@ -620,7 +620,7 @@ where
     }
 
     /// Sends a command to all replicas of this instance.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn send(&mut self, cmd: ComputeCommand<T>) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
@@ -1118,7 +1118,7 @@ where
     }
 
     /// Initiate a peek request for the contents of `id` at `timestamp`.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn peek(
         &mut self,
         id: GlobalId,
@@ -1223,7 +1223,7 @@ where
     ///
     /// It is an error to attempt to set a read policy for a collection that is not readable in the
     /// context of compute. At this time, only indexes are readable compute collections.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
@@ -1266,7 +1266,7 @@ where
     ///
     /// Panics if any of the `updates` references an absent collection.
     /// Panics if any of the `updates` regresses an existing write frontier.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn update_write_frontiers(
         &mut self,
         replica_id: ReplicaId,
@@ -1285,7 +1285,7 @@ where
     ///
     /// Panics if any of the `updates` references an absent collection.
     /// Panics if any of the `updates` regresses an existing replica write frontier.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn update_replica_write_frontiers(
         &mut self,
         replica_id: ReplicaId,
@@ -1333,7 +1333,7 @@ where
     }
 
     /// Remove frontier tracking state for the given replica.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn remove_replica_write_frontiers(&mut self, replica_id: ReplicaId) {
         let mut storage_read_capability_changes = BTreeMap::default();
         for collection in self.compute.collections.values_mut() {
@@ -1363,7 +1363,7 @@ where
     /// # Panics
     ///
     /// Panics if any of the `updates` references an absent collection.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn maybe_update_global_write_frontiers(&mut self, updates: &BTreeMap<GlobalId, Antichain<T>>) {
         // Compute and apply read capability downgrades that result from collection frontier
         // advancements.
@@ -1419,7 +1419,7 @@ where
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends
     /// appropriate compaction commands.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn update_read_capabilities(&mut self, mut updates: BTreeMap<GlobalId, ChangeBatch<T>>) {
         // Records storage read capability updates.
         let mut storage_updates = BTreeMap::default();

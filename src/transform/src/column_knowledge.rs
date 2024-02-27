@@ -46,10 +46,9 @@ impl CheckedRecursion for ColumnKnowledge {
 
 impl crate::Transform for ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "column_knowledge")
     )]
     fn transform(

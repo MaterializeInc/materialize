@@ -28,6 +28,7 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::error::ErrorExt;
+use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
@@ -47,7 +48,7 @@ use mz_storage_types::controller::StorageError;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
-use tracing::{event, info_span, instrument, warn, Instrument, Level};
+use tracing::{event, info_span, warn, Instrument, Level};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{CatalogState, Op, TransactionResult};
@@ -71,7 +72,7 @@ pub struct CatalogTxn<'a, T> {
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
-    #[instrument(name = "coord::catalog_transact", skip_all)]
+    #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
         &mut self,
         session: Option<&Session>,
@@ -87,7 +88,7 @@ impl Coordinator {
 
     /// Same as [`Self::catalog_transact_with`] but runs builtin table updates concurrently with
     /// any side effects (e.g. creating collections).
-    #[instrument(name = "coord::catalog_transact_with_side_effects", skip_all)]
+    #[instrument(name = "coord::catalog_transact_with_side_effects")]
     pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
         &'c mut self,
         session: Option<&Session>,
@@ -118,7 +119,7 @@ impl Coordinator {
     }
 
     /// Same as [`Self::catalog_transact_with`] without a closure passed in.
-    #[instrument(name = "coord::catalog_transact_conn", skip_all)]
+    #[instrument(name = "coord::catalog_transact_conn")]
     pub(crate) async fn catalog_transact_conn(
         &mut self,
         conn_id: Option<&ConnectionId>,
@@ -131,7 +132,7 @@ impl Coordinator {
 
     /// Executes a Catalog transaction with handling if the provided `Session` is in a SQL
     /// transaction that is executing DDL.
-    #[instrument(name = "coord::catalog_transact_with_ddl_transaction", skip_all)]
+    #[instrument(name = "coord::catalog_transact_with_ddl_transaction")]
     pub(crate) async fn catalog_transact_with_ddl_transaction(
         &mut self,
         session: &mut Session,
@@ -200,7 +201,7 @@ impl Coordinator {
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
     /// [`DataflowDesc`]: mz_compute_types::dataflows::DataflowDesc
-    #[instrument(name = "coord::catalog_transact_with", skip_all)]
+    #[instrument(name = "coord::catalog_transact_with")]
     pub(crate) async fn catalog_transact_with<'a, F, R>(
         &mut self,
         conn_id: Option<&ConnectionId>,
@@ -814,7 +815,7 @@ impl Coordinator {
     }
 
     /// Cancels all active compute sinks for the identified connection.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
@@ -822,7 +823,7 @@ impl Coordinator {
 
     /// Retires all active compute sinks for the identified connection with the
     /// specified reason.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn retire_compute_sinks_for_conn(
         &mut self,
         conn_id: &ConnectionId,

@@ -25,10 +25,9 @@ use crate::TransformCtx;
 pub struct ReduceElision;
 
 impl crate::Transform for ReduceElision {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "reduce_elision")
     )]
     fn transform(

@@ -294,7 +294,7 @@ impl Listeners {
     /// Starts an `environmentd` server.
     ///
     /// Returns a handle to the server once it is fully booted.
-    #[tracing::instrument(name = "environmentd::serve", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "environmentd::serve", level = "info")]
     pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
         let Listeners {
             sql: (sql_listener, sql_conns),
