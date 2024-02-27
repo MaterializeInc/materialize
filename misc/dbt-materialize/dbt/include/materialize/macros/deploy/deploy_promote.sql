@@ -24,7 +24,7 @@
 
   ## Arguments
   - `wait` (boolean, optional): Waits for the deployment to be fully hyrated.
-      Defaults to false. It is recommended you call `deploy_wait` manually and
+      Defaults to false. It is recommended you call `deploy_await` manually and
       run additional validation checks before promoting a deployment to production.
   - `poll_interval` (integer): The interval, in seconds, between each readiness check.
 
@@ -103,7 +103,7 @@
 {% endfor %}
 
 {% if wait %}
-    {{ deploy_wait(poll_interval) }}
+    {{ deploy_await(poll_interval) }}
 {% endif %}
 
 {% call statement('swap', fetch_result=True, auto_begin=False) -%}
