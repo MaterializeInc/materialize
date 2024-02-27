@@ -64,6 +64,7 @@ pub enum Statement<T: AstInfo> {
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterObjectSwap(AlterObjectSwapStatement),
+    AlterRetainHistory(AlterRetainHistoryStatement<T>),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
     AlterSetCluster(AlterSetClusterStatement<T>),
@@ -133,6 +134,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
+            Statement::AlterRetainHistory(stmt) => f.write_node(stmt),
             Statement::AlterObjectSwap(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSetCluster(stmt) => f.write_node(stmt),
@@ -205,6 +207,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSecret => "create_secret",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
+        StatementKind::AlterRetainHistory => "alter_retain_history",
         StatementKind::AlterObjectSwap => "alter_object_swap",
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterRole => "alter_role",
@@ -2070,6 +2073,30 @@ impl AstDisplay for AlterObjectRenameStatement {
     }
 }
 impl_display!(AlterObjectRenameStatement);
+
+/// `ALTER <OBJECT> ... RETAIN HISTORY FOR`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterRetainHistoryStatement<T: AstInfo> {
+    pub object_type: ObjectType,
+    pub if_exists: bool,
+    pub name: UnresolvedObjectName,
+    pub history: WithOptionValue<T>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterRetainHistoryStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_node(&self.object_type);
+        f.write_str(" ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+        f.write_str(" SET RETAIN HISTORY ");
+        f.write_node(&self.history);
+    }
+}
+impl_display_t!(AlterRetainHistoryStatement);
 
 /// `ALTER <OBJECT> SWAP ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
