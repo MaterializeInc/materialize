@@ -71,7 +71,7 @@ class Scenario:
             BalancerdStart,
         ]
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         assert False
 
     def finalization(self) -> list[ActionOrFactory]:
@@ -88,7 +88,7 @@ class Scenario:
 class KafkaSources(Scenario):
     """A Zippy test using Kafka sources exclusively."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             MzStart: 5,
             MzStop: 1,
@@ -108,7 +108,7 @@ class KafkaSources(Scenario):
 class AlterConnectionWithKafkaSources(Scenario):
     """A Zippy test using Kafka sources and alter connections."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             MzStart: 5,
             MzStop: 1,
@@ -129,7 +129,7 @@ class AlterConnectionWithKafkaSources(Scenario):
 class UserTables(Scenario):
     """A Zippy test using user tables exclusively."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             MzStart: 5,
             BalancerdStart: 1,
@@ -151,7 +151,7 @@ class UserTables(Scenario):
 class UserTablesTogglePersistTxn(Scenario):
     """A Zippy test using user tables with toggling persist_txn."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         workload: dict[ActionOrFactory, float] = {
             MzStop: 10,
             CreateTableParameterized(): 10,
@@ -184,7 +184,7 @@ class DebeziumPostgres(Scenario):
             PostgresStart,
         ]
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreatePostgresTable: 10,
             CreateDebeziumSource: 10,
@@ -203,7 +203,7 @@ class PostgresCdc(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return super().bootstrap() + [PostgresStart]
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreatePostgresTable: 10,
             CreatePostgresCdcTable: 10,
@@ -227,7 +227,7 @@ class ClusterReplicas(Scenario):
         ]
 
     # Due to gh#13235 it is not possible to have MzStop/MzStart in this scenario
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             KillClusterd: 5,
             StoragedRestart: 5,
@@ -248,7 +248,7 @@ class ClusterReplicas(Scenario):
 class KafkaParallelInsert(Scenario):
     """A Zippy test using simple views over Kafka sources with parallel insertion."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             KillClusterd: 5,
             StoragedKill: 5,
@@ -264,7 +264,7 @@ class KafkaParallelInsert(Scenario):
 class CrdbMinioRestart(Scenario):
     """A Zippy test that restarts CRDB and Minio."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
@@ -285,7 +285,7 @@ class CrdbMinioRestart(Scenario):
 class CrdbRestart(Scenario):
     """A Zippy test that restarts Cockroach."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
@@ -305,7 +305,7 @@ class CrdbRestart(Scenario):
 class KafkaSourcesLarge(Scenario):
     """A Zippy test using a large number of Kafka sources, views and sinks (no killings)."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTopicParameterized(max_topics=5): 10,
             CreateSourceParameterized(max_sources=25): 10,
@@ -322,7 +322,7 @@ class KafkaSourcesLarge(Scenario):
 class DataflowsLarge(Scenario):
     """A Zippy test using a smaller number but more complex dataflows."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreateReplica: 2,
             CreateTopicParameterized(
@@ -341,7 +341,7 @@ class DataflowsLarge(Scenario):
 class UserTablesLarge(Scenario):
     """A Zippy scenario over tables (no killing)."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTableParameterized(max_tables=2): 10,
             CreateViewParameterized(
@@ -356,7 +356,7 @@ class UserTablesLarge(Scenario):
 class BackupAndRestoreLarge(Scenario):
     """A Zippy scenario with the occasional Backup+Restore."""
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreateTableParameterized(max_tables=2): 10,
             CreateViewParameterized(
@@ -375,7 +375,7 @@ class PostgresCdcLarge(Scenario):
     def bootstrap(self) -> list[ActionOrFactory]:
         return super().bootstrap() + [PostgresStart]
 
-    def config(self) -> dict[ActionOrFactory, float]:
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
             CreatePostgresTable: 10,
             CreatePostgresCdcTable: 10,
