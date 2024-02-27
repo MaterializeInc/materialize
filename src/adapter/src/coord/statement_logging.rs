@@ -350,12 +350,11 @@ impl Coordinator {
         reason: StatementEndedExecutionReason,
     ) {
         let StatementLoggingId(uuid) = id;
-        let now = self.now_datetime();
-        let now_millis = now.timestamp_millis().try_into().expect("sane system time");
+        let now = self.now();
         let ended_record = StatementEndedExecutionRecord {
             id: uuid,
             reason,
-            ended_at: now_millis,
+            ended_at: now,
         };
 
         let began_record = self
@@ -372,7 +371,11 @@ impl Coordinator {
                 .pending_statement_execution_events
                 .push((row, diff));
         }
-        self.record_statement_lifecycle_event(&id, &StatementLifecycleEvent::ExecutionFinished);
+        self.record_statement_lifecycle_event(
+            &id,
+            &StatementLifecycleEvent::ExecutionFinished,
+            now,
+        );
     }
 
     fn pack_statement_execution_inner(
@@ -650,9 +653,11 @@ impl Coordinator {
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
         let ev_id = Uuid::new_v4();
+        let now = self.now();
         self.record_statement_lifecycle_event(
             &StatementLoggingId(ev_id),
             &StatementLifecycleEvent::ExecutionBegan,
+            now,
         );
 
         let params = std::iter::zip(params.types.iter(), params.datums.iter())
@@ -731,13 +736,13 @@ impl Coordinator {
         &mut self,
         id: &StatementLoggingId,
         event: &StatementLifecycleEvent,
+        when: EpochMillis,
     ) {
         if self
             .catalog()
             .system_config()
             .enable_statement_lifecycle_logging()
         {
-            let when = self.now();
             let row = Self::pack_statement_lifecycle_event(id, event, when);
             self.statement_logging
                 .pending_statement_lifecycle_events
