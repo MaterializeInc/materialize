@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_wait(poll_interval=15) %}
+{% macro deploy_await(poll_interval=15) %}
 {#
   Waits for all objects within the deployment clusters to be fully hydrated,
   polling the cluster's readiness status at a specified interval.
