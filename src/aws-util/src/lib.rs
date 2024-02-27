@@ -14,6 +14,8 @@ use hyper_tls::HttpsConnector;
 
 #[cfg(feature = "s3")]
 pub mod s3;
+#[cfg(feature = "s3")]
+pub mod s3_uploader;
 
 /// Creates an AWS SDK configuration loader with the defaults for the latest
 /// behavior version plus some Materialize-specific overrides.

@@ -3720,12 +3720,20 @@ dependencies = [
 name = "mz-aws-util"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-types",
+ "bytes",
+ "bytesize",
+ "http",
  "hyper-tls",
+ "mz-ore",
+ "thiserror",
+ "tokio",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -10010,6 +10018,7 @@ dependencies = [
  "futures-sink",
  "futures-task",
  "futures-util",
+ "getrandom",
  "globset",
  "hashbrown 0.14.0",
  "hyper",
