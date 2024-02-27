@@ -115,7 +115,7 @@ const UPGRADE_SEED: usize = 2;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug, Clone)]
-enum Mode {
+pub(crate) enum Mode {
     /// Mutable operations are prohibited.
     Readonly,
     /// Mutable operations have an effect in-memory, but aren't persisted durably.
@@ -392,7 +392,7 @@ impl UnopenedPersistCatalogState {
 
         // Perform data migrations.
         if is_initialized && !read_only {
-            upgrade(&mut self).await?;
+            upgrade(&mut self, mode.clone()).await?;
         }
 
         debug!(
@@ -466,10 +466,20 @@ impl UnopenedPersistCatalogState {
         target_upper: Timestamp,
     ) -> Result<(), DurableCatalogError> {
         self.epoch.validate()?;
-
         let updates: Vec<StateUpdate<StateUpdateKindRaw>> =
             sync(&mut self.listen, &mut self.upper, target_upper).await;
+        self.apply_updates(updates)?;
+        // Now that we've synced with the persist shard, we can be fenced out.
+        self.epoch.mark_fenceable();
 
+        Ok(())
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    pub(crate) fn apply_updates(
+        &mut self,
+        updates: Vec<StateUpdate<StateUpdateKindRaw>>,
+    ) -> Result<(), DurableCatalogError> {
         for update in updates {
             let StateUpdate { kind, ts, diff } = &update;
             if *diff != 1 && *diff != -1 {
@@ -524,10 +534,6 @@ impl UnopenedPersistCatalogState {
 
             self.snapshot.push(update);
         }
-
-        // Now that we've synced with the persist shard, we can be fenced out.
-        self.epoch.mark_fenceable();
-
         Ok(())
     }
 
