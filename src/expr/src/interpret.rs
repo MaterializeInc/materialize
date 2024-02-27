@@ -546,19 +546,39 @@ impl SpecialUnary {
         match func {
             UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => Some(SpecialUnary {
                 map_fn: |specs, range| {
-                    // Using `true` for `is_monotone` is correct for this except
-                    // that it also might return NULL for anything in the range,
-                    // so union them.
                     let expr = MirScalarExpr::CallUnary {
                         func: UnaryFunc::TryParseMonotonicIso8601Timestamp(
                             crate::func::TryParseMonotonicIso8601Timestamp,
                         ),
                         expr: Box::new(MirScalarExpr::Column(0)),
                     };
-                    let spec = range.flat_map(true, |datum| {
-                        specs.eval_result(datum.and_then(|d| expr.eval(&[d], specs.arena)))
-                    });
-                    spec.union(ResultSpec::null())
+                    let eval = |d| specs.eval_result(expr.eval(&[d], specs.arena));
+
+                    eagerly(range, |values| {
+                        match values {
+                            Values::Within(a, b) if a == b => eval(a),
+                            Values::Within(a, b) => {
+                                let spec = eval(a).union(eval(b));
+                                let values_spec = if spec.nullable {
+                                    // At least one of the endpoints of the range wasn't a valid
+                                    // timestamp. We can't compute a precise range in this case.
+                                    // If we used the general is_monotone handling, that code would
+                                    // incorrectly assume the whole range mapped to null if each
+                                    // endpoint did.
+                                    ResultSpec::value_all()
+                                } else {
+                                    spec
+                                };
+                                // A range of strings will always contain strings that don't parse
+                                // as timestamps - so unlike the general case, we'll assume null
+                                // is present in every range of output values.
+                                values_spec.union(ResultSpec::null())
+                            }
+                            // Otherwise, assume the worst: this function may return either a valid
+                            // value or null.
+                            _ => ResultSpec::value_all().union(ResultSpec::null()),
+                        }
+                    })
                 },
                 pushdownable: true,
             }),
