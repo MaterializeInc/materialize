@@ -767,8 +767,10 @@ fn generate_rbac_requirements(
         })
         | Plan::ExplainPushdown(plan::ExplainPushdownPlan { explainee }) => RbacRequirements {
             privileges: match explainee {
-                Explainee::MaterializedView(id)
+                Explainee::View(id)
+                | Explainee::MaterializedView(id)
                 | Explainee::Index(id)
+                | Explainee::ReplanView(id)
                 | Explainee::ReplanMaterializedView(id)
                 | Explainee::ReplanIndex(id) => {
                     let item = catalog.get_item(id);
@@ -786,8 +788,10 @@ fn generate_rbac_requirements(
                     .collect(),
             },
             item_usage: match explainee {
-                Explainee::MaterializedView(..)
+                Explainee::View(..)
+                | Explainee::MaterializedView(..)
                 | Explainee::Index(..)
+                | Explainee::ReplanView(..)
                 | Explainee::ReplanMaterializedView(..)
                 | Explainee::ReplanIndex(..) => &EMPTY_ITEM_USAGE,
                 Explainee::Statement(_) => &DEFAULT_ITEM_USAGE,

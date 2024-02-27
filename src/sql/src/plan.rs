@@ -605,7 +605,7 @@ pub struct CreateTablePlan {
     pub if_not_exists: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CreateViewPlan {
     pub name: QualifiedItemName,
     pub view: View,
@@ -806,10 +806,14 @@ pub struct ExplainPlanPlan {
 /// The type of object to be explained
 #[derive(Clone, Debug)]
 pub enum Explainee {
+    /// Lookup and explain a plan saved for an view.
+    View(GlobalId),
     /// Lookup and explain a plan saved for an existing materialized view.
     MaterializedView(GlobalId),
     /// Lookup and explain a plan saved for an existing index.
     Index(GlobalId),
+    /// Replan an existing view.
+    ReplanView(GlobalId),
     /// Replan an existing materialized view.
     ReplanMaterializedView(GlobalId),
     /// Replan an existing index.
@@ -829,6 +833,12 @@ pub enum ExplaineeStatement {
         plan: plan::SelectPlan,
         desc: RelationDesc,
     },
+    /// The object to be explained is a CREATE VIEW.
+    CreateView {
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+        plan: plan::CreateViewPlan,
+    },
     /// The object to be explained is a CREATE MATERIALIZED VIEW.
     CreateMaterializedView {
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
@@ -847,6 +857,7 @@ impl ExplaineeStatement {
     pub fn depends_on(&self) -> BTreeSet<GlobalId> {
         match self {
             Self::Select { plan, .. } => plan.source.depends_on(),
+            Self::CreateView { plan, .. } => plan.view.expr.depends_on(),
             Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
         }
@@ -865,6 +876,7 @@ impl ExplaineeStatement {
     pub fn broken(&self) -> bool {
         match self {
             Self::Select { broken, .. } => *broken,
+            Self::CreateView { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
         }
@@ -876,8 +888,9 @@ impl ExplaineeStatementKind {
         use ExplainStage::*;
         match self {
             Self::Select => true,
+            Self::CreateView => ![GlobalPlan, PhysicalPlan].contains(stage),
             Self::CreateMaterializedView => true,
-            Self::CreateIndex => ![RawPlan, DecorrelatedPlan].contains(stage),
+            Self::CreateIndex => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
         }
     }
 }
@@ -886,6 +899,7 @@ impl std::fmt::Display for ExplaineeStatementKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Select => write!(f, "SELECT"),
+            Self::CreateView => write!(f, "CREATE VIEW"),
             Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
             Self::CreateIndex => write!(f, "CREATE INDEX"),
         }

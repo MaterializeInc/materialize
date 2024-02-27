@@ -3750,10 +3750,7 @@ impl<'a> Parser<'a> {
 
     fn parse_cluster_feature(&mut self) -> Result<ClusterFeature<Raw>, ParserError> {
         Ok(ClusterFeature {
-            name: self.parse_cluster_feature_name().map_err(|err| {
-                let msg = "a valid CREATE CLUSTER feature";
-                self.error(err.pos, msg.to_string())
-            })?,
+            name: self.parse_cluster_feature_name()?,
             value: self.parse_optional_option_value()?,
         })
     }
@@ -7295,7 +7292,18 @@ impl<'a> Parser<'a> {
         } else {
             let broken = self.parse_keyword(BROKEN);
 
-            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
+            if self.peek_keywords(&[CREATE, VIEW])
+                || self.peek_keywords(&[CREATE, OR, REPLACE, VIEW])
+            {
+                // Parse: `BROKEN? CREATE [OR REPLACE] VIEW ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_view()? {
+                    Statement::CreateView(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+
+                Explainee::CreateView(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
                 || self.peek_keywords(&[CREATE, OR, REPLACE, MATERIALIZED, VIEW])
             {
                 // Parse: `BROKEN? CREATE [OR REPLACE] MATERIALIZED VIEW ...`
@@ -7329,9 +7337,11 @@ impl<'a> Parser<'a> {
     /// Parse an `EXPLAIN ... PLAN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain_plan(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let start = self.peek_pos();
         let (has_stage, stage) = match self.parse_one_of_keywords(&[
             RAW,
             DECORRELATED,
+            LOCALLY,
             OPTIMIZED,
             PHYSICAL,
             OPTIMIZER,
@@ -7344,6 +7354,10 @@ impl<'a> Parser<'a> {
             Some(DECORRELATED) => {
                 self.expect_keyword(PLAN)?;
                 (true, Some(ExplainStage::DecorrelatedPlan))
+            }
+            Some(LOCALLY) => {
+                self.expect_keywords(&[OPTIMIZED, PLAN])?;
+                (true, Some(ExplainStage::LocalPlan))
             }
             Some(OPTIMIZED) => {
                 self.expect_keyword(PLAN)?;
@@ -7399,6 +7413,13 @@ impl<'a> Parser<'a> {
 
         let explainee = self.parse_explainee()?;
 
+        // Explainees that represent a view only work in association with an
+        // explicitly defined stage.
+        if matches!((explainee.is_view(), &stage), (true, None)) {
+            let msg = format!("EXPLAIN statement for a view needs an explicit stage");
+            return Err(self.error(start, msg));
+        }
+
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
             stage: stage.unwrap_or_else(|| ExplainStage::GlobalPlan),
             with_options,
@@ -7409,10 +7430,7 @@ impl<'a> Parser<'a> {
 
     fn parse_explain_plan_option(&mut self) -> Result<ExplainPlanOption<Raw>, ParserError> {
         Ok(ExplainPlanOption {
-            name: self.parse_explain_plan_option_name().map_err(|err| {
-                let msg = "a valid `EXPLAIN` option";
-                self.error(err.pos, msg.to_string())
-            })?,
+            name: self.parse_explain_plan_option_name()?,
             value: self.parse_optional_option_value()?,
         })
     }
