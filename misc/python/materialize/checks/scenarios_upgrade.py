@@ -9,6 +9,7 @@
 
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
+from materialize.checks.all_checks.statement_logging import StatementLogging
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import (
@@ -223,10 +224,23 @@ class UpgradeClusterdComputeFirst(Scenario):
 
 
 class PreflightCheckContinue(Scenario):
-    """Preflght check, then upgrade"""
+    """Preflight check, then upgrade"""
 
     def base_version(self) -> MzVersion:
         return get_last_version()
+
+    def _include_check_class(self, check_class: type[Check]) -> bool:
+        if not super()._include_check_class(check_class):
+            return False
+
+        if (
+            check_class == StatementLogging
+            and self.base_version() == MzVersion.parse_mz("v0.89.2")
+        ):
+            # mz_version column was added to mz_statement_execution_history, history will be lost when a new column is added to the objects
+            return False
+
+        return True
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
@@ -260,7 +274,7 @@ class PreflightCheckContinue(Scenario):
 
 
 class PreflightCheckRollback(Scenario):
-    """Preflght check, then roll back"""
+    """Preflight check, then roll back"""
 
     def base_version(self) -> MzVersion:
         return get_last_version()
