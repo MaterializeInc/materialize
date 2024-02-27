@@ -7329,39 +7329,42 @@ impl<'a> Parser<'a> {
     /// Parse an `EXPLAIN ... PLAN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain_plan(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let stage = match self.parse_one_of_keywords(&[
-            PLAN,
+        let (expect_for, stage) = match self.parse_one_of_keywords(&[
             RAW,
             DECORRELATED,
             OPTIMIZED,
             PHYSICAL,
             OPTIMIZER,
+            PLAN,
         ]) {
-            Some(PLAN) => {
-                // EXPLAIN PLAN = EXPLAIN OPTIMIZED PLAN
-                Some(ExplainStage::OptimizedPlan)
-            }
             Some(RAW) => {
                 self.expect_keyword(PLAN)?;
-                Some(ExplainStage::RawPlan)
+                (true, Some(ExplainStage::RawPlan))
             }
             Some(DECORRELATED) => {
                 self.expect_keyword(PLAN)?;
-                Some(ExplainStage::DecorrelatedPlan)
+                (true, Some(ExplainStage::DecorrelatedPlan))
             }
             Some(OPTIMIZED) => {
                 self.expect_keyword(PLAN)?;
-                Some(ExplainStage::OptimizedPlan)
+                (true, Some(ExplainStage::GlobalPlan))
             }
             Some(PHYSICAL) => {
                 self.expect_keyword(PLAN)?;
-                Some(ExplainStage::PhysicalPlan)
+                (true, Some(ExplainStage::PhysicalPlan))
             }
             Some(OPTIMIZER) => {
                 self.expect_keyword(TRACE)?;
-                Some(ExplainStage::Trace)
+                (true, Some(ExplainStage::Trace))
             }
-            None => None,
+            Some(PLAN) => {
+                // Use the default plan for the explainee.
+                (true, None)
+            }
+            None => {
+                // Use the default plan for the explainee.
+                (false, None)
+            }
             _ => unreachable!(),
         };
 
@@ -7390,14 +7393,14 @@ impl<'a> Parser<'a> {
             ExplainFormat::Text
         };
 
-        if stage.is_some() {
+        if expect_for {
             self.expect_keyword(FOR)?;
         }
 
         let explainee = self.parse_explainee()?;
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
-            stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
+            stage: stage.unwrap_or_else(|| explainee.default_stage()),
             with_options,
             format,
             explainee,

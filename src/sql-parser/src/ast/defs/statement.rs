@@ -3552,8 +3552,8 @@ pub enum ExplainStage {
     RawPlan,
     /// The mz_expr::MirRelationExpr after decorrelation
     DecorrelatedPlan,
-    /// The mz_expr::MirRelationExpr after optimization
-    OptimizedPlan,
+    /// The mz_expr::MirRelationExpr after global optimization
+    GlobalPlan,
     /// The mz_compute_types::plan::Plan
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
@@ -3567,7 +3567,7 @@ impl ExplainStage {
         match self {
             Self::RawPlan => Some(Raw.path()),
             Self::DecorrelatedPlan => Some(Decorrelated.path()),
-            Self::OptimizedPlan => Some(Optimized.path()),
+            Self::GlobalPlan => Some(Global.path()),
             Self::PhysicalPlan => Some(Physical.path()),
             Self::Trace => None,
         }
@@ -3579,7 +3579,7 @@ impl ExplainStage {
         match self {
             Self::RawPlan => false,
             Self::DecorrelatedPlan => false,
-            Self::OptimizedPlan => true,
+            Self::GlobalPlan => true,
             Self::PhysicalPlan => true,
             Self::Trace => false,
         }
@@ -3591,7 +3591,7 @@ impl AstDisplay for ExplainStage {
         match self {
             Self::RawPlan => f.write_str("RAW PLAN"),
             Self::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
-            Self::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            Self::GlobalPlan => f.write_str("OPTIMIZED PLAN"),
             Self::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
             Self::Trace => f.write_str("OPTIMIZER TRACE"),
         }
@@ -3604,7 +3604,7 @@ impl_display!(ExplainStage);
 pub enum NamedPlan {
     Raw,
     Decorrelated,
-    Optimized,
+    Global,
     Physical,
     FastPath,
 }
@@ -3615,7 +3615,7 @@ impl NamedPlan {
         match value {
             "optimize/raw" => Some(Self::Raw),
             "optimize/hir_to_mir" => Some(Self::Decorrelated),
-            "optimize/global" => Some(Self::Optimized),
+            "optimize/global" => Some(Self::Global),
             "optimize/finalize_dataflow" => Some(Self::Physical),
             "optimize/fast_path" => Some(Self::FastPath),
             _ => None,
@@ -3628,7 +3628,7 @@ impl NamedPlan {
         match self {
             Self::Raw => "optimize/raw",
             Self::Decorrelated => "optimize/hir_to_mir",
-            Self::Optimized => "optimize/global",
+            Self::Global => "optimize/global",
             Self::Physical => "optimize/finalize_dataflow",
             Self::FastPath => "optimize/fast_path",
         }
@@ -3648,6 +3648,14 @@ pub enum Explainee<T: AstInfo> {
     Select(Box<SelectStatement<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
     CreateIndex(Box<CreateIndexStatement<T>>, bool),
+}
+
+impl<T: AstInfo> Explainee<T> {
+    pub fn default_stage(&self) -> ExplainStage {
+        match self {
+            _ => ExplainStage::GlobalPlan,
+        }
+    }
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {
