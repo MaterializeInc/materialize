@@ -16,6 +16,7 @@ import "google/protobuf/empty.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "expr/src/refresh_schedule.proto";
+import "pgcopy/src/copy.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/controller.proto";
 import "storage-types/src/connections/aws.proto";
@@ -50,4 +51,5 @@ message ProtoCopyToS3OneshotSinkConnection {
     mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
     uint64 max_file_size = 3;
     mz_repr.relation_and_scalar.ProtoRelationDesc desc = 4;
+    mz_pgcopy.copy.ProtoCopyFormatParams format = 5;
 }

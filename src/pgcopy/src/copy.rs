@@ -13,9 +13,17 @@ use std::io;
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use mz_ore::collections::CollectionExt;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, RelationType, Row, RowArena};
+use proptest::prelude::any;
+use proptest::prelude::Arbitrary;
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use serde::Deserialize;
+use serde::Serialize;
 
 static END_OF_COPY_MARKER: &[u8] = b"\\.";
+
+include!(concat!(env!("OUT_DIR"), "/mz_pgcopy.copy.rs"));
 
 pub fn encode_copy_row_binary(
     row: &Row,
@@ -426,10 +434,45 @@ impl<'a> RawIterator<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub enum CopyFormatParams<'a> {
     Text(CopyTextFormatParams<'a>),
     Csv(CopyCsvFormatParams<'a>),
+}
+
+impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
+    fn into_proto(&self) -> ProtoCopyFormatParams {
+        use proto_copy_format_params::Kind;
+        ProtoCopyFormatParams {
+            kind: Some(match self {
+                Self::Text(f) => Kind::Text(f.into_proto()),
+                Self::Csv(f) => Kind::Csv(f.into_proto()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoCopyFormatParams) -> Result<Self, TryFromProtoError> {
+        use proto_copy_format_params::Kind;
+        match proto.kind {
+            Some(Kind::Text(f)) => Ok(Self::Text(f.into_rust()?)),
+            Some(Kind::Csv(f)) => Ok(Self::Csv(f.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoCopyFormatParams::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for CopyFormatParams<'static> {
+    type Parameters = ();
+    type Strategy = Union<BoxedStrategy<Self>>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        Union::new(vec![
+            any::<CopyTextFormatParams>().prop_map(Self::Text).boxed(),
+            any::<CopyCsvFormatParams>().prop_map(Self::Csv).boxed(),
+        ])
+    }
 }
 
 /// Decodes the given bytes into `Row`-s based on the given `CopyFormatParams`.
@@ -458,7 +501,7 @@ pub fn encode_copy_format<'a>(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct CopyTextFormatParams<'a> {
     pub null: Cow<'a, str>,
     pub delimiter: Cow<'a, str>, // TODO (mouli): refactor delimiter to be a single u8
@@ -470,6 +513,36 @@ impl<'a> Default for CopyTextFormatParams<'a> {
             delimiter: Cow::from("\t"),
             null: Cow::from("\\N"),
         }
+    }
+}
+
+impl RustType<ProtoCopyTextFormatParams> for CopyTextFormatParams<'static> {
+    fn into_proto(&self) -> ProtoCopyTextFormatParams {
+        ProtoCopyTextFormatParams {
+            null: self.null.into_proto(),
+            delimiter: self.delimiter.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCopyTextFormatParams) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            null: Cow::Owned(proto.null.into_rust()?),
+            delimiter: Cow::Owned(proto.delimiter.into_rust()?),
+        })
+    }
+}
+
+impl Arbitrary for CopyTextFormatParams<'static> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (any::<String>(), any::<String>())
+            .prop_map(|(null, delimiter)| Self {
+                null: Cow::Owned(null),
+                delimiter: Cow::Owned(delimiter),
+            })
+            .boxed()
     }
 }
 
@@ -509,13 +582,58 @@ pub fn decode_copy_format_text(
     Ok(rows)
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct CopyCsvFormatParams<'a> {
     pub delimiter: u8,
     pub quote: u8,
     pub escape: u8,
     pub header: bool,
     pub null: Cow<'a, str>,
+}
+
+impl RustType<ProtoCopyCsvFormatParams> for CopyCsvFormatParams<'static> {
+    fn into_proto(&self) -> ProtoCopyCsvFormatParams {
+        ProtoCopyCsvFormatParams {
+            delimiter: self.delimiter.into(),
+            quote: self.quote.into(),
+            escape: self.escape.into(),
+            header: self.header,
+            null: self.null.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCopyCsvFormatParams) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            delimiter: proto.delimiter.into_rust()?,
+            quote: proto.quote.into_rust()?,
+            escape: proto.escape.into_rust()?,
+            header: proto.header,
+            null: Cow::Owned(proto.null.into_rust()?),
+        })
+    }
+}
+
+impl Arbitrary for CopyCsvFormatParams<'static> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (
+            any::<u8>(),
+            any::<u8>(),
+            any::<u8>(),
+            any::<bool>(),
+            any::<String>(),
+        )
+            .prop_map(|(delimiter, quote, escape, header, null)| Self {
+                delimiter,
+                quote,
+                escape,
+                header,
+                null: Cow::Owned(null),
+            })
+            .boxed()
+    }
 }
 
 impl<'a> Default for CopyCsvFormatParams<'a> {

@@ -215,7 +215,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                     prefix: self.copy_to_context.uri.to_string(),
                     max_file_size: self.copy_to_context.max_file_size,
                     desc: self.copy_to_context.desc.clone(),
-                    // TODO (mouli): plumb CopyFormatParams
+                    format: self.copy_to_context.format_params.clone(),
                 })
             }
             _ => {
