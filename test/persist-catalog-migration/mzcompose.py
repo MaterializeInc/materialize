@@ -14,7 +14,9 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
-from materialize.version_list import get_published_minor_mz_versions
+from materialize.version_list import (
+    get_previous_mz_version,
+)
 
 mz_options: dict[MzVersion, str] = {}
 
@@ -415,21 +417,29 @@ def workflow_test_version_skips(c: Composition) -> None:
     Test that skipping versions when upgrading will fail.
     """
 
-    # If the current version is `v0.X.0-dev`, we want to start with `v0.X-2.Y`.
-    # `tested_versions` will look like `[v0.X-1.Y1, v0.X-2.Y2]`, where Y1 and Y2 are the most
-    # recent patch versions for their respective minor versions.
-    tested_versions = get_published_minor_mz_versions(newest_first=True, limit=2)
-    from_version: MzVersion = tested_versions[-1]
+    current_version = MzVersion.parse_cargo()
+
+    # If the current version is `v0.X.0-dev`, two_minor_releases_before will be `v0.X-2.Y`.
+    # where Y is the most recent patch version of the minor version.
+    two_minor_releases_before = get_previous_mz_version(
+        get_previous_mz_version(current_version, previous_minor=True),
+        previous_minor=True,
+    )
+
+    print(
+        f"Testing that a migration from two minor releases before (={two_minor_releases_before})"
+        f" to the current version (={current_version}) should fail"
+    )
 
     c.down(destroy_volumes=True)
 
     with c.override(
         Materialized(
-            image=f"materialize/materialized:{from_version}",
+            image=f"materialize/materialized:{two_minor_releases_before}",
             options=[
                 opt
                 for start_version, opt in mz_options.items()
-                if from_version >= start_version
+                if two_minor_releases_before >= start_version
             ],
             catalog_store="persist",
         )
