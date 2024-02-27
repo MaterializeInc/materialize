@@ -42,6 +42,11 @@ class TestRunWithDeploy:
             "test_view_index.sql": test_view_index,
         }
 
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
+
     def test_deployment_run(self, project):
         # the test runner overrides schemas
         # so we can only validate the cluster
@@ -94,6 +99,11 @@ class TestSourceFail:
             "test_source.sql": test_source,
         }
 
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
+
     def test_source_fails(self, project):
         run_dbt(["run-operation", "deploy_init"])
         run_dbt(["run", "--vars", "deploy: True"], expect_pass=False)
@@ -117,6 +127,11 @@ class TestSinkFail:
             "test_materialized_view.sql": test_materialized_view,
             "test_sink.sql": test_sink,
         }
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
 
     def test_source_fails(self, project):
         run_dbt(["run-operation", "deploy_init"])
