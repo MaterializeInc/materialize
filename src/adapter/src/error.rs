@@ -404,8 +404,8 @@ impl AdapterError {
             AdapterError::Catalog(e) => match &e.kind {
                 mz_catalog::memory::error::ErrorKind::VarError(e) => match e {
                     VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
-                    VarError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
-                    VarError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+                    VarError::FixedValueParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
+                    VarError::InvalidParameterType { .. } => SqlState::INVALID_PARAMETER_VALUE,
                     VarError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
                     VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                     VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,

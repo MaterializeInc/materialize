@@ -141,7 +141,7 @@ impl SynchronizedParameters {
     pub fn enable_launchdarkly(&self) -> bool {
         let var_name = self.get(ENABLE_LAUNCHDARKLY.name());
         let var_input = VarInput::Flat(&var_name);
-        bool::parse(&ENABLE_LAUNCHDARKLY, var_input).expect("This is known to be a bool")
+        bool::parse(var_input).expect("This is known to be a bool")
     }
 }
 

@@ -56,8 +56,8 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, SessionVars, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
+    self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, SCHEMA_ALIAS,
+    TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -1463,7 +1463,7 @@ impl Coordinator {
         variable.visible(session.user(), Some(self.catalog().system_config()))?;
 
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
-        if variable.name() == DATABASE_VAR_NAME
+        if variable.name() == vars::DATABASE.name()
             && matches!(
                 self.catalog().resolve_database(&variable.value()),
                 Err(CatalogError::UnknownDatabase(_))
@@ -1471,7 +1471,7 @@ impl Coordinator {
         {
             let name = variable.value();
             session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
-        } else if variable.name() == CLUSTER_VAR_NAME
+        } else if variable.name() == vars::CLUSTER.name()
             && matches!(
                 self.catalog().resolve_cluster(&variable.value()),
                 Err(CatalogError::UnknownCluster(_))
@@ -1517,7 +1517,7 @@ impl Coordinator {
         if &name == TRANSACTION_ISOLATION_VAR_NAME {
             self.validate_set_isolation_level(session)?;
         }
-        if &name == CLUSTER_VAR_NAME {
+        if &name == vars::CLUSTER.name() {
             self.validate_set_cluster(session)?;
         }
 
@@ -1537,7 +1537,7 @@ impl Coordinator {
                 )?;
 
                 // Database or cluster value does not correspond to a catalog item.
-                if name.as_str() == DATABASE_VAR_NAME
+                if name.as_str() == vars::DATABASE.name()
                     && matches!(
                         self.catalog().resolve_database(vars.database()),
                         Err(CatalogError::UnknownDatabase(_))
@@ -1545,7 +1545,7 @@ impl Coordinator {
                 {
                     let name = vars.database().to_string();
                     session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
-                } else if name.as_str() == CLUSTER_VAR_NAME
+                } else if name.as_str() == vars::CLUSTER.name()
                     && matches!(
                         self.catalog().resolve_cluster(vars.cluster()),
                         Err(CatalogError::UnknownCluster(_))
@@ -1582,7 +1582,7 @@ impl Coordinator {
         if &name == TRANSACTION_ISOLATION_VAR_NAME {
             self.validate_set_isolation_level(session)?;
         }
-        if &name == CLUSTER_VAR_NAME {
+        if &name == vars::CLUSTER.name() {
             self.validate_set_cluster(session)?;
         }
         session
@@ -1607,7 +1607,7 @@ impl Coordinator {
 
                     session.vars_mut().set(
                         Some(self.catalog().system_config()),
-                        TRANSACTION_ISOLATION_VAR_NAME.as_str(),
+                        TRANSACTION_ISOLATION_VAR_NAME,
                         VarInput::Flat(&isolation_level.to_ast_string_stable()),
                         plan.local,
                     )?
