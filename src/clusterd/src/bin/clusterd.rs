@@ -273,6 +273,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
     ));
 
+    let connection_context = ConnectionContext::from_cli_args(
+        args.environment_id,
+        &args.tracing.startup_log_filter,
+        args.aws_external_id_prefix,
+        args.aws_connection_role_arn,
+        secrets_reader,
+        None,
+    );
+
     // Start storage server.
     let (_storage_server, storage_client) = mz_storage::serve(
         mz_cluster::server::ClusterConfig {
@@ -281,14 +290,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             tracing_handle: Arc::clone(&tracing_handle),
         },
         SYSTEM_TIME.clone(),
-        ConnectionContext::from_cli_args(
-            args.environment_id,
-            &args.tracing.startup_log_filter,
-            args.aws_external_id_prefix,
-            args.aws_connection_role_arn,
-            secrets_reader,
-            None,
-        ),
+        connection_context.clone(),
         StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
     )?;
     info!(
@@ -315,6 +317,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
             worker_core_affinity: args.worker_core_affinity,
+            connection_context,
         },
     )?;
     info!(

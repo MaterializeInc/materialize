@@ -179,6 +179,11 @@ pub struct CopyToS3OneshotSinkConnection {
     pub prefix: String,
     /// The AWS connection information to do the writes.
     pub aws_connection: mz_storage_types::connections::aws::AwsConnection,
+    /// The max file size of each file uploaded to S3.
+    pub max_file_size: u64,
+    /// The relation desc of the data to be uploaded to S3.
+    pub desc: RelationDesc,
+    // TODO(mouli): add csv params here
 }
 
 impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnection {
@@ -186,6 +191,8 @@ impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnect
         ProtoCopyToS3OneshotSinkConnection {
             prefix: self.prefix.clone(),
             aws_connection: Some(self.aws_connection.into_proto()),
+            max_file_size: self.max_file_size,
+            desc: Some(self.desc.into_proto()),
         }
     }
 
@@ -195,6 +202,10 @@ impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnect
             aws_connection: proto
                 .aws_connection
                 .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::aws_connection")?,
+            max_file_size: proto.max_file_size,
+            desc: proto
+                .desc
+                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::desc")?,
         })
     }
 }

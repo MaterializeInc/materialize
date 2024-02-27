@@ -793,6 +793,7 @@ pub struct CopyToPlan {
     pub to: HirScalarExpr,
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     pub format_params: CopyFormatParams<'static>,
+    pub max_file_size: u64,
 }
 
 #[derive(Clone, Debug)]

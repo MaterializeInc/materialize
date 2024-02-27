@@ -741,6 +741,7 @@ fn generate_rbac_requirements(
             to: _,
             connection: _,
             format_params: _,
+            max_file_size: _,
         }) => {
             let mut privileges = generate_read_privileges(
                 catalog,

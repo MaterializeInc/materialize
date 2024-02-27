@@ -417,6 +417,7 @@ pub struct CopyToContext {
     pub uri: Uri,
     pub connection: StorageConnection<ReferencedConnection>,
     pub format_params: CopyFormatParams<'static>,
+    pub max_file_size: u64,
 }
 
 #[derive(Debug)]

@@ -85,12 +85,12 @@ pub struct CompletedUpload {
 }
 
 /// Configuration object to configure the behaviour of the `S3MultiPartUploader`.
-/// Should be initialized by either calling `S3MultiPartUploaderConfig::try_new`
-/// or use `Default::default` to get pre-configured default values.
 #[derive(Debug)]
 pub struct S3MultiPartUploaderConfig {
-    part_size_limit: u64,
-    file_size_limit: u64,
+    /// Size of data buffered in memory before being uploaded as a part.
+    pub part_size_limit: u64,
+    /// The max file size of the file uploaded to s3 by an `S3MultiPartUploader` instance.
+    pub file_size_limit: u64,
 }
 
 impl S3MultiPartUploaderConfig {
@@ -102,11 +102,7 @@ impl S3MultiPartUploaderConfig {
     /// `S3MultiPartUploaderConfig` config.
     const DEFAULT_PART_SIZE_LIMIT: ByteSize = ByteSize::mib(10);
 
-    /// Returns an instance of a `S3MultiPartUploaderConfig`.
-    /// The given `part_size_limit` is how much data would be kept in the buffer of `S3MultiPartUploader`
-    /// before uploading a part.
     /// As per S3 limits, the part size cannot be less than 5MiB and cannot exceed 5GiB.
-    /// The given `file_size_limit` is the maximum configured limit for the current object getting uploaded.
     /// As per S3 limits, the object size cannot exceed 5TiB.
     pub fn validate(&self) -> Result<(), anyhow::Error> {
         let S3MultiPartUploaderConfig {

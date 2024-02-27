@@ -962,6 +962,7 @@ fn plan_copy_to(
         to,
         connection: connection.to_owned(),
         format_params,
+        max_file_size: options.max_file_size.as_bytes(),
     }))
 }
 
@@ -1043,7 +1044,7 @@ generate_extracted_config!(
     (Quote, String),
     (Header, bool),
     (AwsConnection, with_options::Object),
-    (MaxFileSize, ByteSize)
+    (MaxFileSize, ByteSize, Default(ByteSize::mb(256)))
 );
 
 pub fn plan_copy(
