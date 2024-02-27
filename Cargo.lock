@@ -4136,6 +4136,7 @@ dependencies = [
  "itertools",
  "mz-expr",
  "mz-ore",
+ "mz-pgcopy",
  "mz-proto",
  "mz-repr",
  "mz-storage-types",
@@ -5044,7 +5045,14 @@ dependencies = [
  "csv",
  "mz-ore",
  "mz-pgrepr",
+ "mz-proto",
  "mz-repr",
+ "proptest",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "tonic-build",
  "workspace-hack",
 ]
 
