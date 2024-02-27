@@ -526,6 +526,23 @@ struct SpecialUnary {
 impl SpecialUnary {
     /// Returns the special-case handling for a particular function, if it exists.
     fn for_func(func: &UnaryFunc) -> Option<SpecialUnary> {
+        /// Eager in the same sense as `func.rs` uses the term; this assumes that
+        /// nulls and errors propagate up, and we only need to define the behaviour
+        /// on values.
+        fn eagerly<'b>(
+            spec: ResultSpec<'b>,
+            value_fn: impl FnOnce(Values<'b>) -> ResultSpec<'b>,
+        ) -> ResultSpec<'b> {
+            let result = match spec.values {
+                Values::Empty => ResultSpec::nothing(),
+                other => value_fn(other),
+            };
+            ResultSpec {
+                fallible: spec.fallible || result.fallible,
+                nullable: spec.nullable || result.nullable,
+                values: result.values,
+            }
+        }
         match func {
             UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => Some(SpecialUnary {
                 map_fn: |specs, range| {
