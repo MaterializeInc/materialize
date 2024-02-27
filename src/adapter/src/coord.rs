@@ -131,7 +131,7 @@ use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -2800,8 +2800,8 @@ pub fn serve(
         // based on the "now" timestamp, if/when needed.
         let previous_ts = initial_timestamps
             .get(&Timeline::EpochMilliseconds)
-            .expect("missing EpochMillisseconds timestamp")
-            .clone();
+            .cloned()
+            .unwrap_or_else(mz_repr::Timestamp::minimum);
 
         // Choose a time at which to boot. This is used, for example, to prune
         // old storage usage data. Crucially, it is _not_ linearizable, we do
