@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::{debug_span, error, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::cfg::RetryParameters;
@@ -718,6 +718,15 @@ where
         as_of: Antichain<T>,
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
+
+        if !PartialOrder::less_equal(self.since(), &as_of) {
+            error!(
+                "ReadHandle::snapshot called with as_of {:?} not past the since {:?}, \
+                though the read has succeeded. This means the since is not being held back correctly.",
+                &as_of,
+                self.since()
+            )
+        }
 
         let metadata = SerdeLeasedBatchPartMetadata::Snapshot {
             as_of: as_of.iter().map(T::encode).collect(),
