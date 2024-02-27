@@ -27,8 +27,8 @@ use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::builder_async::Event;
-use mz_timely_util::operator::{consolidate_pact, StreamExt};
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::operator::consolidate_pact;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -81,8 +81,8 @@ where
 }
 
 fn copy_to<G>(
-    input: Collection<G, Row, Diff>,
-    _err_collection: Collection<G, DataflowError, Diff>,
+    input_collection: Collection<G, Row, Diff>,
+    err_collection: Collection<G, DataflowError, Diff>,
     sink_id: GlobalId,
     up_to: Antichain<G::Timestamp>,
     sink_connection: CopyToS3OneshotSinkConnection,
@@ -91,85 +91,107 @@ fn copy_to<G>(
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let scope = input.scope();
+    let scope = input_collection.scope();
     let worker_id = scope.index();
+
+    let mut builder = AsyncOperatorBuilder::new("CopyToS3".to_string(), input_collection.scope());
 
     // Move all the data to a single worker and consolidate
     // TODO: split the data among worker to some number of buckets (either static or configurable
     // by the user) to split the load across the cluster.
     let active_worker = usize::cast_from(sink_id.hashed()) % scope.peers();
     let exchange = Exchange::new(move |_| u64::cast_from(active_worker));
-    let input = input.map(|row| (row, ()));
+    let error_exchange = Exchange::new(move |_| u64::cast_from(active_worker));
     let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
-        &input,
+        &input_collection.map(|row| (row, ())),
         exchange,
         "Consolidated COPY TO S3 input",
     );
 
-    input
-        .inner
-        .sink_async(Pipeline, "CopyToS3".into(), |_, mut input| async move {
-            if worker_id != active_worker {
+    let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
+        &err_collection.map(|row| (row, ())),
+        error_exchange,
+        "Consolidated COPY TO S3 error",
+    );
+
+    let mut input_handle = builder.new_disconnected_input(&input.inner, Pipeline);
+    let mut error_handle = builder.new_disconnected_input(&error.inner, Pipeline);
+
+    let send_response = move |response: CopyToResponse| {
+        if let Some(response_protocol) = response_protocol_handle.borrow_mut().deref_mut() {
+            response_protocol.send_response(response);
+        }
+    };
+
+    builder.build(move |_caps| async move {
+        if worker_id != active_worker {
+            return;
+        }
+
+        while let Some(event) = error_handle.next().await {
+            match event {
+                AsyncEvent::Data(_ts, data) => {
+                    if let Some(((error, _), _, _)) = data.first() {
+                        send_response(CopyToResponse::Error(error.to_string()));
+                        return;
+                    }
+                }
+                AsyncEvent::Progress(frontier) => {
+                    if PartialOrder::less_equal(&up_to, &frontier) {
+                        // No error, break from loop and proceed
+                        break;
+                    }
+                }
+            }
+        }
+
+        // fix global ID
+        let sdk_config = match sink_connection
+            .aws_connection
+            .load_sdk_config(&connection_context, GlobalId::Transient(0))
+            .await
+        {
+            Ok(sdk_config) => sdk_config,
+            Err(e) => {
+                send_response(CopyToResponse::Error(e.to_string()));
                 return;
             }
+        };
 
-            // fix global ID
-            let sdk_config = match sink_connection
-                .aws_connection
-                .load_sdk_config(&connection_context, GlobalId::Transient(0))
-                .await
-            {
-                Ok(sdk_config) => sdk_config,
-                Err(e) => {
-                    if let Some(response_protocol) =
-                        response_protocol_handle.borrow_mut().deref_mut()
-                    {
-                        response_protocol.send_error(e.to_string());
+        let mut uploader = CopyToS3Uploader {
+            file_index: 0,
+            desc: sink_connection.desc,
+            buf: Vec::new(),
+            max_file_size: sink_connection.max_file_size,
+            file_name_prefix: "part".into(),
+            path_prefix: sink_connection.prefix,
+            sdk_config,
+        };
+
+        let mut row_count = 0;
+        while let Some(event) = input_handle.next().await {
+            match event {
+                AsyncEvent::Data(_ts, data) => {
+                    for ((row, ()), _time, diff) in data {
+                        assert!(diff > 0, "negative accumulation in copy to S3 input");
+                        row_count += u64::try_from(diff).unwrap();
+                        for _ in 0..diff {
+                            uploader.append_row(&row).await;
+                        }
                     }
-                    return;
                 }
-            };
-
-            // TODO: get these from the SQL query
-            let mut uploader = CopyToS3Uploader {
-                file_index: 0,
-                desc: sink_connection.desc,
-                buf: Vec::new(),
-                max_file_size: sink_connection.max_file_size,
-                file_name_prefix: "part".into(),
-                path_prefix: sink_connection.prefix,
-                sdk_config,
-            };
-
-            let mut row_count = 0;
-            while let Some(event) = input.next().await {
-                match event {
-                    Event::Data(_ts, data) => {
-                        for ((row, ()), _time, diff) in data {
-                            assert!(diff > 0, "negative accumulation in copy to S3 input");
-                            row_count += u64::try_from(diff).unwrap();
-                            for _ in 0..diff {
-                                uploader.append_row(&row).await;
-                            }
-                        }
-                    }
-                    Event::Progress(frontier) => {
-                        if PartialOrder::less_equal(&up_to, &frontier) {
-                            let result = uploader.flush().await;
-                            println!("result: {:?}", result);
-                            // We are done, send the final count.
-                            // TODO: what should happen if the error collection is not empty?
-                            if let Some(response_protocol) =
-                                response_protocol_handle.borrow_mut().deref_mut()
-                            {
-                                response_protocol.send_final_count(row_count);
-                            }
-                            return;
-                        }
+                AsyncEvent::Progress(frontier) => {
+                    if PartialOrder::less_equal(&up_to, &frontier) {
+                        let result = uploader.flush().await;
+                        println!("result: {:?}", result);
+                        // We are done, send the final count.
+                        send_response(CopyToResponse::RowCount(row_count));
+                        return;
                     }
                 }
             }
-        });
+        }
+    });
 }
 
 /// Required state to upload batches to S3
@@ -258,24 +280,10 @@ struct ResponseProtocol {
 }
 
 impl ResponseProtocol {
-    fn send_final_count(&mut self, rows: u64) {
+    fn send_response(&mut self, response: CopyToResponse) {
         let buffer = self.response_buffer.as_mut().expect("Copy response buffer");
 
-        buffer
-            .borrow_mut()
-            .push((self.sink_id, CopyToResponse::RowCount(rows)));
-
-        // The dataflow's input has been exhausted, clear the channel,
-        // to avoid sending `CopyToResponse::Dropped`.
-        self.response_buffer = None;
-    }
-
-    fn send_error(&mut self, error: String) {
-        let buffer = self.response_buffer.as_mut().expect("Copy response buffer");
-
-        buffer
-            .borrow_mut()
-            .push((self.sink_id, CopyToResponse::Error(error)));
+        buffer.borrow_mut().push((self.sink_id, response));
 
         // The dataflow's input has been exhausted, clear the channel,
         // to avoid sending `CopyToResponse::Dropped`.
