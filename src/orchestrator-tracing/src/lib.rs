@@ -128,8 +128,10 @@ pub struct TracingCliArgs {
     )]
     pub startup_opentelemetry_filter: CloneableEnvFilter,
     /// Additional key-value pairs to send with all opentelemetry traces.
+    /// Also used as Sentry tags.
     ///
-    /// Requires that the `--opentelemetry-endpoint` option is specified.
+    /// Requires that one of the `--opentelemetry-endpoint` or `--sentry-dsn`
+    /// options is specified.
     #[clap(
         long,
         env = "OPENTELEMETRY_RESOURCE",
@@ -179,6 +181,17 @@ pub struct TracingCliArgs {
     /// See: <https://docs.sentry.io/platforms/rust/configuration/options/#environment>
     #[clap(long, env = "SENTRY_ENVIRONMENT")]
     pub sentry_environment: Option<String>,
+    /// Tags to send with all Sentry events, in addition to the tags specified by
+    /// `--opentelemetry-resource`.
+    ///
+    /// Requires that the `--sentry-dsn` option is specified.
+    #[clap(
+        long,
+        env = "SENTRY_TAG",
+        value_name = "NAME=VALUE",
+        use_value_delimiter = true
+    )]
+    pub sentry_tag: Vec<KeyValueArg<String, String>>,
 }
 
 impl Default for TracingCliArgs {
@@ -241,6 +254,7 @@ impl TracingCliArgs {
                     .opentelemetry_resource
                     .iter()
                     .cloned()
+                    .chain(self.sentry_tag.iter().cloned())
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 event_filter: mz_service::tracing::mz_sentry_event_filter,
@@ -337,6 +351,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 tokio_console_retention,
                 sentry_dsn,
                 sentry_environment,
+                sentry_tag,
             } = &self.tracing_args;
             args.push(format!("--startup-log-filter={startup_log_filter}"));
             args.push(format!("--log-format={log_format}"));
@@ -353,9 +368,6 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                             .to_str()
                             .expect("opentelemetry-header had non-ascii value"),
                     ));
-                }
-                for kv in opentelemetry_resource {
-                    args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
             }
             #[cfg(feature = "tokio-console")]
@@ -375,10 +387,20 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             }
             if let Some(dsn) = sentry_dsn {
                 args.push(format!("--sentry-dsn={dsn}"));
+                for kv in sentry_tag {
+                    args.push(format!("--sentry-tag={}={}", kv.key, kv.value));
+                }
             }
             if let Some(environment) = sentry_environment {
                 args.push(format!("--sentry-environment={environment}"));
             }
+
+            if opentelemetry_endpoint.is_some() || sentry_dsn.is_some() {
+                for kv in opentelemetry_resource {
+                    args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
+                }
+            }
+
             args
         };
         service_config.args = &args_fn;
