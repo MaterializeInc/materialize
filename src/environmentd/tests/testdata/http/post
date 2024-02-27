@@ -456,3 +456,16 @@ http
 ----
 200 OK
 {"results":[{"error":{"message":"cannot materialize call to current_timestamp","code":"0A000","detail":"See: https://materialize.com/docs/sql/functions/now_and_mz_now/","hint":"Try using `mz_now()` here instead."},"notices":[]}]}
+
+# Test timestamp precision.
+http
+{"query":"select TIMESTAMP '2023-12-19T06:50:37.123056' as col"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[["1702968637123.056"]],"desc":{"columns":[{"name":"col","type_oid":1114,"type_len":8,"type_mod":-1}]},"notices":[]}]}
+
+http
+{"query":"select TIMESTAMPTZ '2023-12-19T06:50:37.123056' as col"}
+----
+200 OK
+{"results":[{"tag":"SELECT 1","rows":[["1702968637123.056"]],"desc":{"columns":[{"name":"col","type_oid":1184,"type_len":8,"type_mod":-1}]},"notices":[]}]}

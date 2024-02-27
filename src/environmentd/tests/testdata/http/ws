@@ -321,6 +321,25 @@ ws-text
 {"type":"Error","payload":{"message":"SUBSCRIBE in transactions must be the only read statement","code":"25000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
+# Test timestamp precision.
+ws-text
+{"query":"select TIMESTAMP '2023-12-19T06:50:37.123056' as col"}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"col","type_oid":1114,"type_len":8,"type_mod":-1}]}}
+{"type":"Row","payload":["1702968637123.056"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query":"select TIMESTAMPTZ '2023-12-19T06:50:37.123056' as col"}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"col","type_oid":1184,"type_len":8,"type_mod":-1}]}}
+{"type":"Row","payload":["1702968637123.056"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
 ws-text rows=2 fixtimestamp=true
 {"query": "SUBSCRIBE t"}
 ----
@@ -328,3 +347,5 @@ ws-text rows=2 fixtimestamp=true
 {"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["<TIMESTAMP>","1","1"]}
 {"type":"Row","payload":["<TIMESTAMP>","1","2"]}
+
+# The above query never completes, so don't put anything below this.
