@@ -53,7 +53,7 @@ mod tests {
                 .transforms
                 .into_iter()
                 .chain(std::iter::once::<Box<dyn Transform>>(
-                    Box::new(mz_transform::movement::ProjectionPushdown)
+                    Box::new(mz_transform::movement::ProjectionPushdown::default())
                 ))
                 .chain(std::iter::once::<Box<dyn Transform>>(
                     Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
@@ -286,7 +286,9 @@ mod tests {
             "ProjectionLifting" => Ok(Box::new(
                 mz_transform::movement::ProjectionLifting::default(),
             )),
-            "ProjectionPushdown" => Ok(Box::new(mz_transform::movement::ProjectionPushdown)),
+            "ProjectionPushdown" => Ok(Box::new(
+                mz_transform::movement::ProjectionPushdown::default(),
+            )),
             "ReductionPushdown" => Ok(Box::new(
                 mz_transform::reduction_pushdown::ReductionPushdown,
             )),
