@@ -200,7 +200,7 @@ impl Coordinator {
         plan: plan::CreateMaterializedViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
-        // sequencing an EXPALIN for this statement.
+        // sequencing an EXPLAIN for this statement.
         explain_ctx: ExplainContext,
     ) -> Result<CreateMaterializedViewStage, AdapterError> {
         let plan::CreateMaterializedViewPlan {
@@ -252,7 +252,7 @@ impl Coordinator {
         // the REFRESH AT expressions have been evaluated, so we can handle something like
         // `mz_now()::text::int8 + 10000`;
         if let Some(refresh_schedule) = refresh_schedule {
-            if !refresh_schedule.ats.is_empty() {
+            if !refresh_schedule.ats.is_empty() && matches!(explain_ctx, ExplainContext::None) {
                 let ids = self
                     .index_oracle(*cluster_id)
                     .sufficient_collections(resolved_ids.0.iter());
