@@ -1077,3 +1077,23 @@ NULL
 30
 70
 100
+
+## EXPLAIN shouldn't try to grab read holds in `create_materialized_view_validate`
+
+statement ok
+CREATE TABLE t3(x int);
+
+statement ok
+INSERT INTO t3 VALUES (5), (6);
+
+statement ok
+CREATE MATERIALIZED VIEW mv8 WITH (REFRESH AT CREATION) AS
+SELECT DISTINCT x-x FROM t3;
+
+# Sleep until we could no longer grab read holds at the original creation time.
+statement ok
+SELECT mz_unsafe.mz_sleep(2);
+
+# This would fail to get read holds if it attempted to do so.
+statement ok
+EXPLAIN REPLAN MATERIALIZED VIEW mv8;
