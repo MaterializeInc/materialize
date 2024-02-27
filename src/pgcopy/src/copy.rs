@@ -17,7 +17,7 @@ use mz_repr::{Datum, RelationType, Row, RowArena};
 static END_OF_COPY_MARKER: &[u8] = b"\\.";
 
 pub fn encode_copy_row_binary(
-    row: Row,
+    row: &Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
@@ -61,14 +61,17 @@ pub fn encode_copy_row_binary(
 }
 
 pub fn encode_copy_row_text(
-    row: Row,
+    row: &Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
     let delim = b'\t';
     let null = b"\\N";
     let mut buf = BytesMut::new();
-    for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
+    for (idx, field) in mz_pgrepr::values_from_row(&row, typ)
+        .into_iter()
+        .enumerate()
+    {
         if idx > 0 {
             out.push(delim);
         }
