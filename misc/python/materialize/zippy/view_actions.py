@@ -14,6 +14,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
+from materialize.zippy.mysql_cdc_capabilities import MySqlCdcTableExists
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.source_capabilities import SourceExists
@@ -32,6 +33,7 @@ class CreateViewParameterized(ActionFactory):
             {BalancerdIsRunning, MzIsRunning, TableExists},
             {BalancerdIsRunning, MzIsRunning, DebeziumSourceExists},
             {BalancerdIsRunning, MzIsRunning, PostgresCdcTableExists},
+            {BalancerdIsRunning, MzIsRunning, MySqlCdcTableExists},
         ]
 
     def __init__(
@@ -55,6 +57,7 @@ class CreateViewParameterized(ActionFactory):
                 TableExists,
                 DebeziumSourceExists,
                 PostgresCdcTableExists,
+                MySqlCdcTableExists,
             ]:
                 potential_inputs.extend(capabilities.get(source_capability))
 

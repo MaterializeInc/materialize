@@ -59,7 +59,7 @@ steps:
             args: [--scenario=DataflowsLarge, --actions=35000]
 
     - id: zippy-pg-cdc-large
-      label: "Large Zippy PogresCdc"
+      label: "Large Zippy PostgresCdc"
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
@@ -68,6 +68,18 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: zippy
             args: [--scenario=PostgresCdcLarge, --actions=200000]
+
+    - id: zippy-mysql-cdc-large
+      label: "Large Zippy MySqlCdc"
+      skip: "TODO: #25582 (invalid data in source)"
+      timeout_in_minutes: 2880
+      agents:
+        queue: linux-aarch64-large
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: zippy
+            args: [--scenario=MySqlCdcLarge, --actions=200000]
 
     - id: zippy-cluster-replicas-long
       label: "Longer Zippy ClusterReplicas"

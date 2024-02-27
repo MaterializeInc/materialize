@@ -406,6 +406,18 @@ steps:
               composition: zippy
               args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m]
 
+      - id: zippy-mysql-cdc
+        label: "Zippy MySQL CDC"
+        skip: "TODO: #25582 (invalid data in source)"
+        timeout_in_minutes: 120
+        agents:
+          queue: linux-aarch64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m]
+
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
         timeout_in_minutes: 120

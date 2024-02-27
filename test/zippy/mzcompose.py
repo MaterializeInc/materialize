@@ -22,6 +22,7 @@ from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.grafana import Grafana
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.prometheus import Prometheus
@@ -55,6 +56,7 @@ SERVICES = [
     SshBastionHost(),
     Persistcli(),
     Toxiproxy(),
+    MySql(),
 ]
 
 
