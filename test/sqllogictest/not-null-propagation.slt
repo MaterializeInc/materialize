@@ -408,17 +408,14 @@ Explained Query:
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
           ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
             Union // { types: "(integer?, integer, boolean)" }
-              Project (#0, #2, #3) // { types: "(integer?, integer, boolean)" }
-                Filter (#1 = 1) // { types: "(integer?, integer, integer, boolean)" }
-                  Map (1, true) // { types: "(integer?, integer, integer, boolean)" }
-                    Get l0 // { types: "(integer?, integer)" }
+              Filter (#1 = 1) // { types: "(integer?, integer, boolean)" }
+                Map (true) // { types: "(integer?, integer, boolean)" }
+                  Get l0 // { types: "(integer?, integer)" }
               Map (false) // { types: "(integer?, integer, boolean)" }
                 Union // { types: "(integer?, integer)" }
                   Negate // { types: "(integer?, integer)" }
-                    Project (#0, #2) // { types: "(integer?, integer)" }
-                      Filter (#1 = 1) // { types: "(integer?, integer, integer)" }
-                        Map (1) // { types: "(integer?, integer, integer)" }
-                          Get l0 // { types: "(integer?, integer)" }
+                    Filter (#1 = 1) // { types: "(integer?, integer)" }
+                      Get l0 // { types: "(integer?, integer)" }
                   Get l0 // { types: "(integer?, integer)" }
   With
     cte l0 =
@@ -692,17 +689,14 @@ Explained Query:
                   - ()
         ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
           Union // { types: "(integer?, integer, boolean)" }
-            Project (#0, #2, #3) // { types: "(integer?, integer, boolean)" }
-              Filter (#1 = 1) // { types: "(integer?, integer, integer, boolean)" }
-                Map (1, true) // { types: "(integer?, integer, integer, boolean)" }
-                  Get l1 // { types: "(integer?, integer)" }
+            Filter (#1 = 1) // { types: "(integer?, integer, boolean)" }
+              Map (true) // { types: "(integer?, integer, boolean)" }
+                Get l1 // { types: "(integer?, integer)" }
             Map (false) // { types: "(integer?, integer, boolean)" }
               Union // { types: "(integer?, integer)" }
                 Negate // { types: "(integer?, integer)" }
-                  Project (#0, #2) // { types: "(integer?, integer)" }
-                    Filter (#1 = 1) // { types: "(integer?, integer, integer)" }
-                      Map (1) // { types: "(integer?, integer, integer)" }
-                        Get l1 // { types: "(integer?, integer)" }
+                  Filter (#1 = 1) // { types: "(integer?, integer)" }
+                    Get l1 // { types: "(integer?, integer)" }
                 Get l1 // { types: "(integer?, integer)" }
         ArrangeBy keys=[[#0]] // { types: "(integer?, boolean?)" }
           Union // { types: "(integer?, boolean?)" }

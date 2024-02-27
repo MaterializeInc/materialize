@@ -62,14 +62,11 @@ Explained Query:
                 Filter (#0 = bigint_to_double(#1)) // { arity: 2 }
                   Get l2 // { arity: 2 }
               Negate // { arity: 1 }
-                Project (#2) // { arity: 1 }
-                  Filter (#0 = 0) // { arity: 3 }
-                    Map (0) // { arity: 3 }
-                      Get l2 // { arity: 2 }
-              Project (#1) // { arity: 1 }
-                Filter (#0 = 0) // { arity: 2 }
-                  Map (0) // { arity: 2 }
-                    Get l1 // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#0 = 0) // { arity: 2 }
+                    Get l2 // { arity: 2 }
+              Filter (#0 = 0) // { arity: 1 }
+                Get l1 // { arity: 1 }
   With
     cte l2 =
       Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }

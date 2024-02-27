@@ -80,7 +80,7 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 "Explained Query (fast path):  ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 > EXPLAIN WITH(no notices) SELECT key1, key2 FROM t1 GROUP BY key1, key2 HAVING key1 = 'a';
-"Explained Query (fast path):  Project (#3, #1)    Filter (#0 = \"a\")      Map (\"a\")        ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Project (#0, #1)    Filter (#0 = \"a\")      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # Optimization not possible - explicit distinct is present in planFor certain types of tests the 
 
@@ -192,7 +192,7 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema}
 "Explained Query (fast path):  ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 > EXPLAIN WITH(no notices) SELECT key1, key2 FROM t1_pkne GROUP BY key1, key2 HAVING key1 = 'a';
-"Explained Query (fast path):  Project (#3, #1)    Filter (#0 = \"a\")      Map (\"a\")        ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
+"Explained Query (fast path):  Project (#0, #1)    Filter (#0 = \"a\")      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 # Optimization not possible - explicit distinct is present in plan
 

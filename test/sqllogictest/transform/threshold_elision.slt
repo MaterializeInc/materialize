@@ -77,10 +77,9 @@ Explained Query:
     Project (#0) // { non_negative: true }
       ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
-      Project (#4) // { non_negative: true }
+      Project (#0) // { non_negative: true }
         Filter (#0 = 5) // { non_negative: true }
-          Map (5) // { non_negative: true }
-            ReadStorage materialize.public.people // { non_negative: true }
+          ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 

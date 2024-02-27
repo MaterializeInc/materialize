@@ -896,6 +896,33 @@ impl MapFilterProject {
         while prev_size.map(|p| self_size < p).unwrap_or(true) {
             // Lock in current size.
             prev_size = Some(self_size);
+
+            // We have an annoying pattern of mapping literals that already exist as columns (by filters).
+            // Try to identify this pattern, of a map that introduces an expression equated to a prior column,
+            // and then replace the mapped expression by a column reference.
+            for (index, expr) in self.expressions.iter_mut().enumerate() {
+                // If `expr` matches a filter equating it to a column < index + input_arity, rewrite it
+                for (_, predicate) in self.predicates.iter() {
+                    if let MirScalarExpr::CallBinary {
+                        func: crate::BinaryFunc::Eq,
+                        expr1,
+                        expr2,
+                    } = predicate
+                    {
+                        if let MirScalarExpr::Column(c) = &**expr1 {
+                            if *c < index + self.input_arity && &**expr2 == expr {
+                                *expr = MirScalarExpr::Column(*c);
+                            }
+                        }
+                        if let MirScalarExpr::Column(c) = &**expr2 {
+                            if *c < index + self.input_arity && &**expr1 == expr {
+                                *expr = MirScalarExpr::Column(*c);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Optimization memoizes individual `ScalarExpr` expressions that
             // are sure to be evaluated, canonicalizes references to the first
             // occurrence of each, inlines expressions that have a reference
