@@ -47,7 +47,7 @@
 //!   The fields of [`SessionVars`] are either;
 //!     - `SessionVar`, which is preferable and simply requires full support of
 //!       the `SessionVar` impl for its embedded value type.
-//!     - [`ServerVar`] for types that do not currently support everything
+//!     - `ServerVar` for types that do not currently support everything
 //!       required by `SessionVar`, e.g. they are fixed-value parameters.
 //!
 //!   In the fullness of time, all fields in [`SessionVars`] should be
@@ -58,13 +58,12 @@
 //!
 //!   All elements of [`SystemVars`] are `SystemVar`.
 //!
-//! Some [`ServerVar`] are also marked as a [`FeatureFlag`]; this is just a
-//! wrapper to make working with a set of [`ServerVar`] easier, primarily from
+//! Some [`VarDefinition`] are also marked as a [`FeatureFlag`]; this is just a
+//! wrapper to make working with a set of [`VarDefinition`] easier, primarily from
 //! within SQL planning, where we might want to check if a feature is enabled
 //! before planning it.
 
-use std::any::Any;
-use std::borrow::Borrow;
+use std::borrow::Cow;
 use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -79,6 +78,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::{CRDB_CONNECT_TIMEOUT, CRDB_TCP_USER_TIMEOUT};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::bytes::ByteSize;
 use mz_repr::user::ExternalUserMetadata;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
@@ -89,12 +89,11 @@ use uncased::UncasedStr;
 use crate::ast::Ident;
 use crate::session::user::User;
 
-mod constraints;
-mod definitions;
-mod errors;
-mod value;
-
-use constraints::*;
+pub(crate) mod constraints;
+pub(crate) mod definitions;
+pub(crate) mod errors;
+pub(crate) mod polyfill;
+pub(crate) mod value;
 
 pub use definitions::*;
 pub use errors::*;
@@ -172,160 +171,72 @@ pub trait Var: Debug {
     fn description(&self) -> &'static str;
 
     /// Returns the name of the type of this variable.
-    fn type_name(&self) -> String;
+    fn type_name(&self) -> Cow<'static, str>;
 
     /// Indicates wither the [`Var`] is visible as a function of the `user` and `system_vars`.
     /// "Invisible" parameters return `VarErrors`.
     ///
     /// Variables marked as `internal` are only visible for the system user.
     fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError>;
+
+    /// Upcast `self` to a `dyn Var`, useful when working with multiple different implementors of
+    /// [`Var`].
+    fn as_var(&self) -> &dyn Var
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 /// A `SessionVar` is the session value for a configuration parameter. If unset,
 /// the server default is used instead.
+///
+/// Note: even though all of the different `*_value` fields are `Box<dyn Value>` they are enforced
+/// to be the same type because we use the `definition`s `parse(...)` method. This is guaranteed to
+/// return the same type as the compiled in default.
 #[derive(Debug)]
-struct SessionVar<V>
-where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
-{
-    /// Value compiled into the binary.
-    parent: ServerVar<V>,
-    /// Sysetm or Role default value.
-    default_value: Option<V::Owned>,
+pub struct SessionVar {
+    definition: VarDefinition,
+    /// System or Role default value.
+    default_value: Option<Box<dyn Value>>,
     /// Value `LOCAL` to a transaction, will be unset at the completion of the transaction.
-    local_value: Option<V::Owned>,
+    local_value: Option<Box<dyn Value>>,
     /// Value set during a transaction, will be set if the transaction is committed.
-    staged_value: Option<V::Owned>,
+    staged_value: Option<Box<dyn Value>>,
     /// Value that overrides the default.
-    session_value: Option<V::Owned>,
-    feature_flag: Option<&'static FeatureFlag>,
-    constraints: Vec<ValueConstraint<V>>,
+    session_value: Option<Box<dyn Value>>,
 }
 
-impl<V> SessionVar<V>
-where
-    V: Value + Clone + Debug + PartialEq + 'static,
-    V::Owned: Debug + Send + Sync,
-{
-    fn new(parent: &ServerVar<V>) -> SessionVar<V> {
+impl Clone for SessionVar {
+    fn clone(&self) -> Self {
         SessionVar {
+            definition: self.definition.clone(),
+            default_value: self.default_value.as_ref().map(|v| v.box_clone()),
+            local_value: self.local_value.as_ref().map(|v| v.box_clone()),
+            staged_value: self.staged_value.as_ref().map(|v| v.box_clone()),
+            session_value: self.session_value.as_ref().map(|v| v.box_clone()),
+        }
+    }
+}
+
+impl SessionVar {
+    pub fn new(var: VarDefinition) -> Self {
+        SessionVar {
+            definition: var,
             default_value: None,
             local_value: None,
             staged_value: None,
             session_value: None,
-            parent: parent.clone(),
-            feature_flag: None,
-            constraints: vec![],
         }
-    }
-
-    fn add_feature_flag(mut self, flag: &'static FeatureFlag) -> Self {
-        self.feature_flag = Some(flag);
-        self
-    }
-
-    fn with_value_constraint(mut self, c: ValueConstraint<V>) -> SessionVar<V> {
-        assert!(
-            !self
-                .constraints
-                .iter()
-                .any(|c| matches!(c, ValueConstraint::ReadOnly | ValueConstraint::Fixed)),
-            "fixed value and read only params do not support any other constraints"
-        );
-        self.constraints.push(c);
-        self
-    }
-
-    fn check_constraints(&self, v: &V::Owned) -> Result<(), VarError> {
-        let cur_v = self.value();
-        for constraint in &self.constraints {
-            constraint.check_constraint(self, cur_v, v)?;
-        }
-
-        Ok(())
-    }
-
-    fn value(&self) -> &V {
-        self.local_value
-            .as_ref()
-            .map(|v| v.borrow())
-            .or_else(|| self.staged_value.as_ref().map(|v| v.borrow()))
-            .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
-            .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
-            .unwrap_or(&self.parent.value)
-    }
-}
-
-impl<V> Var for SessionVar<V>
-where
-    V: Value + Clone + Debug + PartialEq + 'static,
-    V::Owned: Debug + Send + Sync,
-{
-    fn name(&self) -> &'static str {
-        self.parent.name()
-    }
-
-    fn value(&self) -> String {
-        SessionVar::value(self).format()
-    }
-
-    fn description(&self) -> &'static str {
-        self.parent.description()
-    }
-
-    fn type_name(&self) -> String {
-        V::type_name()
-    }
-
-    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
-        if let Some(flag) = self.feature_flag {
-            flag.enabled(system_vars, None, None)?;
-        }
-
-        self.parent.visible(user, system_vars)
-    }
-}
-
-/// A `Var` with additional methods for mutating the value, as well as
-/// helpers that enable various operations in a `dyn` context.
-pub trait SessionVarMut: Var + Send + Sync {
-    /// Upcast to Var, for use with `dyn`.
-    fn as_var(&self) -> &dyn Var;
-
-    fn value_any(&self) -> &(dyn Any + 'static);
-
-    /// Parse the input and update the stored value to match.
-    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError>;
-
-    /// Sets the default value for the variable.
-    fn set_default(&mut self, value: VarInput) -> Result<(), VarError>;
-
-    /// Reset the stored value to the default.
-    fn reset(&mut self, local: bool);
-
-    fn end_transaction(&mut self, action: EndTransactionAction);
-}
-
-impl<V> SessionVarMut for SessionVar<V>
-where
-    V: Value + Clone + Debug + PartialEq + 'static,
-    V::Owned: Debug + Clone + Send + Sync,
-{
-    /// Upcast to Var, for use with `dyn`.
-    fn as_var(&self) -> &dyn Var {
-        self
-    }
-
-    fn value_any(&self) -> &(dyn Any + 'static) {
-        let value = SessionVar::value(self);
-        value
     }
 
     /// Parse the input and update the stored value to match.
-    fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
-        let v = V::parse(self, input)?;
+    pub fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError> {
+        let v = self.definition.parse(input)?;
 
-        self.check_constraints(&v)?;
+        // Validate our parsed value.
+        self.validate_constraints(v.as_ref())?;
 
         if local {
             self.local_value = Some(v);
@@ -337,30 +248,29 @@ where
     }
 
     /// Sets the default value for the variable.
-    fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
-        let v = V::parse(self, input)?;
-        self.check_constraints(&v)?;
+    pub fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
+        let v = self.definition.parse(input)?;
+        self.validate_constraints(v.as_ref())?;
         self.default_value = Some(v);
         Ok(())
     }
 
     /// Reset the stored value to the default.
-    fn reset(&mut self, local: bool) {
+    pub fn reset(&mut self, local: bool) {
         let value = self
             .default_value
             .as_ref()
-            .map(|v| v.borrow())
-            .unwrap_or(&self.parent.value)
-            .to_owned();
+            .map(|v| v.as_ref())
+            .unwrap_or(self.definition.value.value());
         if local {
-            self.local_value = Some(value);
+            self.local_value = Some(value.box_clone());
         } else {
             self.local_value = None;
-            self.staged_value = Some(value);
+            self.staged_value = Some(value.box_clone());
         }
     }
 
-    fn end_transaction(&mut self, action: EndTransactionAction) {
+    pub fn end_transaction(&mut self, action: EndTransactionAction) {
         self.local_value = None;
         match action {
             EndTransactionAction::Commit if self.staged_value.is_some() => {
@@ -369,118 +279,107 @@ where
             _ => self.staged_value = None,
         }
     }
+
+    pub fn value_dyn(&self) -> &dyn Value {
+        self.local_value
+            .as_deref()
+            .or_else(|| self.staged_value.as_deref())
+            .or_else(|| self.session_value.as_deref())
+            .or_else(|| self.default_value.as_deref())
+            .unwrap_or(self.definition.value.value())
+    }
+
+    fn validate_constraints(&self, val: &dyn Value) -> Result<(), VarError> {
+        if let Some(constraint) = &self.definition.constraint {
+            constraint.check_constraint(self, self.value_dyn(), val)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Var for SessionVar {
+    fn name(&self) -> &'static str {
+        self.definition.name.as_str()
+    }
+
+    fn value(&self) -> String {
+        self.value_dyn().format()
+    }
+
+    fn description(&self) -> &'static str {
+        self.definition.description
+    }
+
+    fn type_name(&self) -> Cow<'static, str> {
+        self.definition.type_name()
+    }
+
+    fn visible(
+        &self,
+        user: &User,
+        system_vars: Option<&super::vars::SystemVars>,
+    ) -> Result<(), super::vars::VarError> {
+        self.definition.visible(user, system_vars)
+    }
 }
 
 /// Session variables.
 ///
 /// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SessionVars {
-    vars: BTreeMap<&'static UncasedStr, Box<dyn SessionVarMut>>,
-    // Inputs to computed variables.
+    /// The set of all session variables.
+    vars: BTreeMap<&'static UncasedStr, SessionVar>,
+    /// Inputs to computed variables.
     build_info: &'static BuildInfo,
+    /// Information about the user associated with this Session.
     user: User,
 }
 
 impl SessionVars {
     /// Creates a new [`SessionVars`] without considering the System or Role defaults.
     pub fn new_unchecked(build_info: &'static BuildInfo, user: User) -> SessionVars {
-        let s = SessionVars {
-            vars: BTreeMap::new(),
+        use definitions::*;
+
+        let vars = [
+            &FAILPOINTS,
+            &SERVER_VERSION,
+            &SERVER_VERSION_NUM,
+            &SQL_SAFE_UPDATES,
+            &REAL_TIME_RECENCY,
+            &EMIT_TIMESTAMP_NOTICE,
+            &EMIT_TRACE_ID_NOTICE,
+            &AUTO_ROUTE_INTROSPECTION_QUERIES,
+            &ENABLE_SESSION_RBAC_CHECKS,
+            &ENABLE_SESSION_CARDINALITY_ESTIMATES,
+            &MAX_QUERY_RESULT_SIZE,
+            &MAX_IDENTIFIER_LENGTH,
+            &STATEMENT_LOGGING_SAMPLE_RATE,
+            &EMIT_INTROSPECTION_QUERY_NOTICE,
+            &UNSAFE_NEW_TRANSACTION_WALL_TIME,
+            &WELCOME_MESSAGE,
+        ]
+        .into_iter()
+        .chain(SystemVars::SESSION_VARS.iter().map(|(_name, var)| *var))
+        .map(|var| (var.name, SessionVar::new(var.clone())))
+        .collect();
+
+        SessionVars {
+            vars,
             build_info,
             user,
-        };
-
-        s.with_system_vars(&*SystemVars::SESSION_VARS)
-            .with_var(&FAILPOINTS)
-            .with_value_constrained_var(&SERVER_VERSION, ValueConstraint::ReadOnly)
-            .with_value_constrained_var(&SERVER_VERSION_NUM, ValueConstraint::ReadOnly)
-            .with_var(&SQL_SAFE_UPDATES)
-            .with_feature_gated_var(&REAL_TIME_RECENCY, &ALLOW_REAL_TIME_RECENCY)
-            .with_var(&EMIT_TIMESTAMP_NOTICE)
-            .with_var(&EMIT_TRACE_ID_NOTICE)
-            .with_var(&AUTO_ROUTE_INTROSPECTION_QUERIES)
-            .with_var(&ENABLE_SESSION_RBAC_CHECKS)
-            .with_feature_gated_var(
-                &ENABLE_SESSION_CARDINALITY_ESTIMATES,
-                &ENABLE_CARDINALITY_ESTIMATES,
-            )
-            .with_var(&MAX_QUERY_RESULT_SIZE)
-            .with_var(&MAX_IDENTIFIER_LENGTH)
-            .with_value_constrained_var(
-                &STATEMENT_LOGGING_SAMPLE_RATE,
-                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
-            )
-            .with_var(&EMIT_INTROSPECTION_QUERY_NOTICE)
-            .with_var(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
-            .with_var(&WELCOME_MESSAGE)
-    }
-
-    fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
-    where
-        V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + PartialEq + Send + Clone + Sync,
-    {
-        self.vars.insert(var.name, Box::new(SessionVar::new(var)));
-        self
-    }
-
-    fn with_value_constrained_var<V>(
-        mut self,
-        var: &'static ServerVar<V>,
-        c: ValueConstraint<V>,
-    ) -> Self
-    where
-        V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + Send + Clone + Sync,
-    {
-        self.vars.insert(
-            var.name,
-            Box::new(SessionVar::new(var).with_value_constraint(c)),
-        );
-        self
-    }
-
-    fn with_feature_gated_var<V>(
-        mut self,
-        var: &'static ServerVar<V>,
-        flag: &'static FeatureFlag,
-    ) -> Self
-    where
-        V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + Send + Clone + Sync,
-    {
-        self.vars.insert(
-            var.name,
-            Box::new(SessionVar::new(var).add_feature_flag(flag)),
-        );
-        self
-    }
-
-    fn with_system_vars<'a>(
-        mut self,
-        vars: impl IntoIterator<Item = (&'a &'static UncasedStr, &'a Box<dyn SystemVarMut>)>,
-    ) -> Self {
-        for (name, var) in vars {
-            self.vars.insert(name, var.to_session_var());
         }
-        self
     }
 
-    fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
-    where
-        V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + PartialEq + Send + Clone + Sync,
-    {
+    fn expect_value<V: Value>(&self, var: &VarDefinition) -> &V {
         let var = self
             .vars
             .get(var.name)
             .expect("provided var should be in state");
-
-        var.value_any()
-            .downcast_ref()
-            .expect("provided var type should matched stored var")
+        let val = var.value_dyn();
+        val.as_any().downcast_ref::<V>().expect("success")
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -501,13 +400,12 @@ impl SessionVars {
     /// values for this session) that are expected to be sent to the client when
     /// a new connection is established or when their value changes.
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
-        #[allow(clippy::as_conversions)]
         [
-            &*APPLICATION_NAME as &dyn Var,
+            &APPLICATION_NAME,
             &CLIENT_ENCODING,
             &DATE_STYLE,
             &INTEGER_DATETIMES,
-            &*SERVER_VERSION,
+            &SERVER_VERSION,
             &STANDARD_CONFORMING_STRINGS,
             &TIMEZONE,
             &INTERVAL_STYLE,
@@ -515,10 +413,10 @@ impl SessionVars {
             // set is a Materialize extension. Doing so allows users to more easily identify where
             // their queries will be executing, which is important to know when you consider the
             // size of a cluster, what indexes are present, etc.
-            &*CLUSTER,
+            &CLUSTER,
             &CLUSTER_REPLICA,
-            &*DATABASE,
-            &*SEARCH_PATH,
+            &DATABASE,
+            &SEARCH_PATH,
         ]
         .into_iter()
         .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
@@ -528,7 +426,7 @@ impl SessionVars {
         // network roundtrip. This is known to be safe because CockroachDB
         // has an analogous extension [0].
         // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
-        .chain(std::iter::once(self.build_info as &dyn Var))
+        .chain(std::iter::once(self.build_info.as_var()))
     }
 
     /// Resets all variables to their default value.
@@ -685,7 +583,7 @@ impl SessionVars {
 
     /// Returns the value of the `application_name` configuration parameter.
     pub fn application_name(&self) -> &str {
-        self.expect_value(&*APPLICATION_NAME).as_str()
+        self.expect_value::<String>(&APPLICATION_NAME).as_str()
     }
 
     /// Returns the build info.
@@ -705,22 +603,23 @@ impl SessionVars {
 
     /// Returns the value of the `cluster` configuration parameter.
     pub fn cluster(&self) -> &str {
-        self.expect_value(&*CLUSTER).as_str()
+        self.expect_value::<String>(&CLUSTER).as_str()
     }
 
     /// Returns the value of the `cluster_replica` configuration parameter.
     pub fn cluster_replica(&self) -> Option<&str> {
-        self.expect_value(&CLUSTER_REPLICA).as_deref()
+        self.expect_value::<Option<String>>(&CLUSTER_REPLICA)
+            .as_deref()
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
     pub fn date_style(&self) -> &[&str] {
-        &self.expect_value(&DATE_STYLE).0
+        &self.expect_value::<DateStyle>(&DATE_STYLE).0
     }
 
     /// Returns the value of the `database` configuration parameter.
     pub fn database(&self) -> &str {
-        self.expect_value(&*DATABASE).as_str()
+        self.expect_value::<String>(&DATABASE).as_str()
     }
 
     /// Returns the value of the `extra_float_digits` configuration parameter.
@@ -745,12 +644,12 @@ impl SessionVars {
 
     /// Returns the value of the `search_path` configuration parameter.
     pub fn search_path(&self) -> &[Ident] {
-        self.expect_value(&*SEARCH_PATH).as_slice()
+        self.expect_value::<Vec<Ident>>(&SEARCH_PATH).as_slice()
     }
 
     /// Returns the value of the `server_version` configuration parameter.
     pub fn server_version(&self) -> &str {
-        self.expect_value(&*SERVER_VERSION).as_str()
+        self.expect_value::<String>(&SERVER_VERSION).as_str()
     }
 
     /// Returns the value of the `server_version_num` configuration parameter.
@@ -832,7 +731,8 @@ impl SessionVars {
 
     /// Returns the value of the `max_query_result_size` configuration parameter.
     pub fn max_query_result_size(&self) -> u64 {
-        self.expect_value(&MAX_QUERY_RESULT_SIZE).as_bytes()
+        self.expect_value::<ByteSize>(&MAX_QUERY_RESULT_SIZE)
+            .as_bytes()
     }
 
     /// Sets the external metadata associated with the user.
@@ -866,163 +766,58 @@ impl SessionVars {
 
 /// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,
 /// the server default is used instead.
-#[derive(Debug, Clone)]
-struct SystemVar<V>
-where
-    V: Value + Debug + PartialEq + 'static,
-    V::Owned: Debug + Clone + Send + Sync,
-{
-    persisted_value: Option<V::Owned>,
-    dynamic_default: Option<V::Owned>,
-    parent: ServerVar<V>,
-    constraints: Vec<ValueConstraint<V>>,
+#[derive(Debug)]
+pub struct SystemVar {
+    definition: VarDefinition,
+    /// Value currently persisted to disk.
+    persisted_value: Option<Box<dyn Value>>,
+    /// Current default, not persisted to disk.
+    dynamic_default: Option<Box<dyn Value>>,
 }
 
-impl<V> SystemVar<V>
-where
-    V: Value + Debug + Clone + PartialEq + 'static,
-    V::Owned: Debug + Clone + Send + Sync,
-{
-    fn new(parent: &ServerVar<V>) -> SystemVar<V> {
+impl Clone for SystemVar {
+    fn clone(&self) -> Self {
         SystemVar {
+            definition: self.definition.clone(),
+            persisted_value: self.persisted_value.as_ref().map(|v| v.box_clone()),
+            dynamic_default: self.dynamic_default.as_ref().map(|v| v.box_clone()),
+        }
+    }
+}
+
+impl SystemVar {
+    pub fn new(definition: VarDefinition) -> Self {
+        SystemVar {
+            definition,
             persisted_value: None,
             dynamic_default: None,
-            parent: parent.clone(),
-            constraints: vec![],
         }
-    }
-
-    fn with_value_constraint(mut self, c: ValueConstraint<V>) -> SystemVar<V> {
-        assert!(
-            !self
-                .constraints
-                .iter()
-                .any(|c| matches!(c, ValueConstraint::ReadOnly | ValueConstraint::Fixed)),
-            "fixed value and read only params do not support any other constraints"
-        );
-        self.constraints.push(c);
-        self
-    }
-
-    fn check_constraints(&self, v: &V::Owned) -> Result<(), VarError> {
-        let cur_v = self.value();
-        for constraint in &self.constraints {
-            constraint.check_constraint(self, cur_v, v)?;
-        }
-
-        Ok(())
-    }
-
-    fn persisted_value(&self) -> Option<&V> {
-        self.persisted_value.as_ref().map(|v| v.borrow())
-    }
-
-    fn value(&self) -> &V {
-        self.persisted_value
-            .as_ref()
-            .map(|v| v.borrow())
-            .unwrap_or_else(|| {
-                self.dynamic_default
-                    .as_ref()
-                    .map(|v| v.borrow())
-                    .unwrap_or(&self.parent.value)
-            })
-    }
-}
-
-impl<V> Var for SystemVar<V>
-where
-    V: Value + Debug + Clone + PartialEq + 'static,
-    V::Owned: Debug + Clone + Send + Sync,
-{
-    fn name(&self) -> &'static str {
-        self.parent.name()
-    }
-
-    fn value(&self) -> String {
-        SystemVar::value(self).format()
-    }
-
-    fn description(&self) -> &'static str {
-        self.parent.description()
-    }
-
-    fn type_name(&self) -> String {
-        V::type_name()
-    }
-
-    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
-        self.parent.visible(user, system_vars)
-    }
-}
-
-/// A `Var` with additional methods for mutating the value, as well as
-/// helpers that enable various operations in a `dyn` context.
-pub trait SystemVarMut: Var + Send + Sync {
-    /// Upcast to Var, for use with `dyn`.
-    fn as_var(&self) -> &dyn Var;
-
-    /// Creates a [`SessionVarMut`] from this [`SystemVarMut`].
-    fn to_session_var(&self) -> Box<dyn SessionVarMut>;
-
-    /// Return the value as `dyn Any`.
-    fn value_any(&self) -> &(dyn Any + 'static);
-
-    /// Clone, but object safe and specialized to `VarMut`.
-    fn clone_var(&self) -> Box<dyn SystemVarMut>;
-
-    /// Return whether or not `input` is equal to this var's default value,
-    /// if there is one.
-    fn is_default(&self, input: VarInput) -> Result<bool, VarError>;
-
-    /// Parse the input and update the stored value to match.
-    fn set(&mut self, input: VarInput) -> Result<bool, VarError>;
-
-    /// Reset the stored value to the default.
-    fn reset(&mut self) -> bool;
-
-    /// Set the default for this variable. This is the value this
-    /// variable will be be `reset` to.
-    fn set_default(&mut self, input: VarInput) -> Result<(), VarError>;
-}
-
-impl<V> SystemVarMut for SystemVar<V>
-where
-    V: Value + Debug + Clone + PartialEq + 'static,
-    V::Owned: Debug + Clone + Send + Sync,
-{
-    fn as_var(&self) -> &dyn Var {
-        self
-    }
-
-    fn to_session_var(&self) -> Box<dyn SessionVarMut> {
-        let mut var = SessionVar::new(&self.parent);
-        for constraint in &self.constraints {
-            var = var.with_value_constraint(constraint.clone());
-        }
-        Box::new(var)
-    }
-
-    fn value_any(&self) -> &(dyn Any + 'static) {
-        let value = SystemVar::value(self);
-        value
-    }
-
-    fn clone_var(&self) -> Box<dyn SystemVarMut> {
-        Box::new(self.clone())
     }
 
     fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
-        let v = V::parse(self, input)?;
-        Ok(self.parent.value.borrow() == v.borrow())
+        let v = self.definition.parse(input)?;
+        Ok(self.definition.default_value() == v.as_ref())
+    }
+
+    pub fn value_dyn(&self) -> &dyn Value {
+        self.persisted_value
+            .as_deref()
+            .or_else(|| self.dynamic_default.as_deref())
+            .unwrap_or(self.definition.default_value())
+    }
+
+    pub fn value<V: 'static>(&self) -> &V {
+        let val = self.value_dyn();
+        val.as_any().downcast_ref::<V>().expect("success")
     }
 
     fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
-        let v = V::parse(self, input)?;
+        let v = self.definition.parse(input)?;
 
-        self.check_constraints(&v)?;
+        // Validate our parsed value.
+        self.validate_constraints(v.as_ref())?;
 
-        if self.persisted_value() != Some(v.borrow()) {
+        if self.persisted_value.as_ref() != Some(&v) {
             self.persisted_value = Some(v);
             Ok(true)
         } else {
@@ -1031,7 +826,7 @@ where
     }
 
     fn reset(&mut self) -> bool {
-        if self.persisted_value() != None {
+        if self.persisted_value.is_some() {
             self.persisted_value = None;
             true
         } else {
@@ -1040,9 +835,43 @@ where
     }
 
     fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
-        let v = V::parse(self, input)?;
+        let v = self.definition.parse(input)?;
         self.dynamic_default = Some(v);
         Ok(())
+    }
+
+    fn validate_constraints(&self, val: &dyn Value) -> Result<(), VarError> {
+        if let Some(constraint) = &self.definition.constraint {
+            constraint.check_constraint(self, self.value_dyn(), val)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Var for SystemVar {
+    fn name(&self) -> &'static str {
+        self.definition.name.as_str()
+    }
+
+    fn value(&self) -> String {
+        self.value_dyn().format()
+    }
+
+    fn description(&self) -> &'static str {
+        self.definition.description
+    }
+
+    fn type_name(&self) -> Cow<'static, str> {
+        self.definition.type_name()
+    }
+
+    fn visible(
+        &self,
+        user: &User,
+        system_vars: Option<&super::vars::SystemVars>,
+    ) -> Result<(), super::vars::VarError> {
+        self.definition.visible(user, system_vars)
     }
 }
 
@@ -1106,11 +935,13 @@ impl DropConnection {
 ///
 /// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SystemVars {
     /// Allows "unsafe" parameters to be set.
     allow_unsafe: bool,
-    vars: BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>,
+    /// Set of all [`SystemVar`]s.
+    vars: BTreeMap<&'static UncasedStr, SystemVar>,
+
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
     /// NB: This is intentionally disconnected from the one that is plumbed
     /// around to various components (initially, just persist). This is so we
@@ -1122,17 +953,6 @@ pub struct SystemVars {
     persist_configs: ConfigSet,
 }
 
-impl Clone for SystemVars {
-    fn clone(&self) -> Self {
-        SystemVars {
-            allow_unsafe: self.allow_unsafe,
-            vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
-            active_connection_count: Arc::clone(&self.active_connection_count),
-            persist_configs: self.persist_configs.clone(),
-        }
-    }
-}
-
 impl Default for SystemVars {
     fn default() -> Self {
         Self::new(Arc::new(Mutex::new(ConnectionCounter::new(0))))
@@ -1141,32 +961,27 @@ impl Default for SystemVars {
 
 impl SystemVars {
     /// Set of [`SystemVar`]s that can also get set at a per-Session level.
-    const SESSION_VARS: Lazy<BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>> =
+    ///
+    /// TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition.
+    const SESSION_VARS: Lazy<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
         Lazy::new(|| {
-            #[allow(clippy::as_conversions)]
             [
-                Box::new(SystemVar::new(&APPLICATION_NAME)) as Box<dyn SystemVarMut>,
-                Box::new(SystemVar::new(&CLIENT_ENCODING)),
-                Box::new(SystemVar::new(&CLIENT_MIN_MESSAGES)),
-                Box::new(SystemVar::new(&CLUSTER)),
-                Box::new(SystemVar::new(&CLUSTER_REPLICA)),
-                Box::new(SystemVar::new(&DATABASE)),
-                Box::new(SystemVar::new(&DATE_STYLE)),
-                Box::new(SystemVar::new(&EXTRA_FLOAT_DIGITS)),
-                Box::new(
-                    SystemVar::new(&INTEGER_DATETIMES)
-                        .with_value_constraint(ValueConstraint::Fixed),
-                ),
-                Box::new(SystemVar::new(&INTERVAL_STYLE)),
-                Box::new(SystemVar::new(&SEARCH_PATH)),
-                Box::new(
-                    SystemVar::new(&STANDARD_CONFORMING_STRINGS)
-                        .with_value_constraint(ValueConstraint::Fixed),
-                ),
-                Box::new(SystemVar::new(&STATEMENT_TIMEOUT)),
-                Box::new(SystemVar::new(&IDLE_IN_TRANSACTION_SESSION_TIMEOUT)),
-                Box::new(SystemVar::new(&TIMEZONE)),
-                Box::new(SystemVar::new(&TRANSACTION_ISOLATION)),
+                &APPLICATION_NAME,
+                &CLIENT_ENCODING,
+                &CLIENT_MIN_MESSAGES,
+                &CLUSTER,
+                &CLUSTER_REPLICA,
+                &DATABASE,
+                &DATE_STYLE,
+                &EXTRA_FLOAT_DIGITS,
+                &INTEGER_DATETIMES,
+                &INTERVAL_STYLE,
+                &SEARCH_PATH,
+                &STANDARD_CONFORMING_STRINGS,
+                &STATEMENT_TIMEOUT,
+                &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+                &TIMEZONE,
+                &TRANSACTION_ISOLATION,
             ]
             .into_iter()
             .map(|var| (UncasedStr::new(var.name()), var))
@@ -1174,223 +989,190 @@ impl SystemVars {
         });
 
     pub fn new(active_connection_count: Arc<Mutex<ConnectionCounter>>) -> Self {
-        let vars = SystemVars {
-            vars: Default::default(),
+        let system_vars = vec![
+            &MAX_KAFKA_CONNECTIONS,
+            &MAX_POSTGRES_CONNECTIONS,
+            &MAX_AWS_PRIVATELINK_CONNECTIONS,
+            &MAX_TABLES,
+            &MAX_SOURCES,
+            &MAX_SINKS,
+            &MAX_MATERIALIZED_VIEWS,
+            &MAX_CLUSTERS,
+            &MAX_REPLICAS_PER_CLUSTER,
+            &MAX_CREDIT_CONSUMPTION_RATE,
+            &MAX_DATABASES,
+            &MAX_SCHEMAS_PER_DATABASE,
+            &MAX_OBJECTS_PER_SCHEMA,
+            &MAX_SECRETS,
+            &MAX_ROLES,
+            &MAX_RESULT_SIZE,
+            &MAX_COPY_FROM_SIZE,
+            &ALLOWED_CLUSTER_REPLICA_SIZES,
+            &DISK_CLUSTER_REPLICAS_DEFAULT,
+            &upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK,
+            &upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES,
+            &upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE,
+            &upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+            &upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+            &upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO,
+            &upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM,
+            &upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE,
+            &upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE,
+            &upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE,
+            &upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION,
+            &upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS,
+            &upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS,
+            &upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB,
+            &upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO,
+            &upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION,
+            &upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES,
+            &upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL,
+            &COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES,
+            &STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES,
+            &STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION,
+            &STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY,
+            &STORAGE_STATISTICS_INTERVAL,
+            &STORAGE_STATISTICS_COLLECTION_INTERVAL,
+            &STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION,
+            &STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO,
+            &STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS,
+            &PERSIST_FAST_PATH_LIMIT,
+            &PERSIST_TXN_TABLES,
+            &CATALOG_KIND_IMPL,
+            &METRICS_RETENTION,
+            &UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP,
+            &ENABLE_RBAC_CHECKS,
+            &PG_SOURCE_CONNECT_TIMEOUT,
+            &PG_SOURCE_KEEPALIVES_IDLE,
+            &PG_SOURCE_KEEPALIVES_INTERVAL,
+            &PG_SOURCE_KEEPALIVES_RETRIES,
+            &PG_SOURCE_TCP_USER_TIMEOUT,
+            &PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT,
+            &PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT,
+            &PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT,
+            &PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT,
+            &SSH_CHECK_INTERVAL,
+            &SSH_CONNECT_TIMEOUT,
+            &SSH_KEEPALIVES_IDLE,
+            &KAFKA_SOCKET_KEEPALIVE,
+            &KAFKA_SOCKET_TIMEOUT,
+            &KAFKA_TRANSACTION_TIMEOUT,
+            &KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT,
+            &KAFKA_FETCH_METADATA_TIMEOUT,
+            &KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT,
+            &KAFKA_DEFAULT_METADATA_FETCH_INTERVAL,
+            &ENABLE_LAUNCHDARKLY,
+            &MAX_CONNECTIONS,
+            &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
+            &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
+            &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
+            &ENABLE_MZ_JOIN_CORE,
+            &LINEAR_JOIN_YIELDING,
+            &DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT,
+            &DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY,
+            &ENABLE_STORAGE_SHARD_FINALIZATION,
+            &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
+            &ENABLE_DEFAULT_CONNECTION_VALIDATION,
+            &MIN_TIMESTAMP_INTERVAL,
+            &MAX_TIMESTAMP_INTERVAL,
+            &LOGGING_FILTER,
+            &OPENTELEMETRY_FILTER,
+            &LOGGING_FILTER_DEFAULTS,
+            &OPENTELEMETRY_FILTER_DEFAULTS,
+            &SENTRY_FILTERS,
+            &WEBHOOKS_SECRETS_CACHING_TTL_SECS,
+            &COORD_SLOW_MESSAGE_WARN_THRESHOLD,
+            &grpc_client::CONNECT_TIMEOUT,
+            &grpc_client::HTTP2_KEEP_ALIVE_INTERVAL,
+            &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
+            &cluster_scheduling::CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT,
+            &cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY,
+            &cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
+            &cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD,
+            &cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
+            &cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW,
+            &cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT,
+            &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
+            &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
+            &cluster_scheduling::CLUSTER_ALWAYS_USE_DISK,
+            &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
+            &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
+            &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
+            &STATEMENT_LOGGING_TARGET_DATA_RATE,
+            &STATEMENT_LOGGING_MAX_DATA_CREDIT,
+            &OPTIMIZER_STATS_TIMEOUT,
+            &OPTIMIZER_ONESHOT_STATS_TIMEOUT,
+            &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
+            &WEBHOOK_CONCURRENT_REQUEST_LIMIT,
+            &ENABLE_COLUMNATION_LGALLOC,
+            &ENABLE_COMPUTE_CHUNKED_STACK,
+            &ENABLE_STATEMENT_LIFECYCLE_LOGGING,
+            &ENABLE_DEPENDENCY_READ_HOLD_ASSERTS,
+            &TIMESTAMP_ORACLE_IMPL,
+            &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE,
+            &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT,
+            &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL,
+            &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER,
+        ];
+
+        let persist_configs = mz_dyncfgs::all_dyncfgs();
+        let persist_vars: Vec<_> = persist_configs
+            .entries()
+            .map(|cfg| match cfg.default() {
+                ConfigVal::Bool(default) => VarDefinition::new_runtime(
+                    cfg.name(),
+                    <bool as ConfigType>::get(default),
+                    cfg.desc(),
+                    true,
+                ),
+                ConfigVal::U32(default) => VarDefinition::new_runtime(
+                    cfg.name(),
+                    <u32 as ConfigType>::get(default),
+                    cfg.desc(),
+                    true,
+                ),
+                ConfigVal::Usize(default) => VarDefinition::new_runtime(
+                    cfg.name(),
+                    <usize as ConfigType>::get(default),
+                    cfg.desc(),
+                    true,
+                ),
+                ConfigVal::String(default) => VarDefinition::new_runtime(
+                    cfg.name(),
+                    <String as ConfigType>::get(default),
+                    cfg.desc(),
+                    true,
+                ),
+                ConfigVal::Duration(default) => VarDefinition::new_runtime(
+                    cfg.name(),
+                    <Duration as ConfigType>::get(default),
+                    cfg.desc(),
+                    true,
+                ),
+            })
+            .collect();
+
+        let vars: BTreeMap<_, _> = system_vars
+            .into_iter()
+            // Include all of our feature flags.
+            .chain(definitions::FEATURE_FLAGS.iter().copied())
+            // Include the subset of Session variables we allow system defaults for.
+            .chain(Self::SESSION_VARS.values().copied())
+            .cloned()
+            // Include Persist configs.
+            .chain(persist_vars.into_iter())
+            .map(|var| (var.name, SystemVar::new(var)))
+            .collect();
+
+        let mut vars = SystemVars {
+            vars,
             active_connection_count,
             allow_unsafe: false,
-            persist_configs: mz_dyncfgs::all_dyncfgs(),
+            persist_configs,
         };
-
-        let mut vars = vars
-            .with_session_vars(&Self::SESSION_VARS)
-            .with_feature_flags()
-            .with_var(&MAX_KAFKA_CONNECTIONS)
-            .with_var(&MAX_POSTGRES_CONNECTIONS)
-            .with_var(&MAX_AWS_PRIVATELINK_CONNECTIONS)
-            .with_var(&MAX_TABLES)
-            .with_var(&MAX_SOURCES)
-            .with_var(&MAX_SINKS)
-            .with_var(&MAX_MATERIALIZED_VIEWS)
-            .with_var(&MAX_CLUSTERS)
-            .with_var(&MAX_REPLICAS_PER_CLUSTER)
-            .with_value_constrained_var(
-                &MAX_CREDIT_CONSUMPTION_RATE,
-                ValueConstraint::Domain(&NumericNonNegNonNan),
-            )
-            .with_var(&MAX_DATABASES)
-            .with_var(&MAX_SCHEMAS_PER_DATABASE)
-            .with_var(&MAX_OBJECTS_PER_SCHEMA)
-            .with_var(&MAX_SECRETS)
-            .with_var(&MAX_ROLES)
-            .with_var(&MAX_RESULT_SIZE)
-            .with_var(&MAX_COPY_FROM_SIZE)
-            .with_var(&ALLOWED_CLUSTER_REPLICA_SIZES)
-            .with_var(&DISK_CLUSTER_REPLICAS_DEFAULT)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_PARALLELISM)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_COMPRESSION_TYPE)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_BATCH_SIZE)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_RETRY_DURATION)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES)
-            .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL)
-            .with_var(&COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES)
-            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
-            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
-            .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
-            .with_var(&STORAGE_STATISTICS_INTERVAL)
-            .with_var(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
-            .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
-            .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
-            .with_var(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
-            .with_var(&PERSIST_FAST_PATH_LIMIT)
-            .with_var(&PERSIST_TXN_TABLES)
-            .with_var(&CATALOG_KIND_IMPL)
-            .with_var(&METRICS_RETENTION)
-            .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
-            .with_var(&ENABLE_RBAC_CHECKS)
-            .with_var(&PG_SOURCE_CONNECT_TIMEOUT)
-            .with_var(&PG_SOURCE_KEEPALIVES_IDLE)
-            .with_var(&PG_SOURCE_KEEPALIVES_INTERVAL)
-            .with_var(&PG_SOURCE_KEEPALIVES_RETRIES)
-            .with_var(&PG_SOURCE_TCP_USER_TIMEOUT)
-            .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
-            .with_var(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
-            .with_var(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
-            .with_var(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
-            .with_var(&SSH_CHECK_INTERVAL)
-            .with_var(&SSH_CONNECT_TIMEOUT)
-            .with_var(&SSH_KEEPALIVES_IDLE)
-            .with_var(&KAFKA_SOCKET_KEEPALIVE)
-            .with_var(&KAFKA_SOCKET_TIMEOUT)
-            .with_var(&KAFKA_TRANSACTION_TIMEOUT)
-            .with_var(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
-            .with_var(&KAFKA_FETCH_METADATA_TIMEOUT)
-            .with_var(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
-            .with_var(&KAFKA_DEFAULT_METADATA_FETCH_INTERVAL)
-            .with_var(&ENABLE_LAUNCHDARKLY)
-            .with_var(&MAX_CONNECTIONS)
-            .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
-            .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
-            .with_var(&KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES)
-            .with_var(&ENABLE_MZ_JOIN_CORE)
-            .with_var(&LINEAR_JOIN_YIELDING)
-            .with_var(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
-            .with_var(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
-            .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
-            .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
-            .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
-            .with_var(&MIN_TIMESTAMP_INTERVAL)
-            .with_var(&MAX_TIMESTAMP_INTERVAL)
-            .with_var(&LOGGING_FILTER)
-            .with_var(&OPENTELEMETRY_FILTER)
-            .with_var(&LOGGING_FILTER_DEFAULTS)
-            .with_var(&OPENTELEMETRY_FILTER_DEFAULTS)
-            .with_var(&SENTRY_FILTERS)
-            .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
-            .with_var(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
-            .with_var(&grpc_client::CONNECT_TIMEOUT)
-            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
-            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .with_var(&cluster_scheduling::CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT)
-            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY)
-            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT)
-            .with_var(&cluster_scheduling::CLUSTER_ENABLE_TOPOLOGY_SPREAD)
-            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE)
-            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW)
-            .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
-            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
-            .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
-            .with_var(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
-            .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .with_value_constrained_var(
-                &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
-                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
-            )
-            .with_value_constrained_var(
-                &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
-                ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
-            )
-            .with_var(&STATEMENT_LOGGING_TARGET_DATA_RATE)
-            .with_var(&STATEMENT_LOGGING_MAX_DATA_CREDIT)
-            .with_var(&OPTIMIZER_STATS_TIMEOUT)
-            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
-            .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
-            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
-            .with_var(&ENABLE_COLUMNATION_LGALLOC)
-            .with_var(&ENABLE_COMPUTE_CHUNKED_STACK)
-            .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
-            .with_var(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
-            .with_var(&TIMESTAMP_ORACLE_IMPL)
-            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
-            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
-            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL)
-            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER);
-
-        for cfg in vars.persist_configs.entries() {
-            let name = UncasedStr::new(cfg.name());
-            let var: Box<dyn SystemVarMut> = match cfg.default() {
-                ConfigVal::Bool(default) => Box::new(SystemVar::new(&ServerVar {
-                    name,
-                    value: <bool as ConfigType>::get(default),
-                    description: cfg.desc(),
-                    internal: true,
-                })),
-                ConfigVal::U32(default) => Box::new(SystemVar::new(&ServerVar {
-                    name,
-                    value: <u32 as ConfigType>::get(default),
-                    description: cfg.desc(),
-                    internal: true,
-                })),
-                ConfigVal::Usize(default) => Box::new(SystemVar::new(&ServerVar {
-                    name,
-                    value: <usize as ConfigType>::get(default),
-                    description: cfg.desc(),
-                    internal: true,
-                })),
-                ConfigVal::String(default) => Box::new(SystemVar::new(&ServerVar {
-                    name,
-                    value: <String as ConfigType>::get(default),
-                    description: cfg.desc(),
-                    internal: true,
-                })),
-                ConfigVal::Duration(default) => Box::new(SystemVar::new(&ServerVar {
-                    name,
-                    value: <Duration as ConfigType>::get(default),
-                    description: cfg.desc(),
-                    internal: true,
-                })),
-            };
-            vars.vars.insert(name, var);
-        }
-
         vars.refresh_internal_state();
+
         vars
-    }
-
-    fn with_var<V>(mut self, var: &ServerVar<V>) -> Self
-    where
-        V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + Send + Clone + Sync,
-    {
-        self.vars.insert(var.name, Box::new(SystemVar::new(var)));
-        self
-    }
-
-    fn with_value_constrained_var<V>(
-        mut self,
-        var: &'static ServerVar<V>,
-        c: ValueConstraint<V>,
-    ) -> Self
-    where
-        V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + Send + Clone + Sync,
-    {
-        self.vars.insert(
-            var.name,
-            Box::new(SystemVar::new(var).with_value_constraint(c)),
-        );
-        self
-    }
-
-    fn with_session_vars(
-        mut self,
-        vars: &BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>,
-    ) -> Self {
-        for (name, var) in vars {
-            self.vars.insert(*name, var.clone_var());
-        }
-        self
     }
 
     pub fn set_unsafe(mut self, allow_unsafe: bool) -> Self {
@@ -1402,28 +1184,26 @@ impl SystemVars {
         self.allow_unsafe
     }
 
-    fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
-    where
-        V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + Send + Clone + Sync,
-    {
-        let var = self
+    fn expect_value<V: 'static>(&self, var: &VarDefinition) -> &V {
+        let val = self
             .vars
             .get(var.name)
-            .unwrap_or_else(|| panic!("provided var {var:?} should be in state"));
+            .expect("provided var should be in state");
 
-        var.value_any()
-            .downcast_ref()
+        val.value_dyn()
+            .as_any()
+            .downcast_ref::<V>()
             .expect("provided var type should matched stored var")
     }
 
     fn expect_config_value<V: ConfigType + 'static>(&self, name: &UncasedStr) -> &V {
-        let var = self
+        let val = self
             .vars
             .get(name)
             .unwrap_or_else(|| panic!("provided var {name} should be in state"));
 
-        var.value_any()
+        val.value_dyn()
+            .as_any()
             .downcast_ref()
             .expect("provided var type should matched stored var")
     }
@@ -1594,7 +1374,7 @@ impl SystemVars {
             self.active_connection_count
                 .lock()
                 .expect("lock poisoned")
-                .limit = u64::cast_from(*self.expect_value(&MAX_CONNECTIONS));
+                .limit = u64::cast_from(*self.expect_value::<u32>(&MAX_CONNECTIONS));
         }
     }
 
@@ -1609,7 +1389,7 @@ impl SystemVars {
     /// Returns the system default for the [`CLUSTER`] session variable. To know the active cluster
     /// for the current session, you must check the [`SessionVars`].
     pub fn default_cluster(&self) -> String {
-        self.expect_value(&CLUSTER).to_owned()
+        self.expect_value::<String>(&CLUSTER).to_owned()
     }
 
     /// Returns the value of the `max_kafka_connections` configuration parameter.
@@ -1689,7 +1469,7 @@ impl SystemVars {
 
     /// Returns the value of the `max_result_size` configuration parameter.
     pub fn max_result_size(&self) -> u64 {
-        self.expect_value(&MAX_RESULT_SIZE).as_bytes()
+        self.expect_value::<ByteSize>(&MAX_RESULT_SIZE).as_bytes()
     }
 
     /// Returns the value of the `max_copy_from_size` configuration parameter.
@@ -1699,7 +1479,7 @@ impl SystemVars {
 
     /// Returns the value of the `allowed_cluster_replica_sizes` configuration parameter.
     pub fn allowed_cluster_replica_sizes(&self) -> Vec<String> {
-        self.expect_value(&ALLOWED_CLUSTER_REPLICA_SIZES)
+        self.expect_value::<Vec<Ident>>(&ALLOWED_CLUSTER_REPLICA_SIZES)
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
@@ -2021,7 +1801,7 @@ impl SystemVars {
     }
 
     /// Returns the `linear_join_yielding` configuration parameter.
-    pub fn linear_join_yielding(&self) -> &String {
+    pub fn linear_join_yielding(&self) -> &Cow<'static, str> {
         self.expect_value(&LINEAR_JOIN_YIELDING)
     }
 
@@ -2059,27 +1839,32 @@ impl SystemVars {
     }
 
     pub fn logging_filter(&self) -> CloneableEnvFilter {
-        self.expect_value(&*LOGGING_FILTER).clone()
+        self.expect_value::<CloneableEnvFilter>(&LOGGING_FILTER)
+            .clone()
     }
 
     pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
-        self.expect_value(&*OPENTELEMETRY_FILTER).clone()
+        self.expect_value::<CloneableEnvFilter>(&OPENTELEMETRY_FILTER)
+            .clone()
     }
 
     pub fn logging_filter_defaults(&self) -> Vec<SerializableDirective> {
-        self.expect_value(&*LOGGING_FILTER_DEFAULTS).clone()
+        self.expect_value::<Vec<SerializableDirective>>(&LOGGING_FILTER_DEFAULTS)
+            .clone()
     }
 
     pub fn opentelemetry_filter_defaults(&self) -> Vec<SerializableDirective> {
-        self.expect_value(&*OPENTELEMETRY_FILTER_DEFAULTS).clone()
+        self.expect_value::<Vec<SerializableDirective>>(&OPENTELEMETRY_FILTER_DEFAULTS)
+            .clone()
     }
 
     pub fn sentry_filters(&self) -> Vec<SerializableDirective> {
-        self.expect_value(&*SENTRY_FILTERS).clone()
+        self.expect_value::<Vec<SerializableDirective>>(&SENTRY_FILTERS)
+            .clone()
     }
 
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
-        *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
+        *self.expect_value(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
     }
 
     pub fn coord_slow_message_warn_threshold(&self) -> Duration {
@@ -2227,7 +2012,6 @@ impl SystemVars {
             || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
             || name == LINEAR_JOIN_YIELDING.name()
             || name == ENABLE_MZ_JOIN_CORE.name()
-            || name == ENABLE_JEMALLOC_PROFILING.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
             || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
             || self.is_persist_config_var(name)
@@ -2337,8 +2121,8 @@ pub fn is_http_config_var(name: &str) -> bool {
 /// flag.
 #[derive(Debug)]
 pub struct FeatureFlag {
-    flag: &'static ServerVar<bool>,
-    feature_desc: &'static str,
+    pub flag: &'static VarDefinition,
+    pub feature_desc: &'static str,
 }
 
 impl Var for FeatureFlag {
@@ -2354,7 +2138,7 @@ impl Var for FeatureFlag {
         self.flag.description()
     }
 
-    fn type_name(&self) -> String {
+    fn type_name(&self) -> Cow<'static, str> {
         self.flag.type_name()
     }
 
@@ -2371,7 +2155,7 @@ impl FeatureFlag {
         detail: Option<String>,
     ) -> Result<(), VarError> {
         match system_vars {
-            Some(system_vars) if *system_vars.expect_value(self.flag) => Ok(()),
+            Some(system_vars) if *system_vars.expect_value::<bool>(self.flag) => Ok(()),
             _ => Err(VarError::RequiresFeatureFlag {
                 feature: feature.unwrap_or(self.feature_desc.to_string()),
                 detail,
@@ -2402,7 +2186,7 @@ impl Var for BuildInfo {
         "Shows the Materialize server version (Materialize)."
     }
 
-    fn type_name(&self) -> String {
+    fn type_name(&self) -> Cow<'static, str> {
         String::type_name()
     }
 
@@ -2424,7 +2208,7 @@ impl Var for User {
         "Reports whether the current session is a superuser (PostgreSQL)."
     }
 
-    fn type_name(&self) -> String {
+    fn type_name(&self) -> Cow<'static, str> {
         bool::type_name()
     }
 
