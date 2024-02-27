@@ -1898,69 +1898,6 @@ impl Coordinator {
         };
     }
 
-    fn explain_materialized_view(
-        &mut self,
-        ctx: &ExecuteContext,
-        plan::ExplainPlanPlan {
-            stage,
-            format,
-            config,
-            explainee,
-        }: plan::ExplainPlanPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::Explainee::MaterializedView(id) = explainee else {
-            unreachable!() // Asserted in `sequence_explain_plan`.
-        };
-        let CatalogItem::MaterializedView(_) = self.catalog().get_entry(&id).item() else {
-            unreachable!() // Asserted in `plan_explain_plan`.
-        };
-
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
-            tracing::error!(
-                "cannot find dataflow metainformation for materialized view {id} in catalog"
-            );
-            coord_bail!(
-                "cannot find dataflow metainformation for materialized view {id} in catalog"
-            );
-        };
-
-        let explain = match stage {
-            ExplainStage::GlobalPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
-                    coord_bail!("cannot find {stage} for materialized view in catalog");
-                };
-                explain_dataflow(
-                    plan,
-                    format,
-                    &config,
-                    &self.catalog().for_session(ctx.session()),
-                    dataflow_metainfo,
-                )?
-            }
-            ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
-                    coord_bail!("cannot find {stage} for materialized view in catalog");
-                };
-                explain_dataflow(
-                    plan,
-                    format,
-                    &config,
-                    &self.catalog().for_session(ctx.session()),
-                    dataflow_metainfo,
-                )?
-            }
-            _ => {
-                coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
-            }
-        };
-
-        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
-
-        Ok(Self::send_immediate_rows(rows))
-    }
-
     fn explain_index(
         &mut self,
         ctx: &ExecuteContext,
