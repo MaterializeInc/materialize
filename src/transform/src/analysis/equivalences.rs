@@ -36,7 +36,12 @@ impl Analysis for Equivalences {
         builder.require::<RelationType>(); // needed for expression reduction.
     }
 
-    fn derive(expr: &MirRelationExpr, results: &[Self::Value], depends: &Derived) -> Self::Value {
+    fn derive(
+        expr: &MirRelationExpr,
+        _index: usize,
+        results: &[Self::Value],
+        depends: &Derived,
+    ) -> Self::Value {
         let mut equivalences = match expr {
             MirRelationExpr::Constant { rows, typ } => {
                 // Trawl `rows` for any constant information worth recording.
