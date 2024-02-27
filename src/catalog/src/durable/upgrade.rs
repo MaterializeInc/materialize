@@ -417,8 +417,13 @@ pub(crate) mod persist {
                     .await
                 }
                 46 => {
-                    run_versioned_upgrade(unopened_catalog_state, version, v46_to_v47::upgrade)
-                        .await
+                    run_versioned_upgrade(
+                        unopened_catalog_state,
+                        mode,
+                        version,
+                        v46_to_v47::upgrade,
+                    )
+                    .await
                 }
 
                 // Up-to-date, no migration needed!
