@@ -14,11 +14,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
+use futures::StreamExt;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
 use mz_frontegg_auth::{Authentication, AuthenticationConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_server_core::TlsCliArgs;
+use tokio_stream::wrappers::IntervalStream;
 use tracing::warn;
 
 #[derive(Debug, clap::Parser)]
@@ -132,6 +134,9 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
             "exactly one of --static-resolver-addr or --frontegg-resolver-template must be present"
         ),
     };
+    let ticker = IntervalStream::new(tokio::time::interval(Duration::from_secs(60 * 60)));
+    let ticker = ticker.map(|_| None);
+    let ticker = Box::pin(ticker);
     let config = BalancerConfig::new(
         &BUILD_INFO,
         args.sigterm_wait_seconds.map(Duration::from_secs),
@@ -143,6 +148,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.https_resolver_template,
         args.tls.into_config()?,
         metrics_registry,
+        ticker,
     );
     let service = BalancerService::new(config).await?;
     service.serve().await?;
