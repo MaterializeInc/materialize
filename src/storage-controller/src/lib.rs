@@ -29,7 +29,6 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -68,7 +67,7 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
+use mz_storage_types::sources::{IngestionDescription, SourceData, SourceDesc, SourceExport};
 use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -2077,6 +2076,110 @@ where
 
         self.txns_init_run = true;
         Ok(())
+    }
+
+    async fn real_time_recent_timestamp(
+        &self,
+        source_ids: BTreeSet<GlobalId>,
+        timeout: Duration,
+    ) -> Result<BoxFuture<'static, Result<Self::Timestamp, StorageError>>, StorageError> {
+        use mz_storage_types::sources::GenericSourceConnection;
+
+        let mut unavilable_ids = BTreeSet::new();
+        let mut rtr_futures = BTreeMap::new();
+
+        // Only user sources can be read from w/ RTR.
+        for id in source_ids.into_iter().filter(GlobalId::is_user) {
+            let collection = match self.collection(id) {
+                Ok(c) => c,
+                // Not a storage item, which we accept.
+                Err(_) => continue,
+            };
+
+            let (source_conn, remap_id) = match &collection.description.data_source {
+                DataSource::Ingestion(IngestionDescription {
+                    desc: SourceDesc { connection, .. },
+                    remap_collection_id,
+                    ..
+                }) => match connection {
+                    // Today only Kafka supports RTR
+                    GenericSourceConnection::Kafka(_) => (connection.clone(), *remap_collection_id),
+                    // Eventually PG and MySQL will support RTR but today we
+                    // must error if they're queried with RTR.
+                    GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_) => {
+                        unavilable_ids.insert(id);
+                        continue;
+                    }
+                    // These internal sources will never support RTR.
+                    GenericSourceConnection::LoadGenerator(_) => continue,
+                },
+                // Subsources don't currently support RTR until we fix the
+                // dependency inversion.
+                DataSource::Other(DataSourceOther::Source) => {
+                    unavilable_ids.insert(id);
+                    continue;
+                }
+                // Skip over all other objects
+                _ => {
+                    continue;
+                }
+            };
+
+            // If we know we're going to error, avoid doing the work below.
+            if !unavilable_ids.is_empty() {
+                continue;
+            }
+
+            // Prepare for getting the external system's frontier.
+            let config = self.config().clone();
+
+            // Determine the remap collection we plan to read from.
+            //
+            // Note that the process of reading from the remap shard is the same
+            // as other areas in this code that do the same thing, but we inline
+            // it here because we must prove that we have not taken ownership of
+            // `self` to move the stream of data from the remap shard into a
+            // future.
+            let read_handle = self.read_handle_for_snapshot(remap_id).await?;
+
+            let remap_collection = self.collection(remap_id)?;
+            let remap_as_of = remap_collection
+                .implied_capability
+                .clone()
+                .into_option()
+                .ok_or(StorageError::ReadBeforeSince(remap_id))?;
+
+            rtr_futures.insert(
+                id,
+                tokio::time::timeout(timeout, async move {
+                    // Fetch the remap shard's contents; we must do this first so
+                    // that the `as_of` doesn't change.
+                    let as_of = Antichain::from_elem(remap_as_of);
+                    let remap_subsrcribe = read_handle
+                        .subscribe(as_of)
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(remap_id))?;
+
+                    source_conn
+                        .real_time_recency_ts(id, config, remap_subsrcribe)
+                        .await
+                }),
+            );
+        }
+
+        if !unavilable_ids.is_empty() {
+            Err(StorageError::RtrUnavailable(unavilable_ids))
+        } else {
+            Ok(Box::pin(async move {
+                let (ids, futs): (Vec<_>, Vec<_>) = rtr_futures.into_iter().unzip();
+                ids.into_iter()
+                    .zip_eq(futures::future::join_all(futs).await)
+                    .try_fold(T::minimum(), |curr, (id, per_source_res)| {
+                        let new = per_source_res.map_err(|_| StorageError::RtrTimeout(id))??;
+                        Ok::<_, StorageError>(std::cmp::max(curr, new))
+                    })
+            }))
+        }
     }
 }
 

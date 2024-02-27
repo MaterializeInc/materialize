@@ -347,8 +347,9 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("statement_timeout"),
     value: Duration::from_secs(10),
     description:
-        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
-        If this value is specified without units, it is taken as milliseconds.",
+        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, DELETE and real-time \
+        recency SELECT operations. If this value is specified without units, it is taken as \
+        milliseconds.",
     internal: false,
 };
 
@@ -1238,7 +1239,7 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
 /// is additionally gated by a feature flag.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
-    value: false,
+    value: true,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
     internal: false,
 };

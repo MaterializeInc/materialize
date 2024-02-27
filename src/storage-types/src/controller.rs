@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{self, Debug};
 
@@ -201,6 +202,12 @@ pub enum StorageError {
     ResourceExhausted(&'static str),
     /// The specified component is shutting down.
     ShuttingDown(&'static str),
+    /// Cannot perform RTR query over source
+    RtrUnavailable(BTreeSet<GlobalId>),
+    /// We failed to determine the real-time-recency timestamp.
+    RtrTimeout(GlobalId),
+    /// The collection was dropped before we could ingest its external frontier.
+    RtrDropFailure(GlobalId),
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -224,6 +231,9 @@ impl Error for StorageError {
             Self::InvalidUsage(_) => None,
             Self::ResourceExhausted(_) => None,
             Self::ShuttingDown(_) => None,
+            Self::RtrUnavailable(_) => None,
+            Self::RtrTimeout(_) => None,
+            Self::RtrDropFailure(_) => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -287,6 +297,16 @@ impl fmt::Display for StorageError {
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
             Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
             Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
+            Self::RtrUnavailable(_) => {
+                write!(f, "real-time recency unavailable for some sources in query")
+            }
+            Self::RtrTimeout(_) => {
+                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+            }
+            Self::RtrDropFailure(_) => write!(
+                f,
+                "real-time source dropped before ingesting the upstream system's visible frontier"
+            ),
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }

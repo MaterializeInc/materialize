@@ -36,6 +36,10 @@ include!(concat!(
     "/mz_storage_types.sources.kafka.rs"
 ));
 
+/// The frontier that Kafka presents––for each partition, the greatest visible
+/// offset.
+pub type NativeFrontier = Partitioned<RangeBound<i32>, MzOffset>;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::Kafka,
@@ -109,6 +113,67 @@ impl<C: ConnectionAccess> KafkaSourceConnection<C> {
             self.group_id_prefix.as_deref().unwrap_or(""),
             self.client_id(connection_context, source_id)
         )
+    }
+}
+
+impl KafkaSourceConnection {
+    pub async fn fetch_write_frontier(
+        self,
+        storage_configuration: &crate::configuration::StorageConfiguration,
+    ) -> Result<timely::progress::Antichain<NativeFrontier>, anyhow::Error> {
+        use mz_kafka_util::client::MzClientContext;
+        use mz_ore::collections::CollectionExt;
+        use mz_timely_util::antichain::AntichainExt;
+        use rdkafka::admin::AdminClient;
+        use timely::progress::Antichain;
+
+        let (context, _error_rx) = MzClientContext::with_errors();
+        let client: AdminClient<_> = self
+            .connection
+            .create_with_context(&storage_configuration, context, &BTreeMap::new())
+            .await?;
+
+        let metadata_timeout = storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout;
+
+        let meta = client
+            .inner()
+            .fetch_metadata(Some(&self.topic), metadata_timeout)?;
+
+        let pids = meta
+            .topics()
+            .into_element()
+            .partitions()
+            .iter()
+            .map(|p| p.id());
+
+        let mut current_upper = Antichain::new();
+        let mut max_pid = 0;
+        for pid in pids {
+            let (_, high) = client
+                .inner()
+                .fetch_watermarks(&self.topic, pid, metadata_timeout)?;
+            max_pid = std::cmp::max(pid, max_pid);
+            current_upper.insert(Partitioned::new_singleton(
+                RangeBound::Elem(pid, BoundKind::At),
+                MzOffset::from(u64::try_from(high).unwrap()),
+            ));
+        }
+        current_upper.insert(Partitioned::new_range(
+            RangeBound::Elem(max_pid, BoundKind::After),
+            RangeBound::PosInfinity,
+            MzOffset::from(0),
+        ));
+
+        tracing::debug!(
+            "Kafka topic {} has native upper of {}",
+            self.topic,
+            current_upper.pretty(),
+        );
+
+        Ok(current_upper)
     }
 }
 
@@ -352,7 +417,7 @@ impl<P> Extrema for RangeBound<P> {
     }
 }
 
-impl SourceTimestamp for Partitioned<RangeBound<i32>, MzOffset> {
+impl SourceTimestamp for NativeFrontier {
     fn encode_row(&self) -> Row {
         use mz_repr::adt::range;
         let mut row = Row::with_capacity(2);
