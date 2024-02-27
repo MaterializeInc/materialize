@@ -30,7 +30,7 @@
 {%- endmacro %}
 
 {% macro materialize__create_materialized_view_as(relation, sql) -%}
-  {%- set cluster = config.get('cluster', target.cluster) -%}
+  {%- set cluster = generate_cluster_name(config.get('cluster', target.cluster)) -%}
 
   create materialized view {{ relation }}
   {% if cluster %}
@@ -122,6 +122,8 @@
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
   {%- set index_config = adapter.parse_index(index_dict) -%}
   {%- set cluster = index_config.cluster or config.get('cluster', target.cluster) -%}
+  {%- set cluster = generate_cluster_name(cluster) -%}
+
     create
     {% if index_config.default -%}
       default

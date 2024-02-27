@@ -2533,7 +2533,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::ne
     sql: "
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, transaction_isolation, execution_timestamp, transaction_id,
-transient_index_id, began_at, finished_at, finished_status,
+transient_index_id, mz_version, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
@@ -2610,7 +2610,7 @@ pub static MZ_ACTIVITY_LOG_THINNED: Lazy<BuiltinView> = Lazy::new(|| {
     column_defs: None,
     sql: "
 SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name,
-transaction_isolation, execution_timestamp, transient_index_id, params, began_at, finished_at, finished_status,
+transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
 session_id, prepared_at, statement_type, throttled_count,

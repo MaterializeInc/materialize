@@ -157,6 +157,7 @@ dependencies = [
  "anyhow",
  "ctor",
  "either",
+ "mz-ore-instrument-macro",
  "mz-test-macro",
  "num",
  "once_cell",
@@ -166,6 +167,10 @@ dependencies = [
  "stacker",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "mz-ore-instrument-macro"
+version = "0.0.0"
 
 [[package]]
 name = "mz-sql-lexer"

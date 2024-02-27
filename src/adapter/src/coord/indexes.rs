@@ -29,7 +29,7 @@ impl DataflowBuilder<'_> {
     /// Identifies a bundle of storage and compute collection ids sufficient for
     /// building a dataflow for the identifiers in `ids` out of the indexes
     /// available in this compute instance.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub fn sufficient_collections<'a, I>(&self, ids: I) -> CollectionIdBundle
     where
         I: IntoIterator<Item = &'a GlobalId>,

@@ -544,7 +544,7 @@ pub struct ComputeReplicaConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaConfig {
-    Unmanaged {
+    Unorchestrated {
         storagectl_addrs: Vec<String>,
         storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
@@ -552,7 +552,7 @@ pub enum ReplicaConfig {
         workers: usize,
         compute: ComputeReplicaConfig,
     },
-    Managed {
+    Orchestrated {
         size: String,
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,

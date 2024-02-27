@@ -171,7 +171,9 @@ class Test:
         self._actions: list[Action] = []
         self._final_actions: list[Action] = []
         self._capabilities = Capabilities()
-        self._config: dict[ActionOrFactory, float] = self._scenario.config()
+        self._actions_with_weight: dict[
+            ActionOrFactory, float
+        ] = self._scenario.actions_with_weight()
         self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():
@@ -222,7 +224,7 @@ class Test:
         actions_or_factories: list[ActionOrFactory] = []
         class_weights = []
 
-        for action_or_factory in self._config.keys():
+        for action_or_factory in self._actions_with_weight.keys():
             alternatives = []
 
             # We do not drill down if it is an ActionFactory
@@ -240,9 +242,8 @@ class Test:
 
             for alternative in alternatives:
                 actions_or_factories.append(alternative)
-                class_weights.append(
-                    self._config[action_or_factory] / len(alternatives)
-                )
+                weight = self._actions_with_weight[action_or_factory]
+                class_weights.append(weight / len(alternatives))
 
         assert (
             len(actions_or_factories) > 0

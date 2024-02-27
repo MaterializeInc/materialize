@@ -33,20 +33,36 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::zip_eq;
-use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+use mz_expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
+use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::{TransformCtx, TransformError};
 
 /// Pushes projections down through other operators.
-#[derive(Debug, Default)]
-pub struct ProjectionPushdown;
+#[derive(Debug)]
+pub struct ProjectionPushdown {
+    recursion_guard: RecursionGuard,
+}
+
+impl Default for ProjectionPushdown {
+    fn default() -> Self {
+        Self {
+            recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+        }
+    }
+}
+
+impl CheckedRecursion for ProjectionPushdown {
+    fn recursion_guard(&self) -> &RecursionGuard {
+        &self.recursion_guard
+    }
+}
 
 impl crate::Transform for ProjectionPushdown {
     // This method is only used during unit testing.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "projection_pushdown")
     )]
     fn transform(
@@ -77,345 +93,348 @@ impl ProjectionPushdown {
         desired_projection: &Vec<usize>,
         gets: &mut BTreeMap<Id, BTreeSet<usize>>,
     ) -> Result<(), TransformError> {
-        // First, try to push the desired projection down through `relation`.
-        // In the process `relation` is transformed to a `MirRelationExpr`
-        // equivalent to `relation.project(actual_projection)`.
-        // There are three reasons why `actual_projection` may differ from
-        // `desired_projection`:
-        // 1) `relation` may need one or more columns that is not contained in
-        //    `desired_projection`.
-        // 2) `relation` may not be able to accommodate certain permutations.
-        //    For example, `MirRelationExpr::Map` always appends all
-        //    newly-created columns to the end.
-        // 3) Nothing can be pushed through a leaf node. If `relation` is a leaf
-        //    node, `actual_projection` will always be `(0..relation.arity())`.
-        // Then, if `actual_projection` and `desired_projection` differ, we will
-        // add a project around `relation`.
-        let actual_projection = match relation {
-            MirRelationExpr::Constant { .. } => (0..relation.arity()).collect(),
-            MirRelationExpr::Get { id, .. } => {
-                gets.entry(*id)
-                    .or_insert_with(BTreeSet::new)
-                    .extend(desired_projection.iter().cloned());
-                (0..relation.arity()).collect()
-            }
-            MirRelationExpr::Let { id, value, body } => {
-                // Let harvests any requirements of get from its body,
-                // and pushes the sorted union of the requirements at its value.
-                let id = Id::Local(*id);
-                let prior = gets.insert(id, BTreeSet::new());
-                self.action(body, desired_projection, gets)?;
-                let desired_value_projection = gets.remove(&id).unwrap();
-                if let Some(prior) = prior {
-                    gets.insert(id, prior);
+        self.checked_recur(|_| {
+            // First, try to push the desired projection down through `relation`.
+            // In the process `relation` is transformed to a `MirRelationExpr`
+            // equivalent to `relation.project(actual_projection)`.
+            // There are three reasons why `actual_projection` may differ from
+            // `desired_projection`:
+            // 1) `relation` may need one or more columns that is not contained in
+            //    `desired_projection`.
+            // 2) `relation` may not be able to accommodate certain permutations.
+            //    For example, `MirRelationExpr::Map` always appends all
+            //    newly-created columns to the end.
+            // 3) Nothing can be pushed through a leaf node. If `relation` is a leaf
+            //    node, `actual_projection` will always be `(0..relation.arity())`.
+            // Then, if `actual_projection` and `desired_projection` differ, we will
+            // add a project around `relation`.
+            let actual_projection = match relation {
+                MirRelationExpr::Constant { .. } => (0..relation.arity()).collect(),
+                MirRelationExpr::Get { id, .. } => {
+                    gets.entry(*id)
+                        .or_insert_with(BTreeSet::new)
+                        .extend(desired_projection.iter().cloned());
+                    (0..relation.arity()).collect()
                 }
-                let desired_value_projection =
-                    desired_value_projection.into_iter().collect::<Vec<_>>();
-                self.action(value, &desired_value_projection, gets)?;
-                let new_type = value.typ();
-                self.update_projection_around_get(
+                MirRelationExpr::Let { id, value, body } => {
+                    // Let harvests any requirements of get from its body,
+                    // and pushes the sorted union of the requirements at its value.
+                    let id = Id::Local(*id);
+                    let prior = gets.insert(id, BTreeSet::new());
+                    self.action(body, desired_projection, gets)?;
+                    let desired_value_projection = gets.remove(&id).unwrap();
+                    if let Some(prior) = prior {
+                        gets.insert(id, prior);
+                    }
+                    let desired_value_projection =
+                        desired_value_projection.into_iter().collect::<Vec<_>>();
+                    self.action(value, &desired_value_projection, gets)?;
+                    let new_type = value.typ();
+                    self.update_projection_around_get(
+                        body,
+                        &BTreeMap::from_iter(std::iter::once((
+                            id,
+                            (desired_value_projection, new_type),
+                        ))),
+                    );
+                    desired_projection.clone()
+                }
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    limits: _,
                     body,
-                    &BTreeMap::from_iter(std::iter::once((
-                        id,
-                        (desired_value_projection, new_type),
-                    ))),
-                );
-                desired_projection.clone()
-            }
-            MirRelationExpr::LetRec {
-                ids,
-                values,
-                limits: _,
-                body,
-            } => {
-                // Determine the recursive IDs in this LetRec binding.
-                let rec_ids = MirRelationExpr::recursive_ids(ids, values);
+                } => {
+                    // Determine the recursive IDs in this LetRec binding.
+                    let rec_ids = MirRelationExpr::recursive_ids(ids, values);
 
-                // Seed the gets map with empty demand for each non-recursive ID.
-                for id in ids.iter().filter(|id| !rec_ids.contains(id)) {
-                    let prior = gets.insert(Id::Local(*id), BTreeSet::new());
-                    assert!(prior.is_none());
-                }
+                    // Seed the gets map with empty demand for each non-recursive ID.
+                    for id in ids.iter().filter(|id| !rec_ids.contains(id)) {
+                        let prior = gets.insert(Id::Local(*id), BTreeSet::new());
+                        assert!(prior.is_none());
+                    }
 
-                // Descend into the body with the supplied desired_projection.
-                self.action(body, desired_projection, gets)?;
-                // Descend into the values in reverse order.
-                for (id, value) in zip_eq(ids.iter().rev(), values.iter_mut().rev()) {
-                    let desired_projection = if rec_ids.contains(id) {
-                        // For recursive IDs: request all columns.
-                        let columns = 0..value.arity();
-                        columns.collect::<Vec<_>>()
-                    } else {
-                        // For non-recursive IDs: request the gets entry.
-                        let columns = gets.get(&Id::Local(*id)).unwrap();
-                        columns.iter().cloned().collect::<Vec<_>>()
-                    };
-                    self.action(value, &desired_projection, gets)?;
-                }
-
-                // Update projections around gets of non-recursive IDs.
-                let mut updates = BTreeMap::new();
-                for (id, value) in zip_eq(ids.iter(), values.iter_mut()) {
-                    // Update the current value.
-                    self.update_projection_around_get(value, &updates);
-                    // If this is a non-recursive ID, add an entry to the
-                    // updates map for subsequent values and the body.
-                    if !rec_ids.contains(id) {
-                        let new_type = value.typ();
-                        let new_proj = {
-                            let columns = gets.remove(&Id::Local(*id)).unwrap();
+                    // Descend into the body with the supplied desired_projection.
+                    self.action(body, desired_projection, gets)?;
+                    // Descend into the values in reverse order.
+                    for (id, value) in zip_eq(ids.iter().rev(), values.iter_mut().rev()) {
+                        let desired_projection = if rec_ids.contains(id) {
+                            // For recursive IDs: request all columns.
+                            let columns = 0..value.arity();
+                            columns.collect::<Vec<_>>()
+                        } else {
+                            // For non-recursive IDs: request the gets entry.
+                            let columns = gets.get(&Id::Local(*id)).unwrap();
                             columns.iter().cloned().collect::<Vec<_>>()
                         };
-                        updates.insert(Id::Local(*id), (new_proj, new_type));
+                        self.action(value, &desired_projection, gets)?;
                     }
+
+                    // Update projections around gets of non-recursive IDs.
+                    let mut updates = BTreeMap::new();
+                    for (id, value) in zip_eq(ids.iter(), values.iter_mut()) {
+                        // Update the current value.
+                        self.update_projection_around_get(value, &updates);
+                        // If this is a non-recursive ID, add an entry to the
+                        // updates map for subsequent values and the body.
+                        if !rec_ids.contains(id) {
+                            let new_type = value.typ();
+                            let new_proj = {
+                                let columns = gets.remove(&Id::Local(*id)).unwrap();
+                                columns.iter().cloned().collect::<Vec<_>>()
+                            };
+                            updates.insert(Id::Local(*id), (new_proj, new_type));
+                        }
+                    }
+                    // Update the body.
+                    self.update_projection_around_get(body, &updates);
+
+                    // Remove the entries for all ids (don't restrict only to
+                    // non-recursive IDs here for better hygene).
+                    for id in ids.iter() {
+                        gets.remove(&Id::Local(*id));
+                    }
+
+                    // Return the desired projection (leads to a no-op in the
+                    // projection handling logic after this match statement).
+                    desired_projection.clone()
                 }
-                // Update the body.
-                self.update_projection_around_get(body, &updates);
+                MirRelationExpr::Join {
+                    inputs,
+                    equivalences,
+                    ..
+                } => {
+                    let input_mapper = JoinInputMapper::new(inputs);
 
-                // Remove the entries for all ids (don't restrict only to
-                // non-recursive IDs here for better hygene).
-                for id in ids.iter() {
-                    gets.remove(&Id::Local(*id));
+                    let mut columns_to_pushdown =
+                        desired_projection.iter().cloned().collect::<BTreeSet<_>>();
+                    // Each equivalence class imposes internal demand for columns.
+                    for equivalence in equivalences.iter() {
+                        for expr in equivalence.iter() {
+                            expr.support_into(&mut columns_to_pushdown);
+                        }
+                    }
+
+                    // Populate child demands from external and internal demands.
+                    let new_columns =
+                        input_mapper.split_column_set_by_input(columns_to_pushdown.iter());
+
+                    // Recursively indicate the requirements.
+                    for (input, inp_columns) in inputs.iter_mut().zip(new_columns) {
+                        let inp_columns = inp_columns.into_iter().collect::<Vec<_>>();
+                        self.action(input, &inp_columns, gets)?;
+                    }
+
+                    reverse_permute(
+                        equivalences.iter_mut().flat_map(|e| e.iter_mut()),
+                        columns_to_pushdown.iter(),
+                    );
+
+                    columns_to_pushdown.into_iter().collect()
                 }
-
-                // Return the desired projection (leads to a no-op in the
-                // projection handling logic after this match statement).
-                desired_projection.clone()
-            }
-            MirRelationExpr::Join {
-                inputs,
-                equivalences,
-                ..
-            } => {
-                let input_mapper = JoinInputMapper::new(inputs);
-
-                let mut columns_to_pushdown =
-                    desired_projection.iter().cloned().collect::<BTreeSet<_>>();
-                // Each equivalence class imposes internal demand for columns.
-                for equivalence in equivalences.iter() {
-                    for expr in equivalence.iter() {
+                MirRelationExpr::FlatMap { input, func, exprs } => {
+                    let inner_arity = input.arity();
+                    // A FlatMap which returns zero rows acts like a filter
+                    // so we always need to execute it
+                    let mut columns_to_pushdown =
+                        desired_projection.iter().cloned().collect::<BTreeSet<_>>();
+                    for expr in exprs.iter() {
                         expr.support_into(&mut columns_to_pushdown);
                     }
-                }
+                    columns_to_pushdown.retain(|c| *c < inner_arity);
 
-                // Populate child demands from external and internal demands.
-                let new_columns =
-                    input_mapper.split_column_set_by_input(columns_to_pushdown.iter());
-
-                // Recursively indicate the requirements.
-                for (input, inp_columns) in inputs.iter_mut().zip(new_columns) {
-                    let inp_columns = inp_columns.into_iter().collect::<Vec<_>>();
-                    self.action(input, &inp_columns, gets)?;
-                }
-
-                reverse_permute(
-                    equivalences.iter_mut().flat_map(|e| e.iter_mut()),
-                    columns_to_pushdown.iter(),
-                );
-
-                columns_to_pushdown.into_iter().collect()
-            }
-            MirRelationExpr::FlatMap { input, func, exprs } => {
-                let inner_arity = input.arity();
-                // A FlatMap which returns zero rows acts like a filter
-                // so we always need to execute it
-                let mut columns_to_pushdown =
-                    desired_projection.iter().cloned().collect::<BTreeSet<_>>();
-                for expr in exprs.iter() {
-                    expr.support_into(&mut columns_to_pushdown);
-                }
-                columns_to_pushdown.retain(|c| *c < inner_arity);
-
-                reverse_permute(exprs.iter_mut(), columns_to_pushdown.iter());
-                let columns_to_pushdown = columns_to_pushdown.into_iter().collect::<Vec<_>>();
-                self.action(input, &columns_to_pushdown, gets)?;
-                // The actual projection always has the newly-created columns at
-                // the end.
-                let mut actual_projection = columns_to_pushdown;
-                for c in 0..func.output_type().arity() {
-                    actual_projection.push(inner_arity + c);
-                }
-                actual_projection
-            }
-            MirRelationExpr::Filter { input, predicates } => {
-                let mut columns_to_pushdown =
-                    desired_projection.iter().cloned().collect::<BTreeSet<_>>();
-                for predicate in predicates.iter() {
-                    predicate.support_into(&mut columns_to_pushdown);
-                }
-                reverse_permute(predicates.iter_mut(), columns_to_pushdown.iter());
-                let columns_to_pushdown = columns_to_pushdown.into_iter().collect::<Vec<_>>();
-                self.action(input, &columns_to_pushdown, gets)?;
-                columns_to_pushdown
-            }
-            MirRelationExpr::Project { input, outputs } => {
-                // Combine `outputs` with `desired_projection`.
-                *outputs = desired_projection.iter().map(|c| outputs[*c]).collect();
-
-                let unique_outputs = outputs.iter().map(|i| *i).collect::<BTreeSet<_>>();
-                if outputs.len() == unique_outputs.len() {
-                    // Push down the project as is.
-                    self.action(input, outputs, gets)?;
-                    *relation = input.take_dangerous();
-                } else {
-                    // Push down only the unique elems in `outputs`.
-                    let columns_to_pushdown = unique_outputs.into_iter().collect::<Vec<_>>();
-                    reverse_permute_columns(outputs.iter_mut(), columns_to_pushdown.iter());
+                    reverse_permute(exprs.iter_mut(), columns_to_pushdown.iter());
+                    let columns_to_pushdown = columns_to_pushdown.into_iter().collect::<Vec<_>>();
                     self.action(input, &columns_to_pushdown, gets)?;
-                }
-
-                desired_projection.clone()
-            }
-            MirRelationExpr::Map { input, scalars } => {
-                let arity = input.arity();
-                // contains columns whose supports have yet to be explored
-                let mut actual_projection =
-                    desired_projection.iter().cloned().collect::<BTreeSet<_>>();
-                for (i, scalar) in scalars.iter().enumerate().rev() {
-                    if actual_projection.contains(&(i + arity)) {
-                        scalar.support_into(&mut actual_projection);
+                    // The actual projection always has the newly-created columns at
+                    // the end.
+                    let mut actual_projection = columns_to_pushdown;
+                    for c in 0..func.output_type().arity() {
+                        actual_projection.push(inner_arity + c);
                     }
+                    actual_projection
                 }
-                *scalars = (0..scalars.len())
-                    .filter_map(|i| {
-                        if actual_projection.contains(&(i + arity)) {
-                            Some(scalars[i].clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                reverse_permute(scalars.iter_mut(), actual_projection.iter());
-                self.action(
-                    input,
-                    &actual_projection
-                        .iter()
-                        .filter(|c| **c < arity)
-                        .map(|c| *c)
-                        .collect(),
-                    gets,
-                )?;
-                actual_projection.into_iter().collect()
-            }
-            MirRelationExpr::Reduce {
-                input,
-                group_key,
-                aggregates,
-                monotonic: _,
-                expected_group_size: _,
-            } => {
-                let mut columns_to_pushdown = BTreeSet::new();
-                // Group keys determine aggregation granularity and are
-                // each crucial in determining aggregates and even the
-                // multiplicities of other keys.
-                for k in group_key.iter() {
-                    k.support_into(&mut columns_to_pushdown)
+                MirRelationExpr::Filter { input, predicates } => {
+                    let mut columns_to_pushdown =
+                        desired_projection.iter().cloned().collect::<BTreeSet<_>>();
+                    for predicate in predicates.iter() {
+                        predicate.support_into(&mut columns_to_pushdown);
+                    }
+                    reverse_permute(predicates.iter_mut(), columns_to_pushdown.iter());
+                    let columns_to_pushdown = columns_to_pushdown.into_iter().collect::<Vec<_>>();
+                    self.action(input, &columns_to_pushdown, gets)?;
+                    columns_to_pushdown
                 }
+                MirRelationExpr::Project { input, outputs } => {
+                    // Combine `outputs` with `desired_projection`.
+                    *outputs = desired_projection.iter().map(|c| outputs[*c]).collect();
 
-                for index in (0..aggregates.len()).rev() {
-                    if !desired_projection.contains(&(group_key.len() + index)) {
-                        aggregates.remove(index);
+                    let unique_outputs = outputs.iter().map(|i| *i).collect::<BTreeSet<_>>();
+                    if outputs.len() == unique_outputs.len() {
+                        // Push down the project as is.
+                        self.action(input, outputs, gets)?;
+                        *relation = input.take_dangerous();
                     } else {
-                        // No obvious requirements on aggregate columns.
-                        // A "non-empty" requirement, I guess?
-                        aggregates[index]
-                            .expr
-                            .support_into(&mut columns_to_pushdown)
+                        // Push down only the unique elems in `outputs`.
+                        let columns_to_pushdown = unique_outputs.into_iter().collect::<Vec<_>>();
+                        reverse_permute_columns(outputs.iter_mut(), columns_to_pushdown.iter());
+                        self.action(input, &columns_to_pushdown, gets)?;
                     }
-                }
 
-                reverse_permute(
-                    itertools::chain!(
-                        group_key.iter_mut(),
-                        aggregates.iter_mut().map(|a| &mut a.expr)
-                    ),
-                    columns_to_pushdown.iter(),
-                );
-
-                self.action(
-                    input,
-                    &columns_to_pushdown.into_iter().collect::<Vec<_>>(),
-                    gets,
-                )?;
-                let mut actual_projection =
-                    desired_projection.iter().cloned().collect::<BTreeSet<_>>();
-                actual_projection.extend(0..group_key.len());
-                actual_projection.into_iter().collect()
-            }
-            MirRelationExpr::TopK {
-                input,
-                group_key,
-                order_key,
-                limit,
-                ..
-            } => {
-                // Group and order keys and limit support must be retained, as
-                // they define which rows are retained.
-                let mut columns_to_pushdown =
-                    desired_projection.iter().cloned().collect::<BTreeSet<_>>();
-                columns_to_pushdown.extend(group_key.iter().cloned());
-                columns_to_pushdown.extend(order_key.iter().map(|o| o.column));
-                if let Some(limit) = limit.as_ref() {
-                    // Strictly speaking not needed because the
-                    // `limit` support should be a subset of the
-                    // `group_key` support, but we don't want to
-                    // take this for granted here.
-                    limit.support_into(&mut columns_to_pushdown);
-                }
-                // If the `TopK` does not have any new column demand, just push
-                // down the desired projection. Otherwise, push down the sorted
-                // column demand.
-                let columns_to_pushdown = if columns_to_pushdown.len() == desired_projection.len() {
                     desired_projection.clone()
-                } else {
-                    columns_to_pushdown.into_iter().collect::<Vec<_>>()
-                };
-                reverse_permute_columns(
-                    itertools::chain!(
-                        group_key.iter_mut(),
-                        order_key.iter_mut().map(|o| &mut o.column),
-                    ),
-                    columns_to_pushdown.iter(),
-                );
-                reverse_permute(limit.iter_mut(), columns_to_pushdown.iter());
-                self.action(input, &columns_to_pushdown, gets)?;
-                columns_to_pushdown
-            }
-            MirRelationExpr::Negate { input } => {
-                self.action(input, desired_projection, gets)?;
-                desired_projection.clone()
-            }
-            MirRelationExpr::Union { base, inputs } => {
-                self.action(base, desired_projection, gets)?;
-                for input in inputs {
-                    self.action(input, desired_projection, gets)?;
                 }
-                desired_projection.clone()
+                MirRelationExpr::Map { input, scalars } => {
+                    let arity = input.arity();
+                    // contains columns whose supports have yet to be explored
+                    let mut actual_projection =
+                        desired_projection.iter().cloned().collect::<BTreeSet<_>>();
+                    for (i, scalar) in scalars.iter().enumerate().rev() {
+                        if actual_projection.contains(&(i + arity)) {
+                            scalar.support_into(&mut actual_projection);
+                        }
+                    }
+                    *scalars = (0..scalars.len())
+                        .filter_map(|i| {
+                            if actual_projection.contains(&(i + arity)) {
+                                Some(scalars[i].clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    reverse_permute(scalars.iter_mut(), actual_projection.iter());
+                    self.action(
+                        input,
+                        &actual_projection
+                            .iter()
+                            .filter(|c| **c < arity)
+                            .map(|c| *c)
+                            .collect(),
+                        gets,
+                    )?;
+                    actual_projection.into_iter().collect()
+                }
+                MirRelationExpr::Reduce {
+                    input,
+                    group_key,
+                    aggregates,
+                    monotonic: _,
+                    expected_group_size: _,
+                } => {
+                    let mut columns_to_pushdown = BTreeSet::new();
+                    // Group keys determine aggregation granularity and are
+                    // each crucial in determining aggregates and even the
+                    // multiplicities of other keys.
+                    for k in group_key.iter() {
+                        k.support_into(&mut columns_to_pushdown)
+                    }
+
+                    for index in (0..aggregates.len()).rev() {
+                        if !desired_projection.contains(&(group_key.len() + index)) {
+                            aggregates.remove(index);
+                        } else {
+                            // No obvious requirements on aggregate columns.
+                            // A "non-empty" requirement, I guess?
+                            aggregates[index]
+                                .expr
+                                .support_into(&mut columns_to_pushdown)
+                        }
+                    }
+
+                    reverse_permute(
+                        itertools::chain!(
+                            group_key.iter_mut(),
+                            aggregates.iter_mut().map(|a| &mut a.expr)
+                        ),
+                        columns_to_pushdown.iter(),
+                    );
+
+                    self.action(
+                        input,
+                        &columns_to_pushdown.into_iter().collect::<Vec<_>>(),
+                        gets,
+                    )?;
+                    let mut actual_projection =
+                        desired_projection.iter().cloned().collect::<BTreeSet<_>>();
+                    actual_projection.extend(0..group_key.len());
+                    actual_projection.into_iter().collect()
+                }
+                MirRelationExpr::TopK {
+                    input,
+                    group_key,
+                    order_key,
+                    limit,
+                    ..
+                } => {
+                    // Group and order keys and limit support must be retained, as
+                    // they define which rows are retained.
+                    let mut columns_to_pushdown =
+                        desired_projection.iter().cloned().collect::<BTreeSet<_>>();
+                    columns_to_pushdown.extend(group_key.iter().cloned());
+                    columns_to_pushdown.extend(order_key.iter().map(|o| o.column));
+                    if let Some(limit) = limit.as_ref() {
+                        // Strictly speaking not needed because the
+                        // `limit` support should be a subset of the
+                        // `group_key` support, but we don't want to
+                        // take this for granted here.
+                        limit.support_into(&mut columns_to_pushdown);
+                    }
+                    // If the `TopK` does not have any new column demand, just push
+                    // down the desired projection. Otherwise, push down the sorted
+                    // column demand.
+                    let columns_to_pushdown =
+                        if columns_to_pushdown.len() == desired_projection.len() {
+                            desired_projection.clone()
+                        } else {
+                            columns_to_pushdown.into_iter().collect::<Vec<_>>()
+                        };
+                    reverse_permute_columns(
+                        itertools::chain!(
+                            group_key.iter_mut(),
+                            order_key.iter_mut().map(|o| &mut o.column),
+                        ),
+                        columns_to_pushdown.iter(),
+                    );
+                    reverse_permute(limit.iter_mut(), columns_to_pushdown.iter());
+                    self.action(input, &columns_to_pushdown, gets)?;
+                    columns_to_pushdown
+                }
+                MirRelationExpr::Negate { input } => {
+                    self.action(input, desired_projection, gets)?;
+                    desired_projection.clone()
+                }
+                MirRelationExpr::Union { base, inputs } => {
+                    self.action(base, desired_projection, gets)?;
+                    for input in inputs {
+                        self.action(input, desired_projection, gets)?;
+                    }
+                    desired_projection.clone()
+                }
+                MirRelationExpr::Threshold { input } => {
+                    // Threshold requires all columns, as collapsing any distinct values
+                    // has the potential to change how it thresholds counts. This could
+                    // be improved with reasoning about distinctness or non-negativity.
+                    let arity = input.arity();
+                    self.action(input, &(0..arity).collect(), gets)?;
+                    (0..arity).collect()
+                }
+                MirRelationExpr::ArrangeBy { input, keys: _ } => {
+                    // Do not push the project past the ArrangeBy.
+                    // TODO: how do we handle key sets containing column references
+                    // that are not demanded upstream?
+                    let arity = input.arity();
+                    self.action(input, &(0..arity).collect(), gets)?;
+                    (0..arity).collect()
+                }
+            };
+            let add_project = desired_projection != &actual_projection;
+            if add_project {
+                let mut projection_to_add = desired_projection.to_owned();
+                reverse_permute_columns(projection_to_add.iter_mut(), actual_projection.iter());
+                *relation = relation.take_dangerous().project(projection_to_add);
             }
-            MirRelationExpr::Threshold { input } => {
-                // Threshold requires all columns, as collapsing any distinct values
-                // has the potential to change how it thresholds counts. This could
-                // be improved with reasoning about distinctness or non-negativity.
-                let arity = input.arity();
-                self.action(input, &(0..arity).collect(), gets)?;
-                (0..arity).collect()
-            }
-            MirRelationExpr::ArrangeBy { input, keys: _ } => {
-                // Do not push the project past the ArrangeBy.
-                // TODO: how do we handle key sets containing column references
-                // that are not demanded upstream?
-                let arity = input.arity();
-                self.action(input, &(0..arity).collect(), gets)?;
-                (0..arity).collect()
-            }
-        };
-        let add_project = desired_projection != &actual_projection;
-        if add_project {
-            let mut projection_to_add = desired_projection.to_owned();
-            reverse_permute_columns(projection_to_add.iter_mut(), actual_projection.iter());
-            *relation = relation.take_dangerous().project(projection_to_add);
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// When we push the `desired_value_projection` at `value`,

@@ -11,6 +11,7 @@ from typing import Union
 
 from materialize.zippy.debezium_capabilities import DebeziumSourceExists
 from materialize.zippy.framework import Capability
+from materialize.zippy.mysql_cdc_capabilities import MySqlCdcTableExists
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.table_capabilities import TableExists
@@ -23,6 +24,7 @@ WatermarkedObjects = list[
         "ViewExists",
         DebeziumSourceExists,
         PostgresCdcTableExists,
+        MySqlCdcTableExists,
     ]
 ]
 

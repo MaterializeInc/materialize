@@ -379,8 +379,6 @@ pub struct ComputeParameters {
     pub linear_join_yielding: Option<YieldSpec>,
     /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
     pub enable_mz_join_core: Option<bool>,
-    /// Whether to activate jemalloc heap profiling.
-    pub enable_jemalloc_profiling: Option<bool>,
     /// Enable lgalloc for columnation.
     pub enable_columnation_lgalloc: Option<bool>,
     /// Enable the chunked stack implementation.
@@ -403,7 +401,6 @@ impl ComputeParameters {
             dataflow_max_inflight_bytes,
             linear_join_yielding,
             enable_mz_join_core,
-            enable_jemalloc_profiling,
             enable_columnation_lgalloc,
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
@@ -423,9 +420,6 @@ impl ComputeParameters {
         }
         if enable_mz_join_core.is_some() {
             self.enable_mz_join_core = enable_mz_join_core;
-        }
-        if enable_jemalloc_profiling.is_some() {
-            self.enable_jemalloc_profiling = enable_jemalloc_profiling;
         }
         if enable_columnation_lgalloc.is_some() {
             self.enable_columnation_lgalloc = enable_columnation_lgalloc;
@@ -460,7 +454,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             }),
             linear_join_yielding: self.linear_join_yielding.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
-            enable_jemalloc_profiling: self.enable_jemalloc_profiling.into_proto(),
             enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
             enable_chunked_stack: self.enable_chunked_stack.into_proto(),
             enable_operator_hydration_status_logging: self
@@ -481,7 +474,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                 .transpose()?,
             linear_join_yielding: proto.linear_join_yielding.into_rust()?,
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
-            enable_jemalloc_profiling: proto.enable_jemalloc_profiling.into_rust()?,
             enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
             enable_chunked_stack: proto.enable_chunked_stack.into_rust()?,
             enable_operator_hydration_status_logging: proto

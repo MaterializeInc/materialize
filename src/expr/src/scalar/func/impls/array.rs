@@ -11,7 +11,7 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{ColumnType, Datum, Row, RowArena, RowPacker, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -142,6 +142,97 @@ impl LazyUnaryFunc for CastArrayToString {
 impl fmt::Display for CastArrayToString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("arraytostr")
+    }
+}
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastArrayToJsonb {
+    pub cast_element: Box<MirScalarExpr>,
+}
+
+impl LazyUnaryFunc for CastArrayToJsonb {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        fn pack<'a>(
+            temp_storage: &RowArena,
+            elems: &mut impl Iterator<Item = Datum<'a>>,
+            dims: &[ArrayDimension],
+            cast_element: &MirScalarExpr,
+            packer: &mut RowPacker,
+        ) -> Result<(), EvalError> {
+            packer.push_list_with(|packer| match dims {
+                [] => Ok(()),
+                [dim] => {
+                    for _ in 0..dim.length {
+                        let elem = elems.next().unwrap();
+                        let elem = cast_element.eval(&[elem], temp_storage)?;
+                        packer.push(elem);
+                    }
+                    Ok(())
+                }
+                [dim, rest @ ..] => {
+                    for _ in 0..dim.length {
+                        pack(temp_storage, elems, rest, cast_element, packer)?;
+                    }
+                    Ok(())
+                }
+            })
+        }
+
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+        let a = a.unwrap_array();
+        let elements = a.elements();
+        let dims = a.dims().into_iter().collect::<Vec<_>>();
+        let mut row = Row::default();
+        pack(
+            temp_storage,
+            &mut elements.into_iter(),
+            &dims,
+            &self.cast_element,
+            &mut row.packer(),
+        )?;
+        Ok(temp_storage.push_unary_row(row))
+    }
+
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Jsonb.nullable(input_type.nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        // TODO? If we moved typeconv into `expr` we could determine the right
+        // inverse of this.
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for CastArrayToJsonb {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("arraytojsonb")
     }
 }
 

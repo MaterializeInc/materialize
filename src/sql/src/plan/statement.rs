@@ -257,7 +257,7 @@ pub fn describe(
 /// connections), these might want to take different code paths than
 /// `purify_statement`. Feel free to rationalize this by thinking of those
 /// statements as not necessarily depending on external state.
-#[tracing::instrument(level = "debug", skip_all)]
+#[mz_ore::instrument(level = "debug")]
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,

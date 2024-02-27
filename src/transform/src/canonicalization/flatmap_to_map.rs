@@ -20,10 +20,9 @@ use crate::TransformCtx;
 pub struct FlatMapToMap;
 
 impl crate::Transform for FlatMapToMap {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "flatmap_to_map")
     )]
     fn transform(

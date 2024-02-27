@@ -243,10 +243,9 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = self.name)
     )]
     fn transform(
@@ -346,10 +345,9 @@ impl Default for FuseAndCollapse {
 }
 
 impl Transform for FuseAndCollapse {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "fuse_and_collapse")
     )]
     fn transform(
@@ -609,10 +607,9 @@ impl Optimizer {
     ///
     /// These optimizations are performed with no information about available arrangements,
     /// which makes them suitable for pre-optimization before dataflow deployment.
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = self.name)
     )]
     pub fn optimize(

@@ -553,7 +553,7 @@ where
         Ok(result)
     }
 
-    #[tracing::instrument(name = "oracle::write_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::write_ts", level = "debug")]
     async fn fallible_write_ts(&self) -> Result<WriteTimestamp<Timestamp>, anyhow::Error> {
         let proposed_next_ts = self.next.now();
         let proposed_next_ts = Self::ts_to_decimal(proposed_next_ts);
@@ -586,7 +586,7 @@ where
         })
     }
 
-    #[tracing::instrument(name = "oracle::peek_write_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::peek_write_ts", level = "debug")]
     async fn fallible_peek_write_ts(&self) -> Result<Timestamp, anyhow::Error> {
         let q = r#"
             SELECT write_ts FROM timestamp_oracle
@@ -607,7 +607,7 @@ where
         Ok(write_ts)
     }
 
-    #[tracing::instrument(name = "oracle::read_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::read_ts", level = "debug")]
     async fn fallible_read_ts(&self) -> Result<Timestamp, anyhow::Error> {
         let q = r#"
             SELECT read_ts FROM timestamp_oracle
@@ -628,7 +628,7 @@ where
         Ok(read_ts)
     }
 
-    #[tracing::instrument(name = "oracle::apply_write", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::apply_write", level = "debug")]
     async fn fallible_apply_write(&self, write_ts: Timestamp) -> Result<(), anyhow::Error> {
         let q = r#"
             UPDATE timestamp_oracle SET write_ts = GREATEST(write_ts, $2), read_ts = GREATEST(read_ts, $2)
@@ -798,22 +798,22 @@ impl<N> TimestampOracle<Timestamp> for PostgresTimestampOracle<N>
 where
     N: GenericNowFn<Timestamp> + std::fmt::Debug + 'static,
 {
-    #[tracing::instrument(name = "oracle::write_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::write_ts", level = "debug")]
     async fn write_ts(&mut self) -> WriteTimestamp<Timestamp> {
         ShareableTimestampOracle::write_ts(self).await
     }
 
-    #[tracing::instrument(name = "oracle::peek_write_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::peek_write_ts", level = "debug")]
     async fn peek_write_ts(&self) -> Timestamp {
         ShareableTimestampOracle::peek_write_ts(self).await
     }
 
-    #[tracing::instrument(name = "oracle::read_ts", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::read_ts", level = "debug")]
     async fn read_ts(&self) -> Timestamp {
         ShareableTimestampOracle::read_ts(self).await
     }
 
-    #[tracing::instrument(name = "oracle::apply_write", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "oracle::apply_write", level = "debug")]
     async fn apply_write(&mut self, write_ts: Timestamp) {
         ShareableTimestampOracle::apply_write(self, write_ts).await
     }

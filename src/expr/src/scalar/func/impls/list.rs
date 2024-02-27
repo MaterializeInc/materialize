@@ -10,7 +10,7 @@
 use std::fmt;
 
 use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +69,68 @@ impl LazyUnaryFunc for CastListToString {
 impl fmt::Display for CastListToString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("listtostr")
+    }
+}
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastListToJsonb {
+    pub cast_element: Box<MirScalarExpr>,
+}
+
+impl LazyUnaryFunc for CastListToJsonb {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+        let mut row = Row::default();
+        row.packer().push_list_with(|packer| {
+            for elem in a.unwrap_list().iter() {
+                let elem = self.cast_element.eval(&[elem], temp_storage)?;
+                packer.push(elem);
+            }
+            Ok::<_, EvalError>(())
+        })?;
+        Ok(temp_storage.push_unary_row(row))
+    }
+
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Jsonb.nullable(input_type.nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        // TODO? If we moved typeconv into `expr` we could determine the right
+        // inverse of this.
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for CastListToJsonb {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("listtojsonb")
     }
 }
 

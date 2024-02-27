@@ -57,10 +57,9 @@ impl CheckedRecursion for JoinImplementation {
 }
 
 impl crate::Transform for JoinImplementation {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "join_implementation")
     )]
     fn transform(

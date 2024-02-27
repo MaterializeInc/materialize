@@ -33,6 +33,9 @@ CREATE TABLE public.t (a int);
 # needed for creating a source
 GRANT SELECT ON performance_schema.replication_connection_configuration TO priv
 
+# needed to keep the source up to date
+GRANT REPLICATION SLAVE ON *.* TO priv
+
 #
 # no CONNECT error
 #

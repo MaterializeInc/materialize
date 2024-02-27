@@ -37,7 +37,7 @@ use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
 
 impl Coordinator {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_cluster(
         &mut self,
         session: &Session,
@@ -96,7 +96,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_managed_cluster(
         &mut self,
         session: &Session,
@@ -230,7 +230,7 @@ impl Coordinator {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_unmanaged_cluster(
         &mut self,
         session: &Session,
@@ -241,7 +241,7 @@ impl Coordinator {
         tracing::debug!("sequence_create_unmanaged_cluster");
 
         self.ensure_valid_azs(replicas.iter().filter_map(|(_, r)| {
-            if let mz_sql::plan::ReplicaConfig::Managed {
+            if let mz_sql::plan::ReplicaConfig::Orchestrated {
                 availability_zone: Some(az),
                 ..
             } = &r
@@ -268,7 +268,7 @@ impl Coordinator {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let (compute, location) = match replica_config {
-                mz_sql::plan::ReplicaConfig::Unmanaged {
+                mz_sql::plan::ReplicaConfig::Unorchestrated {
                     storagectl_addrs,
                     storage_addrs,
                     computectl_addrs,
@@ -285,7 +285,7 @@ impl Coordinator {
                     };
                     (compute, location)
                 }
-                mz_sql::plan::ReplicaConfig::Managed {
+                mz_sql::plan::ReplicaConfig::Orchestrated {
                     availability_zone,
                     billed_as,
                     compute,
@@ -389,7 +389,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_cluster_replica(
         &mut self,
         session: &Session,
@@ -401,7 +401,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         // Choose default AZ if necessary
         let (compute, location) = match config {
-            mz_sql::plan::ReplicaConfig::Unmanaged {
+            mz_sql::plan::ReplicaConfig::Unorchestrated {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -418,7 +418,7 @@ impl Coordinator {
                 };
                 (compute, location)
             }
-            mz_sql::plan::ReplicaConfig::Managed {
+            mz_sql::plan::ReplicaConfig::Orchestrated {
                 availability_zone,
                 billed_as,
                 compute,

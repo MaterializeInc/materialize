@@ -23,6 +23,7 @@ use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
+use mz_ore::instrument;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
@@ -39,7 +40,7 @@ use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, instrument};
+use tracing::error;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -154,7 +155,7 @@ impl Client {
     ///
     /// Returns a new client that is bound to the session and a response
     /// containing various details about the startup.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn startup(&self, session: Session) -> Result<SessionClient, AdapterError> {
         let user = session.user().clone();
         let conn_id = session.conn_id().clone();
@@ -336,7 +337,7 @@ Issue a SQL query to get started. Need help?
         response
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     fn send(&self, cmd: Command) {
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
@@ -463,7 +464,7 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn declare(
         &mut self,
         name: String,
@@ -494,7 +495,7 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
-    #[tracing::instrument(level = "debug", skip(self, cancel_future))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn execute(
         &mut self,
         portal_name: String,
@@ -543,7 +544,7 @@ impl SessionClient {
     }
 
     /// Ends a transaction.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -564,7 +565,7 @@ impl SessionClient {
     }
 
     /// Fetches the catalog.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
         let CatalogSnapshot { catalog } = self
             .send_without_session(|tx| Command::CatalogSnapshot { tx })
@@ -708,7 +709,7 @@ impl SessionClient {
         rx.await.expect("sender dropped")
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
@@ -716,7 +717,7 @@ impl SessionClient {
         self.send_with_cancel(f, futures::future::pending()).await
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     async fn send_with_cancel<T, F>(
         &mut self,
         f: F,

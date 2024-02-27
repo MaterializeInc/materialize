@@ -18,8 +18,10 @@ from materialize import buildkite
 from materialize.docker import is_image_tag_of_version
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
-from materialize.version_list import (
+from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
+)
+from materialize.version_list import (
     get_commits_of_accepted_regressions_between_versions,
     get_latest_published_version,
     resolve_ancestor_image_tag,

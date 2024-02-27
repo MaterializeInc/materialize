@@ -759,7 +759,7 @@ impl CatalogState {
 
     /// Parse a SQL string into a catalog view item with only a limited
     /// context.
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     pub fn parse_view_item(&self, create_sql: String) -> Result<CatalogItem, anyhow::Error> {
         let mut session_catalog = self.for_system_session();
 
@@ -826,7 +826,7 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a pair of [`Plan`] and a [`ResolvedIds)`.
-    #[tracing::instrument(skip_all)]
+    #[mz_ore::instrument]
     pub(crate) fn parse_plan(
         &self,
         create_sql: String,
@@ -864,7 +864,7 @@ impl CatalogState {
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
-    #[tracing::instrument(level = "info", skip(self, pcx))]
+    #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
         id: GlobalId,
@@ -1154,7 +1154,7 @@ impl CatalogState {
         self.entry_by_id.insert(entry.id(), entry.clone());
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub(super) fn drop_item(&mut self, id: GlobalId) {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         info!(

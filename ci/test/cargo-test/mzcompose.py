@@ -57,6 +57,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         COCKROACH_URL=cockroach_url,
         MZ_SOFT_ASSERTIONS="1",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",
+        MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
     )
 
@@ -75,7 +76,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "cargo",
                 "llvm-cov",
                 "run",
-                "--workspace",
                 "--bin",
                 "clusterd",
                 "--release",
@@ -141,6 +141,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "nextest",
                     "run",
                     "--workspace",
+                    "--all-features",
                     "--profile=ci",
                     "--cargo-profile=ci",
                     f"--partition=count:{partition}/{total}",

@@ -102,7 +102,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     # between testdrive runs.
     c.sql(
         """
-        ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
 
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
 
@@ -130,7 +130,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.sql(
         """
-        ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+        ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
 
         CREATE CLUSTER REPLICA cluster1.replica2
             STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
@@ -166,7 +166,7 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
     c.up("clusterd2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -303,7 +303,7 @@ def workflow_test_github_15531(c: Composition) -> None:
         )
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -408,7 +408,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -470,7 +470,7 @@ def workflow_test_github_15799(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -524,7 +524,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -628,7 +628,7 @@ def workflow_test_github_15496(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -701,7 +701,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -780,7 +780,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         c.up("clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -954,7 +954,7 @@ def workflow_test_github_17509(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1048,7 +1048,7 @@ def workflow_test_github_19610(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1156,7 +1156,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         c.up("clusterd_nopanic")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1480,7 +1480,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1569,7 +1569,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     c.up("clusterd2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1686,7 +1686,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1778,7 +1778,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1862,7 +1862,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     c.up("materialized", "clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -1961,7 +1961,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     c.up("clusterd1")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -2032,7 +2032,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         input=dedent(
             """
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+            ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 
             $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
             {
@@ -2215,7 +2215,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         return Metrics(resp)
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )
@@ -2643,18 +2643,7 @@ def workflow_test_profile_fetch(c: Composition) -> None:
         check = make_check(403, "heap profiling not activated")
         check(code, text)
 
-    # Test fetching CPU profiles.
-    test_post(
-        {"action": "time_fg", "time_secs": "1", "hz": "1"},
-        make_ok_check(
-            "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
-        ),
-    )
-
-    # Activate memory profiling.
-    test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
-
-    # Test fetching heap profiles.
+    # Test fetching heap profiles. Heap profiling should be activated by default.
     test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
     test_post(
         {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
@@ -2664,6 +2653,14 @@ def workflow_test_profile_fetch(c: Composition) -> None:
         make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
     )
     test_get("heap", make_ok_check(""))
+
+    # Test fetching CPU profiles. This disables memory profiling!
+    test_post(
+        {"action": "time_fg", "time_secs": "1", "hz": "1"},
+        make_ok_check(
+            "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
+        ),
+    )
 
     # Deactivate memory profiling.
     test_post(
@@ -2677,22 +2674,27 @@ def workflow_test_profile_fetch(c: Composition) -> None:
     test_post({"action": "mem_fg"}, check_profiling_disabled)
     test_get("heap", check_profiling_disabled)
 
-    # Test toggling profiling via feature flag.
-    c.sql(
-        "ALTER SYSTEM SET enable_jemalloc_profiling = true;",
-        port=6877,
-        user="mz_system",
-    )
-    code = requests.get(envd_url + "heap").status_code
-    assert code == 200, f"expected 200, got {code}"
+    # Activate memory profiling again.
+    test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
 
-    c.sql(
-        "ALTER SYSTEM SET enable_jemalloc_profiling = false;",
-        port=6877,
-        user="mz_system",
+    # Test fetching heap profiles again.
+    test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
+    test_post(
+        {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
     )
-    code = requests.get(envd_url + "heap").status_code
-    assert code == 403, f"expected 403, got {code}"
+    test_post(
+        {"action": "mem_fg"},
+        make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
+    )
+    test_get("heap", make_ok_check(""))
+
+    # Test fetching CPU profiles again.
+    test_post(
+        {"action": "time_fg", "time_secs": "1", "hz": "1"},
+        make_ok_check(
+            "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
+        ),
+    )
 
 
 def workflow_test_incident_70(c: Composition) -> None:

@@ -39,6 +39,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
@@ -62,7 +63,6 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{self, Duration, Interval, MissedTickBehavior};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::instrument;
 use uuid::Uuid;
 
 pub mod clusters;
@@ -301,7 +301,7 @@ where
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
@@ -419,7 +419,7 @@ where
     T: Into<mz_repr::Timestamp>,
 {
     /// Creates a new controller.
-    #[instrument(name = "controller::new", skip_all)]
+    #[instrument(name = "controller::new")]
     pub async fn new(
         config: ControllerConfig,
         envd_epoch: NonZeroI64,

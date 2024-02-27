@@ -90,7 +90,7 @@ impl Server {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub fn handle_connection<A>(
         &self,
         conn: A,

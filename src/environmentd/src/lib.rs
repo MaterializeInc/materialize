@@ -294,7 +294,7 @@ impl Listeners {
     /// Starts an `environmentd` server.
     ///
     /// Returns a handle to the server once it is fully booted.
-    #[tracing::instrument(name = "environmentd::serve", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "environmentd::serve", level = "info")]
     pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
         let Listeners {
             sql: (sql_listener, sql_conns),
@@ -309,7 +309,7 @@ impl Listeners {
         let (pgwire_tls, http_tls) = match &config.tls {
             None => (None, None),
             Some(tls_config) => {
-                let context = tls_config.context()?;
+                let context = tls_config.load_context()?;
                 let pgwire_tls = mz_server_core::TlsConfig {
                     context: context.clone(),
                     mode: mz_server_core::TlsMode::Require,

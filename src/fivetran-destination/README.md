@@ -31,7 +31,7 @@ git submodule update --init --recursive misc/fivetran_sdk
 Once you have the `fivetran_sdk` submodule updated, run:
 
 ```shell
-cargo build --release --bin mz-fivetran-destination
+cargo build --release -p mz-fivetran-destination
 ```
 
 Cargo will emit the built binary at

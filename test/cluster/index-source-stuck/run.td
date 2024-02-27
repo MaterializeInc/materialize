@@ -11,7 +11,7 @@
 # in sqllogictest.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
 
 > DROP CLUSTER IF EXISTS cluster1 CASCADE;
 > DROP CLUSTER IF EXISTS cluster2 CASCADE;

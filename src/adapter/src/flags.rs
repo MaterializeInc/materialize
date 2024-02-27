@@ -37,7 +37,6 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         dataflow_max_inflight_bytes: Some(config.compute_dataflow_max_inflight_bytes()),
         linear_join_yielding: Some(linear_join_yielding),
         enable_mz_join_core: Some(config.enable_mz_join_core()),
-        enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),
         enable_columnation_lgalloc: Some(config.enable_columnation_lgalloc()),
         enable_chunked_stack: Some(config.enable_compute_chunked_stack()),
         enable_operator_hydration_status_logging: Some(

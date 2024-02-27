@@ -1919,8 +1919,8 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unmanaged_cluster_replicas,
-        desc: "unmanaged cluster replicas",
+        name: enable_unorchestrated_cluster_replicas,
+        desc: "unorchestrated cluster replicas",
         default: false,
         internal: true,
         enable_for_item_parsing: true,
@@ -2020,13 +2020,6 @@ feature_flags!(
         name: enable_explain_broken,
         desc: "EXPLAIN ... BROKEN <query> syntax",
         default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_jemalloc_profiling,
-        desc: "jemalloc heap memory profiling",
-        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2523,7 +2516,7 @@ impl SessionVars {
     /// [`SessionVars::set`] since the last call to `end_transaction`.
     ///
     /// Returns any session parameters that changed because the transaction ended.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -5515,7 +5508,6 @@ impl SystemVars {
             || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
             || name == LINEAR_JOIN_YIELDING.name()
             || name == ENABLE_MZ_JOIN_CORE.name()
-            || name == ENABLE_JEMALLOC_PROFILING.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
             || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
             || self.is_persist_config_var(name)

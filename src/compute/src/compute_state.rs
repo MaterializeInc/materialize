@@ -200,7 +200,7 @@ impl SinkToken {
 
 impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
@@ -233,7 +233,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             dataflow_max_inflight_bytes,
             linear_join_yielding,
             enable_mz_join_core,
-            enable_jemalloc_profiling,
             enable_columnation_lgalloc,
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
@@ -256,21 +255,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 false => LinearJoinImpl::DifferentialDataflow,
                 true => LinearJoinImpl::Materialize,
             };
-        }
-        match enable_jemalloc_profiling {
-            Some(true) => {
-                mz_ore::task::spawn(
-                    || "activate-jemalloc-profiling",
-                    mz_prof::activate_jemalloc_profiling(),
-                );
-            }
-            Some(false) => {
-                mz_ore::task::spawn(
-                    || "deactivate-jemalloc-profiling",
-                    mz_prof::deactivate_jemalloc_profiling(),
-                );
-            }
-            None => (),
         }
         match enable_columnation_lgalloc {
             Some(true) => {
@@ -377,7 +361,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn handle_peek(&mut self, peek: Peek) {
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
@@ -619,7 +603,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     ///
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
-    #[tracing::instrument(level = "debug", skip(self, peek))]
+    #[mz_ore::instrument(level = "debug")]
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         let log_event = peek.as_log_event(false);
         // Respond with the response.

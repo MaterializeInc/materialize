@@ -19,10 +19,9 @@ use crate::TransformCtx;
 pub struct NormalizeOps;
 
 impl crate::Transform for NormalizeOps {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "normalize_ops")
     )]
     fn transform(

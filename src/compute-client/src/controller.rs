@@ -634,7 +634,7 @@ where
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn record_introspection_updates(&mut self) {
         // We could record the contents of `introspection_rx` directly here, but to reduce the
         // pressure on persist we spend some effort consolidating first.
@@ -666,7 +666,7 @@ where
     ComputeGrpcClient: ComputeClient<T>,
 {
     /// Processes the work queued by [`ComputeController::ready`].
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
         // Perform periodic maintenance work.
         if self.compute.maintenance_scheduled {
@@ -704,7 +704,7 @@ where
         None
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn maintain(&mut self) {
         // Perform instance maintenance work.
         for instance in self.compute.instances.values_mut() {

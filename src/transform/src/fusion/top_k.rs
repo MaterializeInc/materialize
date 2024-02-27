@@ -19,10 +19,9 @@ use crate::TransformCtx;
 pub struct TopK;
 
 impl crate::Transform for TopK {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "topk_fusion")
     )]
     fn transform(

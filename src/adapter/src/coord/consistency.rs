@@ -12,9 +12,9 @@
 use super::Coordinator;
 use crate::catalog::consistency::CatalogInconsistencies;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_ore::instrument;
 use mz_repr::GlobalId;
 use serde::Serialize;
-use tracing::instrument;
 
 #[derive(Debug, Default, Serialize, PartialEq)]
 pub struct CoordinatorInconsistencies {

@@ -28,6 +28,7 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort,
 };
 use mz_ore::halt;
+use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::GlobalId;
@@ -35,7 +36,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tracing::{error, instrument, warn};
+use tracing::{error, warn};
 
 use crate::Controller;
 
@@ -506,7 +507,7 @@ where
     }
 
     /// Remove orphaned replicas.
-    #[instrument(skip_all)]
+    #[instrument]
     pub async fn remove_orphaned_replicas(
         &mut self,
         next_user_replica_id: u64,

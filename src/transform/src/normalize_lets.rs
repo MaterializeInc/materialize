@@ -59,10 +59,9 @@ impl NormalizeLets {
 }
 
 impl crate::Transform for NormalizeLets {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "normalize_lets")
     )]
     fn transform(

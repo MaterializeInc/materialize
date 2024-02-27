@@ -1486,10 +1486,6 @@ criteria = "safe-to-deploy"
 version = "10.2.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.sync_wrapper]]
-version = "0.1.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.synstructure]]
 version = "0.12.3"
 criteria = "safe-to-deploy"
@@ -1804,10 +1800,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.windows_x86_64_msvc]]
 version = "0.48.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.winreg]]
-version = "0.10.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.workspace-hack]]

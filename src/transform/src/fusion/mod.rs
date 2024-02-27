@@ -27,10 +27,9 @@ use crate::TransformCtx;
 pub struct Fusion;
 
 impl crate::Transform for Fusion {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "fusion")
     )]
     fn transform(

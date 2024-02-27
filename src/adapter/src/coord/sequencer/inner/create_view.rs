@@ -9,11 +9,12 @@
 
 use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
+use mz_ore::instrument;
 use mz_repr::RelationDesc;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan::{self};
-use tracing::{instrument, Span};
+use tracing::Span;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -68,7 +69,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn create_view_validate(
         &mut self,
         session: &Session,
@@ -104,7 +105,7 @@ impl Coordinator {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_view_optimize(
         &mut self,
         CreateViewOptimize {
@@ -140,7 +141,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_view_finish(
         &mut self,
         session: &Session,

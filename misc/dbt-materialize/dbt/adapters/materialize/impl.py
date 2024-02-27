@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -217,6 +217,11 @@ class MaterializeAdapter(PostgresAdapter):
                 rendered_column_constraints.append(" ".join(rendered_column_constraint))
 
         return rendered_column_constraints
+
+    @available
+    @classmethod
+    def sleep(cls, seconds):
+        time.sleep(seconds)
 
     def get_column_schema_from_query(self, sql: str) -> List[PostgresColumn]:
         # The idea is that this function returns the names and types of the

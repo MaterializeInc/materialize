@@ -109,7 +109,7 @@ impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
 ///
 /// The outer Result is for errors related to the statement size. The inner Result is for
 /// errors during the parsing.
-#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
+#[mz_ore::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements_with_limit(
     sql: &str,
 ) -> Result<Result<Vec<StatementParseResult>, ParserStatementError>, String> {
@@ -123,7 +123,7 @@ pub fn parse_statements_with_limit(
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
-#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
+#[mz_ore::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
     debug!("parsing statements: {sql}");
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {

@@ -595,6 +595,13 @@ user-id = 359
 user-login = "seanmonstar"
 user-name = "Sean McArthur"
 
+[[publisher.reqwest]]
+version = "0.11.24"
+when = "2024-01-31"
+user-id = 359
+user-login = "seanmonstar"
+user-name = "Sean McArthur"
+
 [[publisher.rustc-demangle]]
 version = "0.1.16"
 when = "2019-08-13"
@@ -1411,6 +1418,13 @@ who = "David Koloski <dkoloski@google.com>"
 criteria = "safe-to-deploy"
 version = "0.1.11"
 notes = "Reviewed on https://fxrev.dev/804724"
+aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.tokio-stream]]
+who = "David Koloski <dkoloski@google.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.11 -> 0.1.14"
+notes = "Reviewed on https://fxrev.dev/907732."
 aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
 
 [[audits.google.audits.version_check]]

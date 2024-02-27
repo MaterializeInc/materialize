@@ -142,7 +142,7 @@ def workflow_clusterd(c: Composition) -> None:
     port = c.port("clusterd", 6878)
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )

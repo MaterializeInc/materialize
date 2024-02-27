@@ -41,10 +41,9 @@ impl CheckedRecursion for ProjectionLifting {
 }
 
 impl crate::Transform for ProjectionLifting {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "projection_lifting")
     )]
     fn transform(

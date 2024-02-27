@@ -182,7 +182,7 @@ impl Coordinator {
         });
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn drain_statement_log(&mut self) {
         let session_updates = std::mem::take(&mut self.statement_logging.pending_session_events)
             .into_iter()
@@ -350,12 +350,11 @@ impl Coordinator {
         reason: StatementEndedExecutionReason,
     ) {
         let StatementLoggingId(uuid) = id;
-        let now = self.now_datetime();
-        let now_millis = now.timestamp_millis().try_into().expect("sane system time");
+        let now = self.now();
         let ended_record = StatementEndedExecutionRecord {
             id: uuid,
             reason,
-            ended_at: now_millis,
+            ended_at: now,
         };
 
         let began_record = self
@@ -372,7 +371,11 @@ impl Coordinator {
                 .pending_statement_execution_events
                 .push((row, diff));
         }
-        self.record_statement_lifecycle_event(&id, &StatementLifecycleEvent::ExecutionFinished);
+        self.record_statement_lifecycle_event(
+            &id,
+            &StatementLifecycleEvent::ExecutionFinished,
+            now,
+        );
     }
 
     fn pack_statement_execution_inner(
@@ -392,6 +395,7 @@ impl Coordinator {
             execution_timestamp,
             transaction_id,
             transient_index_id,
+            mz_version,
         } = record;
 
         let cluster = cluster_id.map(|id| id.to_string());
@@ -425,6 +429,7 @@ impl Coordinator {
                     .map(|p| Datum::from(p.as_ref().map(String::as_str))),
             )
             .expect("correct array dimensions");
+        packer.push(Datum::from(mz_version.as_str()));
         packer.push(Datum::TimestampTz(
             to_datetime(*began_at).try_into().expect("Sane system time"),
         ));
@@ -648,9 +653,11 @@ impl Coordinator {
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
         let ev_id = Uuid::new_v4();
+        let now = self.now();
         self.record_statement_lifecycle_event(
             &StatementLoggingId(ev_id),
             &StatementLifecycleEvent::ExecutionBegan,
+            now,
         );
 
         let params = std::iter::zip(params.types.iter(), params.datums.iter())
@@ -676,6 +683,7 @@ impl Coordinator {
                 .inner()
                 .expect("Every statement runs in an explicit or implicit transaction")
                 .id,
+            mz_version: self.catalog().state().config().build_info.human_version(),
             // These are not known yet; we'll fill them in later.
             cluster_id: None,
             cluster_name: None,
@@ -728,13 +736,13 @@ impl Coordinator {
         &mut self,
         id: &StatementLoggingId,
         event: &StatementLifecycleEvent,
+        when: EpochMillis,
     ) {
         if self
             .catalog()
             .system_config()
             .enable_statement_lifecycle_logging()
         {
-            let when = self.now();
             let row = Self::pack_statement_lifecycle_event(id, event, when);
             self.statement_logging
                 .pending_statement_lifecycle_events

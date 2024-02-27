@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
@@ -29,7 +30,7 @@ use mz_persist::location::{
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
 use tokio::sync::{Mutex, OnceCell};
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
@@ -137,7 +138,7 @@ impl PersistClientCache {
     /// durable to the given [PersistLocation].
     ///
     /// The same `location` may be used concurrently from multiple processes.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub async fn open(&self, location: PersistLocation) -> Result<PersistClient, ExternalError> {
         let blob = self.open_blob(location.blob_uri).await?;
         let consensus = self.open_consensus(location.consensus_uri).await?;

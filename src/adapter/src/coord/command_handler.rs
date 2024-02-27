@@ -19,6 +19,7 @@ use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
 use mz_catalog::SYSTEM_CONN_ID;
+use mz_ore::instrument;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -47,7 +48,7 @@ use mz_sql_parser::ast::{
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug_span, instrument, warn, Instrument};
+use tracing::{debug_span, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::{
@@ -223,7 +224,7 @@ impl Coordinator {
         .boxed_local()
     }
 
-    #[tracing::instrument(level = "debug", skip(self, tx, secret_key, notice_tx))]
+    #[mz_ore::instrument(level = "debug")]
     async fn handle_startup(
         &mut self,
         tx: oneshot::Sender<Result<StartupResponse, AdapterError>>,
@@ -340,7 +341,7 @@ impl Coordinator {
     }
 
     /// Handles an execute command.
-    #[instrument(name = "coord::handle_execute", skip_all, fields(session = session.uuid().to_string()))]
+    #[instrument(name = "coord::handle_execute", fields(session = session.uuid().to_string()))]
     pub(crate) async fn handle_execute(
         &mut self,
         portal_name: String,
@@ -442,7 +443,7 @@ impl Coordinator {
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[instrument(name = "coord::handle_execute_inner", skip_all, fields(stmt = stmt.to_ast_string_redacted()))]
+    #[instrument(name = "coord::handle_execute_inner", fields(stmt = stmt.to_ast_string_redacted()))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Arc<Statement<Raw>>,
@@ -860,7 +861,7 @@ impl Coordinator {
     /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned
     /// `ConnectionId` because this method gets called by external clients when
     /// they request to cancel a request.
-    #[tracing::instrument(level = "debug", skip(self, secret_key))]
+    #[mz_ore::instrument(level = "debug")]
     async fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         if let Some((id_handle, conn_meta)) = self.active_conns.get_key_value(&conn_id) {
             // If the secret key specified by the client doesn't match the
@@ -879,7 +880,7 @@ impl Coordinator {
 
     /// Unconditionally instructs the dataflow layer to cancel any ongoing,
     /// interactive work for the named `conn_id`.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         // Cancel pending writes. There is at most one pending write per session.
         let mut maybe_ctx = None;
@@ -936,7 +937,7 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
         if self.active_conns.get(&conn_id).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
@@ -972,7 +973,7 @@ impl Coordinator {
 
     /// Returns the necessary metadata for appending to a webhook source, and a channel to send
     /// rows.
-    #[tracing::instrument(level = "debug", skip(self, tx))]
+    #[mz_ore::instrument(level = "debug")]
     fn handle_get_webhook(
         &mut self,
         database: String,
