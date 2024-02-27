@@ -558,6 +558,7 @@ pub struct CreateIndexExplain {
 pub enum CreateViewStage {
     Optimize(CreateViewOptimize),
     Finish(CreateViewFinish),
+    Explain(CreateViewExplain),
 }
 
 #[derive(Debug)]
@@ -565,6 +566,9 @@ pub struct CreateViewOptimize {
     validity: PlanValidity,
     plan: plan::CreateViewPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -574,6 +578,14 @@ pub struct CreateViewFinish {
     plan: plan::CreateViewPlan,
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
+}
+
+#[derive(Debug)]
+pub struct CreateViewExplain {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateViewPlan,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
