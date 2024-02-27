@@ -37,6 +37,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
+use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OverrideFrom};
@@ -211,7 +212,7 @@ impl Coordinator {
         let plan::Explainee::MaterializedView(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::MaterializedView(_) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
@@ -225,6 +226,18 @@ impl Coordinator {
         };
 
         let explain = match stage {
+            ExplainStage::RawPlan => explain_plan(
+                view.raw_expr.clone(),
+                format,
+                &config,
+                &self.catalog().for_session(ctx.session()),
+            )?,
+            ExplainStage::LocalPlan => explain_plan(
+                view.optimized_expr.as_inner().clone(),
+                format,
+                &config,
+                &self.catalog().for_session(ctx.session()),
+            )?,
             ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
