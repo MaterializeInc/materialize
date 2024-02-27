@@ -7295,7 +7295,18 @@ impl<'a> Parser<'a> {
         } else {
             let broken = self.parse_keyword(BROKEN);
 
-            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
+            if self.peek_keywords(&[CREATE, VIEW])
+                || self.peek_keywords(&[CREATE, OR, REPLACE, VIEW])
+            {
+                // Parse: `BROKEN? CREATE [OR REPLACE] VIEW ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_view()? {
+                    Statement::CreateView(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+
+                Explainee::CreateView(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
                 || self.peek_keywords(&[CREATE, OR, REPLACE, MATERIALIZED, VIEW])
             {
                 // Parse: `BROKEN? CREATE [OR REPLACE] MATERIALIZED VIEW ...`
@@ -7332,6 +7343,7 @@ impl<'a> Parser<'a> {
         let (expect_for, stage) = match self.parse_one_of_keywords(&[
             RAW,
             DECORRELATED,
+            LOCALLY,
             OPTIMIZED,
             PHYSICAL,
             OPTIMIZER,
@@ -7344,6 +7356,10 @@ impl<'a> Parser<'a> {
             Some(DECORRELATED) => {
                 self.expect_keyword(PLAN)?;
                 (true, Some(ExplainStage::DecorrelatedPlan))
+            }
+            Some(LOCALLY) => {
+                self.expect_keywords(&[OPTIMIZED, PLAN])?;
+                (true, Some(ExplainStage::LocalPlan))
             }
             Some(OPTIMIZED) => {
                 self.expect_keyword(PLAN)?;

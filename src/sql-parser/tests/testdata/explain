@@ -89,6 +89,13 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN VIEW foo
 ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: ReplanView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
+EXPLAIN PLAN FOR REPLAN VIEW foo
+----
+EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR REPLAN VIEW foo
+=>
+ExplainPlan(ExplainPlanStatement { stage: LocalPlan, with_options: [], format: Text, explainee: ReplanView(Name(UnresolvedItemName([Ident("foo")]))) })
+
+parse-statement
 EXPLAIN OPTIMIZED PLAN FOR REPLAN MATERIALIZED VIEW foo
 ----
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN MATERIALIZED VIEW foo
@@ -101,6 +108,13 @@ EXPLAIN OPTIMIZED PLAN FOR REPLAN INDEX foo
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR REPLAN INDEX foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: GlobalPlan, with_options: [], format: Text, explainee: ReplanIndex(Name(UnresolvedItemName([Ident("foo")]))) })
+
+parse-statement
+EXPLAIN PLAN FOR VIEW foo
+----
+EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR VIEW foo
+=>
+ExplainPlan(ExplainPlanStatement { stage: LocalPlan, with_options: [], format: Text, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN WITH(types) FOR VIEW foo
@@ -160,6 +174,20 @@ EXPLAIN OPTIMIZER TRACE WITH (TYPES) AS TEXT FOR BROKEN SELECT 1 + 1
 ExplainPlan(ExplainPlanStatement { stage: Trace, with_options: [ExplainPlanOption { name: Types, value: None }], format: Text, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, true) })
 
 # TODO (aalexandrov): Add negative tests for new explain API.
+
+parse-statement
+EXPLAIN CREATE VIEW mv AS SELECT 665
+----
+EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR CREATE VIEW mv AS SELECT 665
+=>
+ExplainPlan(ExplainPlanStatement { stage: LocalPlan, with_options: [], format: Text, explainee: CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
+
+parse-statement
+EXPLAIN CREATE OR REPLACE VIEW mv AS SELECT 665
+----
+EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR CREATE OR REPLACE VIEW mv AS SELECT 665
+=>
+ExplainPlan(ExplainPlanStatement { stage: LocalPlan, with_options: [], format: Text, explainee: CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
 
 parse-statement
 EXPLAIN WITH (humanized expressions) CREATE MATERIALIZED VIEW mv AS SELECT 665
