@@ -1915,7 +1915,7 @@ impl Coordinator {
         };
 
         let explain = match stage {
-            ExplainStage::OptimizedPlan => {
+            ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
@@ -1974,7 +1974,7 @@ impl Coordinator {
         };
 
         let explain = match stage {
-            ExplainStage::OptimizedPlan => {
+            ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");

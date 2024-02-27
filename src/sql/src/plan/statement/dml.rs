@@ -255,20 +255,21 @@ pub fn describe_explain_plan(
 
     match stage {
         ExplainStage::RawPlan => {
-            relation_desc =
-                relation_desc.with_column("Raw Plan", ScalarType::String.nullable(false));
+            let name = "Raw Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::DecorrelatedPlan => {
-            relation_desc =
-                relation_desc.with_column("Decorrelated Plan", ScalarType::String.nullable(false));
+            let name = "Decorrelated Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
-        ExplainStage::OptimizedPlan => {
-            relation_desc =
-                relation_desc.with_column("Optimized Plan", ScalarType::String.nullable(false));
+        }
+        ExplainStage::GlobalPlan => {
+            let name = "Optimized Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::PhysicalPlan => {
-            relation_desc =
-                relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
+            let name = "Physical Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::Trace => {
             relation_desc = relation_desc
