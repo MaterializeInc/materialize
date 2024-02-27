@@ -407,30 +407,14 @@ impl Coordinator {
 
         match linearized_timeline {
             Some(timeline) => {
-                let shared_oracle = self.get_shared_timestamp_oracle(&timeline);
+                let oracle = self.get_timestamp_oracle(&timeline);
 
-                if let Some(shared_oracle) = shared_oracle {
-                    // We can do it in an async task, because we can ship off
-                    // the timetamp oracle.
+                // We ship the timestamp oracle off to an async task, so that we
+                // don't block the main task while we wait.
 
-                    let span = tracing::debug_span!("linearized timestamp task");
-                    mz_ore::task::spawn(|| "linearized timestamp task", async move {
-                        let oracle_read_ts = shared_oracle.read_ts().instrument(span).await;
-                        let stage = build_stage(Some(oracle_read_ts));
-
-                        let stage = PeekStage::RealTimeRecency(stage);
-                        // Ignore errors if the coordinator has shut down.
-                        let _ = internal_cmd_tx.send(Message::PeekStageReady {
-                            ctx,
-                            otel_ctx: root_otel_ctx,
-                            stage,
-                        });
-                    });
-                } else {
-                    // Timestamp oracle can't be shipped to an async task, we
-                    // have to do it here.
-                    let oracle = self.get_timestamp_oracle(&timeline);
-                    let oracle_read_ts = oracle.read_ts().await;
+                let span = tracing::debug_span!("linearized timestamp task");
+                mz_ore::task::spawn(|| "linearized timestamp task", async move {
+                    let oracle_read_ts = oracle.read_ts().instrument(span).await;
                     let stage = build_stage(Some(oracle_read_ts));
 
                     let stage = PeekStage::RealTimeRecency(stage);
@@ -440,7 +424,7 @@ impl Coordinator {
                         otel_ctx: root_otel_ctx,
                         stage,
                     });
-                }
+                });
             }
             None => {
                 let stage = build_stage(None);

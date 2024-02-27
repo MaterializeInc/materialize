@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A timestamp oracle that wraps a `ShareableTimestampOracle` and batches calls
+//! A timestamp oracle that wraps a `TimestampOracle` and batches calls
 //! to it.
 
 use std::sync::Arc;
@@ -18,9 +18,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use crate::metrics::Metrics;
-use crate::{ShareableTimestampOracle, TimestampOracle, WriteTimestamp};
+use crate::{TimestampOracle, WriteTimestamp};
 
-/// A batching [`TimestampOracle`] backed by a [`ShareableTimestampOracle`]
+/// A batching [`TimestampOracle`] backed by a [`TimestampOracle`]
 ///
 /// This will only batch calls to `read_ts` because the rest of the system
 /// already naturally does batching of write-related calls via the group commit
@@ -33,7 +33,7 @@ use crate::{ShareableTimestampOracle, TimestampOracle, WriteTimestamp};
 /// can only make it so that we return later timestamps. Those later timestamps
 /// still fall within the duration of the `read_ts` call and so are linearized.
 pub struct BatchingTimestampOracle<T> {
-    inner: Arc<dyn ShareableTimestampOracle<T> + Send + Sync>,
+    inner: Arc<dyn TimestampOracle<T> + Send + Sync>,
     command_tx: UnboundedSender<Command<T>>,
 }
 
@@ -53,10 +53,7 @@ where
     T: Clone + Send + Sync + 'static,
 {
     /// Crates a [`BatchingTimestampOracle`] that uses the given inner oracle.
-    pub fn new(
-        metrics: Arc<Metrics>,
-        oracle: Arc<dyn ShareableTimestampOracle<T> + Send + Sync>,
-    ) -> Self {
+    pub fn new(metrics: Arc<Metrics>, oracle: Arc<dyn TimestampOracle<T> + Send + Sync>) -> Self {
         let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let task_oracle = Arc::clone(&oracle);
@@ -100,7 +97,7 @@ where
 }
 
 #[async_trait]
-impl<T> ShareableTimestampOracle<T> for BatchingTimestampOracle<T>
+impl<T> TimestampOracle<T> for BatchingTimestampOracle<T>
 where
     T: Send + Sync,
 {
@@ -128,47 +125,11 @@ where
     }
 }
 
-#[async_trait(?Send)]
-impl<T> TimestampOracle<T> for BatchingTimestampOracle<T>
-where
-    T: Send + Sync + 'static,
-{
-    #[mz_ore::instrument(name = "oracle::write_ts", level = "debug")]
-    async fn write_ts(&mut self) -> WriteTimestamp<T> {
-        ShareableTimestampOracle::write_ts(self).await
-    }
-
-    #[mz_ore::instrument(name = "oracle::peek_write_ts", level = "debug")]
-    async fn peek_write_ts(&self) -> T {
-        ShareableTimestampOracle::peek_write_ts(self).await
-    }
-
-    #[mz_ore::instrument(name = "oracle::read_ts", level = "debug")]
-    async fn read_ts(&self) -> T {
-        ShareableTimestampOracle::read_ts(self).await
-    }
-
-    #[mz_ore::instrument(name = "oracle::apply_write", level = "debug")]
-    async fn apply_write(&mut self, write_ts: T) {
-        ShareableTimestampOracle::apply_write(self, write_ts).await
-    }
-
-    fn get_shared(&self) -> Option<Arc<dyn ShareableTimestampOracle<T> + Send + Sync>> {
-        let inner: Arc<dyn ShareableTimestampOracle<T> + Send + Sync> = Arc::clone(&self.inner);
-        let shallow_clone = Self {
-            inner,
-            command_tx: self.command_tx.clone(),
-        };
-
-        Some(Arc::new(shallow_clone))
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
-    use futures::FutureExt;
     use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::Timestamp;
     use tracing::info;
 
     use crate::postgres_oracle::{PostgresTimestampOracle, PostgresTimestampOracleConfig};
@@ -191,58 +152,22 @@ mod tests {
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
         crate::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
-            // We use the postgres oracle as the backing oracle because it's
-            // the only shareable oracle we have.
-            let oracle =
-                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn).map(
-                    |oracle| {
-                        let shared_oracle = oracle.get_shared().expect("known to be shareable");
-                        let batching_oracle =
-                            BatchingTimestampOracle::new(Arc::clone(&metrics), shared_oracle);
+            // We use the postgres oracle as the backing oracle.
+            let pg_oracle =
+                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
 
-                        batching_oracle
-                    },
-                );
+            async {
+                let arced_pg_oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
+                    Arc::new(pg_oracle.await);
 
-            oracle
-        })
-        .await?;
+                let batching_oracle =
+                    BatchingTimestampOracle::new(Arc::clone(&metrics), arced_pg_oracle);
 
-        Ok(())
-    }
+                let arced_oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
+                    Arc::new(batching_oracle);
 
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    async fn test_shareable_batching_timestamp_oracle() -> Result<(), anyhow::Error> {
-        let config = match PostgresTimestampOracleConfig::new_for_test() {
-            Some(config) => config,
-            None => {
-                info!(
-                    "{} env not set: skipping test that uses external service",
-                    PostgresTimestampOracleConfig::EXTERNAL_TESTS_POSTGRES_URL
-                );
-                return Ok(());
+                arced_oracle
             }
-        };
-        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-
-        crate::tests::shareable_timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
-            // We use the postgres oracle as the backing oracle because it's
-            // the only shareable oracle we have.
-            let oracle =
-                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn)
-                    .map(|oracle| {
-                        let shared_oracle = oracle.get_shared().expect("known to be shareable");
-                        let batching_oracle =
-                            BatchingTimestampOracle::new(Arc::clone(&metrics), shared_oracle);
-
-                        batching_oracle
-                    })
-                    .map(|batching_oracle| {
-                        batching_oracle.get_shared().expect("known to be shareable")
-                    });
-
-            oracle
         })
         .await?;
 
