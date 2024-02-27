@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
@@ -33,13 +34,10 @@ use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
 use mz_timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle, WriteTimestamp};
+use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{debug, error, info, Instrument};
 
-use crate::coord::catalog_oracle::{
-    self, CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
-    TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
-};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
@@ -169,11 +167,12 @@ impl Coordinator {
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
         let now = self.now().into();
 
-        if timestamp > catalog_oracle::upper_bound(&now) {
+        let upper_bound = upper_bound(&now);
+        if timestamp > upper_bound {
             error!(
+                %now,
                 "Setting local read timestamp to {timestamp}, which is more than \
-                {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
-                *TIMESTAMP_PERSIST_INTERVAL
+                the desired upper bound {upper_bound}."
             );
         }
         self.global_timelines
@@ -195,11 +194,12 @@ impl Coordinator {
     ) -> Option<impl Future<Output = ()> + Send + 'static> {
         let now = self.now().into();
 
-        if timestamp > catalog_oracle::upper_bound(&now) {
+        let upper_bound = upper_bound(&now);
+        if timestamp > upper_bound {
             error!(
+                %now,
                 "Setting local read timestamp to {timestamp}, which is more than \
-                {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
-                *TIMESTAMP_PERSIST_INTERVAL
+                the desired upper bound {upper_bound}."
             );
         }
 
@@ -217,15 +217,11 @@ impl Coordinator {
         &'a mut self,
         timeline: &'a Timeline,
     ) -> &mut TimelineState<Timestamp> {
-        let catalog = Arc::clone(&self.catalog);
-        let timestamp_persistence = CatalogTimestampPersistence::new(timeline.clone(), catalog);
-
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
             self.timestamp_oracle_impl,
-            timestamp_persistence,
             self.pg_timestamp_oracle_config.clone(),
             &mut self.global_timelines,
         )
@@ -235,18 +231,14 @@ impl Coordinator {
     /// Ensures that a global timeline state exists for `timeline`, with an initial time
     /// of `initially`.
     #[instrument]
-    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, P>(
+    pub(crate) async fn ensure_timeline_state_with_initial_time<'a>(
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
         timestamp_oracle_impl: TimestampOracleImpl,
-        timestamp_persistence: P,
         pg_oracle_config: Option<PostgresTimestampOracleConfig>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
-    ) -> &'a mut TimelineState<Timestamp>
-    where
-        P: TimestampPersistence<mz_repr::Timestamp> + 'static,
-    {
+    ) -> &'a mut TimelineState<Timestamp> {
         if !global_timelines.contains_key(timeline) {
             info!(
                 "opening a new {:?} TimestampOracle for timeline {:?}",
@@ -293,19 +285,6 @@ impl Coordinator {
 
                     let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> =
                         Box::new(batching_oracle);
-
-                    oracle
-                }
-                TimestampOracleImpl::Catalog => {
-                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
-                        CatalogTimestampOracle::new(
-                            initially,
-                            now_fn,
-                            *TIMESTAMP_PERSIST_INTERVAL,
-                            timestamp_persistence,
-                        )
-                        .await,
-                    );
 
                     oracle
                 }
@@ -730,4 +709,21 @@ impl Coordinator {
                 .insert(timeline, TimelineState { oracle, read_holds });
         }
     }
+}
+
+/// Convenience function for calculating the current upper bound that we want to
+/// prevent the global timestamp from exceeding.
+fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
+    const TIMESTAMP_INTERVAL: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
+        Duration::from_secs(5)
+            .as_millis()
+            .try_into()
+            .expect("5 seconds can fit into `Timestamp`")
+    });
+
+    const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
+
+    now.saturating_add(
+        TIMESTAMP_INTERVAL.saturating_mul(Timestamp::from(TIMESTAMP_INTERVAL_UPPER_BOUND)),
+    )
 }

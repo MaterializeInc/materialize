@@ -25,7 +25,6 @@ use mz_repr::GlobalId;
 use mz_sql::session::vars::CatalogKind;
 use mz_stash::DebugStashFactory;
 use mz_storage_types::controller::PersistTxnTablesImpl;
-use mz_storage_types::sources::Timeline;
 use uuid::Uuid;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
@@ -200,10 +199,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
 
-    /// Get all timelines and their persisted timestamps.
-    // TODO(jkosh44) This should be removed once the timestamp oracle is extracted.
-    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError>;
-
     /// Get all audit log events.
     ///
     /// Results are guaranteed to be sorted by ID.
@@ -279,13 +274,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         boot_ts: mz_repr::Timestamp,
         wait_for_consolidation: bool,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
-
-    /// Persist new global timestamp for a timeline.
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError>;

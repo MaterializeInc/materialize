@@ -1062,20 +1062,17 @@ impl Value for IntervalStyle {
 pub enum TimestampOracleImpl {
     /// Timestamp oracle backed by Postgres/CRDB.
     Postgres,
-    /// Legacy, in-memory oracle backed by Catalog/Stash.
-    Catalog,
 }
 
 impl TimestampOracleImpl {
     fn as_str(&self) -> &'static str {
         match self {
             TimestampOracleImpl::Postgres => "postgres",
-            TimestampOracleImpl::Catalog => "catalog",
         }
     }
 
     fn valid_values() -> Vec<&'static str> {
-        vec![Self::Postgres.as_str(), Self::Catalog.as_str()]
+        vec![Self::Postgres.as_str()]
     }
 }
 
@@ -1096,8 +1093,6 @@ impl Value for TimestampOracleImpl {
 
         if s == TimestampOracleImpl::Postgres.as_str() {
             Ok(TimestampOracleImpl::Postgres)
-        } else if s == TimestampOracleImpl::Catalog.as_str() {
-            Ok(TimestampOracleImpl::Catalog)
         } else {
             Err(VarParseError::ConstrainedParameter {
                 invalid_values: input.to_vec(),

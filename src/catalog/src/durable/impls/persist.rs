@@ -42,7 +42,7 @@ use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_sql::session::vars::CatalogKind;
 use mz_storage_types::controller::PersistTxnTablesImpl;
-use mz_storage_types::sources::{SourceData, Timeline};
+use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, error, info};
@@ -57,12 +57,12 @@ use crate::durable::initialize::{
     USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
-use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
+use crate::durable::objects::{AuditLogKey, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::persist::upgrade;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, ReadOnlyDurableCatalogState, TimelineTimestamp, Transaction,
+    OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
 };
 
 /// New-type used to represent timestamps in persist.
@@ -1156,20 +1156,6 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
-        self.with_snapshot(|snapshot| {
-            Ok(snapshot
-                .timestamps
-                .clone()
-                .into_iter()
-                .map(RustType::from_proto)
-                .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
-                .collect::<Result<_, _>>()?)
-        })
-        .await
-    }
-
-    #[mz_ore::instrument(level = "debug")]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.sync_to_current_upper().await?;
         let audit_logs = match self.audit_logs.take() {
@@ -1448,17 +1434,6 @@ impl DurableCatalogState for PersistCatalogState {
         }
 
         Ok(events)
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError> {
-        let mut txn = self.transaction().await?;
-        txn.set_timestamp(timeline.clone(), timestamp)?;
-        txn.commit().await
     }
 
     #[mz_ore::instrument(level = "debug")]
