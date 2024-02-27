@@ -1579,6 +1579,94 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_try_parse_monotonic_iso8601_timestamp() {
+        use chrono::NaiveDateTime;
+
+        let arena = RowArena::new();
+
+        let expr = MirScalarExpr::CallUnary {
+            func: UnaryFunc::TryParseMonotonicIso8601Timestamp(TryParseMonotonicIso8601Timestamp),
+            expr: Box::new(MirScalarExpr::Column(0)),
+        };
+
+        let relation = RelationType::new(vec![ScalarType::String.nullable(true)]);
+        // Test the case where we have full timestamps as bounds.
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::String("2024-01-11T00:00:00.000Z"),
+                Datum::String("2024-01-11T20:00:00.000Z"),
+            ),
+        );
+
+        let timestamp = |ts| {
+            Datum::Timestamp(
+                NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S")
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            )
+        };
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.fallible);
+        assert!(range_out.nullable);
+        assert!(!range_out.may_contain(timestamp("2024-01-10T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-11T10:00:00")));
+        assert!(!range_out.may_contain(timestamp("2024-01-12T10:00:00")));
+
+        // Test the case where we have truncated / useless bounds.
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(Datum::String("2024-01-1"), Datum::String("2024-01-2")),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.fallible);
+        assert!(range_out.nullable);
+        assert!(range_out.may_contain(timestamp("2024-01-10T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-11T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-12T10:00:00")));
+
+        // Test the case where only one bound is truncated
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::String("2024-01-1"),
+                Datum::String("2024-01-12T10:00:00"),
+            )
+            .union(ResultSpec::null()),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.fallible);
+        assert!(range_out.nullable);
+        assert!(range_out.may_contain(timestamp("2024-01-10T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-11T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-12T10:00:00")));
+
+        // Test the case where the upper and lower bound are identical
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::String("2024-01-11T10:00:00.000Z"),
+                Datum::String("2024-01-11T10:00:00.000Z"),
+            ),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.fallible);
+        assert!(!range_out.nullable);
+        assert!(!range_out.may_contain(timestamp("2024-01-10T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-11T10:00:00")));
+        assert!(!range_out.may_contain(timestamp("2024-01-12T10:00:00")));
+    }
+
+    #[mz_ore::test]
     fn test_inequality() {
         let arena = RowArena::new();
 
