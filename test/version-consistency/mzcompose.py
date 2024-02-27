@@ -13,12 +13,14 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
+from materialize.version_ancestor_overrides import (
+    ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
+)
 from materialize.version_consistency.version_consistency_test import (
     EVALUATION_STRATEGY_NAMES,
     VersionConsistencyTest,
 )
 from materialize.version_list import (
-    ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
     resolve_ancestor_image_tag,
 )
 

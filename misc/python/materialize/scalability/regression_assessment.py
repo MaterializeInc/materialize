@@ -15,8 +15,10 @@ from materialize.docker import (
 from materialize.mz_version import MzVersion
 from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.endpoint import Endpoint
-from materialize.version_list import (
+from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
+)
+from materialize.version_list import (
     get_commits_of_accepted_regressions_between_versions,
 )
 

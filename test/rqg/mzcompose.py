@@ -19,8 +19,10 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.rqg import RQG
-from materialize.version_list import (
+from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
+)
+from materialize.version_list import (
     resolve_ancestor_image_tag,
 )
 
