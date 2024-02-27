@@ -219,10 +219,8 @@ impl CopyToS3Uploader {
         let bucket = uri.host().expect("s3 bucket");
         let path = uri
             .path()
-            .strip_prefix('/')
-            .expect("s3 path")
-            .strip_suffix('/')
-            .expect("s3 path");
+            .trim_start_matches('/')
+            .trim_end_matches('/');
         (bucket.to_string(), path.to_string())
     }
 

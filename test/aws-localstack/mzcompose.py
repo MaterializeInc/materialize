@@ -25,6 +25,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
+import uuid
 
 ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
 NAMESPACE = ENVIRONMENT_NAME
@@ -212,4 +213,23 @@ def workflow_aws_connection(c: Composition) -> None:
 
 def workflow_copy_to_s3(c: Composition) -> None:
     c.up("localstack", "materialized")
-    c.run_testdrive_files("copy-to-s3/copy-to-s3.td")
+    aws_endpoint_url = f"http://localhost:{c.port('localstack', 4566)}"
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=aws_endpoint_url,
+        region_name=DEFAULT_CLOUD_REGION,
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    )
+    bucket_name = "copy-to-s3"
+    s3_client.create_bucket(Bucket=bucket_name)
+    path_prefix = f"{bucket_name}/{str(uuid.uuid4())}"
+    c.run_testdrive_files(
+        f"--var=endpoint={aws_endpoint_url}",
+        f"--var=access-key={AWS_ACCESS_KEY_ID}",
+        f"--var=secret-key={AWS_SECRET_ACCESS_KEY}",
+        f"--var=s3-prefix={path_prefix}",
+        "copy-to-s3/copy-to-s3.td",
+    )
+    list_response = s3_client.list_objects(Bucket=bucket_name, Prefix=path_prefix)
+    print(list_response)
