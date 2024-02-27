@@ -1,6 +1,52 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.7.4 - 2024-02-27
+
+* Add macros to automate blue/green deployments, which help minimize downtime
+  when deploying changes to the definition of objects in Materialize to
+  production environments:
+
+  * `deploy_init(ignore_existing_objects)`: creates the deployment schemas and
+    clusters using the same configuration as the corresponding production
+    environment to swap with.
+
+  * `deploy_await(poll_interval)`: waits for all objects within the deployment
+    clusters to be fully hydrated, polling the cluster readiness status at a
+    specified `poll_interval`.
+
+  * `deploy_promote`: deploys the current dbt targets to the production
+    environment, encuring all deployment targets, including schemas and
+    clusters, are fully hydrated and deployed together as a single atomic
+    operation. If any part of the deployment fails, the entire deployment is
+    rolled back to maintain consistency and prevent partial updates.
+
+  * `deploy_cleanup`: tears down the deployment schemas and clusters.
+
+  **Sample workflow**
+
+  ```yaml
+  # dbt_project.yml
+  vars:
+  deployment:
+    default:
+      clusters: ["prod"]
+      schemas: ["prod "]
+  ```
+
+  ```bash
+  dbt run-operation deploy_init
+  dbt run --vars 'deploy: True'
+  # deploy_await can run automatically by specifying deploy_promote
+  # (wait=True), but we recommend running this step manually and running
+  # validation checks before promoting.
+  dbt run-operation deploy_await
+  dbt run-operation deploy_promote
+  dbt run-operation deploy_cleanup
+  ```
+
+  In this version, the blue/green deployment workflow will fail if sources or
+  sinks exist in the schemas or cluster to swap. This might change in a future
+  release.
 
 * Revert backport of [dbt-core #8887](https://github.com/dbt-labs/dbt-core/pull/8887),
   which shipped with[dbt v1.7.6](https://github.com/dbt-labs/dbt-core/releases/tag/v1.7.6).
