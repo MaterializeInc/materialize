@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+
 use itertools::Itertools;
 use uncased::UncasedStr;
 
@@ -15,18 +17,20 @@ use mz_ore::str::StrExt;
 use crate::session::vars::Var;
 
 /// Errors that can occur when working with [`Var`]s
+///
+/// [`Var`]: crate::session::vars::Var
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum VarError {
-    /// The specified session parameter is constrained to a finite set of
-    /// values.
+    /// The specified session parameter is constrained to a finite set of values.
     #[error(
         "invalid value for parameter {}: {}",
-        parameter.name.quoted(),
-        values.iter().map(|v| v.quoted()).join(",")
+        name.quoted(),
+        invalid_values.iter().map(|v| v.quoted()).join(",")
     )]
     ConstrainedParameter {
-        parameter: VarErrParam,
-        values: Vec<String>,
+        /// Name of the parameter.
+        name: &'static str,
+        invalid_values: Vec<String>,
         valid_values: Option<Vec<&'static str>>,
     },
     /// The specified parameter is fixed to a single specific value.
@@ -35,22 +39,32 @@ pub enum VarError {
     /// with PostgreSQL-based tools.
     #[error(
         "parameter {} can only be set to {}",
-        .0.name.quoted(),
-        .0.value.quoted(),
+        name.quoted(),
+        value.quoted(),
     )]
-    FixedValueParameter(VarErrParam),
+    FixedValueParameter {
+        /// Name of the parameter.
+        name: &'static str,
+        /// The value the parameter is fixed at.
+        value: String,
+    },
     /// The value for the specified parameter does not have the right type.
     #[error(
         "parameter {} requires a {} value",
-        .0.name.quoted(),
-        .0.type_name.quoted()
+        name.quoted(),
+        required_type.quoted()
     )]
-    InvalidParameterType(VarErrParam),
+    InvalidParameterType {
+        /// Name of the parameter.
+        name: &'static str,
+        /// Required type of the parameter.
+        required_type: Cow<'static, str>,
+    },
     /// The value of the specified parameter is incorrect.
     #[error(
         "parameter {} cannot have value {}: {}",
-        parameter.name.quoted(),
-        values
+        name.quoted(),
+        invalid_values
             .iter()
             .map(|v| v.quoted().to_string())
             .collect::<Vec<_>>()
@@ -58,8 +72,11 @@ pub enum VarError {
         reason,
     )]
     InvalidParameterValue {
-        parameter: VarErrParam,
-        values: Vec<String>,
+        /// Name of the parameter.
+        name: &'static str,
+        /// Invalid values.
+        invalid_values: Vec<String>,
+        /// Reason the values are invalid.
         reason: String,
     },
     /// The specified session parameter is read only.
@@ -108,21 +125,60 @@ impl VarError {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-/// We don't want to hold a static reference to a variable while erroring, so take an owned version
-/// of the fields we want.
-pub struct VarErrParam {
-    name: &'static str,
-    value: String,
-    type_name: String,
+/// Errors that can occur when parsing [`VarInput`].
+///
+/// Note: This exists as a separate type from [`VarError`] because [`VarError`] wants to know about
+/// the [`Var`] we're parsing. We could provide this info to [`Value::parse`] but it's simpler to
+/// later enrich with [`VarParseError::into_var_error`].
+///
+/// [`VarInput`]: crate::session::vars::VarInput
+/// [`Value::parse`]: crate::session::vars::value::Value::parse
+#[derive(Debug)]
+pub enum VarParseError {
+    /// Minimal version of [`VarError::ConstrainedParameter`].
+    ConstrainedParameter {
+        invalid_values: Vec<String>,
+        valid_values: Option<Vec<&'static str>>,
+    },
+    /// Minimal version of [`VarError::FixedValueParameter`].
+    FixedValueParameter,
+    /// Minimal version of [`VarError::InvalidParameterType`].
+    InvalidParameterType,
+    /// Minimal version of [`VarError::InvalidParameterValue`].
+    InvalidParameterValue {
+        invalid_values: Vec<String>,
+        reason: String,
+    },
 }
 
-impl<'a, V: Var + Send + Sync + ?Sized> From<&'a V> for VarErrParam {
-    fn from(var: &'a V) -> VarErrParam {
-        VarErrParam {
-            name: var.name(),
-            value: var.value(),
-            type_name: var.type_name(),
+impl VarParseError {
+    /// Enrich this [`VarParseError`] with information about the [`Var`] we parsed.
+    pub fn into_var_error(self, var: &dyn Var) -> VarError {
+        match self {
+            VarParseError::ConstrainedParameter {
+                invalid_values,
+                valid_values,
+            } => VarError::ConstrainedParameter {
+                name: var.name(),
+                invalid_values,
+                valid_values,
+            },
+            VarParseError::FixedValueParameter => VarError::FixedValueParameter {
+                name: var.name(),
+                value: var.value(),
+            },
+            VarParseError::InvalidParameterType => VarError::InvalidParameterType {
+                name: var.name(),
+                required_type: var.type_name().into(),
+            },
+            VarParseError::InvalidParameterValue {
+                invalid_values,
+                reason,
+            } => VarError::InvalidParameterValue {
+                name: var.name(),
+                invalid_values,
+                reason,
+            },
         }
     }
 }

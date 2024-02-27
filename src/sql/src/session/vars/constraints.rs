@@ -9,42 +9,43 @@
 
 //! Defines constraints that can be imposed on variables.
 
-use std::borrow::Borrow;
 use std::fmt::Debug;
-use std::ops::RangeBounds;
+use std::ops::{RangeBounds, RangeInclusive};
 
 use mz_repr::adt::numeric::Numeric;
 
 use super::{Value, Var, VarError};
 
+pub static NUMERIC_NON_NEGATIVE: NumericNonNegNonNan = NumericNonNegNonNan;
+
+pub static NUMERIC_BOUNDED_0_1_INCLUSIVE: NumericInRange<RangeInclusive<f64>> =
+    NumericInRange(0.0f64..=1.0);
+
 #[derive(Debug)]
-pub enum ValueConstraint<V>
-where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
-{
+pub enum ValueConstraint {
     /// Variable is read-only and cannot be updated.
     ReadOnly,
     /// The variables value can be updated, but only to a fixed value.
     Fixed,
     // Arbitrary constraints over values.
-    Domain(&'static dyn DomainConstraint<V>),
+    Domain(&'static dyn DynDomainConstraint),
 }
 
-impl<V> ValueConstraint<V>
-where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
-{
+impl ValueConstraint {
     pub fn check_constraint(
         &self,
-        var: &(dyn Var + Send + Sync),
-        cur_value: &V,
-        new_value: &V::Owned,
+        var: &dyn Var,
+        cur_value: &dyn Value,
+        new_value: &dyn Value,
     ) -> Result<(), VarError> {
         match self {
             ValueConstraint::ReadOnly => return Err(VarError::ReadOnlyParameter(var.name())),
             ValueConstraint::Fixed => {
-                if cur_value != new_value.borrow() {
-                    return Err(VarError::FixedValueParameter(var.into()));
+                if cur_value != new_value {
+                    return Err(VarError::FixedValueParameter {
+                        name: var.name(),
+                        value: cur_value.format().into(),
+                    });
                 }
             }
             ValueConstraint::Domain(check) => check.check(var, new_value)?,
@@ -54,10 +55,7 @@ where
     }
 }
 
-impl<V> Clone for ValueConstraint<V>
-where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
-{
+impl Clone for ValueConstraint {
     fn clone(&self) -> Self {
         match self {
             ValueConstraint::Fixed => ValueConstraint::Fixed,
@@ -67,23 +65,43 @@ where
     }
 }
 
-pub trait DomainConstraint<V>: Debug + Send + Sync
+/// A type erased version of [`DomainConstraint`] that we can reference on a [`VarDefinition`].
+///
+/// [`VarDefinition`]: crate::session::vars::definitions::VarDefinition
+pub trait DynDomainConstraint: Debug + Send + Sync + 'static {
+    fn check(&self, var: &dyn Var, v: &dyn Value) -> Result<(), VarError>;
+}
+
+impl<D> DynDomainConstraint for D
 where
-    V: Value + Debug + PartialEq + 'static,
+    D: DomainConstraint + Send + Sync + 'static,
+    D::Value: Value,
 {
-    // `self` is make a trait object
-    fn check(&self, var: &(dyn Var + Send + Sync), v: &V::Owned) -> Result<(), VarError>;
+    fn check(&self, var: &dyn Var, v: &dyn Value) -> Result<(), VarError> {
+        let val = v
+            .as_any()
+            .downcast_ref::<D::Value>()
+            .expect("type should match");
+        self.check(var, val)
+    }
+}
+pub trait DomainConstraint: Debug + Send + Sync + 'static {
+    type Value;
+
+    fn check(&self, var: &dyn Var, v: &Self::Value) -> Result<(), VarError>;
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NumericNonNegNonNan;
 
-impl DomainConstraint<Numeric> for NumericNonNegNonNan {
-    fn check(&self, var: &(dyn Var + Send + Sync), n: &Numeric) -> Result<(), VarError> {
+impl DomainConstraint for NumericNonNegNonNan {
+    type Value = Numeric;
+
+    fn check(&self, var: &dyn Var, n: &Numeric) -> Result<(), VarError> {
         if n.is_nan() || n.is_negative() {
             Err(VarError::InvalidParameterValue {
-                parameter: var.into(),
-                values: vec![n.to_string()],
+                name: var.name(),
+                invalid_values: vec![n.to_string()],
                 reason: "only supports non-negative, non-NaN numeric values".to_string(),
             })
         } else {
@@ -95,16 +113,18 @@ impl DomainConstraint<Numeric> for NumericNonNegNonNan {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NumericInRange<R>(pub R);
 
-impl<R> DomainConstraint<Numeric> for NumericInRange<R>
+impl<R> DomainConstraint for NumericInRange<R>
 where
-    R: RangeBounds<f64> + std::fmt::Debug + Send + Sync,
+    R: RangeBounds<f64> + std::fmt::Debug + Send + Sync + 'static,
 {
-    fn check(&self, var: &(dyn Var + Send + Sync), n: &Numeric) -> Result<(), VarError> {
+    type Value = Numeric;
+
+    fn check(&self, var: &dyn Var, n: &Numeric) -> Result<(), VarError> {
         let n: f64 = (*n)
             .try_into()
             .map_err(|_e| VarError::InvalidParameterValue {
-                parameter: var.into(),
-                values: vec![n.to_string()],
+                name: var.name(),
+                invalid_values: vec![n.to_string()],
                 // This first check can fail if the value is NaN, out of range,
                 // OR if it underflows (i.e. is very close to 0 without actually being 0, and the closest
                 // representable float is 0).
@@ -120,8 +140,8 @@ where
             })?;
         if !self.0.contains(&n) {
             Err(VarError::InvalidParameterValue {
-                parameter: var.into(),
-                values: vec![n.to_string()],
+                name: var.name(),
+                invalid_values: vec![n.to_string()],
                 reason: format!("only supports values in range {:?}", self.0),
             })
         } else {
