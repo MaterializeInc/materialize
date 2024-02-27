@@ -166,6 +166,7 @@ class SelectAction(Action):
             [
                 "in the same timedomain",
                 'is not allowed from the "mz_introspection" cluster',
+                "timed out before ingesting the source's visible frontier when real-time-recency query issued",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -225,8 +226,12 @@ class SelectAction(Action):
 
         query += " LIMIT 1"
 
+        if isinstance(obj, KafkaSource) and (not join or isinstance(obj2, KafkaSource)):
+            exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
         exe.execute(query, explainable=True)
         exe.cur.fetchall()
+        if isinstance(obj, KafkaSource) and (not join or isinstance(obj2, KafkaSource)):
+            exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
         return True
 
 

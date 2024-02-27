@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
@@ -214,6 +214,12 @@ pub enum AdapterError {
     /// A CREATE MATERIALIZED VIEW statement tried to acquire a read hold at a REFRESH AT time,
     /// but was unable to get a precise read hold.
     InputNotReadableAtRefreshAtTime(Timestamp, Vec<(Antichain<Timestamp>, CollectionIdBundle)>),
+    /// A humanized version of [`StorageError::RtrUnavailable`].
+    RtrUnavailable(BTreeSet<String>),
+    /// A humanized version of [`StorageError::RtrTimeout`].
+    RtrTimeout(String),
+    /// A humanized version of [`StorageError::RtrDropFailure`].
+    RtrDropFailure(String),
 }
 
 impl AdapterError {
@@ -330,6 +336,9 @@ impl AdapterError {
                     ).join("; "),
                 ))
             }
+            AdapterError::RtrUnavailable(names) => Some(format!("the following sources do not support real-time recency: {}", names.into_iter().join(", "))),
+            AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
+            AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
             _ => None,
         }
     }
@@ -508,6 +517,9 @@ impl AdapterError {
             // `DATA_EXCEPTION`, similarly to `AbsurdSubscribeBounds`.
             AdapterError::MaterializedViewWouldNeverRefresh(_, _) => SqlState::DATA_EXCEPTION,
             AdapterError::InputNotReadableAtRefreshAtTime(_, _) => SqlState::DATA_EXCEPTION,
+            AdapterError::RtrUnavailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::RtrTimeout(_) => SqlState::QUERY_CANCELED,
+            AdapterError::RtrDropFailure(_) => SqlState::UNDEFINED_OBJECT,
         }
     }
 
@@ -723,6 +735,16 @@ impl fmt::Display for AdapterError {
                     "REFRESH AT requested for a time where not all the inputs are readable"
                 )
             }
+            AdapterError::RtrUnavailable(_) => {
+                write!(f, "real-time recency unavailable for some sources in query")
+            }
+            AdapterError::RtrTimeout(_) => {
+                write!(f, "timed out before ingesting the source's visible frontier when real-time-recency query issued")
+            }
+            AdapterError::RtrDropFailure(_) => write!(
+                f,
+                "real-time source dropped before ingesting the upstream system's visible frontier"
+            ),
         }
     }
 }

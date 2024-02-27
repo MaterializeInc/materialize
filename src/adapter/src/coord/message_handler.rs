@@ -23,9 +23,10 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
+use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
-use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
@@ -810,7 +811,7 @@ impl Coordinator {
     async fn message_real_time_recency_timestamp(
         &mut self,
         conn_id: ConnectionId,
-        real_time_recency_ts: mz_repr::Timestamp,
+        real_time_recency_ts: Result<mz_repr::Timestamp, StorageError>,
         mut validity: PlanValidity,
     ) {
         let real_time_recency_context =
@@ -819,6 +820,39 @@ impl Coordinator {
                 // Query was cancelled while waiting.
                 None => return,
             };
+
+        let real_time_recency_ts = match real_time_recency_ts {
+            Ok(rtr) => rtr,
+            Err(e) => {
+                let ctx = real_time_recency_context.take_context();
+                let e = match e {
+                    // TODO: we should be able to generalize this conversion
+                    // from `GlobalId` to minimally qualified name string.
+                    StorageError::RtrTimeout(id) => {
+                        let session = ctx.session();
+                        let conn_catalog = self.catalog().for_session(session);
+                        let name = conn_catalog
+                            .minimal_qualification(conn_catalog.get_item(&id).name())
+                            .to_string();
+                        crate::AdapterError::RtrTimeout(name)
+                    }
+                    // TODO: we should be able to generalize this conversion
+                    // from `GlobalId` to minimally qualified name string.
+                    StorageError::RtrDropFailure(id) => {
+                        let session = ctx.session();
+                        let conn_catalog = self.catalog().for_session(session);
+                        let name = conn_catalog
+                            .minimal_qualification(conn_catalog.get_item(&id).name())
+                            .to_string();
+                        crate::AdapterError::RtrTimeout(name)
+                    }
+                    e => e.into(),
+                };
+
+                ctx.retire(Err(e));
+                return;
+            }
+        };
 
         if let Err(err) = validity.check(self.catalog()) {
             let ctx = real_time_recency_context.take_context();

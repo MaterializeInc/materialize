@@ -23,7 +23,12 @@ from materialize.data_ingest.definition import (
     RecordSize,
     Upsert,
 )
-from materialize.data_ingest.executor import PgExecutor, PrintExecutor
+from materialize.data_ingest.executor import (
+    KafkaExecutor,
+    KafkaRoundtripExecutor,
+    PgExecutor,
+    PrintExecutor,
+)
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
 from materialize.data_ingest.transaction_def import (
@@ -203,8 +208,16 @@ def execute_workload(
         while sleep_time < 60:
             conn.autocommit = True
             with conn.cursor() as cur:
+                if isinstance(executor, KafkaExecutor) or isinstance(
+                    executor, KafkaRoundtripExecutor
+                ):
+                    cur.execute("SET REAL_TIME_RECENCY TO TRUE")
                 cur.execute(f"SELECT * FROM {executor.table} ORDER BY {order_str}")
                 actual_result = cur.fetchall()
+                if isinstance(executor, KafkaExecutor) or isinstance(
+                    executor, KafkaRoundtripExecutor
+                ):
+                    cur.execute("SET REAL_TIME_RECENCY TO FALSE")
             conn.autocommit = False
             if actual_result == expected_result:
                 if correct_once:
@@ -217,6 +230,9 @@ def execute_workload(
                 continue
             else:
                 print(f"Unexpected ({type(executor).__name__}): {actual_result}")
+                assert not isinstance(executor, KafkaExecutor) and not isinstance(
+                    executor, KafkaRoundtripExecutor
+                )
             print(f"Results don't match, sleeping for {sleep_time}s")
             time.sleep(sleep_time)
             sleep_time *= 2
