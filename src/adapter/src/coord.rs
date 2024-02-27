@@ -434,10 +434,10 @@ pub struct PeekStageValidate {
     /// sequencing a COPY TO statement.
     ///
     /// Will result in creating and using [`optimize::copy_to::Optimizer`] in
-    /// the `opimizer` field of all subsequent stages.
+    /// the `optimizer` field of all subsequent stages.
     copy_to_ctx: Option<CopyToContext>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -450,7 +450,7 @@ pub struct PeekStageLinearizeTimestamp {
     timeline_context: TimelineContext,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -464,7 +464,7 @@ pub struct PeekStageRealTimeRecency {
     oracle_read_ts: Option<Timestamp>,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -479,7 +479,7 @@ pub struct PeekStageTimestampReadHold {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -493,7 +493,7 @@ pub struct PeekStageOptimize {
     determination: TimestampDetermination<mz_repr::Timestamp>,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -538,7 +538,7 @@ pub struct CreateIndexOptimize {
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -565,6 +565,7 @@ pub struct CreateIndexExplain {
 pub enum CreateViewStage {
     Optimize(CreateViewOptimize),
     Finish(CreateViewFinish),
+    Explain(CreateViewExplain),
 }
 
 #[derive(Debug)]
@@ -572,6 +573,9 @@ pub struct CreateViewOptimize {
     validity: PlanValidity,
     plan: plan::CreateViewPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPLAIN for this statement.
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -581,6 +585,14 @@ pub struct CreateViewFinish {
     plan: plan::CreateViewPlan,
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
+}
+
+#[derive(Debug)]
+pub struct CreateViewExplain {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateViewPlan,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
@@ -630,7 +642,7 @@ pub struct CreateMaterializedViewOptimize {
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 

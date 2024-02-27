@@ -174,7 +174,7 @@ impl Coordinator {
     }
 
     // `explain_ctx` is an optional context set iff the state machine is initiated from
-    // sequencing an EXPALIN for this statement.
+    // sequencing an EXPLAIN for this statement.
     #[instrument]
     fn create_index_validate(
         &mut self,

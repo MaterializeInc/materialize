@@ -1856,8 +1856,7 @@ impl Coordinator {
         match &plan.explainee {
             plan::Explainee::Statement(stmt) => match stmt {
                 plan::ExplaineeStatement::CreateView { .. } => {
-                    let msg = "EXPLAIN CREATE VIEW is currently not supported";
-                    ctx.retire(Err(AdapterError::Unsupported(msg)));
+                    self.explain_create_view(ctx, plan).await;
                 }
                 plan::ExplaineeStatement::CreateMaterializedView { .. } => {
                     self.explain_create_materialized_view(ctx, plan).await;
@@ -1870,8 +1869,8 @@ impl Coordinator {
                 }
             },
             plan::Explainee::View(_) => {
-                let msg = "EXPLAIN VIEW is currently not supported";
-                ctx.retire(Err(AdapterError::Unsupported(msg)));
+                let result = self.explain_view(&ctx, plan);
+                ctx.retire(result);
             }
             plan::Explainee::MaterializedView(_) => {
                 let result = self.explain_materialized_view(&ctx, plan);
@@ -1882,8 +1881,7 @@ impl Coordinator {
                 ctx.retire(result);
             }
             plan::Explainee::ReplanView(_) => {
-                let msg = "EXPLAIN REPLAN VIEW is currently not supported";
-                ctx.retire(Err(AdapterError::Unsupported(msg)));
+                self.explain_replan_view(ctx, plan).await;
             }
             plan::Explainee::ReplanMaterializedView(_) => {
                 self.explain_replan_materialized_view(ctx, plan).await;
