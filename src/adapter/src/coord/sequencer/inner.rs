@@ -33,7 +33,7 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
-use mz_sql::ast::{ExplainStage, IndexOptionName};
+use mz_sql::ast::IndexOptionName;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -87,7 +87,6 @@ use crate::coord::{
     RealTimeRecencyContext, StageResult, Staged, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::explain::explain_dataflow;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize};
@@ -1896,65 +1895,6 @@ impl Coordinator {
                 self.explain_replan_index(ctx, plan).await;
             }
         };
-    }
-
-    fn explain_index(
-        &mut self,
-        ctx: &ExecuteContext,
-        plan::ExplainPlanPlan {
-            stage,
-            format,
-            config,
-            explainee,
-        }: plan::ExplainPlanPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::Explainee::Index(id) = explainee else {
-            unreachable!() // Asserted in `sequence_explain_plan`.
-        };
-        let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
-            unreachable!() // Asserted in `plan_explain_plan`.
-        };
-
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
-            tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
-            coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
-        };
-
-        let explain = match stage {
-            ExplainStage::GlobalPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for index {id} in catalog");
-                    coord_bail!("cannot find {stage} for index in catalog");
-                };
-                explain_dataflow(
-                    plan,
-                    format,
-                    &config,
-                    &self.catalog().for_session(ctx.session()),
-                    dataflow_metainfo,
-                )?
-            }
-            ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for index {id} in catalog");
-                    coord_bail!("cannot find {stage} for index in catalog");
-                };
-                explain_dataflow(
-                    plan,
-                    format,
-                    &config,
-                    &self.catalog().for_session(ctx.session()),
-                    dataflow_metainfo,
-                )?
-            }
-            _ => {
-                coord_bail!("cannot EXPLAIN {} FOR INDEX", stage);
-            }
-        };
-
-        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
-
-        Ok(Self::send_immediate_rows(rows))
     }
 
     #[instrument]
