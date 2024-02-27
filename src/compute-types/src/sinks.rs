@@ -180,6 +180,9 @@ pub struct CopyToS3OneshotSinkConnection {
     pub prefix: String,
     /// The AWS connection information to do the writes.
     pub aws_connection: mz_storage_types::connections::aws::AwsConnection,
+    /// The ID of the Connection object, used to generate the External ID when
+    /// using AssumeRole with AWS connection.
+    pub connection_id: GlobalId,
     /// The max file size of each file uploaded to S3.
     pub max_file_size: u64,
     /// The relation desc of the data to be uploaded to S3.
@@ -193,6 +196,7 @@ impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnect
         ProtoCopyToS3OneshotSinkConnection {
             prefix: self.prefix.clone(),
             aws_connection: Some(self.aws_connection.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
             max_file_size: self.max_file_size,
             desc: Some(self.desc.into_proto()),
             format: Some(self.format.into_proto()),
@@ -205,6 +209,9 @@ impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnect
             aws_connection: proto
                 .aws_connection
                 .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::aws_connection")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::connection_id")?,
             max_file_size: proto.max_file_size,
             desc: proto
                 .desc

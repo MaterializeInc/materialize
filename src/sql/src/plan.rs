@@ -792,6 +792,8 @@ pub struct CopyToPlan {
     /// The scalar expression to be resolved to get the destination uri.
     pub to: HirScalarExpr,
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
+    /// The ID of the connection.
+    pub connection_id: GlobalId,
     pub format_params: CopyFormatParams<'static>,
     pub max_file_size: u64,
 }

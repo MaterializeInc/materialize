@@ -961,6 +961,7 @@ fn plan_copy_to(
         desc,
         to,
         connection: connection.to_owned(),
+        connection_id: conn_id,
         format_params,
         max_file_size: options.max_file_size.as_bytes(),
     }))

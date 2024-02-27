@@ -740,6 +740,7 @@ fn generate_rbac_requirements(
             desc: _,
             to: _,
             connection: _,
+            connection_id: _,
             format_params: _,
             max_file_size: _,
         }) => {

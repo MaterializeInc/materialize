@@ -131,9 +131,11 @@ fn copy_to<G>(
         while let Some(event) = error_handle.next().await {
             match event {
                 AsyncEvent::Data(_ts, data) => {
-                    if let Some(((error, _), _, _)) = data.first() {
-                        send_response(CopyToResponse::Error(error.to_string()));
-                        return;
+                    if let Some(((error, _), ts, _)) = data.first() {
+                        if !up_to.less_equal(ts) {
+                            send_response(CopyToResponse::Error(error.to_string()));
+                            return;
+                        }
                     }
                 }
                 AsyncEvent::Progress(frontier) => {
@@ -145,10 +147,10 @@ fn copy_to<G>(
             }
         }
 
-        // fix global ID
+        let connection_id = sink_connection.connection_id;
         let sdk_config = match sink_connection
             .aws_connection
-            .load_sdk_config(&connection_context, GlobalId::Transient(0))
+            .load_sdk_config(&connection_context, connection_id)
             .await
         {
             Ok(sdk_config) => sdk_config,
@@ -159,11 +161,12 @@ fn copy_to<G>(
         };
 
         let mut uploader = CopyToS3Uploader {
-            file_index: 0,
+            format: sink_connection.format,
             desc: sink_connection.desc,
             buf: Vec::new(),
             max_file_size: sink_connection.max_file_size,
-            file_name_prefix: "part".into(),
+            file_name_prefix: "part".into(), // file name will be <file_name_prefix>-<file_index>.csv.
+            file_index: 0,
             path_prefix: sink_connection.prefix,
             sdk_config,
         };
@@ -172,18 +175,31 @@ fn copy_to<G>(
         while let Some(event) = input_handle.next().await {
             match event {
                 AsyncEvent::Data(_ts, data) => {
-                    for ((row, ()), _time, diff) in data {
-                        assert!(diff > 0, "negative accumulation in copy to S3 input");
-                        row_count += u64::try_from(diff).unwrap();
-                        for _ in 0..diff {
-                            uploader.append_row(&row).await;
+                    for ((row, ()), ts, diff) in data {
+                        if !up_to.less_equal(&ts) {
+                            assert!(diff > 0, "negative accumulation in copy to S3 input");
+                            row_count += u64::try_from(diff).unwrap();
+                            for _ in 0..diff {
+                                match uploader.append_row(&row).await {
+                                    Ok(()) => {}
+                                    Err(e) => {
+                                        send_response(CopyToResponse::Error(e.to_string()));
+                                        return;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 AsyncEvent::Progress(frontier) => {
                     if PartialOrder::less_equal(&up_to, &frontier) {
-                        let result = uploader.flush().await;
-                        println!("result: {:?}", result);
+                        match uploader.flush().await {
+                            Ok(()) => {}
+                            Err(e) => {
+                                send_response(CopyToResponse::Error(e.to_string()));
+                                return;
+                            }
+                        }
                         // We are done, send the final count.
                         send_response(CopyToResponse::RowCount(row_count));
                         return;
@@ -198,6 +214,8 @@ fn copy_to<G>(
 struct CopyToS3Uploader {
     /// The output description.
     desc: RelationDesc,
+    /// Params to format the data.
+    format: CopyFormatParams<'static>,
     /// The index of the next file.
     file_index: usize,
     /// The prefix for the file names.
@@ -217,21 +235,17 @@ impl CopyToS3Uploader {
     fn extract_s3_bucket_path(prefix: &str) -> (String, String) {
         let uri = Uri::from_str(prefix).expect("valid s3 url");
         let bucket = uri.host().expect("s3 bucket");
-        let path = uri
-            .path()
-            .trim_start_matches('/')
-            .trim_end_matches('/');
+        let path = uri.path().trim_start_matches('/').trim_end_matches('/');
         (bucket.to_string(), path.to_string())
     }
 
-    /// Flushes the internal buffer to S3 by creating a new batch. If there is no pending data to
+    /// Flushes the internal buffer to S3 by uploading a file. If there is no pending data to
     /// be uploaded this is a no-op.
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
         if !self.buf.is_empty() {
-            // Actually put the data to S3
             self.file_index += 1;
-            // TODO (mouli) refactor to buffer properly
             let (bucket, path_prefix) = Self::extract_s3_bucket_path(&self.path_prefix);
+            // TODO: remove hard-coded file extension for .csv
             let file_path = format!(
                 "{}/{}-{:04}.csv",
                 path_prefix, self.file_name_prefix, self.file_index
@@ -255,19 +269,13 @@ impl CopyToS3Uploader {
         Ok(())
     }
 
-    async fn append_row(&mut self, row: &Row) {
-        // TODO (mouli): plumb user specified copy format params
-        encode_copy_format(
-            CopyFormatParams::Csv(Default::default()),
-            row,
-            self.desc.typ(),
-            &mut self.buf,
-        )
-        .expect("TODO");
+    async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
+        encode_copy_format(self.format.clone(), row, self.desc.typ(), &mut self.buf).expect("TODO");
+        // TODO (mouli): refactor to buffer only a single part instead of the entire file
         if u64::cast_from(self.buf.len()) > self.max_file_size {
-            let result = self.flush().await;
-            println!("result: {:?}", result);
+            self.flush().await?;
         }
+        Ok(())
     }
 }
 

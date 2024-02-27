@@ -9,6 +9,7 @@
 
 """Tests of AWS functionality that run against localstack."""
 
+import uuid
 from typing import Any, cast
 
 import boto3
@@ -25,7 +26,6 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
-import uuid
 
 ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
 NAMESPACE = ENVIRONMENT_NAME

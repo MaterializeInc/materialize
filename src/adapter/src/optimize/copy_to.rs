@@ -212,6 +212,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             Connection::Aws(aws_connection) => {
                 ComputeSinkConnection::CopyToS3Oneshot(CopyToS3OneshotSinkConnection {
                     aws_connection: aws_connection.clone(),
+                    connection_id: self.copy_to_context.connection_id,
                     prefix: self.copy_to_context.uri.to_string(),
                     max_file_size: self.copy_to_context.max_file_size,
                     desc: self.copy_to_context.desc.clone(),
