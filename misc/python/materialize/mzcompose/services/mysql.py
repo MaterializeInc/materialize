@@ -20,7 +20,7 @@ class MySql(Service):
         self,
         root_password: str = DEFAULT_ROOT_PASSWORD,
         name: str = "mysql",
-        image: str = "mysql:8.0.35",
+        version: str = "8.0.35",
         port: int = 3306,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
         additional_args: list[str] = [
@@ -33,6 +33,8 @@ class MySql(Service):
             "--server-id=1",
         ],
     ) -> None:
+        image = f"mysql:{version}"
+
         super().__init__(
             name=name,
             config={
