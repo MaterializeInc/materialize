@@ -3893,24 +3893,23 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 // Schemas/search path
                 ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))),
                 // Item name
+                String,
+                // Get rank among particular OID alias (e.g. regclass)
                 String
             ) =>
             // credit for using rank() to @def-
             sql_impl_table_func("
             SELECT DISTINCT
-                oid_alias AS reg,
                 o.id,
                 ARRAY[CASE WHEN s.database_id IS NULL THEN NULL ELSE d.name END, s.name, o.name]
                 AS name,
                 o.count,
                 rank() OVER (
-                    PARTITION BY oid_alias
                     ORDER BY pg_catalog.array_position($2, search_schema.name)
                 )
             FROM
                 (
                     SELECT
-                        a.oid_alias,
                         o.id,
                         o.schema_id,
                         o.name,
@@ -3918,8 +3917,8 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     FROM mz_catalog.mz_objects AS o
                     JOIN mz_internal.mz_object_oid_alias AS a
                         ON o.type = a.object_type
-                    WHERE o.name = CAST($3 AS pg_catalog.text)
-                    GROUP BY 1, 2, 3, 4
+                    WHERE o.name = CAST($3 AS pg_catalog.text) AND a.oid_alias = $4
+                    GROUP BY 1, 2, 3
                 )
                     AS o
                 JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
@@ -3956,10 +3955,11 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                             ELSE
                                 ARRAY[n[2]]
                         END,
-                        n[3]
+                        n[3],
+                        $1
                     ) AS r,
                     mz_catalog.mz_objects AS o
-                WHERE r.id = o.id AND r.rank = 1 AND r.reg = $1;
+                WHERE r.id = o.id AND r.rank = 1;
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
         },
         // Returns the an array representing the minimal namespace a user must
@@ -3994,24 +3994,27 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     -- there are no matches.
                     SELECT (
                         SELECT DISTINCT
-                        CASE
-                            -- If there is only one item with this name and it's rank 1,
-                            -- it is uniquely nameable with just the final element
-                            WHEN rank = 1 AND count = 1
-                                THEN ARRAY[name[3]]
-                            -- Otherwise, it is findable in the search path, so does not
-                            -- need database qualification
-                            ELSE
-                                ARRAY[name[2], name[3]]
-                        END AS minimal_name
-                        FROM mz_internal.mz_name_rank(
-                            pg_catalog.current_database(),
-                            pg_catalog.current_schemas(true),
-                            $1[3]
-                        )
-                        WHERE
-                            -- Ensure name and ID matches
-                            name = $1 AND id = $2
+                            CASE
+                                -- If there is only one item with this name and it's rank 1,
+                                -- it is uniquely nameable with just the final element
+                                WHEN rank = 1 AND count = 1
+                                    THEN ARRAY[r.name[3]]
+                                -- Otherwise, it is findable in the search path, so does not
+                                -- need database qualification
+                                ELSE
+                                    ARRAY[r.name[2], r.name[3]]
+                            END AS minimal_name
+                        FROM mz_catalog.mz_objects AS o
+                            JOIN mz_internal.mz_object_oid_alias AS a
+                                ON o.type = a.object_type,
+                            -- implied lateral to put the OID alias into scope
+                            mz_internal.mz_name_rank(
+                                pg_catalog.current_database(),
+                                pg_catalog.current_schemas(true),
+                                $1[3],
+                                a.oid_alias
+                            ) AS r
+                        WHERE o.id = $2 AND r.id = $2
                     )
                 )
             )")
