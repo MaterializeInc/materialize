@@ -157,6 +157,8 @@ class TestdrivePod(K8sPod, TestdriveBase):
                 "--",
                 *command,
                 input=input,
+                # needed to extract errors
+                capture_output=True,
                 suppress_command_error_output=suppress_command_error_output,
             )
         except subprocess.CalledProcessError as e:
