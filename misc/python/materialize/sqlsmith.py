@@ -130,4 +130,5 @@ known_errors = [
     "aggregate functions are not allowed in LIMIT",
     "nested aggregate functions are not allowed",
     "function map_build(text list) does not exist",
+    "timestamp cannot be NaN",
 ]
