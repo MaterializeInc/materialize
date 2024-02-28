@@ -1923,7 +1923,7 @@ pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("referenced_object_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
 pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -6150,7 +6150,7 @@ pub const MZ_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_sources (id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_SINKS_IND: BuiltinIndex = BuiltinIndex {
@@ -6158,7 +6158,7 @@ pub const MZ_SINKS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_sinks (id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
@@ -6325,7 +6325,7 @@ pub const MZ_OBJECT_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_object_dependencies (object_id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_COMPUTE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
