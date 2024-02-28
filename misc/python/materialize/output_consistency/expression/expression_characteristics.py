@@ -22,6 +22,7 @@ class ExpressionCharacteristics(Enum):
     TINY_VALUE = 102
     LARGE_VALUE = 103
     MAX_VALUE = 104
+    NAN = 105
 
     OVERSIZE = 120
     NEGATIVE = 121

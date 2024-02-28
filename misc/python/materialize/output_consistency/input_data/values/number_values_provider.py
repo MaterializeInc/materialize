@@ -63,6 +63,16 @@ for num_data_type in NUMERIC_DATA_TYPES:
             },
         )
 
+        # also only for decimal types
+        values_of_type.add_raw_value(
+            "'NaN'",
+            "NAN",
+            {
+                ExpressionCharacteristics.NAN,
+                ExpressionCharacteristics.DECIMAL,
+            },
+        )
+
     for index, tiny_value in enumerate(num_data_type.further_tiny_dec_values):
         values_of_type.add_raw_value(
             tiny_value,
