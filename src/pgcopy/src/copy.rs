@@ -12,7 +12,6 @@ use std::io;
 
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
-use mz_ore::collections::CollectionExt;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, RelationType, Row, RowArena};
 use proptest::prelude::any;
@@ -75,12 +74,11 @@ pub fn encode_copy_row_text(
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
-    let delim = delimiter.as_bytes().into_element();
     let null = null.as_bytes();
     let mut buf = BytesMut::new();
     for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
         if idx > 0 {
-            out.push(*delim);
+            out.push(delimiter);
         }
         match field {
             None => out.extend(null),
@@ -162,13 +160,13 @@ pub fn encode_copy_row_csv(
 pub struct CopyTextFormatParser<'a> {
     data: &'a [u8],
     position: usize,
-    column_delimiter: &'a str,
+    column_delimiter: u8,
     null_string: &'a str,
     buffer: Vec<u8>,
 }
 
 impl<'a> CopyTextFormatParser<'a> {
-    pub fn new(data: &'a [u8], column_delimiter: &'a str, null_string: &'a str) -> Self {
+    pub fn new(data: &'a [u8], column_delimiter: u8, null_string: &'a str) -> Self {
         Self {
             data,
             position: 0,
@@ -218,11 +216,11 @@ impl<'a> CopyTextFormatParser<'a> {
     }
 
     fn is_column_delimiter(&self) -> bool {
-        self.check_bytes(self.column_delimiter.as_bytes())
+        self.check_bytes(&[self.column_delimiter])
     }
 
     pub fn expect_column_delimiter(&mut self) -> Result<(), io::Error> {
-        if self.consume_bytes(self.column_delimiter.as_bytes()) {
+        if self.consume_bytes(&[self.column_delimiter]) {
             Ok(())
         } else {
             Err(io::Error::new(
@@ -504,13 +502,13 @@ pub fn encode_copy_format<'a>(
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct CopyTextFormatParams<'a> {
     pub null: Cow<'a, str>,
-    pub delimiter: Cow<'a, str>, // TODO (mouli): refactor delimiter to be a single u8
+    pub delimiter: u8,
 }
 
 impl<'a> Default for CopyTextFormatParams<'a> {
     fn default() -> Self {
         CopyTextFormatParams {
-            delimiter: Cow::from("\t"),
+            delimiter: b'\t',
             null: Cow::from("\\N"),
         }
     }
@@ -527,7 +525,7 @@ impl RustType<ProtoCopyTextFormatParams> for CopyTextFormatParams<'static> {
     fn from_proto(proto: ProtoCopyTextFormatParams) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             null: Cow::Owned(proto.null.into_rust()?),
-            delimiter: Cow::Owned(proto.delimiter.into_rust()?),
+            delimiter: proto.delimiter.into_rust()?,
         })
     }
 }
@@ -537,10 +535,10 @@ impl Arbitrary for CopyTextFormatParams<'static> {
     type Strategy = BoxedStrategy<Self>;
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        (any::<String>(), any::<String>())
+        (any::<String>(), any::<u8>())
             .prop_map(|(null, delimiter)| Self {
                 null: Cow::Owned(null),
-                delimiter: Cow::Owned(delimiter),
+                delimiter,
             })
             .boxed()
     }
@@ -553,7 +551,8 @@ pub fn decode_copy_format_text(
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
 
-    let mut parser = CopyTextFormatParser::new(data, &delimiter, &null);
+    // TODO: pass the `CopyTextFormatParams` to the `new` method
+    let mut parser = CopyTextFormatParser::new(data, delimiter, &null);
     while !parser.is_eof() && !parser.is_end_of_copy_marker() {
         let mut row = Vec::new();
         let buf = RowArena::new();
@@ -765,7 +764,7 @@ mod tests {
     #[mz_ore::test]
     fn test_copy_format_text_parser() {
         let text = "\t\\nt e\t\\N\t\n\\x60\\xA\\x7D\\x4a\n\\44\\044\\123".as_bytes();
-        let mut parser = CopyTextFormatParser::new(text, "\t", "\\N");
+        let mut parser = CopyTextFormatParser::new(text, b'\t', "\\N");
         assert!(parser.is_column_delimiter());
         parser
             .expect_column_delimiter()
@@ -819,7 +818,7 @@ mod tests {
             vec![Some("30"), None],
             vec![Some("40"), None],
         ];
-        let mut parser = CopyTextFormatParser::new(text, "\t", "");
+        let mut parser = CopyTextFormatParser::new(text, b'\t', "");
         for line in expect {
             for (i, value) in line.iter().enumerate() {
                 if i > 0 {
@@ -909,7 +908,7 @@ mod tests {
         ];
 
         for test in tests {
-            let mut parser = CopyTextFormatParser::new(test.input.as_bytes(), "\t", "\\N");
+            let mut parser = CopyTextFormatParser::new(test.input.as_bytes(), b'\t', "\\N");
             assert_eq!(
                 parser
                     .consume_raw_value()

@@ -997,13 +997,8 @@ fn plan_copy_from(
             only_available_with_csv(options.quote, "quote")?;
             only_available_with_csv(options.escape, "escape")?;
             only_available_with_csv(options.header, "HEADER")?;
-            let delimiter = match options.delimiter {
-                Some(delimiter) if delimiter.len() > 1 => {
-                    sql_bail!("COPY delimiter must be a single one-byte character");
-                }
-                Some(delimiter) => Cow::from(delimiter),
-                None => Cow::from("\t"),
-            };
+            let delimiter =
+                extract_byte_param_value(options.delimiter, "delimiter")?.unwrap_or(b'\t');
             let null = match options.null {
                 Some(null) => Cow::from(null),
                 None => Cow::from("\\N"),

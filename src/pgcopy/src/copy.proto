@@ -20,7 +20,7 @@ message ProtoCopyFormatParams {
 
 message ProtoCopyTextFormatParams {
     string null = 1;
-    string delimiter = 2;
+    uint32 delimiter = 2;
 }
 
 message ProtoCopyCsvFormatParams {
