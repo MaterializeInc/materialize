@@ -891,7 +891,7 @@ impl MapFilterProject {
     pub fn optimize(&mut self) {
         // Track sizes and iterate as long as they decrease.
         let mut prev_size = None;
-        let mut self_size = 0;
+        let mut self_size = usize::max_value();
         // Continue as long as strict improvements occur.
         while prev_size.map(|p| self_size < p).unwrap_or(true) {
             // Lock in current size.
