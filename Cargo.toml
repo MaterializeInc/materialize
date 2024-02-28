@@ -227,8 +227,8 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git" }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "1259d66a7c4d83f09152aac49a73b5b976fa75ca" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "1259d66a7c4d83f09152aac49a73b5b976fa75ca" }
 
 # Waiting on https://github.com/openssh-rust/openssh/pull/120 to make it into
 # a release.
