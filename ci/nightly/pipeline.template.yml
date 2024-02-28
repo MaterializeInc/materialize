@@ -469,7 +469,8 @@ steps:
         label: MySQL CDC tests against other MySQL versions
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64-small
+          # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
