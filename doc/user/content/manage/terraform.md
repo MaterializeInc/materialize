@@ -30,7 +30,6 @@ terraform {
   required_providers {
     materialize = {
       source = "MaterializeInc/materialize"
-      version = ">= 0.2.0"
     }
   }
 }
@@ -60,11 +59,9 @@ references:
 variable "MZ_PASSWORD" {}
 
 provider "materialize" {
-  host     = <hostname>
-  user     = <user>
-  password = var.MZ_PASSWORD
-  port     = 6875
-  database = <database>
+  password       = var.MZ_PASSWORD
+  default_region = <region>
+  database       = <database>
 }
 ```
 
