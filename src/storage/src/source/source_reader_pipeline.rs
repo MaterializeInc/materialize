@@ -54,14 +54,15 @@ use mz_storage_types::errors::SourceError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncCapabilitySet, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Leave, Partition};
+use timely::dataflow::operators::{Broadcast, Concat, Leave, Partition};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
@@ -453,7 +454,7 @@ where
             return;
         }
 
-        let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
+        let mut cap_set = AsyncCapabilitySet::from_elem(capabilities.into_element());
 
         let remap_handle = crate::source::reclock::compat::PersistHandle::<FromTime, _>::new(
             Arc::clone(&persist_clients),
@@ -609,7 +610,7 @@ where
 
     reclock_op.build(move |capabilities| async move {
         // The capability of the output after reclocking the source frontier
-        let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
+        let mut cap_set = AsyncCapabilitySet::from_elem(capabilities.into_element());
 
         let source_metrics = metrics.get_source_metrics(&name, id, worker_id);
 

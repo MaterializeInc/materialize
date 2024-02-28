@@ -27,10 +27,10 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
-    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncCapabilitySet, Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::operators::{ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
@@ -240,7 +240,7 @@ where
 
     #[allow(clippy::await_holding_refcell_ref)]
     let shutdown_button = builder.build(move |caps| async move {
-        let mut cap_set = CapabilitySet::from_elem(caps.into_element());
+        let mut cap_set = AsyncCapabilitySet::from_elem(caps.into_element());
 
         // Only one worker is responsible for distributing parts
         if worker_index != chosen_worker {

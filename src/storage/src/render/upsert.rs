@@ -26,14 +26,13 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_types::sources::envelope::UpsertEnvelope;
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    AsyncCapability, AsyncOutputHandle, Event as AsyncEvent,
+    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
@@ -803,7 +802,7 @@ impl<G: Scope> UpsertErrorEmitter<G>
             Vec<(OutputIndex, HealthStatusUpdate)>,
             TeeCore<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
         >,
-        &Capability<<G as ScopeParent>::Timestamp>,
+        &AsyncCapability<<G as ScopeParent>::Timestamp>,
     )
 {
     async fn emit(&mut self, context: String, e: anyhow::Error) {
@@ -820,7 +819,7 @@ async fn process_upsert_state_error<G: Scope>(
         Vec<(OutputIndex, HealthStatusUpdate)>,
         TeeCore<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
     >,
-    health_cap: &Capability<<G as ScopeParent>::Timestamp>,
+    health_cap: &AsyncCapability<<G as ScopeParent>::Timestamp>,
 ) {
     let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
     health_output.give(health_cap, (0, update)).await;

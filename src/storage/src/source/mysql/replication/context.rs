@@ -12,7 +12,6 @@ use std::pin::Pin;
 
 use mysql_async::BinlogStream;
 use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Antichain;
 use tracing::trace;
 
@@ -20,7 +19,7 @@ use mz_mysql_util::{Config, MySqlTableDesc};
 use mz_repr::Row;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::mysql::GtidPartition;
-use mz_timely_util::builder_async::AsyncOutputHandle;
+use mz_timely_util::builder_async::{AsyncCapability, AsyncCapabilitySet, AsyncOutputHandle};
 
 use super::super::{DefiniteError, RewindRequest};
 use crate::source::RawSourceCreationConfig;
@@ -37,11 +36,11 @@ pub(super) struct ReplContext<'a> {
         Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
         TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
     >,
-    pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
-    pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
+    pub(super) data_cap_set: &'a mut AsyncCapabilitySet<GtidPartition>,
+    pub(super) upper_cap_set: &'a mut AsyncCapabilitySet<GtidPartition>,
     // Owned values:
     pub(super) rewinds:
-        BTreeMap<UnresolvedItemName, ([Capability<GtidPartition>; 2], RewindRequest)>,
+        BTreeMap<UnresolvedItemName, ([AsyncCapability<GtidPartition>; 2], RewindRequest)>,
     // Binlog Table Id -> Table Name (its key in the `table_info` map)
     pub(super) table_id_map: BTreeMap<u64, UnresolvedItemName>,
     pub(super) skipped_table_ids: BTreeSet<u64>,
@@ -59,9 +58,9 @@ impl<'a> ReplContext<'a> {
             Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
             TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
         >,
-        data_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        rewinds: BTreeMap<UnresolvedItemName, ([Capability<GtidPartition>; 2], RewindRequest)>,
+        data_cap_set: &'a mut AsyncCapabilitySet<GtidPartition>,
+        upper_cap_set: &'a mut AsyncCapabilitySet<GtidPartition>,
+        rewinds: BTreeMap<UnresolvedItemName, ([AsyncCapability<GtidPartition>; 2], RewindRequest)>,
     ) -> Self {
         Self {
             config,

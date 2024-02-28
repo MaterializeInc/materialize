@@ -149,11 +149,12 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncCapabilitySet, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Map};
+use timely::dataflow::operators::{Broadcast, Concat, ConnectLoop, Feedback, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::types::{Oid, PgLsn};
@@ -352,7 +353,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let req = RewindRequest { oid, snapshot_lsn };
                 rewinds_handle.give(&rewind_cap_set[0], req).await;
             }
-            *rewind_cap_set = CapabilitySet::new();
+            *rewind_cap_set = AsyncCapabilitySet::new();
 
             let upstream_info = match mz_postgres_util::publication_info(
                 &config.config.connection_context.ssh_tunnel_manager,
@@ -490,14 +491,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // its client since this is what holds the exported transaction alive.
             if is_snapshot_leader {
                 trace!(%id, "timely-{worker_id} waiting for all workers to finish");
-                *snapshot_cap_set = CapabilitySet::new();
+                *snapshot_cap_set = AsyncCapabilitySet::new();
                 while snapshot_input.next().await.is_some() {}
                 trace!(%id, "timely-{worker_id} (leader) comitting COPY transaction");
                 client.simple_query("COMMIT").await?;
             } else {
                 trace!(%id, "timely-{worker_id} comitting COPY transaction");
                 client.simple_query("COMMIT").await?;
-                *snapshot_cap_set = CapabilitySet::new();
+                *snapshot_cap_set = AsyncCapabilitySet::new();
             }
             drop(client);
             Ok(())

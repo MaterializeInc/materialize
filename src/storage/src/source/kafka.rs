@@ -30,7 +30,9 @@ use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection, RangeBound};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{
+    AsyncCapability, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use mz_timely_util::order::Partitioned;
 use rdkafka::client::Client;
 use rdkafka::consumer::base_consumer::PartitionQueue;
@@ -40,7 +42,6 @@ use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
-use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
@@ -112,9 +113,9 @@ struct PartialProgressStatistics {
 
 struct PartitionCapability {
     /// The capability of the data produced
-    data: Capability<Partitioned<RangeBound<PartitionId>, MzOffset>>,
+    data: AsyncCapability<Partitioned<RangeBound<PartitionId>, MzOffset>>,
     /// The capability of the progress stream
-    progress: Capability<Partitioned<RangeBound<PartitionId>, MzOffset>>,
+    progress: AsyncCapability<Partitioned<RangeBound<PartitionId>, MzOffset>>,
 }
 
 /// Represents the low and high watermark offsets of a Kafka partition.
