@@ -146,8 +146,8 @@ class MySqlInsert(MySqlDML):
 
                 $ mysql-execute name=mysql
                 USE public;
-                SET @i:={prev_max + 1};
-                INSERT INTO {self.mysql_table.name} SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.mysql_table.watermarks.max - (prev_max + 1)};
+                SET @i:={prev_max};
+                INSERT INTO {self.mysql_table.name} SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.mysql_table.watermarks.max - prev_max};
                 """
             )
         )
