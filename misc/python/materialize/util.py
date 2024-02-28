@@ -16,6 +16,7 @@ import os
 import random
 from enum import Enum
 from pathlib import Path
+from threading import Thread
 from typing import TypeVar
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
@@ -51,3 +52,19 @@ class YesNoOnce(Enum):
     YES = 1
     NO = 2
     ONCE = 3
+
+
+class PropagatingThread(Thread):
+    def run(self):
+        self.exc = None
+        try:
+            self.ret = self._target(*self._args, **self._kwargs)  # type: ignore
+        except BaseException as e:
+            self.exc = e
+
+    def join(self, timeout=None):
+        super().join(timeout)
+        if self.exc:
+            raise self.exc
+        if hasattr(self, "ret"):
+            return self.ret
