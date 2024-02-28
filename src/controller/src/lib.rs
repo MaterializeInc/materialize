@@ -46,6 +46,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
+use mz_persist_txn::metrics::Metrics as TxnMetrics;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
@@ -54,10 +55,11 @@ use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
-use mz_storage_client::controller::StorageController;
+use mz_storage_client::controller::{CollectionDescription, StorageController};
+use mz_storage_client::storage_collections::{self, StorageCollections};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -141,6 +143,7 @@ enum Readiness<T> {
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller<T = mz_repr::Timestamp> {
     pub storage: Box<dyn StorageController<Timestamp = T>>,
+    pub collections: Box<dyn StorageCollections<Timestamp = T>>,
     pub compute: ComputeController<T>,
     /// The clusterd image to use when starting new cluster processes.
     clusterd_image: String,
@@ -190,7 +193,8 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
 impl<T: Timestamp> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
-        self.compute.activate(&mut *self.storage)
+        self.compute
+            .activate(&mut *self.storage, &mut *self.collections)
     }
 
     pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
@@ -294,7 +298,7 @@ where
     ///
     /// When all the objects in `objects` have advanced to `t`, the object
     /// `token` is returned to the client on the next call to [`Self::process`].
-    pub fn install_watch_set(
+    pub fn install_compute_watch_set(
         &mut self,
         mut objects: BTreeSet<GlobalId>,
         t: T,
@@ -305,14 +309,47 @@ where
                 .compute
                 .find_collection(*id)
                 .map(|s| s.write_frontier())
-                .unwrap_or_else(|_| {
-                    self.storage
-                        .collection(*id)
-                        .expect("some controller must have the collection")
-                        .write_frontier
-                        .borrow()
-                });
+                .expect("missing compute dependency");
             frontier.less_equal(&t)
+        });
+        if objects.is_empty() {
+            self.immediate_watch_sets.push(token);
+        } else {
+            let state = Rc::new((t, token));
+            for id in objects {
+                self.objects_to_unfulfilled_watch_sets
+                    .entry(id)
+                    .or_default()
+                    .push(Rc::clone(&state));
+            }
+        }
+    }
+
+    /// Install a _watch set_ in the controller.
+    ///
+    /// A _watch set_ is a request to be informed by the controller when
+    /// all of the frontiers of a particular set of objects have advanced at
+    /// least to a particular timestamp.
+    ///
+    /// When all the objects in `objects` have advanced to `t`, the object
+    /// `token` is returned to the client on the next call to [`Self::process`].
+    pub fn install_storage_watch_set(
+        &mut self,
+        mut objects: BTreeSet<GlobalId>,
+        t: T,
+        token: Box<dyn Any>,
+    ) {
+        let uppers = self
+            .collections
+            .collection_frontiers(objects.iter().cloned().collect())
+            .expect("missing storage dependencies")
+            .into_iter()
+            .map(|(id, _since, upper)| (id, upper))
+            .collect::<BTreeMap<_, _>>();
+
+        objects.retain(|id| {
+            let upper = uppers.get(id).expect("missing collection");
+            upper.less_equal(&t)
         });
         if objects.is_empty() {
             self.immediate_watch_sets.push(token);
@@ -439,6 +476,55 @@ where
         // Dummy implementation
         Box::pin(async { T::minimum() })
     }
+
+    /// Migrate any storage controller state from previous versions to this
+    /// version's expectations.
+    pub async fn migrate_collections(
+        &mut self,
+        collections: Vec<(GlobalId, CollectionDescription<T>)>,
+    ) -> Result<(), StorageError> {
+        // WIP: We _can_ do these concurrently.
+        self.storage
+            .migrate_collections(collections.clone())
+            .await?;
+
+        self.collections.migrate_collections(collections).await?;
+
+        Ok(())
+    }
+
+    /// Create the described collections
+    pub async fn create_collections(
+        &mut self,
+        register_ts: Option<T>,
+        collections: Vec<(GlobalId, CollectionDescription<T>)>,
+    ) -> Result<(), StorageError> {
+        self.collections
+            .create_collections(register_ts.clone(), collections.clone())
+            .await?;
+
+        self.storage
+            .create_collections(register_ts, collections)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Drops the read capability for the sources and allows their resources to be reclaimed.
+    pub fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError> {
+        // We tell the StorageController first, that way tables and other things
+        // on which it doesn't have a read hold are still there.
+        self.storage.drop_sources(identifiers.clone())?;
+        self.collections.drop_collections(identifiers)?;
+
+        Ok(())
+    }
+
+    /// Drops the read capability for the sources and allows their resources to be reclaimed.
+    pub fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
+        self.storage.drop_sources_unvalidated(identifiers.clone());
+        self.collections.drop_collections_unvalidated(identifiers);
+    }
 }
 
 impl<T> Controller<T>
@@ -467,17 +553,36 @@ where
         // legacy one.
         persist_txn_tables: PersistTxnTablesImpl,
     ) -> Self {
+        let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
+        let collections_ctl = storage_collections::StorageCollectionsImpl::new(
+            config.storage_stash_url.clone(),
+            config.persist_location.clone(),
+            Arc::clone(&config.persist_clients),
+            config.now.clone(),
+            Arc::clone(&config.stash_metrics),
+            Arc::clone(&txns_metrics),
+            envd_epoch,
+            config.metrics_registry.clone(),
+            persist_txn_tables,
+            config.connection_context.clone(),
+        )
+        .await;
+
+        let collections_ctl = Box::new(collections_ctl);
+
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
-            config.storage_stash_url,
+            collections_ctl.shared_stash(),
             config.persist_location,
             config.persist_clients,
             config.now,
             config.stash_metrics,
+            Arc::clone(&txns_metrics),
             envd_epoch,
             config.metrics_registry.clone(),
             persist_txn_tables,
             config.connection_context,
+            collections_ctl.clone(),
         )
         .await;
 
@@ -493,6 +598,7 @@ where
 
         Self {
             storage: Box::new(storage_controller),
+            collections: collections_ctl,
             compute: compute_controller,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,

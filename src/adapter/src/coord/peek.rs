@@ -526,10 +526,9 @@ impl crate::coord::Coordinator {
                 let peek_command = (coll_id, None, timestamp, map_filter_project);
                 let metadata = self
                     .controller
-                    .storage
-                    .collection(coll_id)
+                    .collections
+                    .collection_metadata(coll_id)
                     .expect("storage collection for fast-path peek")
-                    .collection_metadata
                     .clone();
                 (
                     peek_command,
@@ -553,6 +552,7 @@ impl crate::coord::Coordinator {
             }) => {
                 let output_ids = dataflow.export_ids().collect();
 
+                tracing::info!(as_of = ?dataflow.as_of, "in implement_peek_plan");
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
                     .active_compute()

@@ -20,6 +20,7 @@ use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
+use timely::progress::Timestamp as _;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -441,43 +442,79 @@ impl Coordinator {
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-                let since = coord.least_valid_read(&id_bundle);
+
+                // We're putting in place a read holds, such that ship_dataflow,
+                // below, which calls update_read_capabilities, can successfully
+                // do so. Otherwise, the since of dependencies might move along
+                // concurrently, pulling the rug from under us!
+                //
+                // TODO: Release our holds once the dataflow has been shipped.
+                // Or, maybe in the future, pass those holds on to compute, to
+                // hold on to them and downgrade when possible?
+                let read_holds_guard = coord
+                    .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
+                    .expect("can acquire read holds");
+                let since = read_holds_guard.coordinator.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since);
 
                 // Emit notices.
-                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
+                read_holds_guard
+                    .coordinator
+                    .emit_optimizer_notices(session, &df_meta.optimizer_notices);
 
                 // Return a metainfo with rendered notices.
-                let df_meta =
-                    coord
-                        .catalog()
-                        .render_notices(df_meta, notice_ids, Some(exported_index_id));
-                coord
+                let df_meta = read_holds_guard.coordinator.catalog().render_notices(
+                    df_meta,
+                    notice_ids,
+                    Some(exported_index_id),
+                );
+                read_holds_guard
+                    .coordinator
                     .catalog_mut()
                     .set_dataflow_metainfo(exported_index_id, df_meta.clone());
 
-                if coord.catalog().state().system_config().enable_mz_notices() {
+                if read_holds_guard
+                    .coordinator
+                    .catalog()
+                    .state()
+                    .system_config()
+                    .enable_mz_notices()
+                {
                     // Initialize a container for builtin table updates.
                     let mut builtin_table_updates =
                         Vec::with_capacity(df_meta.optimizer_notices.len());
                     // Collect optimization hint updates.
-                    coord.catalog().state().pack_optimizer_notices(
-                        &mut builtin_table_updates,
-                        df_meta.optimizer_notices.iter(),
-                        1,
-                    );
+                    read_holds_guard
+                        .coordinator
+                        .catalog()
+                        .state()
+                        .pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            1,
+                        );
                     // Write collected optimization hints to the builtin tables.
-                    let builtin_updates_fut = coord
+                    let builtin_updates_fut = read_holds_guard
+                        .coordinator
                         .builtin_table_update()
                         .execute(builtin_table_updates)
                         .await;
 
-                    let ship_dataflow_fut = coord.ship_dataflow(df_desc, cluster_id);
+                    let ship_dataflow_fut = read_holds_guard
+                        .coordinator
+                        .ship_dataflow(df_desc, cluster_id);
 
                     futures::future::join(builtin_updates_fut, ship_dataflow_fut).await;
                 } else {
-                    coord.ship_dataflow(df_desc, cluster_id).await;
+                    read_holds_guard
+                        .coordinator
+                        .ship_dataflow(df_desc, cluster_id)
+                        .await;
                 }
+
+                // Drop read holds after the dataflow has been shipped, at which
+                // point compute will have put in its own read holds.
+                drop(read_holds_guard);
 
                 coord
                     .set_index_compaction_window(

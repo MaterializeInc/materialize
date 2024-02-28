@@ -29,11 +29,12 @@ use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
-use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_policy::ReadPolicy;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use timely::PartialOrder;
+use timely::{Container, PartialOrder};
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
@@ -330,11 +331,11 @@ impl<T: Timestamp> Instance<T> {
     /// Acquire an [`ActiveInstance`] by providing a storage controller.
     pub fn activate<'a>(
         &'a mut self,
-        storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+        storage_collections: &'a mut dyn StorageCollections<Timestamp = T>,
     ) -> ActiveInstance<'a, T> {
         ActiveInstance {
             compute: self,
-            storage_controller,
+            storage_collections,
         }
     }
 
@@ -740,7 +741,7 @@ where
 #[derive(Debug)]
 pub(super) struct ActiveInstance<'a, T> {
     compute: &'a mut Instance<T>,
-    storage_controller: &'a mut dyn StorageController<Timestamp = T>,
+    storage_collections: &'a mut dyn StorageCollections<Timestamp = T>,
 }
 
 impl<'a, T> ActiveInstance<'a, T>
@@ -900,6 +901,8 @@ where
         // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
 
+        tracing::info!(as_of = ?as_of, "in create_dataflow");
+
         // When we initialize per-replica write frontiers (and thereby the per-replica read
         // capabilities), we cannot use the `as_of` because of reconciliation: Existing
         // slow replicas might be reading from the inputs at times before the `as_of` and we
@@ -914,18 +917,21 @@ where
 
         // Validate sources have `since.less_equal(as_of)`.
         for source_id in dataflow.source_imports.keys() {
-            let since = &self
-                .storage_controller
-                .collection(*source_id)
-                .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?
-                .read_capabilities
-                .frontier();
-            if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
-                Err(DataflowCreationError::SinceViolation(*source_id))?;
-            }
+            // TODO: We don't have any guarantees of the since staying the same
+            // because we don't have any holds. The only thing we have is a read
+            // hold at the as of. Our callers only make sure of that!
+            // let since = &self
+            //     .storage_controller
+            //     .collection(*source_id)
+            //     .map_err(|_| DataflowCreationError::CollectionMissing(*source_id))?
+            //     .read_capabilities
+            //     .frontier();
+            // if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
+            //     Err(DataflowCreationError::SinceViolation(*source_id))?;
+            // }
 
             storage_dependencies.push(*source_id);
-            replica_write_frontier.join_assign(&since.to_owned());
+            replica_write_frontier.join_assign(&as_of.to_owned());
         }
 
         // Validate indexes have `since.less_equal(as_of)`.
@@ -967,7 +973,7 @@ where
             .iter()
             .map(|id| (*id, changes.clone()))
             .collect();
-        self.storage_controller
+        self.storage_collections
             .update_read_capabilities(&mut storage_read_updates);
         // Update compute read capabilities for inputs.
         let compute_read_updates = compute_dependencies
@@ -991,6 +997,7 @@ where
         }
         // Initialize tracking of replica frontiers.
         let replica_ids: Vec<_> = self.compute.replica_ids().collect();
+        tracing::info!(updates = ?updates, "before update_write_frontiers");
         for replica_id in replica_ids {
             self.update_replica_write_frontiers(replica_id, &updates);
         }
@@ -1011,14 +1018,19 @@ where
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
         for (id, (si, monotonic)) in dataflow.source_imports {
-            let collection = self
-                .storage_controller
-                .collection(id)
+            let collection_metadata = self
+                .storage_collections
+                .collection_metadata(id)
                 .map_err(|_| DataflowCreationError::CollectionMissing(id))?;
+            let collection_description = self
+                .storage_collections
+                .collection_description(id)
+                .map_err(|_| DataflowCreationError::CollectionMissing(id))?;
+
             let desc = SourceInstanceDesc {
-                storage_metadata: collection.collection_metadata.clone(),
+                storage_metadata: collection_metadata.clone(),
                 arguments: si.arguments,
-                typ: collection.description.desc.typ().clone(),
+                typ: collection_description.desc.typ().clone(),
             };
             source_imports.insert(id, (desc, monotonic));
         }
@@ -1028,10 +1040,9 @@ where
             let connection = match se.connection {
                 ComputeSinkConnection::Persist(conn) => {
                     let metadata = self
-                        .storage_controller
-                        .collection(id)
+                        .storage_collections
+                        .collection_metadata(id)
                         .map_err(|_| DataflowCreationError::CollectionMissing(id))?
-                        .collection_metadata
                         .clone();
                     let conn = PersistSinkConnection {
                         value_desc: conn.value_desc,
@@ -1144,12 +1155,16 @@ where
         // data up to and including the `as_of` has been sealed.
         let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
             let dep = &self.compute.expect_collection(*id);
-            &dep.write_frontier
+            dep.write_frontier.clone()
         });
-        let storage_frontiers = collection.storage_dependencies.iter().map(|id| {
-            let dep = &self.storage_controller.collection(*id).expect("must exist");
-            &dep.write_frontier
-        });
+
+        let storage_frontiers = self
+            .storage_collections
+            .collection_frontiers(collection.storage_dependencies.iter().cloned().collect())
+            .expect("must exist")
+            .into_iter()
+            .map(|(_id, _since, upper)| upper);
+
         let ready = compute_frontiers
             .chain(storage_frontiers)
             .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()));
@@ -1218,13 +1233,25 @@ where
         peek_target: PeekTarget,
     ) -> Result<(), PeekError> {
         let since = match &peek_target {
-            PeekTarget::Index { .. } => self.compute.collection(id)?.read_capabilities.frontier(),
-            PeekTarget::Persist { .. } => self
-                .storage_controller
-                .collection(id)
-                .map_err(|_| PeekError::CollectionMissing(id))?
-                .implied_capability
-                .borrow(),
+            PeekTarget::Index { .. } => self
+                .compute
+                .collection(id)?
+                .read_capabilities
+                .frontier()
+                .to_owned(),
+            PeekTarget::Persist { .. } => {
+                // TODO: This check doesn't do much, we acquired a hold earlier,
+                // but checking the since here is meaningless because if we
+                // didn't have a hold the since could advance concurrently.
+                //
+                // Putting this in just to appease the check!
+                Antichain::from_elem(timestamp.clone())
+                // self.storage_controller
+                //     .collection(id)
+                //     .map_err(|_| PeekError::CollectionMissing(id))?
+                //     .implied_capability
+                //     .borrow()
+            }
         };
         if !since.less_equal(&timestamp) {
             return Err(PeekError::SinceViolation(id));
@@ -1242,7 +1269,7 @@ where
         match &peek_target {
             PeekTarget::Index { .. } => self.update_read_capabilities(updates),
             PeekTarget::Persist { .. } => self
-                .storage_controller
+                .storage_collections
                 .update_read_capabilities(&mut updates),
         };
 
@@ -1414,7 +1441,7 @@ where
         storage_read_capability_changes.retain(|_key, update| !update.is_empty());
 
         if !storage_read_capability_changes.is_empty() {
-            self.storage_controller
+            self.storage_collections
                 .update_read_capabilities(&mut storage_read_capability_changes);
         }
     }
@@ -1438,7 +1465,7 @@ where
             }
         }
         if !storage_read_capability_changes.is_empty() {
-            self.storage_controller
+            self.storage_collections
                 .update_read_capabilities(&mut storage_read_capability_changes);
         }
     }
@@ -1490,18 +1517,6 @@ where
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(read_capability_changes);
         }
-
-        // Tell the storage controller about new write frontiers for storage collections that are
-        // advanced by compute sinks.
-        let storage_updates: Vec<_> = updates
-            .iter()
-            .filter_map(|(&id, upper)| {
-                let found = self.storage_controller.collection(id).is_ok();
-                found.then_some((id, upper.clone()))
-            })
-            .collect();
-        self.storage_controller
-            .update_write_frontiers(&storage_updates);
     }
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends
@@ -1581,7 +1596,7 @@ where
 
         // Report storage read capability updates.
         if !storage_updates.is_empty() {
-            self.storage_controller
+            self.storage_collections
                 .update_read_capabilities(&mut storage_updates);
         }
     }
@@ -1607,7 +1622,7 @@ where
         match &peek.target {
             PeekTarget::Index { .. } => self.update_read_capabilities(updates),
             PeekTarget::Persist { .. } => self
-                .storage_controller
+                .storage_collections
                 .update_read_capabilities(&mut updates),
         }
     }
@@ -1883,12 +1898,21 @@ where
 
             let compute_frontiers = collection.compute_dependencies.iter().flat_map(|dep_id| {
                 let collection = self.compute.collections.get(dep_id);
-                collection.map(|c| &c.write_frontier)
+                collection.map(|c| c.write_frontier.clone())
             });
-            let storage_frontiers = collection.storage_dependencies.iter().flat_map(|dep_id| {
-                let collection = &self.storage_controller.collection(*dep_id).ok();
-                collection.map(|c| &c.write_frontier)
-            });
+
+            let existing_storage_dependencies = collection
+                .storage_dependencies
+                .iter()
+                .filter(|id| self.storage_collections.check_exists(**id).is_ok())
+                .cloned()
+                .collect::<Vec<_>>();
+            let storage_frontiers = self
+                .storage_collections
+                .collection_frontiers(existing_storage_dependencies)
+                .expect("missing storage collections")
+                .into_iter()
+                .map(|(_id, _since, upper)| upper);
 
             let mut new_capability = Antichain::new();
             for frontier in compute_frontiers.chain(storage_frontiers) {

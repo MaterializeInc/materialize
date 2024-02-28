@@ -29,9 +29,11 @@ use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
+use timely::progress::Timestamp;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
+use crate::coord::read_policy::ReadHoldsGuard;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateMaterializedViewExplain, CreateMaterializedViewFinish,
@@ -498,7 +500,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument]
+    // #[instrument]
     async fn create_materialized_view_finish(
         &mut self,
         session: &Session,
@@ -530,7 +532,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-        let (dataflow_as_of, storage_as_of, until) =
+        let (read_holds_guard, dataflow_as_of, storage_as_of, until) =
             self.select_timestamps(id_bundle, refresh_schedule.as_ref())?;
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -580,11 +582,13 @@ impl Coordinator {
         .collect::<Vec<_>>();
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
-        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
-            .take(global_lir_plan.df_meta().optimizer_notices.len())
-            .collect::<Result<Vec<_>, _>>()?;
+        let notice_ids =
+            std::iter::repeat_with(|| read_holds_guard.coordinator.allocate_transient_id())
+                .take(global_lir_plan.df_meta().optimizer_notices.len())
+                .collect::<Result<Vec<_>, _>>()?;
 
-        let transact_result = self
+        let transact_result = read_holds_guard
+            .coordinator
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 // Save plan structures.
                 coord
@@ -614,7 +618,6 @@ impl Coordinator {
                 // Announce the creation of the materialized view source.
                 coord
                     .controller
-                    .storage
                     .create_collections(
                         None,
                         vec![(
@@ -663,6 +666,10 @@ impl Coordinator {
             })
             .await;
 
+        // Only drop the read holds once the dataflow has been installed,
+        // which acquires it's own read holds.
+        drop(read_holds_guard);
+
         match transact_result {
             Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
@@ -684,20 +691,28 @@ impl Coordinator {
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
     /// materialized view.
     fn select_timestamps(
-        &self,
+        &mut self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
     ) -> Result<
         (
+            ReadHoldsGuard,
             Antichain<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
             Antichain<mz_repr::Timestamp>,
         ),
         AdapterError,
     > {
+        // Acquire read holds _before_ determining the least valid read.
+        // Otherwise we are not guaranteed that the frontier moves under us,
+        // concurrently.
+        let read_holds_guard = self
+            .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
+            .expect("can always acquire non-precise read holds");
+
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
-        let least_valid_read = self.least_valid_read(&id_bundle);
+        let least_valid_read = read_holds_guard.coordinator.least_valid_read(&id_bundle);
         let mut dataflow_as_of = least_valid_read.clone();
         let mut storage_as_of = least_valid_read.clone();
 
@@ -717,7 +732,8 @@ impl Coordinator {
                 {
                     storage_as_of = Antichain::from_elem(first_refresh_ts);
                     dataflow_as_of.join_assign(
-                        &self
+                        &read_holds_guard
+                            .coordinator
                             .greatest_available_read(&id_bundle)
                             .meet(&storage_as_of),
                     );
@@ -725,6 +741,7 @@ impl Coordinator {
                     let last_refresh = refresh_schedule.last_refresh().expect(
                         "if round_up_timestamp returned None, then there should be a last refresh",
                     );
+
                     return Err(AdapterError::MaterializedViewWouldNeverRefresh(
                         last_refresh,
                         *least_valid_read_ts,
@@ -744,7 +761,7 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
-        Ok((dataflow_as_of, storage_as_of, until))
+        Ok((read_holds_guard, dataflow_as_of, storage_as_of, until))
     }
 
     #[instrument]

@@ -78,12 +78,12 @@ impl TimelineContext {
 /// For each timeline we maintain a timestamp oracle, which is responsible for
 /// providing read (and sometimes write) timestamps, and a set of read holds which
 /// guarantee that those read timestamps are valid.
-pub(crate) struct TimelineState<T> {
+pub(crate) struct TimelineState<T: TimelyTimestamp> {
     pub(crate) oracle: Arc<dyn TimestampOracle<T> + Send + Sync>,
     pub(crate) read_holds: ReadHolds<T>,
 }
 
-impl<T: fmt::Debug> fmt::Debug for TimelineState<T> {
+impl<T: TimelyTimestamp> fmt::Debug for TimelineState<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimelineState")
             .field("read_holds", &self.read_holds)
@@ -303,6 +303,7 @@ impl Coordinator {
         for id in ids.storage_ids {
             read_holds.remove_storage_id(&id);
         }
+
         for (compute_id, ids) in ids.compute_ids {
             for id in ids {
                 read_holds.remove_compute_id(&compute_id, &id);
@@ -659,6 +660,7 @@ impl Coordinator {
             if read_holds.times().any(|time| time.less_than(&read_ts)) {
                 read_holds = self.update_read_holds(read_holds, read_ts);
             }
+
             self.global_timelines
                 .insert(timeline, TimelineState { oracle, read_holds });
         }

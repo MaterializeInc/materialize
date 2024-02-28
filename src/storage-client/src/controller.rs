@@ -20,6 +20,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::num::NonZeroI64;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -27,18 +28,18 @@ use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 use mz_persist_client::read::{Cursor, ReadHandle};
-use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-use mz_persist_types::Codec64;
+use mz_persist_types::{Codec64, Opaque};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
-use mz_storage_types::controller::{CollectionMetadata, StorageError};
+use mz_storage_types::controller::StorageError;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData};
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::MutableAntichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
@@ -160,6 +161,17 @@ impl<T> CollectionDescription<T> {
             status_collection_id: None,
         }
     }
+
+    /// Returns the cluster to which the collection is bound, if applicable.
+    pub fn cluster_id(&self) -> Option<StorageInstanceId> {
+        match &self.data_source {
+            DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
+            DataSource::Webhook
+            | DataSource::Introspection(_)
+            | DataSource::Other(_)
+            | DataSource::Progress => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,7 +207,7 @@ pub enum Response<T> {
 
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
-    type Timestamp;
+    type Timestamp: TimelyTimestamp;
 
     /// Marks the end of any initialization commands.
     ///
@@ -209,9 +221,6 @@ pub trait StorageController: Debug {
 
     /// Get the current configuration, including parameters updated with `update_parameters`.
     fn config(&self) -> &StorageConfiguration;
-
-    /// Acquire an immutable reference to the collection state, should it exist.
-    fn collection(&self, id: GlobalId) -> Result<&CollectionState<Self::Timestamp>, StorageError>;
 
     /// Creates a storage instance with the specified ID.
     ///
@@ -247,17 +256,6 @@ pub trait StorageController: Debug {
     /// Disconnects the storage instance from the specified replica.
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
 
-    /// Acquire a mutable reference to the collection state, should it exist.
-    fn collection_mut(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError>;
-
-    /// Acquire an iterator over all collection states.
-    fn collections(
-        &self,
-    ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
-
     /// Migrate any storage controller state from previous versions to this
     /// version's expectations.
     ///
@@ -290,16 +288,6 @@ pub trait StorageController: Debug {
         &mut self,
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
-
-    /// Check that the collection associated with `id` can be altered to represent the given
-    /// `ingestion`.
-    ///
-    /// Note that this check is optimistic and its return of `Ok(())` does not guarantee that
-    /// subsequent calls to `alter_collection` are guaranteed to succeed.
-    fn check_alter_collection(
-        &mut self,
-        collections: &BTreeMap<GlobalId, IngestionDescription>,
     ) -> Result<(), StorageError>;
 
     /// Alter the identified collection to use the described ingestion.
@@ -400,34 +388,6 @@ pub trait StorageController: Debug {
     ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
     where
         Self::Timestamp: Codec64 + Timestamp + Lattice;
-
-    /// Returns aggregate statistics about the contents of the local input named
-    /// `id` at `as_of`.
-    async fn snapshot_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats, StorageError>;
-
-    /// Returns aggregate statistics about the contents of the local input named
-    /// `id` at `as_of`.
-    async fn snapshot_parts_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotPartsStats, StorageError>;
-
-    /// Assigns a read policy to specific identifiers.
-    ///
-    /// The policies are assigned in the order presented, and repeated identifiers should
-    /// conclude with the last policy. Changing a policy will immediately downgrade the read
-    /// capability if appropriate, but it will not "recover" the read capability if the prior
-    /// capability is already ahead of it.
-    ///
-    /// The `StorageController` may include its own overrides on these policies.
-    ///
-    /// Identifiers not present in `policies` retain their existing read policies.
-    fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
 
     /// Ingests write frontier updates for collections that this controller
     /// maintains and potentially generates updates to read capabilities, which
@@ -550,90 +510,53 @@ pub trait StorageController: Debug {
     async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
 }
 
-/// State maintained about individual collections.
-#[derive(Debug)]
-pub struct CollectionState<T> {
-    /// Description with which the collection was created
-    pub description: CollectionDescription<T>,
+/// A wrapper struct that presents the adapter token to a format that is understandable by persist
+/// and also allows us to differentiate between a token being present versus being set for the
+/// first time.
+// TODO(aljoscha): Make this crate-public again once the remap operator doesn't
+// hold a critical handle anymore.
+#[derive(PartialEq, Clone, Debug)]
+pub struct PersistEpoch(pub Option<NonZeroI64>);
 
-    /// Accumulation of read capabilities for the collection.
-    ///
-    /// This accumulation will always contain `self.implied_capability`, but may also contain
-    /// capabilities held by others who have read dependencies on this collection.
-    pub read_capabilities: MutableAntichain<T>,
-    /// The implicit capability associated with collection creation.  This should never be less
-    /// than the since of the associated persist collection.
-    pub implied_capability: Antichain<T>,
-    /// The policy to use to downgrade `self.implied_capability`.
-    pub read_policy: ReadPolicy<T>,
-
-    /// Storage identifiers on which this collection depends.
-    pub storage_dependencies: Vec<GlobalId>,
-
-    /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
-
-    pub collection_metadata: CollectionMetadata,
+impl Opaque for PersistEpoch {
+    fn initial() -> Self {
+        PersistEpoch(None)
+    }
 }
 
-impl<T: Timestamp> CollectionState<T> {
-    /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub fn new(
-        description: CollectionDescription<T>,
-        since: Antichain<T>,
-        write_frontier: Antichain<T>,
-        storage_dependencies: Vec<GlobalId>,
-        metadata: CollectionMetadata,
-    ) -> Self {
-        let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
-        Self {
-            description,
-            read_capabilities,
-            implied_capability: since.clone(),
-            read_policy: ReadPolicy::NoPolicy {
-                initial_since: since,
-            },
-            storage_dependencies,
-            write_frontier,
-            collection_metadata: metadata,
-        }
+impl Codec64 for PersistEpoch {
+    fn codec_name() -> String {
+        "PersistEpoch".to_owned()
     }
 
-    /// Returns the cluster to which the collection is bound, if applicable.
-    pub fn cluster_id(&self) -> Option<StorageInstanceId> {
-        match &self.description.data_source {
-            DataSource::Ingestion(ingestion) => Some(ingestion.instance_id),
-            DataSource::Webhook
-            | DataSource::Introspection(_)
-            | DataSource::Other(_)
-            | DataSource::Progress => None,
-        }
+    fn encode(&self) -> [u8; 8] {
+        self.0.map(NonZeroI64::get).unwrap_or(0).to_le_bytes()
     }
 
-    /// Returns whether the collection was dropped.
-    pub fn is_dropped(&self) -> bool {
-        self.read_capabilities.is_empty()
+    fn decode(buf: [u8; 8]) -> Self {
+        Self(NonZeroI64::new(i64::from_le_bytes(buf)))
+    }
+}
+
+impl From<NonZeroI64> for PersistEpoch {
+    fn from(epoch: NonZeroI64) -> Self {
+        Self(Some(epoch))
     }
 }
 
 /// State maintained about individual exports.
-#[derive(Debug, Clone)]
-pub struct ExportState<T> {
+#[derive(Debug)]
+pub struct ExportState<T: TimelyTimestamp> {
     /// Description with which the export was created
     pub description: ExportDescription<T>,
 
-    /// The capability (hold on the since) that this export needs from its
-    /// dependencies (inputs). When the upper of the export changes, we
-    /// downgrade this, which in turn downgrades holds we have on our
-    /// dependencies' sinces.
-    pub read_capability: Antichain<T>,
+    /// The read hold that this export has on its dependencies (inputs). When
+    /// the upper of the export changes, we downgrade this, which in turn
+    /// downgrades holds we have on our dependencies' sinces.
+    pub read_hold: ReadHold<T>,
 
     /// The policy to use to downgrade `self.read_capability`.
     pub read_policy: ReadPolicy<T>,
-
-    /// Storage identifiers on which this collection depends.
-    pub storage_dependencies: Vec<GlobalId>,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
@@ -642,15 +565,13 @@ pub struct ExportState<T> {
 impl<T: Timestamp> ExportState<T> {
     pub fn new(
         description: ExportDescription<T>,
-        read_capability: Antichain<T>,
+        read_hold: ReadHold<T>,
         read_policy: ReadPolicy<T>,
-        storage_dependencies: Vec<GlobalId>,
     ) -> Self {
         Self {
             description,
-            read_capability,
+            read_hold,
             read_policy,
-            storage_dependencies,
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
         }
     }
@@ -662,7 +583,7 @@ impl<T: Timestamp> ExportState<T> {
 
     /// Returns whether the export was dropped.
     pub fn is_dropped(&self) -> bool {
-        self.read_capability.is_empty()
+        self.read_hold.since().is_empty()
     }
 }
 /// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].

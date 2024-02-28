@@ -1318,8 +1318,7 @@ impl StorageState {
                                 self.sink_handles.get(&id).expect("missing SinkHandle");
                             sink_handle.downgrade_since(frontier.clone());
                         }
-                        None if self.ingestions.contains_key(&id) => (),
-                        None => panic!("AllowCompaction command for non-existent {id}"),
+                        None => (),
                     }
 
                     if frontier.is_empty() {

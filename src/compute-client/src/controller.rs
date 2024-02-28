@@ -46,6 +46,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -250,10 +251,12 @@ impl<T: Timestamp> ComputeController<T> {
     pub fn activate<'a>(
         &'a mut self,
         storage: &'a mut dyn StorageController<Timestamp = T>,
+        collections: &'a mut dyn StorageCollections<Timestamp = T>,
     ) -> ActiveComputeController<'a, T> {
         ActiveComputeController {
             compute: self,
             storage,
+            collections,
         }
     }
 
@@ -445,6 +448,7 @@ where
 pub struct ActiveComputeController<'a, T> {
     compute: &'a mut ComputeController<T>,
     storage: &'a mut dyn StorageController<Timestamp = T>,
+    collections: &'a mut dyn StorageCollections<Timestamp = T>,
 }
 
 impl<T: Timestamp> ActiveComputeController<'_, T> {
@@ -466,7 +470,7 @@ impl<T: Timestamp> ActiveComputeController<'_, T> {
     fn instance(&mut self, id: ComputeInstanceId) -> Result<ActiveInstance<T>, InstanceMissing> {
         self.compute
             .instance_mut(id)
-            .map(|c| c.activate(self.storage))
+            .map(|c| c.activate(self.collections))
     }
 }
 
@@ -690,7 +694,7 @@ where
     async fn maintain(&mut self) {
         // Perform instance maintenance work.
         for instance in self.compute.instances.values_mut() {
-            instance.activate(self.storage).maintain();
+            instance.activate(self.collections).maintain();
         }
 
         // Record pending introspection updates.

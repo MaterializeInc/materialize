@@ -49,6 +49,7 @@ use mz_storage_types::controller::StorageError;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
+use timely::progress::Timestamp as _;
 use tracing::{event, info_span, warn, Instrument, Level};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
@@ -683,7 +684,6 @@ impl Coordinator {
             self.drop_storage_read_policy(id);
         }
         self.controller
-            .storage
             .drop_sources(sources)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
@@ -902,6 +902,9 @@ impl Coordinator {
 
     fn update_storage_config(&mut self) {
         let config_params = flags::storage_config(self.catalog().system_config());
+        self.controller
+            .collections
+            .update_parameters(config_params.clone());
         self.controller.storage.update_parameters(config_params);
     }
 
@@ -981,7 +984,7 @@ impl Coordinator {
         sink: &Sink,
     ) -> Result<(), AdapterError> {
         // Validate `sink.from` is in fact a storage collection
-        self.controller.storage.collection(sink.from)?;
+        self.controller.collections.check_exists(sink.from)?;
 
         let status_id = Some(
             self.catalog()
@@ -998,13 +1001,25 @@ impl Coordinator {
             storage_ids: btreeset! {sink.from},
             compute_ids: btreemap! {},
         };
-        let as_of = self.least_valid_read(&id_bundle);
 
-        let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
+        // We're putting in place a read holds, such that ship_dataflow,
+        // below, which calls update_read_capabilities, can successfully
+        // do so. Otherwise, the since of dependencies might move along
+        // concurrently, pulling the rug from under us!
+        //
+        // TODO: Release our holds once the dataflow has been shipped.
+        // Or, maybe in the future, pass those holds on to compute, to
+        // hold on to them and downgrade when possible?
+        let read_holds_guard = self
+            .acquire_read_holds(mz_repr::Timestamp::minimum(), &id_bundle, false)
+            .expect("can acquire read holds");
+        let as_of = read_holds_guard.coordinator.least_valid_read(&id_bundle);
+
+        let storage_sink_from_entry = read_holds_guard.coordinator.catalog().get_entry(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
-                .desc(&self.catalog().resolve_full_name(
+                .desc(&read_holds_guard.coordinator.catalog().resolve_full_name(
                     storage_sink_from_entry.name(),
                     storage_sink_from_entry.conn_id(),
                 ))
@@ -1013,7 +1028,7 @@ impl Coordinator {
             connection: sink
                 .connection
                 .clone()
-                .into_inline_connection(self.catalog().state()),
+                .into_inline_connection(read_holds_guard.coordinator.catalog().state()),
             envelope: sink.envelope,
             as_of,
             with_snapshot: sink.with_snapshot,
@@ -1021,7 +1036,8 @@ impl Coordinator {
             from_storage_metadata: (),
         };
 
-        Ok(self
+        let res = read_holds_guard
+            .coordinator
             .controller
             .storage
             .create_exports(vec![(
@@ -1031,7 +1047,13 @@ impl Coordinator {
                     instance_id: sink.cluster_id,
                 },
             )])
-            .await?)
+            .await;
+
+        // Drop read holds after the dataflow has been shipped, at which
+        // point compute will have put in its own read holds.
+        drop(read_holds_guard);
+
+        Ok(res?)
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is
