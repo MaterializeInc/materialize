@@ -38,7 +38,9 @@ class K8sResource:
         ]
 
         if suppress_command_error_output:
-            subprocess.run(cmd, text=True, input=input, check=True)
+            subprocess.run(
+                cmd, text=True, input=input, check=True, capture_output=capture_output
+            )
         else:
             run_process_with_error_information(
                 cmd, input, capture_output=capture_output
