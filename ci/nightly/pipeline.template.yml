@@ -462,6 +462,19 @@ steps:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
 
+  - group: MySQL
+    key: mysql
+    steps:
+      - id: mysql-matrix
+        label: MySQL CDC tests against other MySQL versions
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-small
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-matrix
+
   - group: AWS
     key: aws
     steps:
