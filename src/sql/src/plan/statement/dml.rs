@@ -956,6 +956,10 @@ fn plan_copy_to(
 
     let to = plan_expr(ecx, &to_expr)?.type_as(ecx, &ScalarType::String)?;
 
+    if options.max_file_size.as_bytes() < ByteSize::mb(16).as_bytes() {
+        sql_bail!("MAX FILE SIZE cannot be less than 16MB");
+    }
+
     Ok(Plan::CopyTo(CopyToPlan {
         select_plan,
         desc,
