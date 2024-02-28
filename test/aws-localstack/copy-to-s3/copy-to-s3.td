@@ -23,7 +23,8 @@ ALTER SYSTEM SET enable_copy_to_expr = true;
   TO AWS (
     ACCESS KEY ID = '${arg.access-key}',
     SECRET ACCESS KEY = SECRET aws_secret_access_key,
-    ENDPOINT = '${arg.endpoint}'
+    ENDPOINT = '${arg.endpoint}',
+    REGION = '${arg.region}'
   );
 
 ! COPY t TO 's3://path/to/dir';

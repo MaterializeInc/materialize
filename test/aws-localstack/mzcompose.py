@@ -214,61 +214,56 @@ def workflow_aws_connection(c: Composition) -> None:
 
 
 def workflow_copy_to_s3(c: Composition) -> None:
-    c.up("localstack", "materialized")
-    localhost_aws_endpoint_url = f"http://localhost:{c.port('localstack', 4566)}"
-    s3_client = boto3.client(
-        "s3",
-        endpoint_url=localhost_aws_endpoint_url,
-        region_name=DEFAULT_CLOUD_REGION,
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    )
-    bucket_name = "copy-to-s3"
-    s3_client.create_bucket(Bucket=bucket_name)
-    path_prefix = f"{bucket_name}/{str(uuid.uuid4())}"
-    c.run_testdrive_files(
-        f"--var=endpoint={AWS_ENDPOINT_URL_MZ}",
-        f"--var=access-key={AWS_ACCESS_KEY_ID}",
-        f"--var=secret-key={AWS_SECRET_ACCESS_KEY}",
-        f"--var=s3-prefix={path_prefix}",
-        "copy-to-s3/copy-to-s3.td",
-    )
-    date = datetime.now().strftime("%Y-%m-%d")
-    list_response = s3_client.list_objects_v2(
-        Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
-    )
-    # temporarily printing to debug on CI, not able to run this locally
-    print(f"first response: {list_response}")
-    list_response = s3_client.list_objects_v2(
-        Bucket=bucket_name, Prefix=f"{path_prefix}/2/"
-    )
-    # temporarily printing to debug on CI, not able to run this locally
-    print(f"second response: {list_response}")
+    with c.override(
+        Materialized(
+            depends_on=["localstack"],
+            environment_extra=[
+                f"AWS_ENDPOINT_URL={AWS_ENDPOINT_URL_MZ}",
+                f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}",
+                f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}",
+            ],
+        )
+    ):
+        c.up("localstack", "materialized")
+        localhost_aws_endpoint_url = f"http://localhost:{c.port('localstack', 4566)}"
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=localhost_aws_endpoint_url,
+            region_name=DEFAULT_CLOUD_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        )
+        bucket_name = "copy-to-s3"
+        s3_client.create_bucket(Bucket=bucket_name)
+        path_prefix = str(uuid.uuid4())
+        c.run_testdrive_files(
+            f"--var=endpoint={AWS_ENDPOINT_URL_MZ}",
+            f"--var=access-key={AWS_ACCESS_KEY_ID}",
+            f"--var=secret-key={AWS_SECRET_ACCESS_KEY}",
+            f"--var=s3-prefix={bucket_name}/{path_prefix}",
+            f"--var=region={DEFAULT_CLOUD_REGION}",
+            "copy-to-s3/copy-to-s3.td",
+        )
 
-    object_response = s3_client.get_object(
-        Bucket=bucket_name, Key=f"{path_prefix}/1/{date}/part-0001.csv"
-    )
-    # temporarily printing to debug on CI, not able to run this locally
-    print(f"object_response response: {object_response}")
+        # asserting the uploaded files
+        date = datetime.now().strftime("%Y-%m-%d")
+        assert (
+            s3_client.list_objects_v2(
+                Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
+            )["Contents"][0]["Key"]
+            == f"{path_prefix}/1/{date}/part-0001.csv"
+        )
 
-    # asserting the uploaded files
-    assert (
-        s3_client.list_objects_v2(
-            Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
-        )["Contents"][0]["Key"]
-        == "part-0001.csv"
-    )
+        assert (
+            s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/2/")[
+                "Contents"
+            ][0]["Key"]
+            == f"{path_prefix}/2/part-0001.csv"
+        )
 
-    assert (
-        s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/2/")[
-            "Contents"
-        ][0]["Key"]
-        == "part-0001.csv"
-    )
-
-    assert (
-        s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/3/")[
-            "Contents"
-        ][0]["Key"]
-        == "part-0001.csv"
-    )
+        assert (
+            s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/3/")[
+                "Contents"
+            ][0]["Key"]
+            == f"{path_prefix}/3/part-0001.csv"
+        )
