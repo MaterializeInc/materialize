@@ -20,6 +20,7 @@ mod codec;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -71,8 +72,8 @@ pub struct BalancerConfig {
     pgwire_listen_addr: SocketAddr,
     /// Listen address for HTTPS connections.
     https_listen_addr: SocketAddr,
-    /// Cancellation DNS resolver.
-    cancellation_resolver_template: Option<String>,
+    /// Cancellation resolver configmap directory.
+    cancellation_resolver_dir: Option<PathBuf>,
     /// DNS resolver.
     resolver: Resolver,
     https_addr_template: String,
@@ -88,7 +89,7 @@ impl BalancerConfig {
         internal_http_listen_addr: SocketAddr,
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
-        cancellation_resolver_template: Option<String>,
+        cancellation_resolver_dir: Option<PathBuf>,
         resolver: Resolver,
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
@@ -101,7 +102,7 @@ impl BalancerConfig {
             internal_http_listen_addr,
             pgwire_listen_addr,
             https_listen_addr,
-            cancellation_resolver_template,
+            cancellation_resolver_dir,
             resolver,
             https_addr_template,
             tls,
@@ -182,9 +183,15 @@ impl BalancerService {
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
         {
+            if let Some(dir) = &self.cfg.cancellation_resolver_dir {
+                if !dir.is_dir() {
+                    anyhow::bail!("{dir:?} is not a directory");
+                }
+            }
+            let cancellation_resolver = self.cfg.cancellation_resolver_dir.map(Arc::new);
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
-                cancellation_resolver: self.cfg.cancellation_resolver_template.map(Arc::new),
+                cancellation_resolver,
                 tls: pgwire_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
             };
@@ -367,7 +374,7 @@ impl ServerMetrics {
 
 struct PgwireBalancer {
     tls: Option<ReloadingTlsConfig>,
-    cancellation_resolver: Option<Arc<String>>,
+    cancellation_resolver: Option<Arc<PathBuf>>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
 }
@@ -586,15 +593,29 @@ impl mz_server_core::Server for PgwireBalancer {
 /// bits of randomness, and the secret key the full 32, for a total of 51 bits. That is more than
 /// 2e15 combinations, enough to nearly certainly prevent two different envds generating identical
 /// combinations.
-async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &str) {
-    let addr = cancellation_resolver.replace("{}", &conn_id_org_uuid(conn_id));
-    let ips = match tokio::net::lookup_host(&addr).await {
-        Ok(ips) => ips,
+async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &PathBuf) {
+    let suffix = conn_id_org_uuid(conn_id);
+    let path = cancellation_resolver.join(&suffix);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
         Err(err) => {
-            error!("{addr} failed resolution: {err}");
+            error!("could not read cancel file {path:?}: {err}");
             return;
         }
     };
+    let mut all_ips = Vec::new();
+    for addr in contents.lines() {
+        let addr = addr.trim();
+        if addr.is_empty() {
+            continue;
+        }
+        match tokio::net::lookup_host(addr).await {
+            Ok(ips) => all_ips.extend(ips),
+            Err(err) => {
+                error!("{addr} failed resolution: {err}");
+            }
+        }
+    }
     let mut buf = BytesMut::with_capacity(16);
     let msg = FrontendStartupMessage::CancelRequest {
         conn_id,
@@ -604,8 +625,8 @@ async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &s
     // TODO: Is there a way to not use an Arc here by convincing rust that buf will outlive the
     // spawn? Will awaiting the JoinHandle work?
     let buf = buf.freeze();
-    for ip in ips {
-        debug!("resolved {addr} to {ip}");
+    for ip in all_ips {
+        debug!("cancelling {suffix} to {ip}");
         let buf = buf.clone();
         spawn(|| "cancel request for ip", async move {
             let send = async {

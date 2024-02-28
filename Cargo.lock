@@ -3767,6 +3767,7 @@ dependencies = [
  "prometheus",
  "reqwest",
  "semver",
+ "tempfile",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
