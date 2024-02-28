@@ -166,7 +166,16 @@ class TestdrivePod(K8sPod, TestdriveBase):
                 print(e.stdout, end="")
             if e.stderr is not None:
                 print(e.stderr, file=sys.stderr, end="")
-            error_chunks = extract_error_chunks_from_output(e.stderr or e.stdout)
+
+            output = e.stderr or e.stdout
+            if output is None and suppress_command_error_output:
+                output = "(not captured)"
+
+            assert (
+                output is not None
+            ), f"Missing stdout and stderr when running '{e.cmd}' without success"
+
+            error_chunks = extract_error_chunks_from_output(output)
             error_text = "\n".join(error_chunks)
             raise CommandFailureCausedUIError(
                 f"Running {' '.join(command)} in testdrive failed with:\n{error_text}",
