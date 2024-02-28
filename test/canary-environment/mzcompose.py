@@ -29,6 +29,13 @@ MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD = os.environ[
     "MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD"
 ]
 
+MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME = os.environ[
+    "MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME"
+]
+MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD = os.environ[
+    "MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD"
+]
+
 CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER = os.environ[
     "CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER"
 ]
@@ -61,6 +68,10 @@ SERVICES = [
 
 POSTGRES_RANGE = 1024
 POSTGRES_RANGE_FUNCTION = "FLOOR(RANDOM() * (SELECT MAX(id) FROM people))"
+MYSQL_RANGE = 1024
+MYSQL_RANGE_FUNCTION = (
+    "FLOOR(RAND() * (SELECT MAX(id) FROM (SELECT * FROM people) AS p))"
+)
 
 
 def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -106,6 +117,34 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             input=dedent(
                 f"""
             > SET DATABASE=qa_canary_environment
+            $ mysql-connect name=mysql url=mysql://admin@{MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME} password={MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD}
+            $ mysql-execute name=mysql
+            DROP DATABASE IF EXISTS public;
+            CREATE DATABASE public;
+            USE public;
+
+            CREATE TABLE IF NOT EXISTS people (id INTEGER PRIMARY KEY, name TEXT, incarnation INTEGER DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS relationships (a INTEGER, b INTEGER, incarnation INTEGER DEFAULT 1, PRIMARY KEY (a,b));
+
+            CREATE EVENT insert_people ON SCHEDULE EVERY 1 SECOND DO INSERT INTO people (id, name) VALUES (FLOOR(RAND() * {MYSQL_RANGE}), 'aaaaaaaaaaaaaaaa'), (FLOOR(RAND() * {MYSQL_RANGE}), 'aaaaaaaaaaaaaaaa') ON DUPLICATE KEY UPDATE incarnation = people.incarnation + 1;
+            CREATE EVENT update_people_name ON SCHEDULE EVERY 1 SECOND DO UPDATE people SET name = REPEAT(id, 16) WHERE id = {MYSQL_RANGE_FUNCTION};
+            CREATE EVENT update_people_incarnation ON SCHEDULE EVERY 1 SECOND DO UPDATE people SET incarnation = incarnation + 1 WHERE id = {MYSQL_RANGE_FUNCTION};
+            CREATE EVENT delete_people ON SCHEDULE EVERY 1 SECOND DO DELETE FROM people WHERE id = {MYSQL_RANGE_FUNCTION};
+
+            -- MOD() is used to prevent truly random relationships from being created, as this overwhelms WMR
+            -- See https://materialize.com/docs/sql/recursive-ctes/#queries-with-update-locality
+            CREATE EVENT insert_relationships ON SCHEDULE EVERY 1 SECOND DO INSERT INTO relationships (a, b) VALUES (MOD({MYSQL_RANGE_FUNCTION}, 10), {MYSQL_RANGE_FUNCTION}), (MOD({MYSQL_RANGE_FUNCTION}, 10), {MYSQL_RANGE_FUNCTION}) ON DUPLICATE KEY UPDATE incarnation = relationships.incarnation + 1;
+            CREATE EVENT update_relationships_incarnation ON SCHEDULE EVERY 1 SECOND DO UPDATE relationships SET incarnation = incarnation + 1 WHERE a = {MYSQL_RANGE_FUNCTION} and b = {MYSQL_RANGE_FUNCTION};
+            CREATE EVENT delete_relationships ON SCHEDULE EVERY 1 SECOND DO DELETE FROM relationships WHERE a = {MYSQL_RANGE_FUNCTION} AND b = {MYSQL_RANGE_FUNCTION};
+
+            > CREATE SECRET IF NOT EXISTS mysql_password AS '{MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD}'
+
+            > CREATE CONNECTION IF NOT EXISTS mysql TO MYSQL (
+              HOST '{MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME}',
+              USER admin,
+              PASSWORD SECRET mysql_password
+              )
+
             $ postgres-execute connection=postgres://postgres:{MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD}@{MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME}
             -- ALTER USER postgres WITH replication;
 
