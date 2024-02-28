@@ -38,8 +38,8 @@ class MySqlCdcBase:
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
-                DROP DATABASE IF EXISTS public;
-                CREATE DATABASE public;
+                # create the database if it does not exist yet but do not drop it
+                CREATE DATABASE IF NOT EXISTS public;
                 USE public;
 
                 CREATE USER mysql1{self.suffix} IDENTIFIED BY 'mysql';
@@ -53,10 +53,10 @@ class MySqlCdcBase:
                 CREATE TABLE mysql_source_table{self.suffix} (f1 VARCHAR(32), f2 INTEGER, f3 TEXT NOT NULL, PRIMARY KEY(f1, f2));
 
                 SET @i:=0;
-                CREATE TABLE sequence (i INT);
-                INSERT INTO sequence SELECT (@i:=@i+1) FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 100;
+                CREATE TABLE sequence{self.suffix} (i INT);
+                INSERT INTO sequence{self.suffix} SELECT (@i:=@i+1) FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 100;
 
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM sequence WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
 
                 > CREATE SECRET mysqlpass1{self.suffix} AS 'mysql';
 
@@ -85,7 +85,7 @@ class MySqlCdcBase:
                 $ mysql-execute name=mysql
                 USE public;
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'B', i, REPEAT('B', {self.repeats} - i) FROM sequence WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'B', i, REPEAT('B', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SECRET mysqlpass2{self.suffix} AS 'mysql';
@@ -98,7 +98,7 @@ class MySqlCdcBase:
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM sequence WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
                 """
                 + (
@@ -119,7 +119,7 @@ class MySqlCdcBase:
                 $ mysql-execute name=mysql
                 USE public;
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i) FROM sequence WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SOURCE mysql_source2{self.suffix}
@@ -128,12 +128,12 @@ class MySqlCdcBase:
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM sequence WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i) FROM sequence WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
                 > CREATE SECRET mysqlpass3{self.suffix} AS 'mysql';
@@ -150,13 +150,13 @@ class MySqlCdcBase:
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i) FROM sequence WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
-                INSERT INTO mysql_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i) FROM sequence WHERE i <= 100;
+                INSERT INTO mysql_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i) FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
                 """
                 + (
@@ -256,8 +256,8 @@ class MySqlCdcMzNow(Check):
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
-                DROP DATABASE IF EXISTS public;
-                CREATE DATABASE public;
+                # create the database if it does not exist yet but do not drop it
+                CREATE DATABASE IF NOT EXISTS public;
                 USE public;
 
                 CREATE USER mysql2 IDENTIFIED BY 'mysql';
