@@ -168,7 +168,13 @@ fn copy_to<G>(
                 AsyncEvent::Data(_ts, data) => {
                     for ((row, ()), ts, diff) in data {
                         if !up_to.less_equal(&ts) {
-                            assert!(diff > 0, "negative accumulation in copy to S3 input");
+                            if diff < 0 {
+                                tracing::error!("negative accumulation in copy to s3 input");
+                                send_response(CopyToResponse::Error(
+                                    "interal error while reading from copy to s3 input".to_string(),
+                                ));
+                                return;
+                            }
                             row_count += u64::try_from(diff).unwrap();
                             for _ in 0..diff {
                                 match uploader.append_row(&row).await {
@@ -202,29 +208,29 @@ fn copy_to<G>(
     });
 }
 
-// Required state to upload batches to S3
+/// Required state to upload batches to S3
 struct CopyToS3Uploader {
-    // The output description.
+    /// The output description.
     desc: RelationDesc,
-    // Params to format the data.
+    /// Params to format the data.
     format: CopyFormatParams<'static>,
-    // The index of the current file.
+    /// The index of the current file.
     file_index: usize,
-    // The prefix for the file names.
+    /// The prefix for the file names.
     file_name_prefix: String,
-    // The s3 bucket.
+    /// The s3 bucket.
     bucket: String,
-    //The path prefix where the files should be uploaded to.
+    ///The path prefix where the files should be uploaded to.
     path_prefix: String,
-    // The desired file size. A new file upload will be started
-    // when the size exceeds this amount.
+    /// The desired file size. A new file upload will be started
+    /// when the size exceeds this amount.
     max_file_size: u64,
-    // The aws sdk config.
+    /// The aws sdk config.
     sdk_config: SdkConfig,
-    // Multi-part uploader for the current file.
-    // Keeping the uploader in an `Option` to later take owned value.
+    /// Multi-part uploader for the current file.
+    /// Keeping the uploader in an `Option` to later take owned value.
     current_file_uploader: Option<S3MultiPartUploader>,
-    // Temporary buffer to store the encoded bytes.
+    /// Temporary buffer to store the encoded bytes.
     buf: Vec<u8>,
 }
 
@@ -249,7 +255,7 @@ impl CopyToS3Uploader {
         }
     }
 
-    // Creates the uploader for the next file which starts the multi part upload.
+    /// Creates the uploader for the next file which starts the multi part upload.
     async fn start_new_file(&mut self) -> Result<(), anyhow::Error> {
         self.flush().await?;
         assert!(self.current_file_uploader.is_none());
@@ -295,8 +301,8 @@ impl CopyToS3Uploader {
         Ok(())
     }
 
-    // Appends the row to the in-progress upload or creates a new upload if it
-    // will exceed the max file size.
+    /// Appends the row to the in-progress upload or creates a new upload if it
+    /// will exceed the max file size.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
         // encode the row and write to temp buffer.
         self.buf.clear();
