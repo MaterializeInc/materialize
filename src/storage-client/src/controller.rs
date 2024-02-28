@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
+use mz_ore::instrument;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_types::Codec64;
@@ -664,6 +665,7 @@ impl MonotonicAppender {
         MonotonicAppender { tx }
     }
 
+    #[instrument(level = "debug")]
     pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {
         let (tx, rx) = oneshot::channel();
 

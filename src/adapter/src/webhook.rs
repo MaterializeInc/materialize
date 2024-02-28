@@ -14,6 +14,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use mz_ore::instrument;
 use mz_repr::{Datum, Diff, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
@@ -256,6 +257,7 @@ impl WebhookAppender {
     }
 
     /// Appends updates to the linked webhook source.
+    #[instrument(level = "debug", target = "webhook")]
     pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), AppendWebhookError> {
         if self.is_closed() {
             return Err(AppendWebhookError::ChannelClosed);

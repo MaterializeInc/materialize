@@ -15,6 +15,7 @@ use std::sync::Arc;
 use mz_adapter::{AppendWebhookError, AppendWebhookResponse, WebhookAppenderCache};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
+use mz_ore_instrument_macro::instrument;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Row, RowPacker, ScalarType};
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
@@ -25,9 +26,11 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::StatusCode;
 use thiserror::Error;
+use tracing::Instrument;
 
 use crate::http::WebhookState;
 
+#[instrument(level = "debug", target = "webhook")]
 pub async fn handle_webhook(
     State(WebhookState {
         adapter_client,
@@ -81,6 +84,7 @@ pub async fn handle_webhook(
 
 /// Append the provided `body` and `headers` to the webhook source identified via `database`,
 /// `schema`, and `name`.
+#[instrument(level = "debug", target = "webhook")]
 async fn append_webhook(
     adapter_client: &mz_adapter::Client,
     webhook_cache: &WebhookAppenderCache,
@@ -135,6 +139,7 @@ async fn append_webhook(
     if let Some(validator) = validator {
         let valid = validator
             .eval(Bytes::clone(body), Arc::clone(headers), received_at)
+            .instrument(tracing::debug_span!("webhook_eval", target = "webhook"))
             .await?;
         if !valid {
             return Err(AppendWebhookError::ValidationFailed);
@@ -154,6 +159,7 @@ async fn append_webhook(
 ///
 /// TODO(parkmycar): Should we be consolidating the returned Rows here? Presumably something in
 /// storage would already be doing it, so no need to do it twice?
+#[instrument(level = "debug", target = "webhook", fields(body_len = body.len(), headers_len = headers.len()))]
 fn pack_rows(
     body: &[u8],
     body_format: &WebhookBodyFormat,

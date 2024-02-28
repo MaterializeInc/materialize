@@ -4287,6 +4287,7 @@ dependencies = [
  "mz-orchestrator-process",
  "mz-orchestrator-tracing",
  "mz-ore",
+ "mz-ore-instrument-macro",
  "mz-persist-client",
  "mz-pgrepr",
  "mz-pgtest",
