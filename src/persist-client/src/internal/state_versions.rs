@@ -28,7 +28,8 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
@@ -1075,7 +1076,6 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
     }
     fn validate_against_state(&mut self, x: &State<T>) {
         use mz_ore::collections::HashSet;
-        use timely::PartialOrder;
 
         x.map_blobs(|x| match x {
             HollowBlobRef::Batch(x) => {
@@ -1086,21 +1086,33 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             }
         });
 
-        if let Some(first_incr) = self.inc_batches.first() {
-            let first_full = self
-                .full_batches
-                .first()
-                .expect("full has at least 1 batch");
-            assert_eq!(first_incr.desc.lower(), first_full.desc.lower());
-            PartialOrder::less_equal(first_full.desc.since(), first_incr.desc.since());
+        // Check that the sets of batches overall cover the same pTVC.
+        // Partial ordering means we can't just take the first and last batches; instead compute
+        // bounds using the lattice operations.
+        fn overall_desc<'a, T: Timestamp + Lattice>(
+            iter: impl Iterator<Item = &'a Description<T>>,
+        ) -> (Antichain<T>, Antichain<T>, Antichain<T>) {
+            let mut lower = Antichain::new();
+            let mut upper = Antichain::from_elem(T::minimum());
+            let mut since = Antichain::from_elem(T::minimum());
+            for desc in iter {
+                lower.meet_assign(desc.lower());
+                upper.join_assign(desc.upper());
+                since.join_assign(desc.since());
+            }
+            (lower, upper, since)
         }
+        let (inc_lower, inc_upper, inc_since) =
+            overall_desc(self.inc_batches.iter().map(|a| &a.desc));
+        let (full_lower, full_upper, full_since) =
+            overall_desc(self.full_batches.iter().map(|a| &a.desc));
+        assert_eq!(inc_lower, full_lower);
+        assert_eq!(inc_upper, full_upper);
+        // Unsure if we can strengthen this to an equality check; sticking with the
+        // inequality from the original code for now.
+        assert!(PartialOrder::less_equal(&full_since, &inc_since));
 
-        if let Some(last_incr) = self.inc_batches.last() {
-            let last_full = self.full_batches.last().expect("full has at least 1 batch");
-            assert_eq!(last_incr.desc.upper(), last_full.desc.upper());
-            PartialOrder::less_equal(last_full.desc.since(), last_incr.desc.since());
-        }
-
+        // Check that the overall set of parts contained in both representations is the same.
         let inc_parts: HashSet<_> = self
             .inc_batches
             .iter()
@@ -1115,6 +1127,7 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
             .collect();
         assert_eq!(inc_parts, full_parts);
 
+        // Check that both representations have the same rollups.
         assert_eq!(self.inc_rollups, self.full_rollups);
     }
 }
