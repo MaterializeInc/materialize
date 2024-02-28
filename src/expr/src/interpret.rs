@@ -526,22 +526,59 @@ struct SpecialUnary {
 impl SpecialUnary {
     /// Returns the special-case handling for a particular function, if it exists.
     fn for_func(func: &UnaryFunc) -> Option<SpecialUnary> {
+        /// Eager in the same sense as `func.rs` uses the term; this assumes that
+        /// nulls and errors propagate up, and we only need to define the behaviour
+        /// on values.
+        fn eagerly<'b>(
+            spec: ResultSpec<'b>,
+            value_fn: impl FnOnce(Values<'b>) -> ResultSpec<'b>,
+        ) -> ResultSpec<'b> {
+            let result = match spec.values {
+                Values::Empty => ResultSpec::nothing(),
+                other => value_fn(other),
+            };
+            ResultSpec {
+                fallible: spec.fallible || result.fallible,
+                nullable: spec.nullable || result.nullable,
+                values: result.values,
+            }
+        }
         match func {
             UnaryFunc::TryParseMonotonicIso8601Timestamp(_) => Some(SpecialUnary {
                 map_fn: |specs, range| {
-                    // Using `true` for `is_monotone` is correct for this except
-                    // that it also might return NULL for anything in the range,
-                    // so union them.
                     let expr = MirScalarExpr::CallUnary {
                         func: UnaryFunc::TryParseMonotonicIso8601Timestamp(
                             crate::func::TryParseMonotonicIso8601Timestamp,
                         ),
                         expr: Box::new(MirScalarExpr::Column(0)),
                     };
-                    let spec = range.flat_map(true, |datum| {
-                        specs.eval_result(datum.and_then(|d| expr.eval(&[d], specs.arena)))
-                    });
-                    spec.union(ResultSpec::null())
+                    let eval = |d| specs.eval_result(expr.eval(&[d], specs.arena));
+
+                    eagerly(range, |values| {
+                        match values {
+                            Values::Within(a, b) if a == b => eval(a),
+                            Values::Within(a, b) => {
+                                let spec = eval(a).union(eval(b));
+                                let values_spec = if spec.nullable {
+                                    // At least one of the endpoints of the range wasn't a valid
+                                    // timestamp. We can't compute a precise range in this case.
+                                    // If we used the general is_monotone handling, that code would
+                                    // incorrectly assume the whole range mapped to null if each
+                                    // endpoint did.
+                                    ResultSpec::value_all()
+                                } else {
+                                    spec
+                                };
+                                // A range of strings will always contain strings that don't parse
+                                // as timestamps - so unlike the general case, we'll assume null
+                                // is present in every range of output values.
+                                values_spec.union(ResultSpec::null())
+                            }
+                            // Otherwise, assume the worst: this function may return either a valid
+                            // value or null.
+                            _ => ResultSpec::value_all().union(ResultSpec::null()),
+                        }
+                    })
                 },
                 pushdownable: true,
             }),
@@ -1576,6 +1613,94 @@ mod tests {
         assert!(range_out.may_contain(Datum::True));
         assert!(range_out.may_contain(Datum::False));
         assert!(range_out.may_contain(Datum::Null));
+    }
+
+    #[mz_ore::test]
+    fn test_try_parse_monotonic_iso8601_timestamp() {
+        use chrono::NaiveDateTime;
+
+        let arena = RowArena::new();
+
+        let expr = MirScalarExpr::CallUnary {
+            func: UnaryFunc::TryParseMonotonicIso8601Timestamp(TryParseMonotonicIso8601Timestamp),
+            expr: Box::new(MirScalarExpr::Column(0)),
+        };
+
+        let relation = RelationType::new(vec![ScalarType::String.nullable(true)]);
+        // Test the case where we have full timestamps as bounds.
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::String("2024-01-11T00:00:00.000Z"),
+                Datum::String("2024-01-11T20:00:00.000Z"),
+            ),
+        );
+
+        let timestamp = |ts| {
+            Datum::Timestamp(
+                NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S")
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            )
+        };
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.fallible);
+        assert!(range_out.nullable);
+        assert!(!range_out.may_contain(timestamp("2024-01-10T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-11T10:00:00")));
+        assert!(!range_out.may_contain(timestamp("2024-01-12T10:00:00")));
+
+        // Test the case where we have truncated / useless bounds.
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(Datum::String("2024-01-1"), Datum::String("2024-01-2")),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.fallible);
+        assert!(range_out.nullable);
+        assert!(range_out.may_contain(timestamp("2024-01-10T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-11T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-12T10:00:00")));
+
+        // Test the case where only one bound is truncated
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::String("2024-01-1"),
+                Datum::String("2024-01-12T10:00:00"),
+            )
+            .union(ResultSpec::null()),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.fallible);
+        assert!(range_out.nullable);
+        assert!(range_out.may_contain(timestamp("2024-01-10T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-11T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-12T10:00:00")));
+
+        // Test the case where the upper and lower bound are identical
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::String("2024-01-11T10:00:00.000Z"),
+                Datum::String("2024-01-11T10:00:00.000Z"),
+            ),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.fallible);
+        assert!(!range_out.nullable);
+        assert!(!range_out.may_contain(timestamp("2024-01-10T10:00:00")));
+        assert!(range_out.may_contain(timestamp("2024-01-11T10:00:00")));
+        assert!(!range_out.may_contain(timestamp("2024-01-12T10:00:00")));
     }
 
     #[mz_ore::test]
