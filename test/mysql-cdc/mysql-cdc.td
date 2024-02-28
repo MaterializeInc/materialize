@@ -56,6 +56,21 @@ INSERT INTO types_table VALUES ('foo', '2011-11-11', '11:11:11', '2011-11-11 11:
 
 # no array_types_table: MySQL does not support array types
 
+# needed for MySQL 5.7
+SET GLOBAL max_allowed_packet=67108864;
+
+# reconnect after setting the max_allowed_packet var
+$ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
+
+$ mysql-execute name=mysql
+USE public;
+
+# explicitly set the value to have the same across different versions of MySQL
+ALTER DATABASE public CHARSET utf8mb4 COLLATE utf8mb4_general_ci;
+
+CREATE TABLE mysql_version (version TEXT);
+INSERT INTO mysql_version SELECT version();
+
 CREATE TABLE large_text (f1 LONGTEXT, f2 LONGTEXT, f3 TEXT);
 INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024), REPEAT('y', 1 * 1024 * 1024), REPEAT('z', 65535));
 INSERT INTO large_text VALUES (REPEAT('a', 3 * 1024 * 1024),  REPEAT('b', 2 * 1024 * 1024), REPEAT('c', 65535));

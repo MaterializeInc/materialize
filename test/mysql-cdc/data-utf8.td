@@ -32,7 +32,8 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE t1 (f1 TEXT);
+# explicitly set the character set for MySQL 5.7
+CREATE TABLE t1 (f1 TEXT CHARACTER SET utf8mb4);
 
 INSERT INTO t1 VALUES ('това е текст'), ('това ''е'' "текст"');
 

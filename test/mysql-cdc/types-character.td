@@ -32,7 +32,8 @@ CREATE DATABASE public;
 USE public;
 
 # Insert data pre-snapshot
-CREATE TABLE t1 (f1 VARCHAR(10), f2 CHAR(10), f3 TEXT);
+# explicitly set a character set and collate (one that also exists in MySQL 5.7)
+CREATE TABLE t1 (f1 VARCHAR(10), f2 CHAR(10), f3 TEXT) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
 INSERT INTO t1 VALUES ('abc', 'abc', 'abc');
 INSERT INTO t1 VALUES ('ABC', 'ABC', 'ABC');
@@ -61,8 +62,9 @@ INSERT INTO t1 SELECT * FROM t1;
 "abc " "abc       " "abc "
 
 $ mysql-execute name=mysql
-UPDATE t1 SET f1 = 'klm', f2 = 'klm', f3 = 'klm' WHERE f1 = 'abc';
-UPDATE t1 SET f1 = 'xyz ', f2 = 'xyz ', f3 = 'xyz ' WHERE f1 = 'abc ';
+# use LIKE instead of '=' to due to 'PAD SPACE' in the use collation
+UPDATE t1 SET f1 = 'klm', f2 = 'klm', f3 = 'klm' WHERE lower(f1) LIKE 'abc';
+UPDATE t1 SET f1 = 'xyz ', f2 = 'xyz ', f3 = 'xyz ' WHERE lower(f1) LIKE 'abc ';
 
 > SELECT * FROM t1;
 "klm" "klm       " "klm"

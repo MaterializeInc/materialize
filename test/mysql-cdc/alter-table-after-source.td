@@ -321,9 +321,10 @@ contains:unknown
 f1_orig f2_orig
 
 $ mysql-execute name=mysql
-ALTER TABLE alter_table_rename_column RENAME COLUMN f1 TO f3;
-ALTER TABLE alter_table_rename_column RENAME COLUMN f2 TO f1;
-ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
+# use CHANGE instead of RENAME COLUMN f1 TO f3 to be compatible with MySQL 5.7
+ALTER TABLE alter_table_rename_column CHANGE f1 f3 varchar(10);
+ALTER TABLE alter_table_rename_column CHANGE f2 f1 varchar(10);
+ALTER TABLE alter_table_rename_column CHANGE f3 f2 varchar(10);
 INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed');
 
 ! SELECT * FROM alter_table_rename_column;
