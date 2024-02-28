@@ -19,7 +19,8 @@ use http::Uri;
 use mz_aws_util::s3_uploader::{S3MultiPartUploader, S3MultiPartUploaderConfig};
 use mz_ore::cast::CastFrom;
 use mz_pgcopy::{encode_copy_format, CopyFormatParams};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::S3UploadInfo;
@@ -36,6 +37,8 @@ pub fn copy_to<G, F>(
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
+    aws_connection: AwsConnection,
+    connection_id: GlobalId,
     active_worker: usize,
     callback: F,
 ) where
@@ -74,9 +77,7 @@ pub fn copy_to<G, F>(
             }
         }
 
-        let connection_id = connection_details.connection_id;
-        let sdk_config = match connection_details
-            .aws_connection
+        let sdk_config = match aws_connection
             .load_sdk_config(&connection_context, connection_id)
             .await
         {
@@ -238,7 +239,7 @@ impl CopyToS3Uploader {
         self.buf.clear();
         encode_copy_format(self.format.clone(), row, self.desc.typ(), &mut self.buf)
             .map_err(|_| anyhow!("error encoding row"))?;
-        let buffer_length = self.buf.len();
+        let buffer_length = u64::cast_from(self.buf.len());
 
         if self.current_file_uploader.is_none() {
             self.start_new_file().await?;
@@ -249,8 +250,10 @@ impl CopyToS3Uploader {
         let Some(uploader) = self.current_file_uploader.as_mut() else {
             unreachable!("uploader initialized above");
         };
-        if u64::cast_from(buffer_length) < uploader.remaining_bytes_limit() {
+        if buffer_length <= uploader.remaining_bytes_limit() {
             // Add to ongoing upload of the current file if still within limit.
+            // Or in the unlikely even the size of a single row is more than the max_file_size
+            // upload it anyway.
             uploader.buffer_chunk(&self.buf).await?;
         } else {
             // Start a multi part upload of next file.
@@ -261,6 +264,111 @@ impl CopyToS3Uploader {
             };
             uploader.buffer_chunk(&self.buf).await?;
         }
+
+        Ok(())
+    }
+}
+
+// On CI, these tests are enabled by adding the scratch-aws-access plugin
+/// to the `cargo-test` step in `ci/test/pipeline.template.yml` and setting
+/// `MZ_S3_UPLOADER_TEST_S3_BUCKET` in
+/// `ci/test/cargo-test/mzcompose.py`.
+///
+/// For a Materialize developer, to opt in to these tests locally for
+/// development, follow the AWS access guide:
+///
+/// ```text
+/// https://www.notion.so/materialize/AWS-access-5fbd9513dcdc4e11a7591e8caa5f63fe
+/// ```
+///
+/// then running `source src/aws-util/src/setup_test_env_mz.sh`. You will also have
+/// to run `aws sso login` if you haven't recently.
+#[cfg(test)]
+mod tests {
+    use bytesize::ByteSize;
+    use mz_repr::{ColumnName, ColumnType, Datum, RelationType};
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn s3_bucket_path_for_test() -> Option<(String, String)> {
+        let bucket = match std::env::var("MZ_S3_UPLOADER_TEST_S3_BUCKET") {
+            Ok(bucket) => bucket,
+            Err(_) => {
+                if mz_ore::env::is_var_truthy("CI") {
+                    panic!("CI is supposed to run this test but something has gone wrong!");
+                }
+                return None;
+            }
+        };
+
+        let prefix = Uuid::new_v4().to_string();
+        let path = format!("cargo_test/{}/file", prefix);
+        Some((bucket, path))
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    async fn test_multiple_files() -> Result<(), anyhow::Error> {
+        let sdk_config = mz_aws_util::defaults().load().await;
+        let (bucket, path) = match s3_bucket_path_for_test() {
+            Some(tuple) => tuple,
+            None => return Ok(()),
+        };
+        let typ: RelationType = RelationType::new(vec![ColumnType {
+            scalar_type: mz_repr::ScalarType::String,
+            nullable: false,
+        }]);
+        let column_names = vec![ColumnName::from("col1")];
+        let desc = RelationDesc::new(typ, column_names.into_iter());
+        let mut uploader = CopyToS3Uploader::new(
+            sdk_config.clone(),
+            S3UploadInfo {
+                prefix: format!("s3://{}/{}", bucket, path),
+                // this is only for testing, users will not be able to set value smaller than 16MB.
+                max_file_size: ByteSize::b(6).as_u64(),
+                desc,
+                format: CopyFormatParams::Csv(Default::default()),
+            },
+            "part".to_string(),
+        );
+        let mut row = Row::default();
+        row.packer().push(Datum::from("1234"));
+        uploader.append_row(&row).await?;
+
+        // Since the max_file_size is 6B, this row will be uploaded to a new file.
+        row.packer().push(Datum::from("5678"));
+        uploader.append_row(&row).await?;
+
+        uploader.flush().await?;
+
+        // Based on the max_file_size, the uploader should have uploaded two
+        // files, part-0001.csv and part-0002.csv
+        let s3_client = mz_aws_util::s3::new_client(&sdk_config);
+        let first_file = s3_client
+            .get_object()
+            .bucket(bucket.clone())
+            .key(format!("{}/part-0001.csv", path))
+            .send()
+            .await
+            .unwrap();
+
+        let body = first_file.body.collect().await.unwrap().into_bytes();
+        let expected_body: &[u8] = b"1234\n";
+        assert_eq!(body, *expected_body);
+
+        let second_file = s3_client
+            .get_object()
+            .bucket(bucket)
+            .key(format!("{}/part-0002.csv", path))
+            .send()
+            .await
+            .unwrap();
+
+        let body = second_file.body.collect().await.unwrap().into_bytes();
+        let expected_body: &[u8] = b"5678\n";
+        assert_eq!(body, *expected_body);
 
         Ok(())
     }

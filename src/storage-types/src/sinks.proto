@@ -17,7 +17,6 @@ import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/controller.proto";
 import "storage-types/src/connections.proto";
-import "storage-types/src/connections/aws.proto";
 
 package mz_storage_types.sinks;
 
@@ -111,8 +110,6 @@ message ProtoPersistSinkConnection {
 
 message ProtoS3UploadInfo {
     string prefix = 1;
-    mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
-    mz_repr.global_id.ProtoGlobalId connection_id = 3;
     uint64 max_file_size = 4;
     mz_repr.relation_and_scalar.ProtoRelationDesc desc = 5;
     mz_pgcopy.copy.ProtoCopyFormatParams format = 6;

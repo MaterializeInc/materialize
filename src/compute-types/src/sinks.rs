@@ -12,6 +12,7 @@
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::S3UploadInfo;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -175,21 +176,37 @@ pub struct SubscribeSinkConnection {}
 
 /// Connection attributes required to do a oneshot copy to s3.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct CopyToS3OneshotSinkConnection(pub S3UploadInfo);
+pub struct CopyToS3OneshotSinkConnection {
+    /// Information specific to the upload.
+    pub upload_info: S3UploadInfo,
+    /// The AWS connection information to do the writes.
+    pub aws_connection: AwsConnection,
+    /// The ID of the Connection object, used to generate the External ID when
+    /// using AssumeRole with AWS connection.
+    pub connection_id: GlobalId,
+}
 
 impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnection {
     fn into_proto(&self) -> ProtoCopyToS3OneshotSinkConnection {
         ProtoCopyToS3OneshotSinkConnection {
-            s3_upload_info: Some(self.0.into_proto()),
+            upload_info: Some(self.upload_info.into_proto()),
+            aws_connection: Some(self.aws_connection.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoCopyToS3OneshotSinkConnection) -> Result<Self, TryFromProtoError> {
-        Ok(CopyToS3OneshotSinkConnection(
-            proto
-                .s3_upload_info
-                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::s3_upload_info")?,
-        ))
+        Ok(CopyToS3OneshotSinkConnection {
+            upload_info: proto
+                .upload_info
+                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::upload_info")?,
+            aws_connection: proto
+                .aws_connection
+                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::aws_connection")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::connection_id")?,
+        })
     }
 }
 

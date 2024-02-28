@@ -260,9 +260,9 @@ impl S3MultiPartUploader {
         u64::cast_from(self.buffer.len())
     }
 
+    // Returns the amount of bytes which can still be added to the multi-part upload
+    // without exceeding `file_size_limit`.
     pub fn remaining_bytes_limit(&self) -> u64 {
-        // Returns the amount of bytes which can still be added to the multi-part upload
-        // without exceeding `file_size_limit`.
         self.config.file_size_limit() - self.total_bytes_uploaded - self.buffer_size()
     }
 
@@ -390,9 +390,9 @@ mod tests {
             S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), path.clone(), config).await?;
 
         let expected_data = "onetwothree";
-        let _ = uploader.buffer_chunk(b"one").await?;
-        let _ = uploader.buffer_chunk(b"two").await?;
-        let _ = uploader.buffer_chunk(b"three").await?;
+        uploader.buffer_chunk(b"one").await?;
+        uploader.buffer_chunk(b"two").await?;
+        uploader.buffer_chunk(b"three").await?;
 
         // This should trigger one single part upload.
         let CompletedUpload {

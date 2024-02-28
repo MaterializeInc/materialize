@@ -210,16 +210,18 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // might be possible in the future for COPY TO to write to different
         // sinks, which should be set here depending upon the url scheme.
         let connection = match &self.copy_to_context.connection {
-            Connection::Aws(aws_connection) => ComputeSinkConnection::CopyToS3Oneshot(
-                CopyToS3OneshotSinkConnection(S3UploadInfo {
+            Connection::Aws(aws_connection) => {
+                ComputeSinkConnection::CopyToS3Oneshot(CopyToS3OneshotSinkConnection {
+                    upload_info: S3UploadInfo {
+                        prefix: self.copy_to_context.uri.to_string(),
+                        max_file_size: self.copy_to_context.max_file_size,
+                        desc: self.copy_to_context.desc.clone(),
+                        format: self.copy_to_context.format_params.clone(),
+                    },
                     aws_connection: aws_connection.clone(),
                     connection_id: self.copy_to_context.connection_id,
-                    prefix: self.copy_to_context.uri.to_string(),
-                    max_file_size: self.copy_to_context.max_file_size,
-                    desc: self.copy_to_context.desc.clone(),
-                    format: self.copy_to_context.format_params.clone(),
-                }),
-            ),
+                })
+            }
             _ => {
                 // Currently only s3 sinks are supported. It was already validated in planning that this
                 // is an aws connection.

@@ -6019,6 +6019,7 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

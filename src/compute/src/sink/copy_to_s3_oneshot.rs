@@ -81,8 +81,10 @@ where
             input,
             error,
             sink.up_to.clone(),
-            self.0.clone(),
+            self.upload_info.clone(),
             connection_context,
+            self.aws_connection.clone(),
+            self.connection_id,
             active_worker,
             callback,
         );
