@@ -459,7 +459,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-environmentd-clusterd-storage
-        label: "Checks + restart of environmentd & storage clusterd (%N)"
+        label: "Checks + restart of environmentd & storage clusterd %N"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
@@ -473,7 +473,7 @@ steps:
               args: [--scenario=RestartEnvironmentdClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-no-restart-no-upgrade
-        label: "Checks without restart or upgrade"
+        label: "Checks without restart or upgrade %N"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
