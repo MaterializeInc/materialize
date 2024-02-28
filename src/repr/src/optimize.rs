@@ -90,6 +90,13 @@ optimizer_feature_flags!({
     enable_reduce_mfp_fusion: bool,
 });
 
+/// A trait used to implement layered config construction.
+pub trait OverrideFrom<T> {
+    /// Override the configuration represented by [`Self`] with values
+    /// from the given `layer`.
+    fn override_from(self, layer: &T) -> Self;
+}
+
 /// A trait that handles conversion of feature flags.
 trait OptimizerFeatureType {
     fn encode(self) -> String;

@@ -13,6 +13,7 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
@@ -31,7 +32,7 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
-use crate::optimize::{self, Optimize, OverrideFrom};
+use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 

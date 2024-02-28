@@ -12,6 +12,7 @@ use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, RelationDesc, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
@@ -29,7 +30,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::{self, Optimize, OverrideFrom};
+use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext};
 

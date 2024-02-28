@@ -67,7 +67,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
-use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::optimize::{OptimizerFeatureOverrides, OverrideFrom};
 use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
@@ -237,13 +237,6 @@ impl From<&SystemVars> for OptimizerConfig {
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
         }
     }
-}
-
-/// A trait used to implement layered config construction.
-pub trait OverrideFrom<T> {
-    /// Override the configuration represented by [`Self`] with values
-    /// from the given `layer`.
-    fn override_from(self, layer: &T) -> Self;
 }
 
 /// [`OptimizerConfig`] overrides coming from an optional `T`.

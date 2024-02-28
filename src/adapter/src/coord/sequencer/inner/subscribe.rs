@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::instrument;
+use mz_repr::optimize::OverrideFrom;
 use mz_sql::plan::{self, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;
@@ -22,7 +23,7 @@ use crate::coord::{
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::optimize::{Optimize, OverrideFrom};
+use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
 use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
