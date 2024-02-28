@@ -154,7 +154,7 @@ class MySqlInsert(MySqlDML):
 
 
 class MySqlShiftForward(MySqlDML):
-    """Update all rows from a MySQL table by incrementing their values by a constant (tables with a PK only)"""
+    """Update all rows from a MySQL table by incrementing their values by a constant (tables without a PK only)"""
 
     def run(self, c: Composition) -> None:
         if not self.mysql_table.has_pk:
@@ -173,7 +173,7 @@ class MySqlShiftForward(MySqlDML):
 
 
 class MySqlShiftBackward(MySqlDML):
-    """Update all rows from a MySQL table by decrementing their values by a constant (tables with a PK only)"""
+    """Update all rows from a MySQL table by decrementing their values by a constant (tables without a PK only)"""
 
     def run(self, c: Composition) -> None:
         if not self.mysql_table.has_pk:
