@@ -10,10 +10,10 @@
 //! Types for describing dataflow sinks.
 
 use mz_expr::refresh_schedule::RefreshSchedule;
-use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::sinks::S3UploadInfo;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -175,51 +175,21 @@ pub struct SubscribeSinkConnection {}
 
 /// Connection attributes required to do a oneshot copy to s3.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct CopyToS3OneshotSinkConnection {
-    /// The s3 prefix path to write the data to.
-    pub prefix: String,
-    /// The AWS connection information to do the writes.
-    pub aws_connection: mz_storage_types::connections::aws::AwsConnection,
-    /// The ID of the Connection object, used to generate the External ID when
-    /// using AssumeRole with AWS connection.
-    pub connection_id: GlobalId,
-    /// The max file size of each file uploaded to S3.
-    pub max_file_size: u64,
-    /// The relation desc of the data to be uploaded to S3.
-    pub desc: RelationDesc,
-    /// The selected sink format.
-    pub format: CopyFormatParams<'static>,
-}
+pub struct CopyToS3OneshotSinkConnection(pub S3UploadInfo);
 
 impl RustType<ProtoCopyToS3OneshotSinkConnection> for CopyToS3OneshotSinkConnection {
     fn into_proto(&self) -> ProtoCopyToS3OneshotSinkConnection {
         ProtoCopyToS3OneshotSinkConnection {
-            prefix: self.prefix.clone(),
-            aws_connection: Some(self.aws_connection.into_proto()),
-            connection_id: Some(self.connection_id.into_proto()),
-            max_file_size: self.max_file_size,
-            desc: Some(self.desc.into_proto()),
-            format: Some(self.format.into_proto()),
+            s3_upload_info: Some(self.0.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoCopyToS3OneshotSinkConnection) -> Result<Self, TryFromProtoError> {
-        Ok(CopyToS3OneshotSinkConnection {
-            prefix: proto.prefix,
-            aws_connection: proto
-                .aws_connection
-                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::aws_connection")?,
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::connection_id")?,
-            max_file_size: proto.max_file_size,
-            desc: proto
-                .desc
-                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::desc")?,
-            format: proto
-                .format
-                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::format")?,
-        })
+        Ok(CopyToS3OneshotSinkConnection(
+            proto
+                .s3_upload_info
+                .into_rust_if_some("ProtoCopyToS3OneshotSinkConnection::s3_upload_info")?,
+        ))
     }
 }
 

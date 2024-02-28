@@ -13,6 +13,7 @@ use std::borrow::Cow;
 use std::fmt::Debug;
 
 use mz_persist_client::ShardId;
+use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -21,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
+use crate::connections::aws::AwsConnection;
 use crate::connections::ConnectionContext;
 use crate::controller::{CollectionMetadata, StorageError};
 
@@ -767,6 +769,54 @@ impl RustType<ProtoKafkaSinkFormat> for KafkaSinkFormat {
                     .into_rust_if_some("ProtoKafkaSinkAvroFormat::csr_connection")?,
             },
             Kind::Json(()) => Self::Json,
+        })
+    }
+}
+
+/// Info required to copy the data to s3.
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct S3UploadInfo {
+    /// The s3 prefix path to write the data to.
+    pub prefix: String,
+    /// The AWS connection information to do the writes.
+    pub aws_connection: AwsConnection,
+    /// The ID of the Connection object, used to generate the External ID when
+    /// using AssumeRole with AWS connection.
+    pub connection_id: GlobalId,
+    /// The max file size of each file uploaded to S3.
+    pub max_file_size: u64,
+    /// The relation desc of the data to be uploaded to S3.
+    pub desc: RelationDesc,
+    /// The selected sink format.
+    pub format: CopyFormatParams<'static>,
+}
+
+impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
+    fn into_proto(&self) -> ProtoS3UploadInfo {
+        ProtoS3UploadInfo {
+            prefix: self.prefix.clone(),
+            aws_connection: Some(self.aws_connection.into_proto()),
+            connection_id: Some(self.connection_id.into_proto()),
+            max_file_size: self.max_file_size,
+            desc: Some(self.desc.into_proto()),
+            format: Some(self.format.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoS3UploadInfo) -> Result<Self, TryFromProtoError> {
+        Ok(S3UploadInfo {
+            prefix: proto.prefix,
+            aws_connection: proto
+                .aws_connection
+                .into_rust_if_some("ProtoS3UploadInfo::aws_connection")?,
+            connection_id: proto
+                .connection_id
+                .into_rust_if_some("ProtoS3UploadInfo::connection_id")?,
+            max_file_size: proto.max_file_size,
+            desc: proto.desc.into_rust_if_some("ProtoS3UploadInfo::desc")?,
+            format: proto
+                .format
+                .into_rust_if_some("ProtoS3UploadInfo::format")?,
         })
     }
 }

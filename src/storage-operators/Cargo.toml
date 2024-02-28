@@ -10,14 +10,20 @@ publish = false
 workspace = true
 
 [dependencies]
+anyhow = "1.0.66"
 async-stream = "0.3.3"
+aws-types = "1.1.1"
+bytesize = "1.1.0"
 differential-dataflow = "0.12.0"
 futures = "0.3.25"
+http = "0.2.8"
+mz-aws-util = { path = "../aws-util" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-txn = { path = "../persist-txn" }
 mz-persist-types = { path = "../persist-types" }
+mz-pgcopy = { path = "../pgcopy" }
 mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
