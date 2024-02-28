@@ -10,6 +10,7 @@
 """Tests of AWS functionality that run against localstack."""
 
 import uuid
+from datetime import datetime
 from typing import Any, cast
 
 import boto3
@@ -232,23 +233,41 @@ def workflow_copy_to_s3(c: Composition) -> None:
         f"--var=s3-prefix={path_prefix}",
         "copy-to-s3/copy-to-s3.td",
     )
+    date = datetime.now().strftime("%Y-%m-%d")
+    list_response = s3_client.list_objects_v2(
+        Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
+    )
+    # temporarily printing to debug on CI, not able to run this locally
+    print(f"first response: {list_response}")
+    list_response = s3_client.list_objects_v2(
+        Bucket=bucket_name, Prefix=f"{path_prefix}/2/"
+    )
+    # temporarily printing to debug on CI, not able to run this locally
+    print(f"second response: {list_response}")
+
+    object_response = s3_client.get_object(
+        Bucket=bucket_name, Key=f"{path_prefix}/1/{date}/part-0001.csv"
+    )
+    # temporarily printing to debug on CI, not able to run this locally
+    print(f"object_response response: {object_response}")
+
     # asserting the uploaded files
     assert (
-        s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/1")[
+        s3_client.list_objects_v2(
+            Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
+        )["Contents"][0]["Key"]
+        == "part-0001.csv"
+    )
+
+    assert (
+        s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/2/")[
             "Contents"
         ][0]["Key"]
         == "part-0001.csv"
     )
 
     assert (
-        s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/2")[
-            "Contents"
-        ][0]["Key"]
-        == "part-0001.csv"
-    )
-
-    assert (
-        s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/3")[
+        s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/3/")[
             "Contents"
         ][0]["Key"]
         == "part-0001.csv"
