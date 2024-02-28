@@ -16,7 +16,7 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 
-MYSQL_VERSIONS = ["8.3.0"]
+MYSQL_VERSIONS = ["5.7.44", "8.3.0"]
 
 
 def create_mysql_replica(version: str) -> MySql:
