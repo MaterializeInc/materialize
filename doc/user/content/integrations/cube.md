@@ -32,7 +32,7 @@ In this guide, we’ll cover how to connect and configure a [Cube Cloud](https:/
     Port              | **6875**
     Database username | Materialize user.
     Database password | App-specific password.
-    Cluster           | Materialize cluster name.
+    Cluster           | Default cluster for the connection.
     SSL               | ✅
 
 1. #### Configure the default database
