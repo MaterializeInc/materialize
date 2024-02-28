@@ -54,7 +54,7 @@ where
 
         let callback = move |count: Result<u64, String>| {
             if let Some(response_protocol) = response_protocol_handle.borrow_mut().deref_mut() {
-                response_protocol.send_count(count);
+                response_protocol.send(count);
             }
         };
 
@@ -102,18 +102,17 @@ struct ResponseProtocol {
 }
 
 impl ResponseProtocol {
-    fn send_count(&mut self, count: Result<u64, String>) {
-        let buffer = self.response_buffer.as_mut().expect("Copy response buffer");
-        let response = match count {
-            Ok(count) => CopyToResponse::RowCount(count),
-            Err(error) => CopyToResponse::Error(error),
-        };
-
-        buffer.borrow_mut().push((self.sink_id, response));
-
+    // This method should only be called once.
+    fn send(&mut self, count: Result<u64, String>) {
         // The dataflow's input has been exhausted, clear the channel,
         // to avoid sending `CopyToResponse::Dropped`.
-        self.response_buffer = None;
+        if let Some(buffer) = self.response_buffer.take() {
+            let response = match count {
+                Ok(count) => CopyToResponse::RowCount(count),
+                Err(error) => CopyToResponse::Error(error),
+            };
+            buffer.borrow_mut().push((self.sink_id, response));
+        }
     }
 }
 

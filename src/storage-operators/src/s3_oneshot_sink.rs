@@ -96,10 +96,9 @@ pub fn copy_to<G, F>(
                     for ((row, ()), ts, diff) in data {
                         if !up_to.less_equal(&ts) {
                             if diff < 0 {
-                                tracing::error!("negative accumulation in copy to s3 input");
-                                callback(Err(
-                                    "interal error while reading from copy to s3 input".to_string()
-                                ));
+                                callback(Err(format!(
+                                    "Invalid data in source errors, saw retractions ({}) for row that does not exist", diff * -1,
+                                )));
                                 return;
                             }
                             row_count += u64::try_from(diff).unwrap();
@@ -158,6 +157,8 @@ struct CopyToS3Uploader {
     /// Keeping the uploader in an `Option` to later take owned value.
     current_file_uploader: Option<S3MultiPartUploader>,
     /// Temporary buffer to store the encoded bytes.
+    /// Currently at a time this will only store one single encoded row
+    /// before getting added to the `current_file_uploader`'s buffer.
     buf: Vec<u8>,
 }
 
@@ -228,8 +229,10 @@ impl CopyToS3Uploader {
         Ok(())
     }
 
-    /// Appends the row to the in-progress upload or creates a new upload if it
-    /// will exceed the max file size.
+    /// Appends the row to the in-progress upload where it is buffered till it reaches the configured
+    /// `part_size_limit` after which the `S3MultiPartUploader` will upload that part. In case it will
+    /// exceed the max file size of the ongoing upload, then a new `S3MultiPartUploader` for a new file will
+    /// be created and the row data will be appended there.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
         // encode the row and write to temp buffer.
         self.buf.clear();
@@ -248,7 +251,7 @@ impl CopyToS3Uploader {
         };
         if u64::cast_from(buffer_length) < uploader.remaining_bytes_limit() {
             // Add to ongoing upload of the current file if still within limit.
-            uploader.add_chunk(&self.buf).await?;
+            uploader.buffer_chunk(&self.buf).await?;
         } else {
             // Start a multi part upload of next file.
             self.start_new_file().await?;
@@ -256,7 +259,7 @@ impl CopyToS3Uploader {
             let Some(uploader) = self.current_file_uploader.as_mut() else {
                 unreachable!("uploader initialized above");
             };
-            uploader.add_chunk(&self.buf).await?;
+            uploader.buffer_chunk(&self.buf).await?;
         }
 
         Ok(())
