@@ -1459,6 +1459,13 @@ pub static ENABLE_COMPUTE_CHUNKED_STACK: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static ENABLE_LGALLOC_EAGER_RECLAMATION: VarDefinition = VarDefinition::new(
+    "enable_lgalloc_eager_reclamation",
+    value!(bool; true),
+    "Enable lgalloc's eager return behavior.",
+    true,
+);
+
 pub static ENABLE_STATEMENT_LIFECYCLE_LOGGING: VarDefinition = VarDefinition::new(
     "enable_statement_lifecycle_logging",
     value!(bool; false),

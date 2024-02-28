@@ -86,6 +86,7 @@ message ProtoComputeParameters {
     optional bool enable_columnation_lgalloc = 10;
     optional bool enable_operator_hydration_status_logging = 11;
     optional bool enable_chunked_stack = 12;
+    optional bool enable_lgalloc_eager_reclamation = 13;
 }
 
 message ProtoComputeMaxInflightBytesConfig {
