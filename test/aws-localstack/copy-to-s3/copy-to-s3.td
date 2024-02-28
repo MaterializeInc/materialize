@@ -22,7 +22,7 @@ ALTER SYSTEM SET enable_copy_to_expr = true;
 > CREATE CONNECTION aws_conn
   TO AWS (
     ACCESS KEY ID = '${arg.access-key}',
-    SECRET ACCESS KEY = SECRET aws_secret_access_key
+    SECRET ACCESS KEY = SECRET aws_secret_access_key,
     ENDPOINT = '${arg.endpoint}'
   );
 

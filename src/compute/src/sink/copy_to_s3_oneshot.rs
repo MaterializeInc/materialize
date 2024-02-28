@@ -13,8 +13,8 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 use std::str::FromStr;
 
+use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
-use bytes::Bytes;
 use bytesize::ByteSize;
 use differential_dataflow::{Collection, Hashable};
 use http::Uri;
@@ -160,16 +160,7 @@ fn copy_to<G>(
             }
         };
 
-        let mut uploader = CopyToS3Uploader {
-            format: sink_connection.format,
-            desc: sink_connection.desc,
-            buf: Vec::new(),
-            max_file_size: sink_connection.max_file_size,
-            file_name_prefix: "part".into(), // file name will be <file_name_prefix>-<file_index>.csv.
-            file_index: 0,
-            path_prefix: sink_connection.prefix,
-            sdk_config,
-        };
+        let mut uploader = CopyToS3Uploader::new(sdk_config, sink_connection, "part".into());
 
         let mut row_count = 0;
         while let Some(event) = input_handle.next().await {
@@ -194,15 +185,16 @@ fn copy_to<G>(
                 AsyncEvent::Progress(frontier) => {
                     if PartialOrder::less_equal(&up_to, &frontier) {
                         match uploader.flush().await {
-                            Ok(()) => {}
+                            Ok(()) => {
+                                // We are done, send the final count.
+                                send_response(CopyToResponse::RowCount(row_count));
+                                return;
+                            }
                             Err(e) => {
                                 send_response(CopyToResponse::Error(e.to_string()));
                                 return;
                             }
                         }
-                        // We are done, send the final count.
-                        send_response(CopyToResponse::RowCount(row_count));
-                        return;
                     }
                 }
             }
@@ -210,28 +202,84 @@ fn copy_to<G>(
     });
 }
 
-/// Required state to upload batches to S3
+// Required state to upload batches to S3
 struct CopyToS3Uploader {
-    /// The output description.
+    // The output description.
     desc: RelationDesc,
-    /// Params to format the data.
+    // Params to format the data.
     format: CopyFormatParams<'static>,
-    /// The index of the next file.
+    // The index of the current file.
     file_index: usize,
-    /// The prefix for the file names.
+    // The prefix for the file names.
     file_name_prefix: String,
-    /// The bucket prefix batches should be uploaded to.
+    // The s3 bucket.
+    bucket: String,
+    //The path prefix where the files should be uploaded to.
     path_prefix: String,
-    /// A buffer of encoded data.
-    buf: Vec<u8>,
-    /// The desired batch size. When the buffer exceeds this value a put operation will be
-    /// performed.
+    // The desired file size. A new file upload will be started
+    // when the size exceeds this amount.
     max_file_size: u64,
-    /// The aws sdk config.
+    // The aws sdk config.
     sdk_config: SdkConfig,
+    // Multi-part uploader for the current file.
+    // Keeping the uploader in an `Option` to later take owned value.
+    current_file_uploader: Option<S3MultiPartUploader>,
+    // Temporary buffer to store the encoded bytes.
+    buf: Vec<u8>,
 }
 
 impl CopyToS3Uploader {
+    fn new(
+        sdk_config: SdkConfig,
+        sink_connection: CopyToS3OneshotSinkConnection,
+        file_name_prefix: String,
+    ) -> CopyToS3Uploader {
+        let (bucket, path_prefix) = Self::extract_s3_bucket_path(&sink_connection.prefix);
+        CopyToS3Uploader {
+            desc: sink_connection.desc,
+            sdk_config,
+            format: sink_connection.format,
+            file_name_prefix,
+            bucket,
+            path_prefix,
+            max_file_size: sink_connection.max_file_size,
+            file_index: 0,
+            current_file_uploader: None,
+            buf: Vec::new(),
+        }
+    }
+
+    // Creates the uploader for the next file which starts the multi part upload.
+    async fn start_new_file(&mut self) -> Result<(), anyhow::Error> {
+        self.flush().await?;
+        assert!(self.current_file_uploader.is_none());
+
+        self.file_index += 1;
+        // TODO: remove hard-coded file extension .csv
+        let file_path = format!(
+            "{}/{}-{:04}.csv",
+            self.path_prefix, self.file_name_prefix, self.file_index
+        );
+
+        let bucket = self.bucket.clone();
+        info!(
+            "starting upload at bucket: {}, file {}",
+            &bucket, &file_path
+        );
+        let uploader = S3MultiPartUploader::try_new(
+            &self.sdk_config,
+            bucket,
+            file_path,
+            S3MultiPartUploaderConfig {
+                part_size_limit: ByteSize::mib(10).as_u64(),
+                file_size_limit: self.max_file_size,
+            },
+        )
+        .await?;
+        self.current_file_uploader = Some(uploader);
+        Ok(())
+    }
+
     fn extract_s3_bucket_path(prefix: &str) -> (String, String) {
         let uri = Uri::from_str(prefix).expect("valid s3 url");
         let bucket = uri.host().expect("s3 bucket");
@@ -239,42 +287,45 @@ impl CopyToS3Uploader {
         (bucket.to_string(), path.to_string())
     }
 
-    /// Flushes the internal buffer to S3 by uploading a file. If there is no pending data to
-    /// be uploaded this is a no-op.
+    /// Finishes any remaining in-progress upload.
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
-        if !self.buf.is_empty() {
-            self.file_index += 1;
-            let (bucket, path_prefix) = Self::extract_s3_bucket_path(&self.path_prefix);
-            // TODO: remove hard-coded file extension for .csv
-            let file_path = format!(
-                "{}/{}-{:04}.csv",
-                path_prefix, self.file_name_prefix, self.file_index
-            );
-            info!("starting upload at bucket: {}, file {}", bucket, file_path);
-            let mut uploader = S3MultiPartUploader::try_new(
-                &self.sdk_config,
-                bucket,
-                file_path,
-                S3MultiPartUploaderConfig {
-                    part_size_limit: ByteSize::mib(10).as_u64(),
-                    file_size_limit: self.max_file_size,
-                },
-            )
-            .await?;
-
-            uploader.add_chunk(Bytes::from(self.buf.clone())).await?;
+        if let Some(uploader) = self.current_file_uploader.take() {
             uploader.finish().await?;
-            self.buf.clear();
         }
         Ok(())
     }
 
+    // Appends the row to the in-progress upload or creates a new upload if it
+    // will exceed the max file size.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
-        encode_copy_format(self.format.clone(), row, self.desc.typ(), &mut self.buf).expect("TODO");
-        // TODO (mouli): refactor to buffer only a single part instead of the entire file
-        if u64::cast_from(self.buf.len()) > self.max_file_size {
-            self.flush().await?;
+        // encode the row and write to temp buffer.
+        self.buf.clear();
+        encode_copy_format(self.format.clone(), row, self.desc.typ(), &mut self.buf)
+            .map_err(|_| anyhow!("error encoding row"))?;
+        let buffer_length = self.buf.len();
+
+        if self.current_file_uploader.is_none() {
+            self.start_new_file().await?;
         }
+        // Ideally it would be nice to get a `&mut uploader` returned from the `start_new_file`,
+        // but that runs into borrow checker issues when trying to add the `&self.buf` to the
+        // `uploader.add_chunk`.
+        let Some(uploader) = self.current_file_uploader.as_mut() else {
+            unreachable!("uploader initialized above");
+        };
+        if u64::cast_from(buffer_length) < uploader.remaining_bytes_limit() {
+            // Add to ongoing upload of the current file if still within limit.
+            uploader.add_chunk(&self.buf).await?;
+        } else {
+            // Start a multi part upload of next file.
+            self.start_new_file().await?;
+            // Upload data for the new part.
+            let Some(uploader) = self.current_file_uploader.as_mut() else {
+                unreachable!("uploader initialized above");
+            };
+            uploader.add_chunk(&self.buf).await?;
+        }
+
         Ok(())
     }
 }

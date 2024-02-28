@@ -198,7 +198,7 @@ impl S3MultiPartUploader {
     /// the part threshold defined in `S3MultiPartUploaderConfig`.
     /// Note, the size of the data cannot exceed the possible total size of one single file,
     /// returned by `config.file_size_limit()`.
-    pub async fn add_chunk(&mut self, data: Bytes) -> Result<(), S3MultiPartUploadError> {
+    pub async fn add_chunk(&mut self, data: &[u8]) -> Result<(), S3MultiPartUploadError> {
         let num_of_bytes: u64 = u64::cast_from(data.len());
         // We should not exceed the user configured `file_size_limit` for this upload.
         // `remaining_bytes_limit` is defined as `file_size_limit` - `bytes_uploaded` - `bytes_buffered`.
@@ -209,7 +209,7 @@ impl S3MultiPartUploader {
                 file_size_limit: self.config.file_size_limit(),
             });
         }
-        self.buffer.extend_from_slice(&data);
+        self.buffer.extend_from_slice(data);
         self.flush_chunks().await?;
 
         Ok(())
@@ -390,9 +390,9 @@ mod tests {
             S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), path.clone(), config).await?;
 
         let expected_data = "onetwothree";
-        let _ = uploader.add_chunk(Bytes::from("one")).await?;
-        let _ = uploader.add_chunk(Bytes::from("two")).await?;
-        let _ = uploader.add_chunk(Bytes::from("three")).await?;
+        let _ = uploader.add_chunk(b"one").await?;
+        let _ = uploader.add_chunk(b"two").await?;
+        let _ = uploader.add_chunk(b"three").await?;
 
         // This should trigger one single part upload.
         let CompletedUpload {
@@ -444,17 +444,12 @@ mod tests {
         // Adding a chunk of 6MiB, should trigger an upload part since part_size_limit is 5MiB
         let expected_data = vec![97; 6291456]; // 6MiB
         let expected_bytes: u64 = u64::cast_from(expected_data.len());
-        uploader
-            .add_chunk(Bytes::from(expected_data.clone()))
-            .await?;
+        uploader.add_chunk(&expected_data).await?;
 
         assert_eq!(uploader.remaining_bytes_limit(), ByteSize::mib(4).as_u64());
 
         // Adding another 6MiB should return an error since file_size_limit is 10MiB
-        let error = uploader
-            .add_chunk(Bytes::from(expected_data.clone()))
-            .await
-            .unwrap_err();
+        let error = uploader.add_chunk(&expected_data).await.unwrap_err();
         assert_eq!(error.to_string(), "chunk size: 6291456 bytes, exceeds 4194304 bytes which can be added to stay under `file_size_limit` (10485760 bytes)");
 
         let CompletedUpload {
