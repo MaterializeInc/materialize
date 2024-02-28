@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 
 from materialize.buildkite_insights.util.data_io import read_results_from_file
@@ -49,11 +50,20 @@ instance_cost = {
 }
 
 
+@dataclass
+class Failures:
+    failures: int
+    total: int
+
+
 def main() -> None:
     job_costs = defaultdict(lambda: defaultdict(float))
     pipeline_costs = defaultdict(lambda: defaultdict(float))
     job_counts = defaultdict(lambda: defaultdict(int))
     pipeline_counts = defaultdict(lambda: defaultdict(int))
+    job_failures = defaultdict(
+        lambda: defaultdict(lambda: Failures(failures=0, total=0))
+    )
     job_to_pipeline = {}
 
     data = read_results_from_file("data.json")
@@ -94,8 +104,17 @@ def main() -> None:
             job_costs[year_month][job_name] += total_cost
             pipeline_costs[year_month][pipeline_name] += total_cost
             job_counts[year_month][job_name] += 1
+            if job["state"] in ("failed", "broken"):
+                job_failures[year_month][job_name].failures += 1
+            if job["state"] in ("passed", "failed", "broken"):
+                job_failures[year_month][job_name].total += 1
 
-    def print_stats(name, data, include_pipeline=False):
+    def print_stats(
+        name,
+        data,
+        include_pipeline=False,
+        print_fn=lambda x, key: f"{x.get(key, 0):.2f}",
+    ):
         keys = set()
         for ps in data.values():
             for p in ps.keys():
@@ -114,10 +133,7 @@ def main() -> None:
             print(
                 ",".join(
                     additional_values
-                    + [
-                        f"{data[year_month].get(key, 0):.2f}"
-                        for year_month in year_months
-                    ]
+                    + [print_fn(data[year_month], key) for year_month in year_months]
                 )
             )
 
@@ -139,6 +155,15 @@ def main() -> None:
     print_stats("Job [$]", job_costs, include_pipeline=True)
     print()
     print_stats("Job [$/run]", job_cost_per_run, include_pipeline=True)
+    print()
+    print_stats(
+        "Job [% failed]",
+        job_failures,
+        include_pipeline=True,
+        print_fn=lambda x, key: f"{x[key].failures * 100 / x[key].total:.2f}"
+        if x[key].total
+        else "",
+    )
 
 
 if __name__ == "__main__":
