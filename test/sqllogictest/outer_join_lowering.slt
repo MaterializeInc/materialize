@@ -827,7 +827,7 @@ FROM
 
 # EXPLAIN a SELECT * FROM <view> with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, reoptimize imported views, humanized expressions, arity) FOR
 SELECT * FROM v;
 ----
 Explained Query:
@@ -868,7 +868,7 @@ EOF
 
 # EXPLAIN a CREATE INDEX with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, reoptimize imported views, humanized expressions, arity) FOR
 CREATE INDEX ON v(facts_k01);
 ----
 materialize.public.v_facts_k01_idx:

@@ -43,7 +43,7 @@ use tracing::warn;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::optimize::{view, Optimize, OptimizeMode, OptimizerConfig, OptimizerError};
+use crate::optimize::{view, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::viewable_variables;
 
@@ -302,33 +302,35 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     // Re-optimize the imported view plans using the current optimizer
-    // configuration if we are running in `EXPLAIN`.
-    pub fn reoptimize_imported_views(
+    // configuration if reoptimization is requested.
+    pub fn maybe_reoptimize_imported_views(
         &self,
         df_desc: &mut DataflowDesc,
         config: &OptimizerConfig,
     ) -> Result<(), OptimizerError> {
-        if config.mode == OptimizeMode::Explain {
-            for desc in df_desc.objects_to_build.iter_mut().rev() {
-                if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
-                    // Skip descriptions that do not reference proper views.
-                    continue;
-                }
-                if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
-                    let _span = tracing::span!(
-                        target: "optimizer",
-                        tracing::Level::DEBUG,
-                        "view",
-                        path.segment = desc.id.to_string()
-                    )
-                    .entered();
+        if !config.reoptimize_imported_views {
+            return Ok(()); // Do nothing is not explicitly requested.
+        }
 
-                    let mut view_optimizer = view::Optimizer::new(config.clone());
-                    desc.plan = view_optimizer.optimize(view.raw_expr.clone())?;
+        let mut view_optimizer = view::Optimizer::new(config.clone());
+        for desc in df_desc.objects_to_build.iter_mut().rev() {
+            if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
+                continue; // Skip descriptions that do not reference proper views.
+            }
+            if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
+                let _span = tracing::span!(
+                    target: "optimizer",
+                    tracing::Level::DEBUG,
+                    "view",
+                    path.segment = desc.id.to_string()
+                )
+                .entered();
 
-                    // Report the optimized plan under this span.
-                    trace_plan(desc.plan.as_inner());
-                }
+                // Reoptimize the view and update the resulting `desc.plan`.
+                desc.plan = view_optimizer.optimize(view.raw_expr.clone())?;
+
+                // Report the optimized plan under this span.
+                trace_plan(desc.plan.as_inner());
             }
         }
 

@@ -1729,6 +1729,7 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
 // enum are generated automatically by this crate's `build.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ClusterFeatureName {
+    ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
 }
@@ -3089,6 +3090,7 @@ pub enum ExplainPlanOptionName {
     SubtreeSize,
     Timing,
     Types,
+    ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
 }

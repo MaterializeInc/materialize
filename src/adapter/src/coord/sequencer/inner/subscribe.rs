@@ -21,7 +21,7 @@ use crate::coord::{
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::optimize::Optimize;
+use crate::optimize::{Optimize, OverrideFrom};
 use crate::session::{Session, TransactionOps};
 use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
@@ -162,8 +162,9 @@ impl Coordinator {
         } = &plan;
 
         // Collect optimizer parameters.
+        let cluster_id = validity.cluster_id.expect("cluser_id");
         let compute_instance = self
-            .instance_snapshot(validity.cluster_id.expect("cluser_id"))
+            .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
         let id = self.allocate_transient_id()?;
         let conn_id = session.conn_id().clone();
@@ -171,7 +172,8 @@ impl Coordinator {
             .as_ref()
             .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr.clone(), session))
             .transpose()?;
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(cluster_id).config.features());
 
         // Build an optimizer for this SUBSCRIBE.
         let mut optimizer = optimize::subscribe::Optimizer::new(

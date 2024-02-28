@@ -279,6 +279,7 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
 
         let optimizer = match copy_to_ctx {

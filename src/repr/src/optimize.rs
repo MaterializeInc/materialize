@@ -84,6 +84,7 @@ macro_rules! optimizer_feature_flags {
 optimizer_feature_flags!({
     enable_consolidate_after_union_negate: bool,
     persist_fast_path_limit: usize,
+    reoptimize_imported_views: bool,
     enable_new_outer_join_lowering: bool,
     enable_eager_delta_joins: bool,
     enable_reduce_mfp_fusion: bool,

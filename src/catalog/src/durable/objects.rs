@@ -198,6 +198,7 @@ pub struct ClusterVariantManaged {
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
+    pub optimizer_feature_overrides: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

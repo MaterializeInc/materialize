@@ -346,6 +346,7 @@ generate_extracted_config!(
     (SubtreeSize, bool, Default(false)),
     (Timing, bool, Default(false)),
     (Types, bool, Default(false)),
+    (ReoptimizeImportedViews, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None))
 );
@@ -387,6 +388,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             subtree_size: v.subtree_size,
             timing: v.timing,
             types: v.types,
+            reoptimize_imported_views: v.reoptimize_imported_views,
             enable_eager_delta_joins: v.enable_eager_delta_joins,
             enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
         })

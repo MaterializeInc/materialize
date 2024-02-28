@@ -68,6 +68,7 @@ impl Coordinator {
                     idle_arrangement_merge_effort: plan.compute.idle_arrangement_merge_effort,
                     replication_factor: plan.replication_factor,
                     disk: plan.disk,
+                    optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -576,6 +577,7 @@ impl Coordinator {
                     idle_arrangement_merge_effort: None,
                     replication_factor: 1,
                     disk,
+                    optimizer_feature_overrides: Default::default(),
                 });
             }
         }
@@ -588,6 +590,7 @@ impl Coordinator {
                 idle_arrangement_merge_effort,
                 replication_factor,
                 disk,
+                optimizer_feature_overrides: _,
             }) => {
                 use AlterOptionParameter::*;
                 match &options.size {
@@ -707,6 +710,7 @@ impl Coordinator {
                 logging,
                 idle_arrangement_merge_effort,
                 disk,
+                optimizer_feature_overrides: _,
             },
             ClusterVariantManaged {
                 size: new_size,
@@ -715,6 +719,7 @@ impl Coordinator {
                 logging: new_logging,
                 idle_arrangement_merge_effort: new_idle_arrangement_merge_effort,
                 disk: new_disk,
+                optimizer_feature_overrides: _,
             },
         ) = (&config, &new_config);
 
@@ -849,6 +854,7 @@ impl Coordinator {
             logging: _,
             idle_arrangement_merge_effort: _,
             disk: new_disk,
+            optimizer_feature_overrides: _,
         } = &mut new_config;
 
         // Validate replication factor parameter

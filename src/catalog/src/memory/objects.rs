@@ -30,6 +30,7 @@ use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
+use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
 use mz_sql::ast::display::AstDisplay;
@@ -1729,6 +1730,15 @@ pub struct ClusterConfig {
     pub variant: ClusterVariant,
 }
 
+impl ClusterConfig {
+    pub fn features(&self) -> Option<&OptimizerFeatureOverrides> {
+        match &self.variant {
+            ClusterVariant::Managed(managed) => Some(&managed.optimizer_feature_overrides),
+            ClusterVariant::Unmanaged => None,
+        }
+    }
+}
+
 impl From<ClusterConfig> for durable::ClusterConfig {
     fn from(config: ClusterConfig) -> Self {
         Self {
@@ -1753,6 +1763,7 @@ pub struct ClusterVariantManaged {
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
+    pub optimizer_feature_overrides: OptimizerFeatureOverrides,
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
@@ -1764,6 +1775,7 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
             replication_factor: managed.replication_factor,
             disk: managed.disk,
+            optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
         }
     }
 }
@@ -1777,6 +1789,7 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             idle_arrangement_merge_effort: managed.idle_arrangement_merge_effort,
             replication_factor: managed.replication_factor,
             disk: managed.disk,
+            optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
         }
     }
 }
