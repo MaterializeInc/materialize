@@ -120,9 +120,9 @@ Explained Query:
       Threshold // { arity: 2 }
         Union // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
-          Map (null) // { arity: 2 }
-            Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
+          Negate // { arity: 2 }
+            Project (#0, #2) // { arity: 2 }
+              Map (null) // { arity: 3 }
                 ReadStorage materialize.public.t3 // { arity: 2 }
 
 EOF

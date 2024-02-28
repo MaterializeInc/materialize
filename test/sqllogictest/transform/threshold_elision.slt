@@ -76,11 +76,10 @@ Explained Query:
   Union // { non_negative: false }
     Project (#0) // { non_negative: true }
       ReadStorage materialize.public.people // { non_negative: true }
-    Map (5) // { non_negative: false }
-      Negate // { non_negative: false }
-        Project () // { non_negative: true }
-          Filter (#0 = 5) // { non_negative: true }
-            ReadStorage materialize.public.people // { non_negative: true }
+    Negate // { non_negative: false }
+      Project (#0) // { non_negative: true }
+        Filter (#0 = 5) // { non_negative: true }
+          ReadStorage materialize.public.people // { non_negative: true }
 
 EOF
 
