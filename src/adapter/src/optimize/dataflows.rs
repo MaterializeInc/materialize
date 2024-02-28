@@ -101,8 +101,6 @@ pub struct DataflowBuilder<'a> {
     ///
     /// Bound from [`OptimizerConfig::replan`].
     pub replan: Option<GlobalId>,
-    /// Bound from [`OptimizerConfig::enable_eager_delta_joins`].
-    enable_eager_delta_joins: bool,
     /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
 }
@@ -152,12 +150,10 @@ pub fn dataflow_import_id_bundle<P>(
 
 impl<'a> DataflowBuilder<'a> {
     pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
-        let system_vars = catalog.system_config();
         Self {
             catalog,
             compute,
             replan: None,
-            enable_eager_delta_joins: system_vars.enable_eager_delta_joins(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
@@ -168,7 +164,6 @@ impl<'a> DataflowBuilder<'a> {
     // optimizer is using a DataflowBuilder instance.
     pub(super) fn with_config(mut self, config: &OptimizerConfig) -> Self {
         self.replan = config.replan;
-        self.enable_eager_delta_joins = config.enable_eager_delta_joins;
         self
     }
 
@@ -296,7 +291,7 @@ impl<'a> DataflowBuilder<'a> {
             dataflow,
             self,
             &mz_transform::EmptyStatisticsOracle,
-            self.enable_eager_delta_joins,
+            &self.features,
         )?;
 
         Ok(dataflow_metainfo)
@@ -309,8 +304,8 @@ impl<'a> DataflowBuilder<'a> {
         df_desc: &mut DataflowDesc,
         config: &OptimizerConfig,
     ) -> Result<(), OptimizerError> {
-        if !config.reoptimize_imported_views {
-            return Ok(()); // Do nothing is not explicitly requested.
+        if !config.features.reoptimize_imported_views {
+            return Ok(()); // Do nothing if not explicitly requested.
         }
 
         let mut view_optimizer = view::Optimizer::new(config.clone());

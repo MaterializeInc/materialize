@@ -281,7 +281,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &mut df_desc,
             &df_builder,
             &*stats,
-            self.config.enable_eager_delta_joins,
+            &self.config.features,
         )?;
 
         if self.config.mode == OptimizeMode::Explain {
@@ -316,12 +316,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = Plan::finalize_dataflow(
-            df_desc,
-            self.config.enable_consolidate_after_union_negate,
-            self.config.enable_reduce_mfp_fusion,
-        )
-        .map_err(OptimizerError::Internal)?;
+        let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);

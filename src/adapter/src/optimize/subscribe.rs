@@ -310,12 +310,7 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = Plan::finalize_dataflow(
-            df_desc,
-            self.config.enable_consolidate_after_union_negate,
-            self.config.enable_reduce_mfp_fusion,
-        )
-        .map_err(OptimizerError::Internal)?;
+        let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
 
         // Return the plan at the end of this `optimize` step.
         Ok(GlobalLirPlan { df_desc, df_meta })

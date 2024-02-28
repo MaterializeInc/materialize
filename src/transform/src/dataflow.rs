@@ -25,6 +25,7 @@ use mz_expr::{
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::explain::{IndexUsageType, UsedIndexes};
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 
 use crate::monotonic::MonotonicFlag;
@@ -45,7 +46,7 @@ pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
     stats: &dyn StatisticsOracle,
-    eager_delta_joins: bool,
+    features: &OptimizerFeatures,
 ) -> Result<DataflowMetainfo, TransformError> {
     let ctx = crate::typecheck::empty_context();
     let mut dataflow_metainfo = DataflowMetainfo::default();
@@ -58,7 +59,7 @@ pub fn optimize_dataflow(
         dataflow,
         indexes,
         stats,
-        eager_delta_joins,
+        features,
         #[allow(deprecated)]
         &Optimizer::logical_optimizer(&ctx),
         &mut dataflow_metainfo,
@@ -79,7 +80,7 @@ pub fn optimize_dataflow(
         dataflow,
         indexes,
         stats,
-        eager_delta_joins,
+        features,
         &Optimizer::logical_cleanup_pass(&ctx, false),
         &mut dataflow_metainfo,
     )?;
@@ -89,7 +90,7 @@ pub fn optimize_dataflow(
         dataflow,
         indexes,
         stats,
-        eager_delta_joins,
+        features,
         &Optimizer::physical_optimizer(&ctx),
         &mut dataflow_metainfo,
     )?;
@@ -218,7 +219,7 @@ fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
     stats: &dyn StatisticsOracle,
-    eager_delta_joins: bool,
+    features: &OptimizerFeatures,
     optimizer: &Optimizer,
     dataflow_metainfo: &mut DataflowMetainfo,
 ) -> Result<(), TransformError> {
@@ -234,7 +235,7 @@ fn optimize_dataflow_relations(
                 indexes,
                 stats,
                 &object.id,
-                eager_delta_joins,
+                features.enable_eager_delta_joins,
                 dataflow_metainfo,
             ),
         )?;

@@ -17,6 +17,7 @@ use mz_expr::{
     MirScalarExpr, OptimizedMirRelationExpr,
 };
 use mz_ore::{soft_assert_eq_or_log, soft_panic_or_log};
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 use timely::progress::Timestamp;
 
@@ -39,7 +40,7 @@ pub(super) struct Context {
 }
 
 impl Context {
-    pub fn new(debug_name: String, enable_reduce_mfp_fusion: bool) -> Self {
+    pub fn new(debug_name: String, features: &OptimizerFeatures) -> Self {
         Self {
             arrangements: Default::default(),
             next_node_id: 0,
@@ -47,7 +48,7 @@ impl Context {
                 debug_name,
                 id: GlobalId::Transient(0),
             },
-            enable_reduce_mfp_fusion,
+            enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
         }
     }
 
