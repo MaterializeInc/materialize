@@ -66,7 +66,7 @@ impl Coordinator {
     ///
     fn check_read_capabilities(&self) -> Result<(), Vec<ReadCapabilitiesInconsistency>> {
         let mut read_capabilities_inconsistencies = Vec::new();
-        for (gid, _) in &self.storage_read_capabilities {
+        for (gid, _) in &self.storage_read_policies {
             if self.catalog().try_get_entry(gid).is_none() {
                 read_capabilities_inconsistencies
                     .push(ReadCapabilitiesInconsistency::Storage(gid.clone()));

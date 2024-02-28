@@ -24,10 +24,7 @@ use mz_storage_client::client::{StorageCommand, StorageResponse};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 
-use crate::{
-    Controller, DurableCollectionMetadata, ProtoStorageCommand, ProtoStorageResponse,
-    StorageController,
-};
+use crate::{Controller, DurableCollectionMetadata, ProtoStorageCommand, ProtoStorageResponse};
 
 pub(super) type ProtoShardId = String;
 pub static SHARD_FINALIZATION: TypedCollection<ProtoShardId, ()> =
@@ -56,7 +53,7 @@ where
     {
         SHARD_FINALIZATION
             .insert_without_overwrite(
-                &mut self.stash,
+                &mut *self.stash.lock().await,
                 entries.into_iter().map(|key| (key.into_proto(), ())),
             )
             .await
@@ -76,7 +73,7 @@ where
             .map(|s| RustType::into_proto(&s))
             .collect();
         SHARD_FINALIZATION
-            .delete_keys(&mut self.stash, proto_shards)
+            .delete_keys(&mut *self.stash.lock().await, proto_shards)
             .await
             .expect("must be able to write to stash")
     }
@@ -112,6 +109,8 @@ where
         // Get stash metadata.
         let (metadata, shard_finalization) = self
             .stash
+            .lock()
+            .await
             .with_transaction(move |tx| {
                 Box::pin(async move {
                     // Query all collections in parallel.
@@ -127,7 +126,7 @@ where
         // Partition metadata into the collections we want to have and those we failed to drop.
         let (in_use_collections, leaked_collections): (Vec<_>, Vec<_>) = metadata
             .into_iter()
-            .partition(|(id, _)| self.collection(*id).is_ok());
+            .partition(|(id, _)| self.storage_collections.check_exists(*id).is_ok());
 
         // Get all shard IDs
         let shard_finalization: BTreeSet<_> = shard_finalization
@@ -178,7 +177,7 @@ where
                 .map(|id| RustType::into_proto(&id))
                 .collect();
             super::METADATA_COLLECTION
-                .delete_keys(&mut self.stash, proto_ids_to_drop)
+                .delete_keys(&mut *self.stash.lock().await, proto_ids_to_drop)
                 .await
                 .expect("stash operation must succeed");
         }
