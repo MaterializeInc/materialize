@@ -83,21 +83,21 @@ contains:MAX FILE SIZE cannot be less than 16MB
 > SET cluster = c1;
 
 # functions like now() should work in the s3 path
-> COPY t TO 's3://${args.s3-prefix}/1/' || TO_CHAR(now(), 'YYYY-MM-DD')
+> COPY t TO 's3://${arg.s3-prefix}/1/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 
-> COPY (SELECT a FROM t) TO 's3://${args.s3-prefix}/2/'
+> COPY (SELECT a FROM t) TO 's3://${arg.s3-prefix}/2/'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 
-> COPY (SELECT 1000) TO 's3://${args.s3-prefix}/3/'
+> COPY (SELECT 1000) TO 's3://${arg.s3-prefix}/3/'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
