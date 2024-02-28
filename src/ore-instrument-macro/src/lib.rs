@@ -25,15 +25,21 @@
 
 extern crate proc_macro;
 
-use proc_macro::{TokenStream, TokenTree};
+use proc_macro2::{TokenStream, TokenTree};
+use quote::quote;
 
 #[proc_macro_attribute]
-pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn instrument(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let attr = TokenStream::from(attr);
+    let item = TokenStream::from(item);
+
     // syn appears to not be able to parse the `%` part of things like `#[instrument(fields(shard =
     // %id))]`, so we use the more naive proc_macro crate and look for strings.
     let mut iter = attr.into_iter();
-    let mut args = String::from("skip_all");
-    let mut delim = ",";
+    let mut args: TokenStream = quote! { skip_all }.into();
     while let Some(tok) = iter.next() {
         match &tok {
             TokenTree::Ident(ident) => match ident.to_string().as_str() {
@@ -43,11 +49,14 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
             },
             _ => {}
         }
-        args.push_str(delim);
-        delim = "";
-        args.push_str(&tok.to_string());
+        args.extend([tok])
     }
-    let res =
-        format!("#[allow(clippy::disallowed_macros)]\n#[::tracing::instrument({args})]\n{item}");
-    res.parse().unwrap()
+    quote! {
+        #[allow(clippy::disallowed_macros)]
+        #[::tracing::instrument(
+            #args
+        )]
+        #item
+    }
+    .into()
 }

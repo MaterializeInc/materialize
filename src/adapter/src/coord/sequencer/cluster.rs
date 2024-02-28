@@ -105,7 +105,7 @@ impl Coordinator {
             replication_factor,
             size,
             disk,
-            optimizer_feature_overrides,
+            optimizer_feature_overrides: _,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         mut ops: Vec<catalog::Op>,

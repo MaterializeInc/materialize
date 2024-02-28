@@ -4903,6 +4903,8 @@ dependencies = [
 name = "mz-ore-instrument-macro"
 version = "0.0.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
  "tracing",
  "workspace-hack",
 ]
