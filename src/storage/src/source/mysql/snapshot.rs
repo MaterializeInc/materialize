@@ -97,7 +97,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{error, trace};
 
-use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlTableDesc, ER_NO_SUCH_TABLE};
+use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, MySqlTableDesc, ER_NO_SUCH_TABLE};
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
@@ -291,17 +291,21 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .await?;
 
                 // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
-                if let Err(err) = validate_mysql_repl_settings(&mut conn).await {
-                    return Ok(return_definite_error(
-                        DefiniteError::ServerConfigurationError(err.to_string()),
-                        &all_outputs,
-                        &mut raw_handle,
-                        data_cap_set,
-                        &mut definite_error_handle,
-                        definite_error_cap_set,
-                    )
-                    .await);
-                }
+                match validate_mysql_repl_settings(&mut conn).await {
+                    Err(err @ MySqlError::InvalidSystemSetting { .. }) => {
+                        return Ok(return_definite_error(
+                            DefiniteError::ServerConfigurationError(err.to_string()),
+                            &all_outputs,
+                            &mut raw_handle,
+                            data_cap_set,
+                            &mut definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await);
+                    }
+                    Err(err) => Err(err)?,
+                    Ok(()) => (),
+                };
 
                 trace!(%id, "timely-{worker_id} starting transaction with \
                              consistent snapshot at: {}", snapshot_gtid_frontier.pretty());
