@@ -2361,7 +2361,7 @@ where
     #[instrument(level = "info", fields(from_id, storage_dependencies, read_capability))]
     fn install_read_capabilities(
         &mut self,
-        from_id: GlobalId,
+        _from_id: GlobalId,
         storage_dependencies: &[GlobalId],
         read_capability: Antichain<T>,
     ) -> Result<(), StorageError> {
