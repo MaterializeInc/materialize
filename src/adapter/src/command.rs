@@ -391,10 +391,11 @@ impl TryFrom<&Statement<Raw>> for ExecuteResponse {
 
     /// Returns Ok if this Statement always produces a single, trivial ExecuteResponse.
     fn try_from(stmt: &Statement<Raw>) -> Result<Self, Self::Error> {
-        let resp_kinds = Plan::generated_from(stmt.into())
-            .into_iter()
+        let resp_kinds = Plan::generated_from(&stmt.into())
+            .iter()
             .map(ExecuteResponse::generated_from)
             .flatten()
+            .cloned()
             .collect::<BTreeSet<ExecuteResponseKind>>();
         let resps = resp_kinds
             .iter()
@@ -568,12 +569,12 @@ impl ExecuteResponse {
     /// Expresses which [`PlanKind`] generate which set of [`ExecuteResponseKind`].
     /// `ExecuteResponseKind::Canceled` could be generated at any point as well, but that is
     /// excluded from this function.
-    pub fn generated_from(plan: PlanKind) -> Vec<ExecuteResponseKind> {
+    pub fn generated_from(plan: &PlanKind) -> &'static [ExecuteResponseKind] {
         use ExecuteResponseKind::*;
         use PlanKind::*;
 
         match plan {
-            AbortTransaction => vec![TransactionRolledBack],
+            AbortTransaction => &[TransactionRolledBack],
             AlterClusterRename
             | AlterClusterSwap
             | AlterCluster
@@ -587,75 +588,71 @@ impl ExecuteResponse {
             | AlterSecret
             | AlterConnection
             | AlterSource
-            | PurifiedAlterSource => {
-                vec![AlteredObject]
-            }
-            AlterDefaultPrivileges => vec![AlteredDefaultPrivileges],
-            AlterSetCluster => vec![AlteredObject],
+            | PurifiedAlterSource => &[AlteredObject],
+            AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
+            AlterSetCluster => &[AlteredObject],
             AlterIndexSetOptions | AlterIndexResetOptions => {
-                vec![AlteredObject, AlteredIndexLogicalCompaction]
+                &[AlteredObject, AlteredIndexLogicalCompaction]
             }
-            AlterRole => vec![AlteredRole],
+            AlterRole => &[AlteredRole],
             AlterSystemSet | AlterSystemReset | AlterSystemResetAll => {
-                vec![AlteredSystemConfiguration]
+                &[AlteredSystemConfiguration]
             }
-            Close => vec![ClosedCursor],
-            PlanKind::CopyFrom => vec![ExecuteResponseKind::CopyFrom],
-            PlanKind::CopyTo => vec![ExecuteResponseKind::Copied],
-            PlanKind::Comment => vec![ExecuteResponseKind::Comment],
-            CommitTransaction => vec![TransactionCommitted, TransactionRolledBack],
-            CreateConnection => vec![CreatedConnection],
-            CreateDatabase => vec![CreatedDatabase],
-            CreateSchema => vec![CreatedSchema],
-            CreateRole => vec![CreatedRole],
-            CreateCluster => vec![CreatedCluster],
-            CreateClusterReplica => vec![CreatedClusterReplica],
-            CreateSource | CreateSources => vec![CreatedSource],
-            CreateSecret => vec![CreatedSecret],
-            CreateSink => vec![CreatedSink],
-            CreateTable => vec![CreatedTable],
-            CreateView => vec![CreatedView],
-            CreateMaterializedView => vec![CreatedMaterializedView],
-            CreateIndex => vec![CreatedIndex],
-            CreateType => vec![CreatedType],
-            PlanKind::Deallocate => vec![ExecuteResponseKind::Deallocate],
-            Declare => vec![DeclaredCursor],
-            DiscardTemp => vec![DiscardedTemp],
-            DiscardAll => vec![DiscardedAll],
-            DropObjects => vec![DroppedObject],
-            DropOwned => vec![DroppedOwned],
-            PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
+            Close => &[ClosedCursor],
+            PlanKind::CopyFrom => &[ExecuteResponseKind::CopyFrom],
+            PlanKind::CopyTo => &[ExecuteResponseKind::Copied],
+            PlanKind::Comment => &[ExecuteResponseKind::Comment],
+            CommitTransaction => &[TransactionCommitted, TransactionRolledBack],
+            CreateConnection => &[CreatedConnection],
+            CreateDatabase => &[CreatedDatabase],
+            CreateSchema => &[CreatedSchema],
+            CreateRole => &[CreatedRole],
+            CreateCluster => &[CreatedCluster],
+            CreateClusterReplica => &[CreatedClusterReplica],
+            CreateSource | CreateSources => &[CreatedSource],
+            CreateSecret => &[CreatedSecret],
+            CreateSink => &[CreatedSink],
+            CreateTable => &[CreatedTable],
+            CreateView => &[CreatedView],
+            CreateMaterializedView => &[CreatedMaterializedView],
+            CreateIndex => &[CreatedIndex],
+            CreateType => &[CreatedType],
+            PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
+            Declare => &[DeclaredCursor],
+            DiscardTemp => &[DiscardedTemp],
+            DiscardAll => &[DiscardedAll],
+            DropObjects => &[DroppedObject],
+            DropOwned => &[DroppedOwned],
+            PlanKind::EmptyQuery => &[ExecuteResponseKind::EmptyQuery],
             ExplainPlan | ExplainPushdown | ExplainTimestamp | Select | ShowAllVariables
-            | ShowCreate | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => {
-                vec![
-                    ExecuteResponseKind::CopyTo,
-                    SendingRows,
-                    SendingRowsImmediate,
-                ]
-            }
-            Execute | ReadThenWrite => vec![
+            | ShowCreate | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => &[
+                ExecuteResponseKind::CopyTo,
+                SendingRows,
+                SendingRowsImmediate,
+            ],
+            Execute | ReadThenWrite => &[
                 Deleted,
                 Inserted,
                 SendingRows,
                 SendingRowsImmediate,
                 Updated,
             ],
-            PlanKind::Fetch => vec![ExecuteResponseKind::Fetch],
-            GrantPrivileges => vec![GrantedPrivilege],
-            GrantRole => vec![GrantedRole],
-            Insert => vec![Inserted, SendingRowsImmediate],
-            PlanKind::Prepare => vec![ExecuteResponseKind::Prepare],
-            PlanKind::Raise => vec![ExecuteResponseKind::Raised],
-            PlanKind::ReassignOwned => vec![ExecuteResponseKind::ReassignOwned],
-            RevokePrivileges => vec![RevokedPrivilege],
-            RevokeRole => vec![RevokedRole],
+            PlanKind::Fetch => &[ExecuteResponseKind::Fetch],
+            GrantPrivileges => &[GrantedPrivilege],
+            GrantRole => &[GrantedRole],
+            Insert => &[Inserted, SendingRowsImmediate],
+            PlanKind::Prepare => &[ExecuteResponseKind::Prepare],
+            PlanKind::Raise => &[ExecuteResponseKind::Raised],
+            PlanKind::ReassignOwned => &[ExecuteResponseKind::ReassignOwned],
+            RevokePrivileges => &[RevokedPrivilege],
+            RevokeRole => &[RevokedRole],
             PlanKind::SetVariable | ResetVariable | PlanKind::SetTransaction => {
-                vec![ExecuteResponseKind::SetVariable]
+                &[ExecuteResponseKind::SetVariable]
             }
-            PlanKind::Subscribe => vec![Subscribing, ExecuteResponseKind::CopyTo],
-            StartTransaction => vec![StartedTransaction],
-            SideEffectingFunc => vec![SendingRows, SendingRowsImmediate],
-            ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
+            PlanKind::Subscribe => &[Subscribing, ExecuteResponseKind::CopyTo],
+            StartTransaction => &[StartedTransaction],
+            SideEffectingFunc => &[SendingRows, SendingRowsImmediate],
+            ValidateConnection => &[ExecuteResponseKind::ValidatedConnection],
         }
     }
 }
