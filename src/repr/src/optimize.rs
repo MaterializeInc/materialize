@@ -34,8 +34,18 @@ macro_rules! optimizer_feature_flags {
             }
         }
 
+        /// An [`OverrideFrom`] implementation that updates
+        /// [`OptimizerFeatures`] using [`OptimizerFeatureOverrides`] values.
+        impl OverrideFrom<OptimizerFeatureOverrides> for OptimizerFeatures {
+            fn override_from(mut self, overrides: &OptimizerFeatureOverrides) -> Self {
+                $(if let Some(feature_value) = overrides.$feature {
+                    self.$feature = feature_value;
+                })*
+                self
+            }
+        }
 
-        /// Synthesize `OptimizerFeatureOverrides ⇒ BTreeMap<String, String>`
+        /// An `OptimizerFeatureOverrides ⇒ BTreeMap<String, String>`
         /// conversion.
         ///
         /// WARNING: changing the definition of item might break catalog
@@ -59,8 +69,7 @@ macro_rules! optimizer_feature_flags {
             }
         }
 
-        /// Synthesize `BTreeMap<String, String> ⇒ OptimizerFeatureOverrides`
-        /// conversion.
+        /// A `BTreeMap<String, String> ⇒ OptimizerFeatureOverrides` conversion.
         ///
         /// WARNING: changing the definition of item might break catalog
         /// re-hydration for some catalog items (such as entries for `CREATE
