@@ -3899,42 +3899,44 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             ) =>
             // credit for using rank() to @def-
             sql_impl_table_func("
-            SELECT DISTINCT
-                o.id,
-                ARRAY[CASE WHEN s.database_id IS NULL THEN NULL ELSE d.name END, s.name, o.name]
-                AS name,
-                o.count,
-                rank() OVER (
-                    ORDER BY pg_catalog.array_position($2, search_schema.name)
-                )
-            FROM
-                (
-                    SELECT
-                        o.id,
-                        o.schema_id,
-                        o.name,
-                        count(*)
-                    FROM mz_catalog.mz_objects AS o
-                    JOIN mz_internal.mz_object_oid_alias AS a
-                        ON o.type = a.object_type
-                    WHERE o.name = CAST($3 AS pg_catalog.text) AND a.oid_alias = $4
-                    GROUP BY 1, 2, 3
-                )
-                    AS o
-                JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
-                JOIN
-                    unnest($2) AS search_schema (name)
-                    ON search_schema.name = s.name
-                JOIN
+            -- The best ranked name is the one that belongs to the schema correlated with the lowest
+            -- index in the search path
+            SELECT id, name, count, min(schema_pref) OVER () = schema_pref AS best_ranked FROM (
+                SELECT DISTINCT
+                    o.id,
+                    ARRAY[CASE WHEN s.database_id IS NULL THEN NULL ELSE d.name END, s.name, o.name]
+                    AS name,
+                    o.count,
+                    pg_catalog.array_position($2, s.name) AS schema_pref
+                FROM
                     (
-                        SELECT id, name FROM mz_catalog.mz_databases
-                        -- If the provided database does not exist, add a row for it so that it
-                        -- can still join against ambient schemas.
-                        UNION ALL
-                        SELECT '', $1 WHERE $1 NOT IN (SELECT name FROM mz_catalog.mz_databases)
-                    ) AS d
-                    ON d.id = COALESCE(s.database_id, d.id)
-            WHERE d.name = CAST($1 AS pg_catalog.text);
+                        SELECT
+                            o.id,
+                            o.schema_id,
+                            o.name,
+                            count(*)
+                        FROM mz_catalog.mz_objects AS o
+                        JOIN mz_internal.mz_object_oid_alias AS a
+                            ON o.type = a.object_type
+                        WHERE o.name = CAST($3 AS pg_catalog.text) AND a.oid_alias = $4
+                        GROUP BY 1, 2, 3
+                    )
+                        AS o
+                    JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
+                    JOIN
+                        unnest($2) AS search_schema (name)
+                        ON search_schema.name = s.name
+                    JOIN
+                        (
+                            SELECT id, name FROM mz_catalog.mz_databases
+                            -- If the provided database does not exist, add a row for it so that it
+                            -- can still join against ambient schemas.
+                            UNION ALL
+                            SELECT '', $1 WHERE $1 NOT IN (SELECT name FROM mz_catalog.mz_databases)
+                        ) AS d
+                        ON d.id = COALESCE(s.database_id, d.id)
+                WHERE d.name = CAST($1 AS pg_catalog.text)
+            );
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_NAME_RANK;
         },
         "mz_resolve_object_name" => Table {
@@ -3959,7 +3961,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         $1
                     ) AS r,
                     mz_catalog.mz_objects AS o
-                WHERE r.id = o.id AND r.rank = 1;
+                WHERE r.id = o.id AND r.best_ranked;
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
         },
         // Returns the an array representing the minimal namespace a user must
@@ -3997,7 +3999,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                             CASE
                                 -- If there is only one item with this name and it's rank 1,
                                 -- it is uniquely nameable with just the final element
-                                WHEN rank = 1 AND count = 1
+                                WHEN best_ranked AND count = 1
                                     THEN ARRAY[r.name[3]]
                                 -- Otherwise, it is findable in the search path, so does not
                                 -- need database qualification
