@@ -262,9 +262,8 @@ utf8_table            subsource <null>  <null>
 # "space table"         subsource <null>  <null>
 # таблица               subsource <null>  <null>
 
-# TODO: #25416 (source status remains "starting")
-# > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
-# running
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+running
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_progress';
 running
