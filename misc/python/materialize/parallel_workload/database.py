@@ -538,7 +538,7 @@ class KafkaSource(DBObject):
         return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
-        self.executor.create()
+        self.executor.create(logging_exe=exe)
 
 
 class KafkaSink(DBObject):
@@ -662,7 +662,7 @@ class MySqlSource(DBObject):
         return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
-        self.executor.create()
+        self.executor.create(logging_exe=exe)
 
 
 class PostgresColumn(Column):
@@ -730,7 +730,7 @@ class PostgresSource(DBObject):
         return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
-        self.executor.create()
+        self.executor.create(logging_exe=exe)
 
 
 class Index:
@@ -1039,7 +1039,7 @@ class Database:
 
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
-            exe.execute(f"DROP ROLE {identifier(row[0])}")
+            exe.execute(f"DROP ROLE {identifier(row[0])} CASCADE")
 
         exe.execute(
             "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"
