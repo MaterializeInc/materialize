@@ -298,16 +298,6 @@ pub trait StorageController: Debug {
         &self,
     ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
 
-    /// Migrate any storage controller state from previous versions to this
-    /// version's expectations.
-    ///
-    /// This function must "see" the GlobalId of every collection you plan to
-    /// create, but can be called with all of the catalog's collections at once.
-    async fn migrate_collections(
-        &mut self,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
-
     /// Create the sources described in the individual RunIngestionCommand commands.
     ///
     /// Each command carries the source id, the source description, and any associated metadata
