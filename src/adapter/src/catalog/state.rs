@@ -19,6 +19,7 @@ use anyhow::bail;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::durable::Transaction;
 use mz_sql::session::metadata::SessionMetadata;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -80,6 +81,7 @@ use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
 use mz_sql_parser::ast::QualifiedReplica;
+use mz_storage_client::controller::StorageMetadata;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
@@ -131,6 +133,7 @@ pub struct CatalogState {
     pub(super) default_privileges: DefaultPrivileges,
     pub(super) system_privileges: PrivilegeMap,
     pub(super) comments: CommentsMap,
+    pub(super) storage_metadata: StorageMetadata,
 }
 
 fn skip_temp_items<S>(
@@ -182,6 +185,7 @@ impl CatalogState {
             default_privileges: Default::default(),
             system_privileges: Default::default(),
             comments: Default::default(),
+            storage_metadata: Default::default(),
         }
     }
 
@@ -2262,6 +2266,27 @@ impl CatalogState {
             }
             SystemObjectId::System => SystemObjectType::System,
         }
+    }
+
+    /// Synchronizes the local view of the [`StorageMetadata`] with the
+    /// [`Transaction`]'s.
+    ///
+    /// This must be called after any `Transaction` is given to the storage
+    /// controller, otherwise subsequent storage operations will have
+    /// inconsistent metadata.
+    pub(super) fn update_storage_metadata(&mut self, tx: &Transaction<'_>) {
+        use mz_storage_client::controller::StorageTxn;
+        self.storage_metadata.collection_metadata = tx.get_collection_metadata();
+        self.storage_metadata.unfinalized_shards = tx.get_unfinalized_shards();
+        self.storage_metadata.persist_txn_shard = tx.get_persist_txn_shard();
+    }
+
+    /// Returns a read-only view of the current [`StorageMetdata`].
+    ///
+    /// To write to this value, you must use a [`Transaction`], followed by a
+    /// call to [`Self::update_storage_metadata`].
+    pub fn storage_metadata(&self) -> &StorageMetadata {
+        &self.storage_metadata
     }
 }
 
