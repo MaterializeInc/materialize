@@ -18,7 +18,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -191,6 +191,46 @@ impl<T: Codec64 + Timestamp + Lattice> SnapshotCursor<T> {
 #[derive(Debug)]
 pub enum Response<T> {
     FrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
+}
+
+#[async_trait(?Send)]
+pub trait StorageTxn {
+    /// Retrieve all of the visible storage metadata.
+    ///
+    /// The value of this map should be treated as opaque.
+    fn get_storage_metadata(&self) -> BTreeMap<GlobalId, String>;
+
+    /// Add new storage metadata.
+    ///
+    /// Subsequent calls to `get_storage_metadata` must include this data.
+    fn insert_storage_metadata(
+        &mut self,
+        s: BTreeMap<GlobalId, String>,
+    ) -> Result<(), StorageError>;
+
+    /// Remove the metadata associated with the identified collections.
+    ///
+    /// Returns values of the removed metadata.
+    fn delete_storage_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)>;
+
+    /// Retrieve all of the shards that are no longer in use by an active
+    /// collection but are yet to be finalized.
+    fn get_unfinalized_shards(&self) -> BTreeSet<String>;
+
+    /// Insert the specified values as unfinalized shards.
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<String>) -> Result<(), StorageError>;
+
+    /// Mark the specified shards as finalized, deleting them from the
+    /// unfinalized shard collection.
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>);
+
+    /// Get the persist txn shard for this environment if it exists.
+    fn get_persist_txn_shard(&self) -> Option<String>;
+
+    /// Store the specified shard as the environment's persist txn shard.
+    ///
+    /// The implementor should error if the shard is already specified.
+    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError>;
 }
 
 #[async_trait(?Send)]
@@ -548,6 +588,48 @@ pub trait StorageController: Debug {
     /// good and there is no possibility of the old code running concurrently
     /// with the new code.
     async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
+
+    /// On boot, seed our set of collections with this data.
+    ///
+    /// Most likely, this data comes from a persisted source outside of the
+    /// storage controller.
+    async fn initialize_collections(
+        &mut self,
+        txn: &mut dyn StorageTxn,
+        ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError>;
+
+    /// Provisionally synchronize the storage controller state with the
+    /// implementor of [`StorageTxn`].
+    ///
+    /// We require an explicit list of IDs to add and drop because no
+    /// implementor of `StorageTxn` can express to us these items' values using
+    /// its own APIs.
+    ///
+    /// The storage controller expects the caller to either:
+    /// - Call `create_collections` for each `GlobalId` in `ids_to_add` and
+    ///   `drop_sources_unvalidated` for each in `ids_to_drop`.
+    /// - Call `clear_provisional_state`. This is the case if the operation
+    ///   preparing the collections fails.
+    ///
+    /// Because persist shard mappings should remain consistent across restarts,
+    /// the caller of this function must durably record the returned value.
+    ///
+    /// In the future we might be able to delegate this responsibility to the
+    /// storage controller itself, but right now:
+    /// - Components that provide durable storage depend either directly or
+    ///   transitively on this crate, so this module cannot depend on them.
+    ///   Changing that dependency structure requires a large amount of code
+    ///   movement.
+    /// - The storage controller must be able to be made into a trait object, so
+    ///   cannot provide a trait for some "downstream" crate to implement.
+    async fn prepare_collections(
+        &mut self,
+        txn: &mut dyn StorageTxn,
+        ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError>;
+
+    fn clear_prepared_collections(&mut self);
 }
 
 /// State maintained about individual collections.

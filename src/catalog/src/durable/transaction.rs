@@ -31,7 +31,8 @@ use mz_sql::catalog::{
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_client::controller::StorageTxn;
+use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
 use mz_storage_types::sources::Timeline;
 
 use crate::builtin::BuiltinLog;
@@ -1541,6 +1542,90 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
+    }
+}
+
+use crate::durable::async_trait;
+
+#[async_trait]
+impl StorageTxn for Transaction<'_> {
+    fn get_storage_metadata(&self) -> BTreeMap<GlobalId, String> {
+        self.storage_metadata
+            .items()
+            .into_iter()
+            .map(|(StorageMetadataKey { id }, StorageMetadataValue { shard })| (id, shard.clone()))
+            .collect()
+    }
+    fn insert_storage_metadata(
+        &mut self,
+        metadata: BTreeMap<GlobalId, String>,
+    ) -> Result<(), StorageError> {
+        for (id, shard) in metadata {
+            self.storage_metadata
+                .insert(
+                    StorageMetadataKey { id },
+                    StorageMetadataValue {
+                        shard: shard.clone(),
+                    },
+                )
+                .map_err(|err| match err {
+                    DurableCatalogError::DuplicateKey => {
+                        StorageError::StorageMetadataAlreadyExists(id)
+                    }
+                    DurableCatalogError::UniquenessViolation => {
+                        StorageError::PersistShardAlreadyInUse(shard)
+                    }
+                    err => StorageError::Generic(anyhow::anyhow!(err)),
+                })?;
+        }
+        Ok(())
+    }
+    fn delete_storage_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)> {
+        self.storage_metadata
+            .delete(|StorageMetadataKey { id }, _| ids.contains(id))
+            .into_iter()
+            .map(|(StorageMetadataKey { id }, StorageMetadataValue { shard })| (id, shard))
+            .collect()
+    }
+    fn get_unfinalized_shards(&self) -> BTreeSet<String> {
+        self.unfinalized_shards
+            .items()
+            .into_iter()
+            .map(|(UnfinalizedShardKey { shard }, ())| shard)
+            .collect()
+    }
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<String>) -> Result<(), StorageError> {
+        for shard in s {
+            match self
+                .unfinalized_shards
+                .insert(UnfinalizedShardKey { shard }, ())
+            {
+                // Inserting duplicate keys has no effect.
+                Ok(()) | Err(DurableCatalogError::DuplicateKey) => {}
+                Err(e) => Err(StorageError::Generic(anyhow::anyhow!(e)))?,
+            };
+        }
+        Ok(())
+    }
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>) {
+        let _ = self
+            .unfinalized_shards
+            .delete(|UnfinalizedShardKey { shard }, _| shards.contains(shard.as_str()));
+    }
+    fn get_persist_txn_shard(&self) -> Option<String> {
+        let items = self.persist_txn_shard.items();
+        items
+            .into_values()
+            .next()
+            .map(|PersistTxnShardValue { shard }| shard)
+    }
+    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError> {
+        self.persist_txn_shard
+            .insert((), PersistTxnShardValue { shard })
+            .map_err(|err| match err {
+                DurableCatalogError::DuplicateKey => StorageError::PersistTxnShardAlreadyExists,
+                err => StorageError::Generic(anyhow::anyhow!(err)),
+            })
     }
 }
 

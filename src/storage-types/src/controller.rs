@@ -201,6 +201,12 @@ pub enum StorageError {
     ResourceExhausted(&'static str),
     /// The specified component is shutting down.
     ShuttingDown(&'static str),
+    /// Storage metadata already exists for ID.
+    StorageMetadataAlreadyExists(GlobalId),
+    /// Some other collection is already writing to this persist shard.
+    PersistShardAlreadyInUse(String),
+    /// Persist txn shard already exists.
+    PersistTxnShardAlreadyExists,
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -224,6 +230,9 @@ impl Error for StorageError {
             Self::InvalidUsage(_) => None,
             Self::ResourceExhausted(_) => None,
             Self::ShuttingDown(_) => None,
+            Self::StorageMetadataAlreadyExists(_) => None,
+            Self::PersistShardAlreadyInUse(_) => None,
+            Self::PersistTxnShardAlreadyExists => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -287,6 +296,15 @@ impl fmt::Display for StorageError {
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
             Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
             Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
+            Self::StorageMetadataAlreadyExists(key) => {
+                write!(f, "storage metadata for '{key}' already exists")
+            }
+            Self::PersistShardAlreadyInUse(shard) => {
+                write!(f, "persist shard already in use: {shard}")
+            }
+            Self::PersistTxnShardAlreadyExists => {
+                write!(f, "persist txn shard already exists")
+            }
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }

@@ -56,6 +56,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
     ExportState, IntrospectionType, MonotonicAppender, Response, SnapshotCursor, StorageController,
+    StorageTxn,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
@@ -153,6 +154,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     now: NowFn,
     /// The fencing token for this instance of the controller.
     envd_epoch: NonZeroI64,
+
+    /// The set of shards provisionally allocated for collections to use in
+    /// [`Self::create_collections`].
+    ///
+    /// To allocate these values, use [`Self::provisionally_synchronize_state`].
+    provisional_shard_mappings: BTreeMap<GlobalId, ShardId>,
 
     /// Collections maintained by the storage controller.
     ///
@@ -253,6 +260,15 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
+        // TODO: reconcile dangling persist shards.
+        mz_ore::soft_assert_or_log!(
+            self.provisional_shard_mappings.is_empty(),
+            "dangling collections {:?}",
+            self.provisional_shard_mappings
+        );
+
+        self.clear_prepared_collections();
+
         self.reconcile_dangling_statistics();
         self.initialized = true;
         for client in self.clients.values_mut() {
@@ -402,54 +418,31 @@ where
             }
         }
 
-        // Install collection state for each bound description. Note that this
-        // method implementation attempts to do AS MUCH work concurrently as
-        // possible. There are inline comments explaining the motivation behind
-        // each section.
-        let mut entries = Vec::with_capacity(collections.len());
-
-        for (id, _desc) in &collections {
-            entries.push((
-                *id,
-                DurableCollectionMetadata {
-                    data_shard: ShardId::new(),
-                },
-            ))
-        }
-
-        // Perform all stash writes in a single transaction, to minimize transaction overhead and
-        // the time spent waiting for stash.
-        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
-            .insert_without_overwrite(
-                &mut self.stash,
-                entries
-                    .into_iter()
-                    .map(|(key, val)| (key.into_proto(), val.into_proto())),
-            )
-            .await?
-            .into_iter()
-            .map(RustType::from_proto)
-            .collect::<Result<_, _>>()
-            .map_err(|e| StorageError::IOError(e.into()))?;
-
         // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
         let enriched_with_metadata = collections
             .into_iter()
             .map(|(id, description)| {
-                let collection_shards = durable_metadata.get(&id).expect("inserted above");
+                let data_shard = *self
+                    .provisional_shard_mappings
+                    .get(&id)
+                    .unwrap_or_else(|| panic!("missing call to `prepare_collections` for {id}"));
 
-                let status_shard =
-                    if let Some(status_collection_id) = description.status_collection_id {
-                        Some(
-                            durable_metadata
-                                .get(&status_collection_id)
-                                .ok_or(StorageError::IdentifierMissing(status_collection_id))?
-                                .data_shard,
-                        )
-                    } else {
-                        None
-                    };
+                let get_shard = |id| -> Result<Option<ShardId>, StorageError> {
+                    Ok(Some(match self.collections.get(&id) {
+                        Some(col) => col.collection_metadata.data_shard,
+                        None => self
+                            .provisional_shard_mappings
+                            .get(&id)
+                            .cloned()
+                            .ok_or(StorageError::IdentifierMissing(id))?,
+                    }))
+                };
+
+                let status_shard = match description.status_collection_id {
+                    Some(status_collection_id) => get_shard(status_collection_id)?,
+                    None => None,
+                };
 
                 let remap_shard = match &description.data_source {
                     // Only ingestions can have remap shards.
@@ -459,12 +452,7 @@ where
                     }) => {
                         // Iff ingestion has a remap collection, its metadata must
                         // exist (and be correct) by this point.
-                        Some(
-                            durable_metadata
-                                .get(remap_collection_id)
-                                .ok_or(StorageError::IdentifierMissing(*remap_collection_id))?
-                                .data_shard,
-                        )
+                        get_shard(*remap_collection_id)?
                     }
                     _ => None,
                 };
@@ -490,7 +478,7 @@ where
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
                     remap_shard,
-                    data_shard: collection_shards.data_shard,
+                    data_shard,
                     status_shard,
                     relation_desc: description.desc.clone(),
                     txns_shard,
@@ -711,6 +699,8 @@ where
 
         // TODO(guswynn): perform the io in this final section concurrently.
         for (id, description) in to_create {
+            // Remove the provisional shard mappings.
+            self.provisional_shard_mappings.remove(&id);
             match description.data_source {
                 DataSource::Ingestion(ingestion) => {
                     let description = self.enrich_ingestion(id, ingestion)?;
@@ -2149,6 +2139,73 @@ where
         self.txns_init_run = true;
         Ok(())
     }
+
+    async fn initialize_collections(
+        &mut self,
+        txn: &mut dyn StorageTxn,
+        ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError> {
+        mz_ore::soft_assert_or_log!(
+            self.provisional_shard_mappings.is_empty(),
+            "seeding collections should occur only on start up"
+        );
+
+        let metadata = txn.get_storage_metadata();
+        let processed_metadata: Result<Vec<_>, _> = metadata
+            .into_iter()
+            .map(|(id, shard)| ShardId::from_str(&shard).map(|shard| (id, shard)))
+            .collect();
+        let metadata = processed_metadata.map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))?;
+        let storage_metadata: BTreeMap<_, _> = metadata.into_iter().collect();
+
+        // Determine which collections we do not yet have metadata for.
+        let new_collections: BTreeSet<GlobalId> = ids
+            .iter()
+            .filter(|id| !storage_metadata.contains_key(id))
+            .cloned()
+            .collect();
+
+        mz_ore::soft_assert_or_log!(
+            new_collections.iter().all(|id| id.is_system()),
+            "initializing collections should only be missing metadata for new system objects, but got {:?}",
+            new_collections
+        );
+
+        self.prepare_collections(txn, new_collections).await?;
+
+        // Add all previous metadata to the set of provisional metadata
+        self.provisional_shard_mappings.extend(storage_metadata);
+
+        Ok(())
+    }
+
+    async fn prepare_collections(
+        &mut self,
+        txn: &mut dyn StorageTxn,
+        ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError> {
+        if !self.provisional_shard_mappings.is_empty() {
+            return Err(StorageError::Generic(anyhow::anyhow!(
+                "must either create or clear prepared collections before preparing more collections"
+            )));
+        }
+
+        self.provisional_shard_mappings = ids.into_iter().map(|id| (id, ShardId::new())).collect();
+
+        let durably_recorded_mappings = self
+            .provisional_shard_mappings
+            .iter()
+            .map(|(id, shard)| (*id, shard.to_string()))
+            .collect();
+
+        txn.insert_storage_metadata(durably_recorded_mappings)?;
+
+        Ok(())
+    }
+
+    fn clear_prepared_collections(&mut self) {
+        self.provisional_shard_mappings.clear();
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -2338,6 +2395,7 @@ where
 
         Self {
             build_info,
+            provisional_shard_mappings: BTreeMap::new(),
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             stash,
