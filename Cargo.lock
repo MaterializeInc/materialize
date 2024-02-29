@@ -4532,6 +4532,7 @@ name = "mz-frontegg-mock"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "hyper",
  "jsonwebtoken",

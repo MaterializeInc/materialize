@@ -16,13 +16,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use jsonwebtoken::EncodingKey;
-use mz_frontegg_mock::FronteggMockServer;
+use jsonwebtoken::{DecodingKey, EncodingKey};
+use mz_frontegg_mock::{FronteggMockServer, UserConfig};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::now::SYSTEM_TIME;
-use serde::Deserialize;
-use uuid::Uuid;
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Frontegg mock server", long_about = None)]
@@ -30,21 +28,25 @@ struct Args {
     /// Listen address for the server; supports DNS names.
     #[clap(long, value_name = "HOST:PORT")]
     listen_addr: String,
+    /// Issuer to include in generated JWTs.
+    #[clap(long)]
+    issuer: String,
     /// RSA private key in PEM format for JWT encoding.
     #[clap(long)]
     encoding_key: Option<String>,
     /// File path for RSA private key in PEM format for JWT encoding.
     #[clap(long)]
     encoding_key_file: Option<PathBuf>,
+    /// RSA public key in PEM format for JWT decoding.
     #[clap(long)]
-    /// Tenant id.
-    tenant_id: Uuid,
+    decoding_key: Option<String>,
+    /// File path for RSA public key in PEM format for JWT decoding.
     #[clap(long)]
-    /// Users and their client ids and passwords. JSON of the form: `{"u1": {"client": "client_id", "password": "password"}, "u2": {..}}`
+    decoding_key_file: Option<PathBuf>,
+    /// User information.
+    /// JSON of the form: `[{"email": "...", "password": "...", "tenant_id": "...", initial_api_tokens: [{"client_id": "...", "secret": "..."}], "roles": ["role1", "role2"]}]`
+    #[clap(long)]
     users: String,
-    /// Roles to which users belong. JSON of the form: `{"u1": ["role1", "role2"], "u2": [..]}`
-    #[clap(long)]
-    roles: String,
 }
 
 #[tokio::main]
@@ -74,33 +76,35 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         }
         _ => anyhow::bail!("exactly one of --encoding-key or --encoding-key-file expected"),
     };
-    let users: BTreeMap<String, User> =
-        serde_json::from_str(&args.users).with_context(|| "decoding --users")?;
-    let users: BTreeMap<(String, String), String> = users
+    let decoding_key = match (args.decoding_key, args.decoding_key_file) {
+        (None, Some(path)) => {
+            let key = std::fs::read(path)?;
+            DecodingKey::from_rsa_pem(&key).with_context(|| "decoding --decoding-key-file")?
+        }
+        (Some(key), None) => {
+            DecodingKey::from_rsa_pem(key.as_bytes()).with_context(|| "decoding --decoding-key")?
+        }
+        _ => anyhow::bail!("exactly one of --decoding-key or --decoding-key-file expected"),
+    };
+    let users: BTreeMap<String, UserConfig> = serde_json::from_str::<Vec<UserConfig>>(&args.users)
+        .with_context(|| "decoding --users")?
         .into_iter()
-        .map(|(name, u)| ((u.client, u.password), name))
+        .map(|user| (user.email.clone(), user))
         .collect();
-    let roles = serde_json::from_str(&args.roles).with_context(|| "decoding --roles")?;
     let server = FronteggMockServer::start(
         Some(&addr),
+        args.issuer,
         encoding_key,
-        args.tenant_id,
+        decoding_key,
         users,
-        roles,
         SYSTEM_TIME.clone(),
         500,
         None,
     )?;
 
     println!("frontegg-mock listening...");
-    println!(" HTTP address: {}", server.url);
+    println!(" HTTP address: {}", server.base_url);
 
     server.handle.await??;
     anyhow::bail!("serving tasks unexpectedly exited");
-}
-
-#[derive(Deserialize)]
-struct User {
-    client: String,
-    password: String,
 }

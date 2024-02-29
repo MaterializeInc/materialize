@@ -18,11 +18,12 @@ from materialize.ui import UIError
 class FronteggMock(Service):
     def __init__(
         self,
-        tenant_id: str,
         users: str,
-        roles: str,
+        issuer: str,
         encoding_key: str | None = None,
         encoding_key_file: str | None = None,
+        decoding_key: str | None = None,
+        decoding_key_file: str | None = None,
         name: str = "frontegg-mock",
         mzbuild: str = "frontegg-mock",
         volumes: list[str] = [],
@@ -30,12 +31,10 @@ class FronteggMock(Service):
     ) -> None:
         command = [
             "--listen-addr=0.0.0.0:6880",
-            "--tenant-id",
-            tenant_id,
             "--users",
             users,
-            "--roles",
-            roles,
+            "--issuer",
+            issuer,
         ]
         if encoding_key:
             command += ["--encoding-key", encoding_key]
@@ -43,6 +42,13 @@ class FronteggMock(Service):
             command += ["--encoding-key-file", encoding_key_file]
         else:
             raise UIError("FronteggMock service must specify encoding-key[-file]")
+
+        if decoding_key:
+            command += ["--decoding-key", decoding_key]
+        elif decoding_key_file:
+            command += ["--decoding-key-file", decoding_key_file]
+        else:
+            raise UIError("FronteggMock service must specify decoding-key[-file]")
 
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on

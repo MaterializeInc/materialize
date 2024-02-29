@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import logging
+from ipaddress import IPv4Address
 from typing import Any
 
 import psycopg
@@ -60,6 +61,7 @@ def pgwire_sql_conn(auth: AuthConfig, environment: Environment) -> Connection[An
         host=pgwire_host,
         port=pgwire_port,
         sslmode=auth.pgwire_ssl_mode,
+        sslrootcert=auth.tls_ca_cert_path,
     )
     conn.autocommit = True
     return conn
@@ -92,8 +94,23 @@ def sql_query_http(
 ) -> list[list[Any]]:
     environment_params = environment.wait_for_environmentd()
     environmentd_url: str = environment_params["regionInfo"]["httpAddress"]
+    override_ip = (
+        IPv4Address("127.0.0.1")
+        if environment.env_kubectl.context == "kind-mzcloud"
+        else None
+    )
     schema = "http" if "127.0.0.1" in environmentd_url else "https"
-    envd_web_requests = WebRequests(auth, f"{schema}://{environmentd_url}")
+    verify = (
+        "misc/kind/balancer/tls/ca-cert.pem"
+        if schema == "https" and override_ip is not None
+        else None
+    )
+    envd_web_requests = WebRequests(
+        auth,
+        f"{schema}://{environmentd_url}",
+        override_ip=override_ip,
+        verify=verify,
+    )
     response = envd_web_requests.post(
         "/api/sql",
         {"query": query},
