@@ -27,7 +27,6 @@
 
 use std::sync::Arc;
 
-use mz_compute_types::dataflows::BuildDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_expr::refresh_schedule::RefreshSchedule;
@@ -42,7 +41,7 @@ use timely::progress::Antichain;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
-    prep_relation_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
+    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
@@ -205,10 +204,6 @@ impl Optimize<LocalMirPlan> for Optimizer {
         df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-        for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
-            prep_relation_expr(plan, ExprPrepStyle::Index)?;
-        }
-
         let sink_description = ComputeSinkDesc {
             from: self.view_id,
             from_desc: rel_desc.clone(),
@@ -221,8 +216,14 @@ impl Optimize<LocalMirPlan> for Optimizer {
             non_null_assertions: self.non_null_assertions.clone(),
             refresh_schedule: self.refresh_schedule.clone(),
         };
-
         df_desc.export_sink(self.sink_id, sink_description);
+
+        // Prepare expressions in the assembled dataflow.
+        let style = ExprPrepStyle::Index;
+        df_desc.visit_children(
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
+        )?;
 
         let df_meta = mz_transform::optimize_dataflow(
             &mut df_desc,

@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::connection::ConnectionId;
-use mz_compute_types::dataflows::BuildDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_compute_types::ComputeInstanceId;
@@ -29,8 +28,8 @@ use timely::progress::Antichain;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
-    dataflow_import_id_bundle, prep_relation_expr, ComputeInstanceSnapshot, DataflowBuilder,
-    ExprPrepStyle,
+    dataflow_import_id_bundle, prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot,
+    DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
@@ -195,10 +194,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 df_builder.import_into_dataflow(&from_id, &mut df_desc)?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-                for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
-                    prep_relation_expr(plan, ExprPrepStyle::Index)?;
-                }
-
                 // Make SinkDesc
                 let sink_description = ComputeSinkDesc {
                     from: from_id,
@@ -228,10 +223,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-                for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
-                    prep_relation_expr(plan, ExprPrepStyle::Index)?;
-                }
-
                 // Make SinkDesc
                 let sink_description = ComputeSinkDesc {
                     from: self.view_id,
@@ -249,6 +240,13 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 df_desc
             }
         };
+
+        // Prepare expressions in the assembled dataflow.
+        let style = ExprPrepStyle::Index;
+        df_desc.visit_children(
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
+        )?;
 
         let df_meta = mz_transform::optimize_dataflow(
             &mut df_desc,

@@ -243,6 +243,8 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         };
         df_desc.export_sink(self.select_id, sink_description);
 
+        // Prepare expressions in the assembled dataflow.
+        //
         // Resolve all unmaterializable function calls except mz_now(), because
         // we don't yet have a timestamp.
         let style = ExprPrepStyle::OneShot {

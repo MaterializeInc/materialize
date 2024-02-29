@@ -153,20 +153,18 @@ impl Optimize<Index> for Optimizer {
         df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-        for desc in df_desc.objects_to_build.iter_mut() {
-            prep_relation_expr(&mut desc.plan, ExprPrepStyle::Index)?;
-        }
-
-        let mut index_desc = IndexDesc {
+        let index_desc = IndexDesc {
             on_id: index.on,
             key: index.keys.clone(),
         };
-
-        for key in index_desc.key.iter_mut() {
-            prep_scalar_expr(key, ExprPrepStyle::Index)?;
-        }
-
         df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
+
+        // Prepare expressions in the assembled dataflow.
+        let style = ExprPrepStyle::Index;
+        df_desc.visit_children(
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
+        )?;
 
         // Optimize the dataflow across views, and any other ways that appeal.
         let mut df_meta = mz_transform::optimize_dataflow(
