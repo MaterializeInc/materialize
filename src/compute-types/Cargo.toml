@@ -18,7 +18,6 @@ mz-ore = { path = "../ore", features = ["tracing_", "metrics"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-storage-types = { path = "../storage-types" }
-mz-pgcopy = { path = "../pgcopy" }
 proptest = { version = "1.0.0", default-features = false, features = ["std"]}
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }

@@ -4145,7 +4145,6 @@ dependencies = [
  "itertools",
  "mz-expr",
  "mz-ore",
- "mz-pgcopy",
  "mz-proto",
  "mz-repr",
  "mz-storage-types",
