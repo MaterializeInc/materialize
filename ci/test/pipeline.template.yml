@@ -477,7 +477,7 @@ steps:
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
-        parallelism: 2
+        parallelism: 4
         artifact_paths: junit_*.xml
         agents:
           queue: linux-aarch64
