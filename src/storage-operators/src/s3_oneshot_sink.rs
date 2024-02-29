@@ -250,7 +250,7 @@ impl CopyToS3Uploader {
         let Some(uploader) = self.current_file_uploader.as_mut() else {
             unreachable!("uploader initialized above");
         };
-        if buffer_length <= uploader.remaining_bytes_limit() {
+        if buffer_length <= uploader.remaining_bytes_limit() || uploader.added_bytes() == 0 {
             // Add to ongoing upload of the current file if still within limit.
             // Or in the unlikely even the size of a single row is more than the max_file_size
             // upload it anyway.
@@ -334,7 +334,8 @@ mod tests {
             "part".to_string(),
         );
         let mut row = Row::default();
-        row.packer().push(Datum::from("1234"));
+        // Even though this will exceed max_file_size, it should be uploaded in a single file.
+        row.packer().push(Datum::from("1234567"));
         uploader.append_row(&row).await?;
 
         // Since the max_file_size is 6B, this row will be uploaded to a new file.
@@ -355,7 +356,7 @@ mod tests {
             .unwrap();
 
         let body = first_file.body.collect().await.unwrap().into_bytes();
-        let expected_body: &[u8] = b"1234\n";
+        let expected_body: &[u8] = b"1234567\n";
         assert_eq!(body, *expected_body);
 
         let second_file = s3_client
