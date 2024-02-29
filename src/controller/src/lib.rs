@@ -408,7 +408,6 @@ where
     ) -> Option<ControllerResponse<T>> {
         let mut finished = vec![];
         for (id, antichain) in updates {
-            let mut remove = None;
             if let Some(x) = self.objects_to_unfulfilled_watch_sets.get_mut(id) {
                 let mut i = 0;
                 while i < x.len() {
@@ -421,11 +420,8 @@ where
                     }
                 }
                 if x.is_empty() {
-                    remove = Some(id);
+                    self.objects_to_unfulfilled_watch_sets.remove(id);
                 }
-            }
-            if let Some(id) = remove {
-                self.objects_to_unfulfilled_watch_sets.remove(id);
             }
         }
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
