@@ -55,6 +55,10 @@ pub fn copy_to<G, F>(
 
     builder.build(move |_caps| async move {
         if worker_id != active_worker {
+            // Returning 0 count for non-active workers.
+            // If nothing is returned, then a `CopyToResponse::Dropped` message
+            // will be sent instead upon drop, making the accumulated response a `Dropped` as well.
+            callback(Ok(0));
             return;
         }
 

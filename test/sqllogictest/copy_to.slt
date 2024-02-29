@@ -25,14 +25,16 @@ ALTER SYSTEM SET enable_aws_connection = on;
 COMPLETE 0
 
 statement ok
-CREATE CONNECTION aws_conn TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name');
+CREATE SECRET aws_secret_access_key AS 'secret';
 
-# TODO: fix this, currently the query hangs
+statement ok
+CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET aws_secret_access_key);
+
 # Using a select query with 0 rows, so that we don't try to write to s3.
-# simple conn=mz_system,user=mz_system
-# COPY (SELECT generate_series(1, 0)) TO 's3://path' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv', MAX FILE SIZE = '100MB')
-# ----
-# COMPLETE 0
+simple conn=mz_system,user=mz_system
+COPY (SELECT generate_series(1, 0)) TO 's3://path' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv', MAX FILE SIZE = '100MB')
+----
+COMPLETE 0
 
 statement ok
 DROP CONNECTION aws_conn;
