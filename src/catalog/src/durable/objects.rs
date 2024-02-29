@@ -689,6 +689,7 @@ pub struct Snapshot {
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+    pub storage_metadata: BTreeMap<proto::StorageMetadataKey, proto::StorageMetadataValue>,
 }
 
 impl Snapshot {
@@ -879,6 +880,17 @@ pub struct AuditLogKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageKey {
     pub(crate) metric: VersionedStorageUsage,
+}
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct StorageCollectionMetadataKey {
+    pub(crate) id: GlobalId,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct StorageCollectionMetadataValue {
+    pub(crate) shard: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

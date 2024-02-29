@@ -90,6 +90,7 @@ impl StateUpdate {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_metadata,
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
@@ -118,6 +119,7 @@ impl StateUpdate {
         let default_privileges =
             from_batch(default_privileges, ts, StateUpdateKind::DefaultPrivilege);
         let system_privileges = from_batch(system_privileges, ts, StateUpdateKind::SystemPrivilege);
+        let storage_metadata = from_batch(storage_metadata, ts, StateUpdateKind::StorageMetadata);
         let audit_logs = from_batch(audit_log_updates, ts, StateUpdateKind::AuditLog);
         let storage_usage_updates =
             from_batch(storage_usage_updates, ts, StateUpdateKind::StorageUsage);
@@ -137,6 +139,7 @@ impl StateUpdate {
             .chain(system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
+            .chain(storage_metadata)
             .chain(audit_logs)
             .chain(storage_usage_updates)
             .collect()
@@ -214,6 +217,7 @@ pub enum StateUpdateKind {
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
+    StorageMetadata(proto::StorageMetadataKey, proto::StorageMetadataValue),
 }
 
 impl StateUpdateKind {
@@ -239,6 +243,7 @@ impl StateUpdateKind {
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
+            StateUpdateKind::StorageMetadata(_, _) => Some(CollectionType::StorageMetadata),
         }
     }
 }
@@ -361,6 +366,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 StateUpdateKind::SystemPrivilege(key, value) => {
                     proto::state_update_kind::Kind::SystemPrivileges(
                         proto::state_update_kind::SystemPrivileges {
+                            key: Some(key.clone()),
+                            value: Some(value.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                    proto::state_update_kind::Kind::StorageCollectionMetadata(
+                        proto::state_update_kind::StorageCollectionMetadata {
                             key: Some(key.clone()),
                             value: Some(value.clone()),
                         },
@@ -567,6 +580,20 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     value.ok_or_else(|| {
                         TryFromProtoError::missing_field(
                             "state_update_kind::SystemPrivileges::value",
+                        )
+                    })?,
+                ),
+                proto::state_update_kind::Kind::StorageCollectionMetadata(
+                    proto::state_update_kind::StorageCollectionMetadata { key, value },
+                ) => StateUpdateKind::StorageCollectionMetadata(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::key",
+                        )
+                    })?,
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::value",
                         )
                     })?,
                 ),

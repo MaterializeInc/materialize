@@ -1142,6 +1142,9 @@ impl PersistCatalogState {
                     StateUpdateKind::SystemPrivilege(key, value) => {
                         apply(&mut snapshot.system_privileges, key, value, diff);
                     }
+                    StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                        apply(&mut snapshot.storage_collection_metadata, key, value, diff);
+                    }
                 }
             }
             f(snapshot)
@@ -1621,6 +1624,9 @@ impl Trace {
                 }
                 StateUpdateKind::SystemPrivilege(k, v) => {
                     trace.system_privileges.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::StorageMetadata(k, v) => {
+                    trace.storage_metadata.values.push(((k, v), ts, diff))
                 }
             }
         }

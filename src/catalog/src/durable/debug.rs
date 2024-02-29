@@ -70,6 +70,7 @@ pub enum CollectionType {
     SystemConfiguration,
     SystemGidMapping,
     SystemPrivileges,
+    StorageMetadata,
 }
 
 derive_display_from_serialize!(CollectionType);
@@ -252,6 +253,15 @@ collection_impl!({
     update: StateUpdateKind::SystemPrivilege,
 });
 
+collection_impl!({
+    name: StorageMetadataCollection,
+    key: proto::StorageCollectionMetadataKey,
+    value: proto::StorageCollectionMetadataValue,
+    collection_type: CollectionType::StorageMetadata,
+    trace_field: storage_collection_metadata,
+    update: StateUpdateKind::StorageCollectionMetadata,
+});
+
 /// A trace of timestamped diffs for a particular [`Collection`].
 ///
 /// The timestamps are represented as strings since different implementations use non-compatible
@@ -262,7 +272,7 @@ pub struct CollectionTrace<T: Collection + ?Sized> {
 }
 
 impl<T: Collection> CollectionTrace<T> {
-    fn new() -> CollectionTrace<T> {
+    pub fn new() -> CollectionTrace<T> {
         CollectionTrace { values: Vec::new() }
     }
 }
@@ -287,6 +297,7 @@ pub struct Trace {
     pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
+    pub storage_metadata: CollectionTrace<StorageMetadataCollection>,
 }
 
 impl Trace {
@@ -309,6 +320,7 @@ impl Trace {
             system_object_mappings: CollectionTrace::new(),
             system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),
+            storage_metadata: CollectionTrace::new(),
         }
     }
 }
