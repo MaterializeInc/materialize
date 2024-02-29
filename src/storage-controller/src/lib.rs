@@ -81,8 +81,6 @@ use tokio::sync::watch::{channel, Sender};
 use tokio_stream::StreamMap;
 use tracing::{debug, info, warn};
 
-use crate::command_wals::ProtoShardId;
-
 use crate::persist_handles::SnapshotStatsAsOf;
 use crate::rehydration::RehydratingStorageClient;
 mod collection_mgmt;
@@ -91,6 +89,8 @@ mod command_wals;
 mod persist_handles;
 mod rehydration;
 mod statistics;
+
+pub use crate::command_wals::{ProtoShardId, SHARD_FINALIZATION};
 
 pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableCollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");

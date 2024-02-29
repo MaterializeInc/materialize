@@ -3853,6 +3853,7 @@ dependencies = [
  "mz-stash",
  "mz-stash-types",
  "mz-storage-client",
+ "mz-storage-controller",
  "mz-storage-types",
  "once_cell",
  "paste",

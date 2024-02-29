@@ -43,6 +43,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
 mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
+mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }
 paste = "1.0.11"
 prometheus = { version = "0.13.3", default-features = false }

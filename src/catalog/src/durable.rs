@@ -24,6 +24,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
+use mz_stash::Stash;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
@@ -274,6 +275,111 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ReplicaId::User(id))
+    }
+
+    /// Migrates storage stash data from `other` to `self`.
+    async fn migrate_storage_state_from(&mut self, stash: &mut Stash) -> Result<(), CatalogError> {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_proto::RustType;
+        use mz_repr::GlobalId;
+        use mz_stash::TypedCollection;
+        use mz_stash_types::StashError;
+        use mz_storage_client::controller::StorageTxn;
+        use mz_storage_types::controller::DurableCollectionMetadata;
+
+        let mut storage_migration_txn = self.transaction().await?;
+
+        // If the persist-backed implementation of the catalog has storage
+        // metadata, this migration already occurred.
+        if !storage_migration_txn.get_storage_metadata().is_empty() {
+            return Ok(());
+        }
+
+        // Convenience method for reading from a collection in parallel.
+        async fn tx_peek<'tx, K, V>(
+            tx: &'tx mz_stash::Transaction<'tx>,
+            typed: &TypedCollection<K, V>,
+        ) -> Result<BTreeMap<K, V>, StashError>
+        where
+            K: mz_stash::Data,
+            V: mz_stash::Data,
+        {
+            let collection = tx
+                .collection::<K, V>(typed.name())
+                .await
+                .expect("named collection must exist");
+
+            if collection.is_initialized(tx).await? {
+                tx.peek_one(collection).await
+            } else {
+                Ok(BTreeMap::new())
+            }
+        }
+
+        // Get stash metadata.
+        let (metadata_collection, shard_finalization, persist_txns_shard) = stash
+            .with_transaction(move |tx| {
+                Box::pin(async move {
+                    Ok(futures::join!(
+                        tx_peek(&tx, &mz_storage_controller::METADATA_COLLECTION),
+                        tx_peek(&tx, &mz_storage_controller::SHARD_FINALIZATION),
+                        tx_peek(&tx, &mz_storage_controller::PERSIST_TXNS_SHARD),
+                    ))
+                })
+            })
+            .await?;
+
+        let items: std::collections::BTreeSet<_> = storage_migration_txn
+            .loaded_items()
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+
+        let mut unfinalized_shards: BTreeSet<_> = shard_finalization?
+            .into_iter()
+            .map(|(shard, ())| shard)
+            .collect();
+
+        let mut storage_metadata = BTreeMap::new();
+
+        for (id, metadata) in metadata_collection?.into_iter() {
+            let id = GlobalId::from_proto(id)?;
+            let DurableCollectionMetadata { data_shard } =
+                DurableCollectionMetadata::from_proto(metadata)?;
+
+            let data_shard = data_shard.to_string();
+
+            if items.contains(&id) {
+                storage_metadata.insert(id, data_shard);
+            } else {
+                // Item was dropped from the catalog but did not have time to be
+                // dropped from the durable catalog state.
+                unfinalized_shards.insert(data_shard);
+            };
+        }
+
+        let persist_txn_shard: Option<String> = persist_txns_shard?
+            .into_iter()
+            .map(|((), shard)| shard)
+            .next();
+
+        storage_migration_txn
+            .insert_storage_metadata(storage_metadata)
+            .map_err(DurableCatalogError::from)?;
+
+        storage_migration_txn
+            .insert_unfinalized_shards(unfinalized_shards)
+            .map_err(DurableCatalogError::from)?;
+
+        if let Some(shard) = persist_txn_shard {
+            storage_migration_txn
+                .write_persist_txn_shard(shard)
+                .map_err(DurableCatalogError::from)?;
+        }
+
+        // Only the persist-backed implementation may commit without erroring.
+        storage_migration_txn.commit().await
     }
 }
 

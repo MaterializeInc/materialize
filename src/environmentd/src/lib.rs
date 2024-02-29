@@ -426,19 +426,33 @@ impl Listeners {
             }
         }
 
+        let bootstrap_args = BootstrapArgs {
+            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            bootstrap_role: config.bootstrap_role,
+        };
+
         let mut adapter_storage = openable_adapter_storage
-            .open(
-                boot_ts,
-                &BootstrapArgs {
-                    default_cluster_replica_size: config
-                        .bootstrap_default_cluster_replica_size
-                        .clone(),
-                    bootstrap_role: config.bootstrap_role,
-                },
-                config.deploy_generation,
-                None,
-            )
+            .open(boot_ts, &bootstrap_args, config.deploy_generation, None)
             .await?;
+
+        // Migrate the storage metadata to the persist-backed catalog. This can
+        // be deleted in the version following this merge.
+        {
+            let stash_factory =
+                mz_stash::StashFactory::from_metrics(Arc::clone(&config.controller.stash_metrics));
+            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
+                &config.controller.storage_stash_url,
+            )?)?;
+
+            let mut storage_stash = stash_factory
+                .open(config.controller.storage_stash_url.clone(), None, tls, None)
+                .await?;
+
+            adapter_storage
+                .migrate_storage_state_from(&mut storage_stash)
+                .await?;
+        }
+
         let persist_txn_tables_current_ld =
             get_ld_value(PERSIST_TXN_TABLES.name(), &remote_system_parameters, |x| {
                 PersistTxnTablesImpl::from_str(x).map_err(|x| x.to_string())
