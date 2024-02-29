@@ -60,7 +60,7 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_mysql_util::{
-    query_sys_var, MySqlConn, MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
+    query_sys_var, MySqlConn, MySqlError, MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
@@ -417,10 +417,14 @@ async fn raw_stream<'a>(
     resume_upper: &Antichain<GtidPartition>,
 ) -> Result<Result<(BinlogStream, Option<ManagedSshTunnelHandle>), DefiniteError>, TransientError> {
     // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
-    if let Err(err) = validate_mysql_repl_settings(&mut conn).await {
-        return Ok(Err(DefiniteError::ServerConfigurationError(
-            err.to_string(),
-        )));
+    match validate_mysql_repl_settings(&mut conn).await {
+        Err(err @ MySqlError::InvalidSystemSetting { .. }) => {
+            return Ok(Err(DefiniteError::ServerConfigurationError(
+                err.to_string(),
+            )));
+        }
+        Err(err) => Err(err)?,
+        Ok(()) => (),
     };
 
     // To start the stream we need to provide a GTID set of the transactions that we've 'seen'
