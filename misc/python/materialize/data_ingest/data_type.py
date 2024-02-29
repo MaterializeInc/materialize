@@ -366,7 +366,4 @@ DATA_TYPES_FOR_AVRO = sorted(
     list(set(DATA_TYPES) - {TextTextMap, Jsonb, Bytea, Boolean}), key=repr
 )
 
-# MySQL doesn't support keys of unlimited size
-DATA_TYPES_FOR_KEY = sorted(list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea}), key=repr)
-
 NUMBER_TYPES = [SmallInt, Int, Long, Float, Double]

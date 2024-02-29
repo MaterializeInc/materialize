@@ -10,25 +10,19 @@
 import random
 import time
 
-from materialize.data_ingest.executor import (
-    KafkaExecutor,
-    KafkaRoundtripExecutor,
-    MySqlExecutor,
-)
+from materialize.data_ingest.executor import KafkaExecutor, KafkaRoundtripExecutor
 from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Postgres(),
-    MySql(),
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
@@ -75,14 +69,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
 
-    services = (
-        "materialized",
-        "zookeeper",
-        "kafka",
-        "schema-registry",
-        "postgres",
-        "mysql",
-    )
+    services = ("materialized", "zookeeper", "kafka", "schema-registry", "postgres")
     c.up(*services)
 
     conn = c.sql_connection()
@@ -100,7 +87,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     conn.autocommit = False
     conn.close()
 
-    executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
+    executor_classes = [KafkaRoundtripExecutor, KafkaExecutor]
     ports = {s: c.default_port(s) for s in services}
 
     for i, workload_class in enumerate(workloads):

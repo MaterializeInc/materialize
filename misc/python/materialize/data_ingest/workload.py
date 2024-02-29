@@ -14,7 +14,7 @@ from typing import Any
 
 import pg8000
 
-from materialize.data_ingest.data_type import DATA_TYPES_FOR_AVRO, DATA_TYPES_FOR_KEY
+from materialize.data_ingest.data_type import DATA_TYPES_FOR_AVRO
 from materialize.data_ingest.definition import (
     Delete,
     Insert,
@@ -157,7 +157,7 @@ def execute_workload(
     fields = []
 
     for i in range(random.randint(1, 10)):
-        fields.append(Field(f"key{i}", random.choice(DATA_TYPES_FOR_KEY), True))
+        fields.append(Field(f"key{i}", random.choice(DATA_TYPES_FOR_AVRO), True))
     for i in range(random.randint(0, 20)):
         fields.append(Field(f"value{i}", random.choice(DATA_TYPES_FOR_AVRO), False))
     print(f"With fields: {fields}")
