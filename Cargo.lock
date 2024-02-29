@@ -3111,13 +3111,14 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "lgalloc"
-version = "0.1.7"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06e3de70c23cbcf5613858a870f9c02185e6c337ebcd076453383a24fde8f64a"
+checksum = "7a7da66e048ec66e9bcd886b4f704a3702787a517ebed8fb5a0e7c4ed25ee742"
 dependencies = [
  "crossbeam-deque",
  "libc",
  "memmap2",
+ "numa_maps",
  "page_size",
  "tempfile",
  "thiserror",
@@ -6490,6 +6491,12 @@ dependencies = [
  "quote",
  "syn 1.0.107",
 ]
+
+[[package]]
+name = "numa_maps"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "919af26e03f635d91244e3e3e5a63f0377a78044b39e09a69fdad36514dc919f"
 
 [[package]]
 name = "number_prefix"

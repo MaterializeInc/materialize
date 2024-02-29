@@ -385,6 +385,8 @@ pub struct ComputeParameters {
     pub enable_chunked_stack: Option<bool>,
     /// Enable operator hydration status logging.
     pub enable_operator_hydration_status_logging: Option<bool>,
+    /// Enable lgalloc's eager memory return/reclamation feature.
+    pub enable_lgalloc_eager_reclamation: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
     /// Tracing configuration.
@@ -404,6 +406,7 @@ impl ComputeParameters {
             enable_columnation_lgalloc,
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
+            enable_lgalloc_eager_reclamation,
             persist,
             tracing,
             grpc_client,
@@ -430,6 +433,9 @@ impl ComputeParameters {
         if enable_operator_hydration_status_logging.is_some() {
             self.enable_operator_hydration_status_logging =
                 enable_operator_hydration_status_logging;
+        }
+        if enable_lgalloc_eager_reclamation.is_some() {
+            self.enable_lgalloc_eager_reclamation = enable_lgalloc_eager_reclamation;
         }
 
         self.persist.update(persist);
@@ -459,6 +465,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             enable_operator_hydration_status_logging: self
                 .enable_operator_hydration_status_logging
                 .into_proto(),
+            enable_lgalloc_eager_reclamation: self.enable_lgalloc_eager_reclamation.into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
@@ -479,6 +486,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             enable_operator_hydration_status_logging: proto
                 .enable_operator_hydration_status_logging
                 .into_rust()?,
+            enable_lgalloc_eager_reclamation: proto.enable_lgalloc_eager_reclamation.into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,

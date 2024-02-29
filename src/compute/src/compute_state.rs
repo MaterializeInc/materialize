@@ -236,6 +236,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             enable_columnation_lgalloc,
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
+            enable_lgalloc_eager_reclamation,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -256,19 +257,32 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 true => LinearJoinImpl::Materialize,
             };
         }
+
+        // TODO(mh): This has a potential problem that when `enable_columnation_lgalloc` and
+        // `enable_lgalloc_eager_reclamation` arrive at different times, we won't pick up
+        // the expected configuration. This works at the moment because we receive a whole
+        // copy of the parameters when any single one changes, but it's not a guarantee
+        // that's written down.
         match enable_columnation_lgalloc {
             Some(true) => {
                 if let Some(path) = self.compute_state.context.scratch_directory.as_ref() {
-                    info!(path = ?path, "Enabling lgalloc");
-                    lgalloc::lgalloc_set_config(
-                        lgalloc::LgAlloc::new()
-                            .enable()
-                            .with_path(path.clone())
-                            .with_background_config(lgalloc::BackgroundWorkerConfig {
-                                interval: Duration::from_secs(1),
-                                batch: 32,
-                            }),
+                    info!(
+                        ?path,
+                        eager_return = enable_lgalloc_eager_reclamation,
+                        "Enabling lgalloc"
                     );
+                    let mut config = lgalloc::LgAlloc::new();
+                    config
+                        .enable()
+                        .with_path(path.clone())
+                        .with_background_config(lgalloc::BackgroundWorkerConfig {
+                            interval: Duration::from_secs(1),
+                            batch: 32,
+                        });
+                    if let Some(eager_return) = enable_lgalloc_eager_reclamation {
+                        config.eager_return(eager_return);
+                    }
+                    lgalloc::lgalloc_set_config(&config);
                 } else {
                     debug!("Not enabling lgalloc, scratch directory not specified");
                 }
