@@ -55,6 +55,7 @@ impl FronteggMockServer {
         encoding_key: EncodingKey,
         decoding_key: DecodingKey,
         users: BTreeMap<String, UserConfig>,
+        role_permissions: Option<BTreeMap<String, Vec<String>>>,
         now: NowFn,
         expires_in_secs: i64,
         latency: Option<Duration>,
@@ -74,6 +75,21 @@ impl FronteggMockServer {
             })
             .flatten()
             .collect();
+        let role_permissions = role_permissions.unwrap_or_else(|| {
+            BTreeMap::from([
+                (
+                    "MaterializePlatformAdmin".to_owned(),
+                    vec![
+                        "materialize.environment.write".to_owned(),
+                        "materialize.invoice.read".to_owned(),
+                    ],
+                ),
+                (
+                    "MaterializePlatform".to_owned(),
+                    vec!["materialize.environment.read".to_owned()],
+                ),
+            ])
+        });
 
         let context = Arc::new(Context {
             issuer,
@@ -82,6 +98,7 @@ impl FronteggMockServer {
             users: Mutex::new(users),
             user_api_tokens: Mutex::new(user_api_tokens),
             role_updates_rx: Mutex::new(role_updates_rx),
+            role_permissions,
             now,
             expires_in_secs,
             latency,
@@ -168,16 +185,13 @@ fn generate_access_token(
     roles: Vec<String>,
 ) -> String {
     let mut permissions = Vec::new();
-    if roles
-        .iter()
-        .any(|r| r.as_str() == "MaterializePlatformAdmin")
-    {
-        permissions.push("materialize.environment.write".to_owned());
-        permissions.push("materialize.invoice.read".to_owned());
-    }
-    if roles.iter().any(|r| r.as_str() == "MaterializePlatform") {
-        permissions.push("materialize.environment.read".to_owned());
-    }
+    roles.iter().for_each(|role| {
+        if let Some(role_permissions) = context.role_permissions.get(role.as_str()) {
+            permissions.extend_from_slice(role_permissions);
+        }
+    });
+    permissions.sort();
+    permissions.dedup();
     jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &Claims {
@@ -392,6 +406,7 @@ struct Context {
     users: Mutex<BTreeMap<String, UserConfig>>,
     user_api_tokens: Mutex<BTreeMap<UserApiToken, String>>,
     role_updates_rx: Mutex<UnboundedReceiver<(String, Vec<String>)>>,
+    role_permissions: BTreeMap<String, Vec<String>>,
     now: NowFn,
     expires_in_secs: i64,
     latency: Option<Duration>,
