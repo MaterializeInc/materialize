@@ -18,7 +18,6 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::NaiveDateTime;
 use differential_dataflow::{AsCollection, Collection};
-use futures::StreamExt;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
 use mz_ore::error::ErrorExt;
@@ -151,7 +150,7 @@ impl SourceRender for KafkaSourceConnection {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>>
+        _resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>>
             + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
@@ -481,20 +480,6 @@ impl SourceRender for KafkaSourceConnection {
                 }
             }
 
-            let resume_uppers_process_loop = async move {
-                tokio::pin!(resume_uppers);
-                while let Some(_) = resume_uppers.next().await {
-                    // Do nothing to dodge reclocking CPU leak.
-                    // https://github.com/MaterializeInc/materialize/issues/22128
-                }
-                // During dataflow shutdown this loop can end due to the general chaos caused by
-                // dropping tokens as a means to shutdown. This call ensures this future never ends
-                // and we instead rely on this operator being dropped altogether when *its* token
-                // is dropped.
-                std::future::pending::<()>().await;
-            };
-            tokio::pin!(resume_uppers_process_loop);
-
             let mut prev_pid_info: Option<BTreeMap<PartitionId, WatermarkOffsets>> = None;
             let mut snapshot_total = None;
 
@@ -806,10 +791,6 @@ impl SourceRender for KafkaSourceConnection {
                     // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
                     // up
                     _  = tokio::time::timeout(Duration::from_secs(1), notificator.notified()) => {},
-                    // This future is not cancel safe but we are only passing a reference to it in
-                    // the select! loop so the future stays on the stack and never gets cancelled
-                    // until the end of the function.
-                    _ = resume_uppers_process_loop.as_mut() => {},
                 }
             }
         });
