@@ -81,6 +81,7 @@ use mz_sql::session::vars::{
 };
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::QualifiedReplica;
+use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -1048,6 +1049,7 @@ impl Catalog {
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
         &mut self,
+        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
@@ -1088,6 +1090,7 @@ impl Catalog {
         let mut state = self.state.clone();
 
         Self::transact_inner(
+            storage_controller,
             oracle_write_ts,
             session,
             ops,
@@ -1096,7 +1099,8 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-        )?;
+        )
+        .await?;
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
@@ -1136,7 +1140,8 @@ impl Catalog {
     ///   final element.
     /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
-    fn transact_inner(
+    async fn transact_inner(
+        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
@@ -1156,6 +1161,8 @@ impl Catalog {
             Some(_) => vec![],
             None => return Ok(()),
         };
+
+        let mut storage_collections_to_prepare = BTreeSet::new();
 
         for op in ops {
             match op {
@@ -1627,6 +1634,10 @@ impl Catalog {
                     owner_id,
                 } => {
                     state.check_unstable_dependencies(&item)?;
+
+                    if item.is_storage_collection() {
+                        storage_collections_to_prepare.insert(id);
+                    }
 
                     if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
                         let cluster_name = state.clusters_by_id[&id].name.clone();
@@ -2936,6 +2947,12 @@ impl Catalog {
         }
 
         if dry_run_ops.is_empty() {
+            storage_controller
+                .prepare_collections(tx, storage_collections_to_prepare)
+                .await?;
+
+            state.update_storage_metadata(tx);
+
             Ok(())
         } else {
             Err(AdapterError::TransactionDryRun {
