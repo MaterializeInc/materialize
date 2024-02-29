@@ -713,6 +713,7 @@ pub struct Snapshot {
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+    pub storage_metadata: BTreeMap<proto::StorageMetadataKey, proto::StorageMetadataValue>,
 }
 
 impl Snapshot {
@@ -917,6 +918,18 @@ pub struct TimestampKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct TimestampValue {
     pub(crate) ts: mz_repr::Timestamp,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct StorageMetadataKey {
+    pub(crate) id: GlobalId,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct StorageMetadataValue {
+    pub(crate) shard: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

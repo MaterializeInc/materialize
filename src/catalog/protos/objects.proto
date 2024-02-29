@@ -199,6 +199,16 @@ message CommentValue {
   string comment = 1;
 }
 
+message StorageMetadataKey {
+    GlobalId id = 1;
+}
+
+// This value is stored transparently, however, it should only ever be
+// manipulated by the storage controller.
+message StorageMetadataValue {
+    string shard = 1;
+}
+
 // ---- Common Types
 //
 // Note: Normally types like this would go in some sort of `common.proto` file, but we want to keep
@@ -769,6 +779,11 @@ message StateUpdateKind {
     TimestampValue value = 2;
   }
 
+  message StorageMetadata {
+    StorageMetadataKey key = 1;
+    StorageMetadataValue value = 2;
+  }
+
   oneof kind {
     AuditLog audit_log = 1;
     Cluster cluster = 2;
@@ -789,5 +804,6 @@ message StateUpdateKind {
     GidMapping gid_mapping = 17;
     SystemPrivileges system_privileges = 18;
     Timestamp timestamp = 19;
+    StorageMetadata storage_metadata = 20;
   }
 }

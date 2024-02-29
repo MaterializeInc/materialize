@@ -28,8 +28,8 @@ use mz_catalog::durable::debug::{
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
     IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
-    StorageUsageCollection, SystemConfigurationCollection, SystemItemMappingCollection,
-    SystemPrivilegeCollection, TimestampCollection, Trace,
+    StorageMetadataCollection, StorageUsageCollection, SystemConfigurationCollection,
+    SystemItemMappingCollection, SystemPrivilegeCollection, TimestampCollection, Trace,
 };
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
@@ -244,6 +244,7 @@ macro_rules! for_collection {
             CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
             CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
             CollectionType::Timestamp => $fn::<TimestampCollection>($($arg),*).await?,
+            CollectionType::StorageMetadata => $fn::<StorageMetadataCollection>($($arg),*).await?,
         }
     };
 }
@@ -357,6 +358,7 @@ async fn dump(
         system_configurations,
         system_privileges,
         timestamps,
+        storage_metadata,
     } = openable_state.trace().await?;
 
     if !ignore_large_collections {
@@ -381,6 +383,7 @@ async fn dump(
     dump_col(&mut data, system_object_mappings, &ignore);
     dump_col(&mut data, system_privileges, &ignore);
     dump_col(&mut data, timestamps, &ignore);
+    dump_col(&mut data, storage_metadata, &ignore);
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())

@@ -90,6 +90,7 @@ impl StateUpdate {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_metadata,
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
@@ -119,6 +120,7 @@ impl StateUpdate {
         let default_privileges =
             from_batch(default_privileges, ts, StateUpdateKind::DefaultPrivilege);
         let system_privileges = from_batch(system_privileges, ts, StateUpdateKind::SystemPrivilege);
+        let storage_metadata = from_batch(storage_metadata, ts, StateUpdateKind::StorageMetadata);
         let audit_logs = from_batch(audit_log_updates, ts, StateUpdateKind::AuditLog);
         let storage_usage_updates =
             from_batch(storage_usage_updates, ts, StateUpdateKind::StorageUsage);
@@ -139,6 +141,7 @@ impl StateUpdate {
             .chain(system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
+            .chain(storage_metadata)
             .chain(audit_logs)
             .chain(storage_usage_updates)
             .collect()
@@ -217,6 +220,7 @@ pub enum StateUpdateKind {
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
     Timestamp(proto::TimestampKey, proto::TimestampValue),
+    StorageMetadata(proto::StorageMetadataKey, proto::StorageMetadataValue),
 }
 
 impl RustType<proto::StateUpdateKind> for StateUpdateKind {
@@ -347,6 +351,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         key: Some(key.clone()),
                         value: Some(value.clone()),
                     })
+                }
+                StateUpdateKind::StorageMetadata(key, value) => {
+                    proto::state_update_kind::Kind::StorageMetadata(
+                        proto::state_update_kind::StorageMetadata {
+                            key: Some(key.clone()),
+                            value: Some(value.clone()),
+                        },
+                    )
                 }
             }),
         }
@@ -560,6 +572,18 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     })?,
                     value.ok_or_else(|| {
                         TryFromProtoError::missing_field("state_update_kind::Timestamp::value")
+                    })?,
+                ),
+                proto::state_update_kind::Kind::StorageMetadata(
+                    proto::state_update_kind::StorageMetadata { key, value },
+                ) => StateUpdateKind::StorageMetadata(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field("state_update_kind::StorageMetadata::key")
+                    })?,
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageMetadata::value",
+                        )
                     })?,
                 ),
             },

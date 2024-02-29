@@ -1053,6 +1053,9 @@ impl PersistCatalogState {
                 StateUpdateKind::Timestamp(key, value) => {
                     apply(&mut self.snapshot.timestamps, key, value, diff);
                 }
+                StateUpdateKind::StorageMetadata(key, value) => {
+                    apply(&mut self.snapshot.storage_metadata, key, value, diff);
+                }
             }
         }
 
@@ -1577,6 +1580,12 @@ impl Trace {
                 }
                 StateUpdateKind::Timestamp(k, v) => {
                     trace.timestamps.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::StorageMetadata(k, v) => {
+                    trace
+                        .storage_metadata
+                        .values
+                        .push(((k, v), ts.to_string(), diff))
                 }
             }
         }

@@ -45,8 +45,8 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
-    TimestampKey, TimestampValue,
+    SettingValue, StorageMetadataKey, StorageMetadataValue, StorageUsageKey, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -79,6 +79,7 @@ pub struct Transaction<'a> {
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
+    storage_metadata: TableTransaction<StorageMetadataKey, StorageMetadataValue>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -105,6 +106,7 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_metadata,
         }: Snapshot,
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
@@ -138,6 +140,10 @@ impl<'a> Transaction<'a> {
             system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
             default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
+            storage_metadata: TableTransaction::new(
+                storage_metadata,
+                |a: &StorageMetadataValue, b| a.shard == b.shard,
+            )?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
         })
@@ -1465,6 +1471,7 @@ impl<'a> Transaction<'a> {
             system_configurations: self.system_configurations.pending(),
             default_privileges: self.default_privileges.pending(),
             system_privileges: self.system_privileges.pending(),
+            storage_metadata: self.storage_metadata.pending(),
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
@@ -1495,6 +1502,7 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_metadata,
             audit_log_updates,
             storage_usage_updates,
         } = &mut txn_batch;
@@ -1516,6 +1524,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
+        differential_dataflow::consolidation::consolidate_updates(storage_metadata);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
@@ -1557,6 +1566,8 @@ pub struct TransactionBatch {
         proto::SystemPrivilegesValue,
         Diff,
     )>,
+    pub(crate) storage_metadata:
+        Vec<(proto::StorageMetadataKey, proto::StorageMetadataValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
 }
