@@ -109,7 +109,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                                     > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.wmr WHERE degree > 3
                                     0
 
-                                    > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.wmr WHERE degree > 3
+                                    > SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 3
                                     0
 
                                     > SELECT COUNT(DISTINCT count_star) FROM qa_canary_environment.public_loadgen.sales_product_product_category WHERE count_distinct_product_id < 0
