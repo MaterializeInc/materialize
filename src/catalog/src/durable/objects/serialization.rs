@@ -41,8 +41,8 @@ use crate::durable::objects::{
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
     ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemPrivilegesKey,
-    SystemPrivilegesValue,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, StorageUsageKey, SystemPrivilegesKey, SystemPrivilegesValue,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -698,6 +698,34 @@ impl RustType<proto::StorageUsageKey> for StorageUsageKey {
         Ok(StorageUsageKey {
             metric: proto.usage.into_rust_if_some("StorageUsageKey::usage")?,
         })
+    }
+}
+
+impl RustType<proto::StorageCollectionMetadataKey> for StorageCollectionMetadataKey {
+    fn into_proto(&self) -> proto::StorageCollectionMetadataKey {
+        proto::StorageCollectionMetadataKey {
+            id: Some(self.id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::StorageCollectionMetadataKey) -> Result<Self, TryFromProtoError> {
+        Ok(StorageCollectionMetadataKey {
+            id: proto
+                .id
+                .into_rust_if_some("StorageCollectionMetadataKey::id")?,
+        })
+    }
+}
+
+impl RustType<proto::StorageCollectionMetadataValue> for StorageCollectionMetadataValue {
+    fn into_proto(&self) -> proto::StorageCollectionMetadataValue {
+        proto::StorageCollectionMetadataValue {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::StorageCollectionMetadataValue) -> Result<Self, TryFromProtoError> {
+        Ok(StorageCollectionMetadataValue { shard: proto.shard })
     }
 }
 

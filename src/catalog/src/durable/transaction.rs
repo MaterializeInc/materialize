@@ -43,8 +43,8 @@ use crate::durable::objects::{
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageUsageKey, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue,
+    SettingValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue, StorageUsageKey,
+    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -77,6 +77,8 @@ pub struct Transaction<'a> {
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
+    storage_collection_metadata:
+        TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -102,6 +104,7 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_collection_metadata,
         }: Snapshot,
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
@@ -134,6 +137,10 @@ impl<'a> Transaction<'a> {
             system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
             default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
+            storage_collection_metadata: TableTransaction::new(
+                storage_collection_metadata,
+                |a: &StorageCollectionMetadataValue, b| a.shard == b.shard,
+            )?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
         })
@@ -1463,6 +1470,7 @@ impl<'a> Transaction<'a> {
             system_configurations: self.system_configurations.pending(),
             default_privileges: self.default_privileges.pending(),
             system_privileges: self.system_privileges.pending(),
+            storage_collection_metadata: self.storage_collection_metadata.pending(),
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
@@ -1492,6 +1500,7 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_collection_metadata,
             audit_log_updates,
             storage_usage_updates,
         } = &mut txn_batch;
@@ -1512,6 +1521,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
+        differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
@@ -1550,6 +1560,11 @@ pub struct TransactionBatch {
     pub(crate) system_privileges: Vec<(
         proto::SystemPrivilegesKey,
         proto::SystemPrivilegesValue,
+        Diff,
+    )>,
+    pub(crate) storage_collection_metadata: Vec<(
+        proto::StorageCollectionMetadataKey,
+        proto::StorageCollectionMetadataValue,
         Diff,
     )>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,

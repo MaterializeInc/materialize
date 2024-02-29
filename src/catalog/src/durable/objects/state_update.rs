@@ -116,6 +116,7 @@ impl StateUpdate {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_collection_metadata,
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
@@ -139,6 +140,10 @@ impl StateUpdate {
             from_batch(system_configurations, StateUpdateKind::SystemConfiguration);
         let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
         let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
+        let storage_collection_metadata = from_batch(
+            storage_collection_metadata,
+            StateUpdateKind::StorageCollectionMetadata,
+        );
         let audit_logs = from_batch(audit_log_updates, StateUpdateKind::AuditLog);
         let storage_usage_updates =
             from_batch(storage_usage_updates, StateUpdateKind::StorageUsage);
@@ -158,6 +163,7 @@ impl StateUpdate {
             .chain(system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
+            .chain(storage_collection_metadata)
             .chain(audit_logs)
             .chain(storage_usage_updates)
     }
@@ -246,6 +252,10 @@ pub enum StateUpdateKind {
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
+    StorageCollectionMetadata(
+        proto::StorageCollectionMetadataKey,
+        proto::StorageCollectionMetadataValue,
+    ),
 }
 
 impl StateUpdateKind {
@@ -271,6 +281,9 @@ impl StateUpdateKind {
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
+            StateUpdateKind::StorageCollectionMetadata(_, _) => {
+                Some(CollectionType::StorageCollectionMetadata)
+            }
         }
     }
 }
@@ -393,6 +406,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 StateUpdateKind::SystemPrivilege(key, value) => {
                     proto::state_update_kind::Kind::SystemPrivileges(
                         proto::state_update_kind::SystemPrivileges {
+                            key: Some(key.clone()),
+                            value: Some(value.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                    proto::state_update_kind::Kind::StorageCollectionMetadata(
+                        proto::state_update_kind::StorageCollectionMetadata {
                             key: Some(key.clone()),
                             value: Some(value.clone()),
                         },
@@ -602,6 +623,20 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         )
                     })?,
                 ),
+                proto::state_update_kind::Kind::StorageCollectionMetadata(
+                    proto::state_update_kind::StorageCollectionMetadata { key, value },
+                ) => StateUpdateKind::StorageCollectionMetadata(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::key",
+                        )
+                    })?,
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::value",
+                        )
+                    })?,
+                ),
             },
         )
     }
@@ -714,7 +749,8 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::StorageUsage(_, _)
             | StateUpdateKind::SystemConfiguration(_, _)
-            | StateUpdateKind::SystemObjectMapping(_, _) => None,
+            | StateUpdateKind::SystemObjectMapping(_, _)
+            | StateUpdateKind::StorageCollectionMetadata(_, _) => None,
         })
     }
 }
