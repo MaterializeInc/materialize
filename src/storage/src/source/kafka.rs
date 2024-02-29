@@ -133,8 +133,6 @@ struct WatermarkOffsets {
 /// storing them in the `progress_statistics` to be emitted later.
 pub struct KafkaResumeUpperProcessor {
     config: RawSourceCreationConfig,
-    topic_name: String,
-    consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
     progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
 }
 
@@ -459,17 +457,12 @@ impl SourceRender for KafkaSourceConnection {
 
             let offset_committer = KafkaResumeUpperProcessor {
                 config: config.clone(),
-                topic_name: topic.clone(),
-                consumer,
                 progress_statistics: Arc::clone(&reader.progress_statistics),
             };
 
             // Seed the progress metrics with `0` if we are snapshotting.
             if is_snapshotting {
-                if let Err(e) = offset_committer
-                    .process_frontier(resume_upper.clone())
-                    .await
-                {
+                if let Err(e) = offset_committer.process_frontier(resume_upper.clone()) {
                     offset_commit_metrics.offset_commit_failures.inc();
                     tracing::warn!(
                         %e,
@@ -484,7 +477,7 @@ impl SourceRender for KafkaSourceConnection {
             let resume_uppers_process_loop = async move {
                 tokio::pin!(resume_uppers);
                 while let Some(frontier) = resume_uppers.next().await {
-                    if let Err(e) = offset_committer.process_frontier(frontier.clone()).await {
+                    if let Err(e) = offset_committer.process_frontier(frontier.clone()) {
                         offset_commit_metrics.offset_commit_failures.inc();
                         tracing::warn!(
                             %e,
@@ -833,12 +826,10 @@ impl SourceRender for KafkaSourceConnection {
 }
 
 impl KafkaResumeUpperProcessor {
-    async fn process_frontier(
+    fn process_frontier(
         &self,
         frontier: Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>,
     ) -> Result<(), anyhow::Error> {
-        use rdkafka::consumer::CommitMode;
-
         // Generate a list of partitions that this worker is responsible for
         let mut offsets = vec![];
         let mut progress_stat = 0;
@@ -861,21 +852,6 @@ impl KafkaResumeUpperProcessor {
             .expect("poisoned")
             .offset_committed = Some(progress_stat);
 
-        if !offsets.is_empty() {
-            let mut tpl = TopicPartitionList::new();
-            for (pid, offset) in offsets {
-                let offset_to_commit =
-                    Offset::Offset(offset.offset.try_into().expect("offset to be vald i64"));
-                tpl.add_partition_offset(&self.topic_name, pid, offset_to_commit)
-                    .expect("offset known to be valid");
-            }
-            let consumer = Arc::clone(&self.consumer);
-            mz_ore::task::spawn_blocking(
-                || format!("source({}) kafka offset commit", self.config.id),
-                move || consumer.commit(&tpl, CommitMode::Sync),
-            )
-            .await??;
-        }
         Ok(())
     }
 }
