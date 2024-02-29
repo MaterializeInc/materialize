@@ -91,12 +91,16 @@ macro_rules! optimizer_feature_flags {
 }
 
 optimizer_feature_flags!({
-    // Enable fast path optimization.
-    enable_fast_path: bool,
     // Enable consolidation of unions that happen immediately after negate.
     //
     // The refinement happens in the LIR ⇒ LIR phase.
     enable_consolidate_after_union_negate: bool,
+    // Bound from `SystemVars::enable_eager_delta_joins`.
+    enable_eager_delta_joins: bool,
+    // Bound from `SystemVars::enable_new_outer_join_lowering`.
+    enable_new_outer_join_lowering: bool,
+    // Bound from `SystemVars::enable_reduce_mfp_fusion`.
+    enable_reduce_mfp_fusion: bool,
     // An exclusive upper bound on the number of results we may return from a
     // Persist fast-path peek. Required by the `create_fast_path_plan` call in
     // `peek::Optimizer`.
@@ -104,12 +108,6 @@ optimizer_feature_flags!({
     // Reoptimize imported views when building and optimizing a
     // `DataflowDescription` in the global MIR optimization phase.
     reoptimize_imported_views: bool,
-    // Bound from `SystemVars::enable_new_outer_join_lowering`.
-    enable_new_outer_join_lowering: bool,
-    // Bound from `SystemVars::enable_eager_delta_joins`.
-    enable_eager_delta_joins: bool,
-    // Bound from `SystemVars::enable_reduce_mfp_fusion`.
-    enable_reduce_mfp_fusion: bool,
 });
 
 /// A trait used to implement layered config construction.

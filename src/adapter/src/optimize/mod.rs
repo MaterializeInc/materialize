@@ -194,6 +194,9 @@ pub struct OptimizerConfig {
     /// This means that it will not consider catalog items (more specifically
     /// indexes) with [`GlobalId`] greater or equal than the one provided here.
     pub replan: Option<GlobalId>,
+    /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
+    /// Enforced if `timing` is set.
+    pub no_fast_path: bool,
     /// Optimizer feature flags.
     pub features: OptimizerFeatures,
 }
@@ -211,6 +214,7 @@ impl From<&SystemVars> for OptimizerConfig {
         Self {
             mode: OptimizeMode::Execute,
             replan: None,
+            no_fast_path: false,
             features: OptimizerFeatures::from(vars),
         }
     }
@@ -247,18 +251,10 @@ impl OverrideFrom<ExplainContext> for OptimizerConfig {
         // Override general parameters.
         self.mode = OptimizeMode::Explain;
         self.replan = ctx.replan;
+        self.no_fast_path = ctx.config.no_fast_path;
 
         // Override feature flags that can be enabled in the EXPLAIN config.
-        self.features.enable_fast_path = !ctx.config.no_fast_path;
-        if let Some(explain_flag) = ctx.config.reoptimize_imported_views {
-            self.features.reoptimize_imported_views = explain_flag;
-        }
-        if let Some(explain_flag) = ctx.config.enable_new_outer_join_lowering {
-            self.features.enable_new_outer_join_lowering = explain_flag;
-        }
-        if let Some(explain_flag) = ctx.config.enable_eager_delta_joins {
-            self.features.enable_eager_delta_joins = explain_flag;
-        }
+        self.features = self.features.override_from(&ctx.config.features);
 
         // Return the final result.
         self

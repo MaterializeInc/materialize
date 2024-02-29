@@ -133,7 +133,6 @@ mod tests {
                     keys: format_contains("types"), // FIXME: use `keys`
                     linear_chains: false,
                     non_negative: false,
-                    no_fast_path: false,
                     raw_plans: false,
                     raw_syntax: false,
                     subtree_size: false,

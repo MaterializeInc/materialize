@@ -314,7 +314,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
         )? {
-            Some(plan) if self.config.features.enable_fast_path => {
+            Some(plan) if !self.config.no_fast_path => {
                 if self.config.mode == OptimizeMode::Explain {
                     // Trace the `used_indexes` for the FastPathPlan.
                     debug_span!(target: "optimizer", "fast_path").in_scope(|| {

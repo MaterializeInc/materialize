@@ -24,6 +24,7 @@ use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
+use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
@@ -392,9 +393,12 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             subtree_size: v.subtree_size,
             timing: v.timing,
             types: v.types,
-            reoptimize_imported_views: v.reoptimize_imported_views,
-            enable_eager_delta_joins: v.enable_eager_delta_joins,
-            enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
+            features: OptimizerFeatureOverrides {
+                enable_eager_delta_joins: v.enable_eager_delta_joins,
+                enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
+                reoptimize_imported_views: v.reoptimize_imported_views,
+                ..Default::default()
+            },
         })
     }
 }

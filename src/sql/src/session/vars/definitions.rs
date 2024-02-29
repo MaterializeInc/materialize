@@ -2110,13 +2110,12 @@ feature_flags!(
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
-            enable_fast_path: true, // Always enable fast path if available.
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
+            enable_eager_delta_joins: vars.enable_eager_delta_joins(),
+            enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
+            enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
-            enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
-            enable_eager_delta_joins: vars.enable_eager_delta_joins(),
-            enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
         }
     }
 }
