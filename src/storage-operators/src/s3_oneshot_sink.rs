@@ -245,17 +245,19 @@ impl CopyToS3Uploader {
     }
 
     async fn upload_buffer(&mut self) -> Result<(), anyhow::Error> {
-        if let Some(uploader) = self.current_file_uploader.as_mut() {
-            // TODO: spawn task
-            // let buf = std::mem::take(&mut self.buf);
-            // // Clear and move the buffer contents into the task to do the upload.
-            // let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
-            //     uploader.buffer_chunk(&buf).await
-            // });
-            // handle.await.unwrap()?;
-            uploader.buffer_chunk(&self.buf).await?;
-            self.buf.clear();
-        }
+        assert!(self.current_file_uploader.is_some());
+        let Some(uploader) = self.current_file_uploader.as_mut() else {
+            unreachable!();
+        };
+        // TODO: spawn task
+        // let buf = std::mem::take(&mut self.buf);
+        // // Clear and move the buffer contents into the task to do the upload.
+        // let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
+        //     uploader.buffer_chunk(&buf).await
+        // });
+        // handle.await.unwrap()?;
+        uploader.buffer_chunk(&self.buf).await?;
+        self.buf.clear();
         Ok(())
     }
 
