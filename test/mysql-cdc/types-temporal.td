@@ -31,7 +31,8 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE t1 (date_col DATE, time_col TIME(6), time_trunc_col TIME, datetime_col DATETIME(6), datetime_trunc_col DATETIME, timestamp_col TIMESTAMP(6), timestamp_trunc_col TIMESTAMP);
+# MySQL 5.7 needs a default value for timestamp_trunc_col
+CREATE TABLE t1 (date_col DATE, time_col TIME(6), time_trunc_col TIME, datetime_col DATETIME(6), datetime_trunc_col DATETIME, timestamp_col TIMESTAMP(6), timestamp_trunc_col TIMESTAMP DEFAULT '2000-01-01');
 
 INSERT INTO t1 VALUES ('2011-11-11', '11:11:11.123456', '11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456');
 
