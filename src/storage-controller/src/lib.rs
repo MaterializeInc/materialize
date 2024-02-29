@@ -265,6 +265,11 @@ where
         self.config.update(config_params);
         self.statistics_interval_sender
             .send_replace(self.config.parameters.statistics_interval);
+        self.collection_manager.update_user_batch_duration(
+            self.config
+                .parameters
+                .user_storage_managed_collections_batch_duration,
+        );
     }
 
     /// Get the current configuration
