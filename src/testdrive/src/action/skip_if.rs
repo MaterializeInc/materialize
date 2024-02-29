@@ -33,8 +33,8 @@ pub async fn run_skip_if(cmd: BuiltinCommand, state: &State) -> Result<ControlFl
         .get(0);
 
     if should_skip {
-        println!("skip-if query returned true; skipping rest of file");
-        Ok(ControlFlow::Break)
+        println!("skip-if query returned true; skipping until next skip-end or end of the file");
+        Ok(ControlFlow::SkipBegin)
     } else {
         println!("skip-if query returned false; continuing");
         Ok(ControlFlow::Continue)
