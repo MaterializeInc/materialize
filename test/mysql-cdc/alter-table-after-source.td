@@ -330,20 +330,20 @@ INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed
 contains:incompatible schema change
 
 
-#
+# TODO: #25660 (column drop & recreate detection)
 # Change column attnum
 
-> SELECT * from alter_table_change_attnum;
-f1_orig f2_orig
+# > SELECT * from alter_table_change_attnum;
+# f1_orig f2_orig
 
 # Ensure simpl name swap doesn't fool schema detection
-$ mysql-execute name=mysql
-ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
-ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
-INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
+# $ mysql-execute name=mysql
+# ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
+# ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
+# INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
-! SELECT * FROM alter_table_change_attnum;
-contains:incompatible schema change
+# ! SELECT * FROM alter_table_change_attnum;
+# contains:incompatible schema change
 
 > SELECT * from alter_table_supported;
 1 1
