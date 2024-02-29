@@ -59,7 +59,7 @@ where
         };
 
         // Move all the data to a single worker and consolidate
-        // TODO: split the data among worker to some number of buckets (either static or configurable
+        // TODO(#7256): split the data among worker to some number of buckets (either static or configurable
         // by the user) to split the load across the cluster.
         let scope = sinked_collection.scope();
         let active_worker = usize::cast_from(sink_id.hashed()) % scope.peers();
