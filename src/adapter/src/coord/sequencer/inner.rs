@@ -765,28 +765,27 @@ impl Coordinator {
         }];
 
         let from = self.catalog().get_entry(&catalog_sink.from);
-        let from_name = from.name().item.clone();
-        let from_type = from.item().typ().to_string();
-
-        // TODO(parkmycar): Move this to a catalog_transact_with_side_effects model.
-        let result = self
-            .catalog_transact_with(Some(ctx.session().conn_id()), ops, move |txn| {
-                // Validate that the from collection is in fact a persist collection we can export.
-                txn.dataflow_client
-                    .storage
-                    .collection(sink.from)
-                    .map_err(|e| match e {
-                        StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
-                            "{from_name} is a {from_type}, which cannot be exported as a sink"
-                        )),
-                        e => AdapterError::Storage(e),
-                    })?;
-                Ok(())
+        if let Err(e) = self
+            .controller
+            .storage
+            .collection(sink.from)
+            .map_err(|e| match e {
+                StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
+                    "{} is a {}, which cannot be exported as a sink",
+                    from.name().item.clone(),
+                    from.item().typ().to_string(),
+                )),
+                e => AdapterError::Storage(e),
             })
-            .await;
+        {
+            ctx.retire(Err(e));
+            return;
+        }
 
-        let builtin_table_notify = match result {
-            Ok(((), table_updates)) => table_updates,
+        let result = self.catalog_transact(Some(ctx.session()), ops).await;
+
+        match result {
+            Ok(()) => {}
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -808,11 +807,6 @@ impl Coordinator {
         self.create_storage_export(id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
-
-        // Block on the builtin table updates completing.
-        //
-        // Note: these are run in a separate task, so they're run concurrently to everything else.
-        builtin_table_notify.await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }

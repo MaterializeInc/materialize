@@ -410,10 +410,9 @@ impl ConnectionResolver for ConnCatalog<'_> {
     }
 }
 
-pub struct TransactionResult<R> {
+pub struct TransactionResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     pub audit_events: Vec<VersionedEvent>,
-    pub result: R,
 }
 
 impl Catalog {
@@ -1179,16 +1178,12 @@ impl Catalog {
     }
 
     #[instrument(name = "catalog::transact")]
-    pub async fn transact<F, R>(
+    pub async fn transact(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
-        f: F,
-    ) -> Result<TransactionResult<R>, AdapterError>
-    where
-        F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
-    {
+    ) -> Result<TransactionResult, AdapterError> {
         trace!("transact: {:?}", ops);
         fail::fail_point!("catalog_transact", |arg| {
             Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -1232,8 +1227,6 @@ impl Catalog {
             &mut state,
         )?;
 
-        let result = f(&state)?;
-
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
@@ -1262,23 +1255,42 @@ impl Catalog {
         Ok(TransactionResult {
             builtin_table_updates,
             audit_events,
-            result,
         })
     }
 
+    /// Performs the transaction described by `ops`.
+    ///
+    /// # Panics
+    /// - If `ops` contains [`Op::TransactionDryRun`] and the value is not the
+    ///   final element.
+    /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        ops: Vec<Op>,
+        mut ops: Vec<Op>,
         temporary_ids: Vec<GlobalId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
     ) -> Result<(), AdapterError> {
+        let dry_run_ops = match ops.last() {
+            Some(Op::TransactionDryRun) => {
+                // Remove dry run marker.
+                ops.pop();
+                assert!(!ops.is_empty(), "TransactionDryRun must not be the only op");
+                ops.clone()
+            }
+            Some(_) => vec![],
+            None => return Ok(()),
+        };
+
         for op in ops {
             match op {
+                Op::TransactionDryRun => {
+                    unreachable!("TransactionDryRun can only be used a final element of ops")
+                }
                 Op::AlterRole {
                     id,
                     name,
@@ -3009,7 +3021,15 @@ impl Catalog {
                 }
             };
         }
-        Ok(())
+
+        if dry_run_ops.is_empty() {
+            Ok(())
+        } else {
+            Err(AdapterError::TransactionDryRun {
+                new_ops: dry_run_ops,
+                new_state: state.clone(),
+            })
+        }
     }
 
     pub(crate) fn update_item(
@@ -3673,6 +3693,12 @@ pub enum Op {
         previous_public_key_pair: (String, String),
         new_public_key_pair: (String, String),
     },
+    /// Performs a dry run of the commit, but errors with
+    /// [`AdapterError::TransactionDryRun`].
+    ///
+    /// When using this value, it should be included only as the last element of
+    /// the transaction and should not be the only value in the transaction.
+    TransactionDryRun,
 }
 
 impl ConnCatalog<'_> {
@@ -4400,7 +4426,6 @@ mod tests {
                         public_schema_oid: 2,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
-                    |_catalog| Ok(()),
                 )
                 .await
                 .expect("failed to transact");
@@ -4649,7 +4674,6 @@ mod tests {
                         id,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
-                    |_catalog| Ok(()),
                 )
                 .await
                 .expect("failed to transact");
@@ -5625,7 +5649,7 @@ mod tests {
                 value: OwnedVarInput::Flat(CatalogKind::Persist.as_str().to_string()),
             };
             catalog
-                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .transact(mz_repr::Timestamp::MIN, None, vec![op])
                 .await
                 .expect("failed to transact");
 
@@ -5652,7 +5676,7 @@ mod tests {
                 name: CATALOG_KIND_IMPL.name().to_string(),
             };
             catalog
-                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .transact(mz_repr::Timestamp::MIN, None, vec![op])
                 .await
                 .expect("failed to transact");
 
