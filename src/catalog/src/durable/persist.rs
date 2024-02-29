@@ -1145,6 +1145,9 @@ impl PersistCatalogState {
                     StateUpdateKind::StorageCollectionMetadata(key, value) => {
                         apply(&mut snapshot.storage_collection_metadata, key, value, diff);
                     }
+                    StateUpdateKind::UnfinalizedShard(key, ()) => {
+                        apply(&mut snapshot.unfinalized_shards, key, (), diff);
+                    }
                 }
             }
             f(snapshot)
@@ -1625,8 +1628,12 @@ impl Trace {
                 StateUpdateKind::SystemPrivilege(k, v) => {
                     trace.system_privileges.values.push(((k, v), ts, diff))
                 }
-                StateUpdateKind::StorageMetadata(k, v) => {
-                    trace.storage_metadata.values.push(((k, v), ts, diff))
+                StateUpdateKind::StorageCollectionMetadata(k, v) => trace
+                    .storage_collection_metadata
+                    .values
+                    .push(((k, v), ts, diff)),
+                StateUpdateKind::UnfinalizedShard(k, ()) => {
+                    trace.unfinalized_shards.values.push(((k, ()), ts, diff))
                 }
             }
         }

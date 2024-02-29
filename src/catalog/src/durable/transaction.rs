@@ -46,6 +46,7 @@ use crate::durable::objects::{
     Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
     SettingValue, StorageMetadataKey, StorageMetadataValue, StorageUsageKey,
     SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -76,7 +77,9 @@ pub struct Transaction<'a> {
     system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
-    storage_metadata: TableTransaction<StorageMetadataKey, StorageMetadataValue>,
+    storage_collection_metadata:
+        TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
+    unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -102,7 +105,8 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
-            storage_metadata,
+            storage_collection_metadata,
+            unfinalized_shards,
         }: Snapshot,
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
@@ -139,6 +143,7 @@ impl<'a> Transaction<'a> {
                 storage_collection_metadata,
                 |a: &StorageCollectionMetadataValue, b| a.shard == b.shard,
             )?,
+            unfinalized_shards: TableTransaction::new(unfinalized_shards, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
         })
@@ -1477,7 +1482,8 @@ impl<'a> Transaction<'a> {
             system_configurations: self.system_configurations.pending(),
             default_privileges: self.default_privileges.pending(),
             system_privileges: self.system_privileges.pending(),
-            storage_metadata: self.storage_metadata.pending(),
+            storage_collection_metadata: self.storage_collection_metadata.pending(),
+            unfinalized_shards: self.unfinalized_shards.pending(),
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
@@ -1507,7 +1513,8 @@ impl<'a> Transaction<'a> {
             system_configurations,
             default_privileges,
             system_privileges,
-            storage_metadata,
+            storage_collection_metadata,
+            unfinalized_shards,
             audit_log_updates,
             storage_usage_updates,
         } = &mut txn_batch;
@@ -1528,7 +1535,8 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(system_configurations);
         differential_dataflow::consolidation::consolidate_updates(default_privileges);
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
-        differential_dataflow::consolidation::consolidate_updates(storage_metadata);
+        differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
+        differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
@@ -1569,8 +1577,12 @@ pub struct TransactionBatch {
         proto::SystemPrivilegesValue,
         Diff,
     )>,
-    pub(crate) storage_metadata:
-        Vec<(proto::StorageMetadataKey, proto::StorageMetadataValue, Diff)>,
+    pub(crate) storage_collection_metadata: Vec<(
+        proto::StorageCollectionMetadataKey,
+        proto::StorageCollectionMetadataValue,
+        Diff,
+    )>,
+    pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
 }

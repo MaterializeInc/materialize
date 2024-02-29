@@ -1201,8 +1201,6 @@ pub enum CatalogError {
     ConfigAlreadyExists(String),
     /// Builtin migrations failed.
     FailedBuiltinSchemaMigration(String),
-    /// StorageMetadata already exists.
-    StorageMetadataAlreadyExists(GlobalId),
 }
 
 impl fmt::Display for CatalogError {
@@ -1250,9 +1248,6 @@ impl fmt::Display for CatalogError {
             Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
             Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),
             Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
-            Self::StorageMetadataAlreadyExists(key) => {
-                write!(f, "storage metadata for '{key}' already exists")
-            }
         }
     }
 }

@@ -90,7 +90,8 @@ impl StateUpdate {
             system_configurations,
             default_privileges,
             system_privileges,
-            storage_metadata,
+            storage_collection_metadata,
+            unfinalized_shards,
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
@@ -119,7 +120,13 @@ impl StateUpdate {
         let default_privileges =
             from_batch(default_privileges, ts, StateUpdateKind::DefaultPrivilege);
         let system_privileges = from_batch(system_privileges, ts, StateUpdateKind::SystemPrivilege);
-        let storage_metadata = from_batch(storage_metadata, ts, StateUpdateKind::StorageMetadata);
+        let storage_collection_metadata = from_batch(
+            storage_collection_metadata,
+            ts,
+            StateUpdateKind::StorageCollectionMetadata,
+        );
+        let unfinalized_shards =
+            from_batch(unfinalized_shards, ts, StateUpdateKind::UnfinalizedShard);
         let audit_logs = from_batch(audit_log_updates, ts, StateUpdateKind::AuditLog);
         let storage_usage_updates =
             from_batch(storage_usage_updates, ts, StateUpdateKind::StorageUsage);
@@ -139,7 +146,8 @@ impl StateUpdate {
             .chain(system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
-            .chain(storage_metadata)
+            .chain(storage_collection_metadata)
+            .chain(unfinalized_shards)
             .chain(audit_logs)
             .chain(storage_usage_updates)
             .collect()
@@ -217,7 +225,11 @@ pub enum StateUpdateKind {
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
-    StorageMetadata(proto::StorageMetadataKey, proto::StorageMetadataValue),
+    StorageCollectionMetadata(
+        proto::StorageCollectionMetadataKey,
+        proto::StorageCollectionMetadataValue,
+    ),
+    UnfinalizedShard(proto::UnfinalizedShardKey, ()),
 }
 
 impl StateUpdateKind {
@@ -243,7 +255,10 @@ impl StateUpdateKind {
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
-            StateUpdateKind::StorageMetadata(_, _) => Some(CollectionType::StorageMetadata),
+            StateUpdateKind::StorageCollectionMetadata(_, _) => {
+                Some(CollectionType::StorageMetadata)
+            }
+            StateUpdateKind::UnfinalizedShard(_, _) => Some(CollectionType::UnfinalizedShard),
         }
     }
 }
@@ -376,6 +391,13 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         proto::state_update_kind::StorageCollectionMetadata {
                             key: Some(key.clone()),
                             value: Some(value.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::UnfinalizedShard(key, ()) => {
+                    proto::state_update_kind::Kind::UnfinalizedShard(
+                        proto::state_update_kind::UnfinalizedShard {
+                            key: Some(key.clone()),
                         },
                     )
                 }
@@ -596,6 +618,16 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                             "state_update_kind::StorageCollectionMetadata::value",
                         )
                     })?,
+                ),
+                proto::state_update_kind::Kind::UnfinalizedShard(
+                    proto::state_update_kind::UnfinalizedShard { key },
+                ) => StateUpdateKind::UnfinalizedShard(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::key",
+                        )
+                    })?,
+                    (),
                 ),
             },
         )
