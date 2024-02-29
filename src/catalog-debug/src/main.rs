@@ -29,7 +29,7 @@ use mz_catalog::durable::debug::{
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
     IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
     StorageCollectionMetadataCollection, StorageUsageCollection, SystemConfigurationCollection,
-    SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
+    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
@@ -260,6 +260,7 @@ macro_rules! for_collection {
             CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
             CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
             CollectionType::StorageCollectionMetadata => $fn::<StorageCollectionMetadataCollection>($($arg),*).await?,
+            CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
         }
     };
 }
@@ -394,6 +395,7 @@ async fn dump(
         system_configurations,
         system_privileges,
         storage_collection_metadata,
+        unfinalized_shards,
     } = if consolidate {
         openable_state.trace_consolidated().await?
     } else {
@@ -460,6 +462,13 @@ async fn dump(
     dump_col(
         &mut data,
         storage_collection_metadata,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        unfinalized_shards,
         &ignore,
         stats_only,
         consolidate,

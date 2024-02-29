@@ -117,6 +117,7 @@ impl StateUpdate {
             default_privileges,
             system_privileges,
             storage_collection_metadata,
+            unfinalized_shards,
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
@@ -144,6 +145,7 @@ impl StateUpdate {
             storage_collection_metadata,
             StateUpdateKind::StorageCollectionMetadata,
         );
+        let unfinalized_shards = from_batch(unfinalized_shards, StateUpdateKind::UnfinalizedShard);
         let audit_logs = from_batch(audit_log_updates, StateUpdateKind::AuditLog);
         let storage_usage_updates =
             from_batch(storage_usage_updates, StateUpdateKind::StorageUsage);
@@ -164,6 +166,7 @@ impl StateUpdate {
             .chain(default_privileges)
             .chain(system_privileges)
             .chain(storage_collection_metadata)
+            .chain(unfinalized_shards)
             .chain(audit_logs)
             .chain(storage_usage_updates)
     }
@@ -256,6 +259,7 @@ pub enum StateUpdateKind {
         proto::StorageCollectionMetadataKey,
         proto::StorageCollectionMetadataValue,
     ),
+    UnfinalizedShard(proto::UnfinalizedShardKey, ()),
 }
 
 impl StateUpdateKind {
@@ -284,6 +288,7 @@ impl StateUpdateKind {
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
                 Some(CollectionType::StorageCollectionMetadata)
             }
+            StateUpdateKind::UnfinalizedShard(_, _) => Some(CollectionType::UnfinalizedShard),
         }
     }
 }
@@ -416,6 +421,13 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         proto::state_update_kind::StorageCollectionMetadata {
                             key: Some(key.clone()),
                             value: Some(value.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::UnfinalizedShard(key, ()) => {
+                    proto::state_update_kind::Kind::UnfinalizedShard(
+                        proto::state_update_kind::UnfinalizedShard {
+                            key: Some(key.clone()),
                         },
                     )
                 }
@@ -637,6 +649,16 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         )
                     })?,
                 ),
+                proto::state_update_kind::Kind::UnfinalizedShard(
+                    proto::state_update_kind::UnfinalizedShard { key },
+                ) => StateUpdateKind::UnfinalizedShard(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::StorageCollectionMetadata::key",
+                        )
+                    })?,
+                    (),
+                ),
             },
         )
     }
@@ -750,7 +772,8 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::StorageUsage(_, _)
             | StateUpdateKind::SystemConfiguration(_, _)
             | StateUpdateKind::SystemObjectMapping(_, _)
-            | StateUpdateKind::StorageCollectionMetadata(_, _) => None,
+            | StateUpdateKind::StorageCollectionMetadata(_, _)
+            | StateUpdateKind::UnfinalizedShard(_, _) => None,
         })
     }
 }

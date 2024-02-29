@@ -709,6 +709,7 @@ pub struct Snapshot {
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
+    pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
 }
 
 impl Snapshot {
@@ -909,6 +910,13 @@ pub struct StorageCollectionMetadataKey {
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct StorageCollectionMetadataValue {
+    pub(crate) shard: String,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct UnfinalizedShardKey {
     pub(crate) shard: String,
 }
 

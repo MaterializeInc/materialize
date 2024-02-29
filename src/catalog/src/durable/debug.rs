@@ -71,6 +71,7 @@ pub enum CollectionType {
     SystemGidMapping,
     SystemPrivileges,
     StorageCollectionMetadata,
+    UnfinalizedShard,
 }
 
 derive_display_from_serialize!(CollectionType);
@@ -261,6 +262,14 @@ collection_impl!({
     trace_field: storage_collection_metadata,
     update: StateUpdateKind::StorageCollectionMetadata,
 });
+collection_impl!({
+    name: UnfinalizedShardsCollection,
+    key: proto::UnfinalizedShardKey,
+    value: (),
+    collection_type: CollectionType::UnfinalizedShard,
+    trace_field: unfinalized_shards,
+    update: StateUpdateKind::UnfinalizedShard,
+});
 
 /// A trace of timestamped diffs for a particular [`Collection`].
 ///
@@ -298,6 +307,7 @@ pub struct Trace {
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
     pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
+    pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
 }
 
 impl Trace {
@@ -321,6 +331,7 @@ impl Trace {
             system_configurations: CollectionTrace::new(),
             system_privileges: CollectionTrace::new(),
             storage_collection_metadata: CollectionTrace::new(),
+            unfinalized_shards: CollectionTrace::new(),
         }
     }
 }
