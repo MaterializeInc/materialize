@@ -39,6 +39,9 @@ INSERT INTO t1 VALUES ('abc', 'abc', 'abc');
 INSERT INTO t1 VALUES ('ABC', 'ABC', 'ABC');
 INSERT INTO t1 VALUES ('abc ', 'abc ', 'abc ');
 
+CREATE TABLE t2 (f_latin1_1 VARCHAR(20) CHARACTER SET latin1 COLLATE latin1_bin, f_latin1_2 VARCHAR(20) CHARACTER SET latin1 COLLATE latin1_general_ci, f_latin1_3 VARCHAR(20) CHARACTER SET latin1 COLLATE latin1_general_cs, f_latin1_4 VARCHAR(20) CHARACTER SET latin1 COLLATE latin1_german2_ci, f_utf32_1 VARCHAR(20) CHARACTER SET utf32 COLLATE utf32_bin, f_utf32_2 VARCHAR(20) CHARACTER SET utf32 COLLATE utf32_general_ci, f_utf32_3 VARCHAR(20) CHARACTER SET utf32 COLLATE utf32_german2_ci, f_utf32_4 VARCHAR(20) CHARACTER SET utf32 COLLATE utf32_unicode_ci, f_utf8_1 VARCHAR(20) CHARACTER SET utf8 COLLATE utf8_bin, f_utf8_2 VARCHAR(20) CHARACTER SET utf8 COLLATE utf8_general_ci, f_utf8_3 VARCHAR(20) CHARACTER SET utf8 COLLATE utf8_german2_ci, f_utf8_4 VARCHAR(20) CHARACTER SET utf8 COLLATE utf8_icelandic_ci, f_utf8_5 VARCHAR(20) CHARACTER SET utf8 COLLATE utf8_unicode_ci, f_utf8mb4_1 VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, f_utf8mb4_2 VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci, f_utf8mb4_3 VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_german2_ci, f_utf8mb4_4 VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, f_utf8mb4_5 VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_vietnamese_ci);
+INSERT INTO t2 VALUES (' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ', ' abc @öÜèßï ');
+
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
@@ -73,3 +76,6 @@ UPDATE t1 SET f1 = 'xyz ', f2 = 'xyz ', f3 = 'xyz ' WHERE lower(f1) LIKE 'abc ';
 "klm" "klm       " "klm"
 "xyz " "xyz       " "xyz "
 "xyz " "xyz       " "xyz "
+
+> SELECT * FROM t2;
+" abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï " " abc @öÜèßï "
