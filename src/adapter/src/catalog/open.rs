@@ -314,7 +314,11 @@ impl Catalog {
                 privileges,
             } in schemas
             {
-                let oid = state.allocate_oid()?;
+                let oid = if let Some(oid) = CatalogState::get_system_schema_oid(&name) {
+                    oid
+                } else {
+                    state.allocate_oid()?
+                };
                 let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                     Some(database_id) => {
                         let db = state
@@ -390,7 +394,11 @@ impl Catalog {
                 vars,
             } in roles
             {
-                let oid = state.allocate_oid()?;
+                let oid = if let Some(role) = BUILTIN_ROLES.iter().find(|role| name == role.name) {
+                    role.oid
+                } else {
+                    state.allocate_oid()?
+                };
                 state.roles_by_name.insert(name.clone(), id);
                 state.roles_by_id.insert(
                     id,
@@ -465,7 +473,6 @@ impl Catalog {
                     };
                     match builtin {
                         Builtin::Log(log) => {
-                            let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::Source,
                                 MZ_SYSTEM_ROLE_ID,
@@ -473,7 +480,7 @@ impl Catalog {
                             acl_items.extend_from_slice(&log.access);
                             state.insert_item(
                                 id,
-                                oid,
+                                log.oid,
                                 name.clone(),
                                 CatalogItem::Log(Log {
                                     variant: log.variant.clone(),
@@ -485,7 +492,6 @@ impl Catalog {
                         }
 
                         Builtin::Table(table) => {
-                            let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::Table,
                                 MZ_SYSTEM_ROLE_ID,
@@ -494,7 +500,7 @@ impl Catalog {
 
                             state.insert_item(
                                 id,
-                                oid,
+                                table.oid,
                                 name.clone(),
                                 CatalogItem::Table(Table {
                                     create_sql: None,
@@ -533,7 +539,6 @@ impl Catalog {
                                     view.name, e
                                 )
                             });
-                            let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::View,
                                 MZ_SYSTEM_ROLE_ID,
@@ -542,7 +547,7 @@ impl Catalog {
 
                             state.insert_item(
                                 id,
-                                oid,
+                                view.oid,
                                 name,
                                 item,
                                 MZ_SYSTEM_ROLE_ID,
@@ -553,6 +558,9 @@ impl Catalog {
                         Builtin::Type(_) => unreachable!("loaded separately"),
 
                         Builtin::Func(func) => {
+                            // This OID is never used. `func` has a `Vec` of implementations and
+                            // each implementation has it's own OID. Those are the OIDs that are
+                            // actually used by the system.
                             let oid = state.allocate_oid()?;
                             state.insert_item(
                                 id,
@@ -565,7 +573,6 @@ impl Catalog {
                         }
 
                         Builtin::Source(coll) => {
-                            let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::Source,
                                 MZ_SYSTEM_ROLE_ID,
@@ -574,7 +581,7 @@ impl Catalog {
 
                             state.insert_item(
                                 id,
-                                oid,
+                                coll.oid,
                                 name.clone(),
                                 CatalogItem::Source(Source {
                                     create_sql: None,
@@ -717,10 +724,9 @@ impl Catalog {
                             panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                         };
 
-                        let oid = state.allocate_oid()?;
                         state.insert_item(
                             id,
-                            oid,
+                            index.oid,
                             name,
                             item,
                             MZ_SYSTEM_ROLE_ID,
