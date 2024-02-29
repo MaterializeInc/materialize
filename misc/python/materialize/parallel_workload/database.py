@@ -252,7 +252,6 @@ class View(DBObject):
     rename: int
     schema: Schema
     refresh: str | None
-    sleep: int
 
     def __init__(
         self,
@@ -308,8 +307,6 @@ class View(DBObject):
             else None
         )
 
-        self.sleep = rng.randint(0, 5)
-
         if base_object2:
             self.join_column = rng.choice(base_object.columns)
             self.join_column2 = None
@@ -338,9 +335,6 @@ class View(DBObject):
             f"{source_column} AS {column.name(True)}"
             for source_column, column in zip(self.source_columns, self.columns)
         )
-
-        if self.sleep:
-            columns_str += f", mz_unsafe.mz_sleep({self.sleep})"
 
         query += f" {self}"
 
