@@ -40,6 +40,7 @@ class Executor:
     database: str
     schema: str
     cluster: str | None
+    logging_exe: Any | None
 
     def __init__(
         self,
@@ -55,6 +56,7 @@ class Executor:
         self.database = database
         self.schema = schema
         self.cluster = cluster
+        self.logging_exe = None
         self.reconnect()
 
     def reconnect(self) -> None:
@@ -66,13 +68,16 @@ class Executor:
         )
         self.mz_conn.autocommit = True
 
-    def create(self) -> None:
+    def create(self, logging_exe: Any | None = None) -> None:
         raise NotImplementedError
 
-    def run(self, transaction: Transaction) -> None:
+    def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         raise NotImplementedError
 
     def execute(self, cur: pg8000.Cursor, query: str) -> None:
+        if self.logging_exe is not None:
+            self.logging_exe.log(query)
+
         try:
             cur.execute(query)
         except InterfaceError:
@@ -108,10 +113,10 @@ class Executor:
 
 
 class PrintExecutor(Executor):
-    def create(self) -> None:
+    def create(self, logging_exe: Any | None = None) -> None:
         pass
 
-    def run(self, transaction: Transaction) -> None:
+    def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
         print("Transaction:")
         print("  ", transaction.row_lists)
 
@@ -143,7 +148,8 @@ class KafkaExecutor(Executor):
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
 
-    def create(self) -> None:
+    def create(self, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
         schema = {
             "type": "record",
             "name": "value",
@@ -200,6 +206,9 @@ class KafkaExecutor(Executor):
             registry, json.dumps(key_schema), lambda d, ctx: d
         )
 
+        if logging_exe is not None:
+            logging_exe.log(f"{topic}-value: {json.dumps(schema)}")
+            logging_exe.log(f"{topic}-key: {json.dumps(key_schema)}")
         registry.register_schema(
             f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
         )
@@ -232,7 +241,8 @@ class KafkaExecutor(Executor):
             )
         self.mz_conn.autocommit = False
 
-    def run(self, transaction: Transaction) -> None:
+    def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
         for row_list in transaction.row_lists:
             for row in row_list.rows:
                 if (
@@ -298,7 +308,8 @@ class MySqlExecutor(Executor):
         self.source = f"mysql_source{num}"
         self.num = num
 
-    def create(self) -> None:
+    def create(self, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
         self.mysql_conn = pymysql.connect(
             host="localhost",
             user="root",
@@ -349,7 +360,8 @@ class MySqlExecutor(Executor):
             )
         self.mz_conn.autocommit = False
 
-    def run(self, transaction: Transaction) -> None:
+    def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
         with self.mysql_conn.cursor() as cur:
             for row_list in transaction.row_lists:
                 for row in row_list.rows:
@@ -421,7 +433,8 @@ class PgExecutor(Executor):
         self.source = f"postgres_source{num}"
         self.num = num
 
-    def create(self) -> None:
+    def create(self, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
         self.pg_conn = pg8000.connect(
             host="localhost",
             user="postgres",
@@ -471,7 +484,8 @@ class PgExecutor(Executor):
             )
         self.mz_conn.autocommit = False
 
-    def run(self, transaction: Transaction) -> None:
+    def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
         with self.pg_conn.cursor() as cur:
             for row_list in transaction.row_lists:
                 for row in row_list.rows:
@@ -546,7 +560,8 @@ class KafkaRoundtripExecutor(Executor):
         self.num = num
         self.known_keys = set()
 
-    def create(self) -> None:
+    def create(self, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
         values = [
             f"{field.name} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
             for field in self.fields
@@ -589,7 +604,8 @@ class KafkaRoundtripExecutor(Executor):
             )
         self.mz_conn.autocommit = False
 
-    def run(self, transaction: Transaction) -> None:
+    def run(self, transaction: Transaction, logging_exe: Any | None = None) -> None:
+        self.logging_exe = logging_exe
         with self.mz_conn.cursor() as cur:
             for row_list in transaction.row_lists:
                 for row in row_list.rows:

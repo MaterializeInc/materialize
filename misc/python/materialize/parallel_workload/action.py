@@ -384,7 +384,7 @@ class SourceInsertAction(Action):
                         source.num_rows += 1
                     elif row.operation == Operation.DELETE:
                         source.num_rows -= 1
-            source.executor.run(transaction)
+            source.executor.run(transaction, logging_exe=exe)
         return True
 
 
