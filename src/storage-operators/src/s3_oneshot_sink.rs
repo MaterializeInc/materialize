@@ -273,7 +273,7 @@ impl CopyToS3Uploader {
     }
 }
 
-// On CI, these tests are enabled by adding the scratch-aws-access plugin
+/// On CI, these tests are enabled by adding the scratch-aws-access plugin
 /// to the `cargo-test` step in `ci/test/pipeline.template.yml` and setting
 /// `MZ_S3_UPLOADER_TEST_S3_BUCKET` in
 /// `ci/test/cargo-test/mzcompose.py`.
