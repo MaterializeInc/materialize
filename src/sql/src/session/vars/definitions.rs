@@ -1381,7 +1381,7 @@ pub static AUTO_ROUTE_INTROSPECTION_QUERIES: VarDefinition = VarDefinition::new(
 
 pub static MAX_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_connections",
-    value!(u32; 1000),
+    value!(u32; 5000),
     "The maximum number of concurrent connections (Materialize).",
     false,
 );
