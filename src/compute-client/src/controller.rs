@@ -241,7 +241,7 @@ impl<T: Timestamp> ComputeController<T> {
         Ok(collection)
     }
 
-    /// TODO(#25239): Add documentation.
+    /// Return a read-only handle to the indicated collection.
     pub fn find_collection(
         &self,
         collection_id: GlobalId,

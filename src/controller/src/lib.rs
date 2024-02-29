@@ -115,13 +115,14 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
+    /// Notification that a watch set has finished. See [`Self::install_watch_set`] for details.
     WatchSetFinished(Vec<Box<dyn Any>>),
 }
 
 /// Whether one of the underlying controllers is ready for their `process`
 /// method to be called.
 #[derive(Default)]
-enum Readiness {
+enum Readiness<T> {
     /// No underlying controllers are ready.
     #[default]
     NotReady,
@@ -134,7 +135,7 @@ enum Readiness {
     /// Frontiers are ready for recording.
     Frontiers,
     /// An internally-generated message is ready to be returned.
-    Internal,
+    Internal(ControllerResponse<T>),
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -148,7 +149,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// The cluster orchestrator.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// Tracks the readiness of the underlying controllers.
-    readiness: Readiness,
+    readiness: Readiness<T>,
     /// Tasks for collecting replica metrics.
     metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
@@ -167,8 +168,23 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
 
-    watch_sets: BTreeMap<GlobalId, Vec<Rc<(T, Box<dyn Any>)>>>,
+    /// A map associating a global ID to a vector of all the watch sets
+    /// that that ID is part of which have not yet been fulfilled for that object.
+    ///
+    /// See [`self.install_watch_se)`] for a description of watch sets.
+    // When a watch set is fulfilled for a given object (that is, when
+    // the object's frontier advances to at least the watch set's
+    // timestamp), the corresponding entry will be removed from the
+    // vector here. That way, when the entire watch set is fulfilled,
+    // the corresponding `Rc` will be the last reference to it, and
+    // the call to `Rc::into_inner` will succeed.
+    objects_to_unfulfilled_watch_sets: BTreeMap<GlobalId, Vec<Rc<(T, Box<dyn Any>)>>>,
 
+    /// A list of watch sets that were already fulfilled as soon as
+    /// they were installed, and thus that must be returned to the
+    /// client on the next call to [`self.process`].
+    ///
+    /// See [`self.install_watch_se)`] for a description of watch sets.
     immediate_watch_sets: Vec<Box<dyn Any>>,
 }
 
@@ -228,6 +244,14 @@ where
         self.compute.initialization_complete();
     }
 
+    /// Returns `Some` if there is an immediately available
+    /// internally-generated response that we need to return to the
+    /// client (as opposed to waiting for a response from compute or storage).
+    fn take_internal_response(&mut self) -> Option<ControllerResponse<T>> {
+        let ws = std::mem::take(&mut self.immediate_watch_sets);
+        (!ws.is_empty()).then_some(ControllerResponse::WatchSetFinished(ws))
+    }
+
     /// Waits until the controller is ready to process a response.
     ///
     /// This method may block for an arbitrarily long time.
@@ -238,8 +262,14 @@ where
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
         if let Readiness::NotReady = self.readiness {
-            if !self.immediate_watch_sets.is_empty() {
-                self.readiness = Readiness::Internal;
+            // the coordinator wants to be able to make a simple
+            // sequence of ready, process, ready, process, .... calls,
+            // but the controller sometimes has responses immediately
+            // ready to be processed and should do so before calling
+            // into either of the lower-level controllers. This `if`
+            // statement handles that case.
+            if let Some(response) = self.take_internal_response() {
+                self.readiness = Readiness::Internal(response);
             } else {
                 // The underlying `ready` methods are cancellation safe, so it is
                 // safe to construct this `select!`.
@@ -261,6 +291,14 @@ where
         }
     }
 
+    /// Install a _watch set_ in the controller.
+    ///
+    /// A _watch set_ is a request to be informed by the controller when
+    /// all of the frontiers of a particular set of objects have advanced at
+    /// least to a particular timestamp.
+    ///
+    /// When all the objects in `objects` have advanced to `t`, the object
+    /// `token` is returned to the client on the next call to [`Self::process`].
     pub fn install_watch_set(
         &mut self,
         mut objects: BTreeSet<GlobalId>,
@@ -286,12 +324,53 @@ where
         } else {
             let state = Rc::new((t, token));
             for id in objects {
-                self.watch_sets
+                self.objects_to_unfulfilled_watch_sets
                     .entry(id)
                     .or_default()
                     .push(Rc::clone(&state));
             }
         }
+    }
+
+    /// Process a pending response from the storage controller. If necessary,
+    /// return a higher-level response to our client.
+    ///
+    /// Precondition: The last readiness status generated must be `Readiness::Storage`.
+    async fn process_storage_response(
+        &mut self,
+    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        let maybe_response = self.storage.process().await?;
+        Ok(maybe_response.and_then(
+            |mz_storage_client::controller::Response::FrontierUpdates(r)| {
+                self.handle_frontier_updates(&r)
+            },
+        ))
+    }
+
+    /// Process a pending response from the compute controller. If necessary,
+    /// return a higher-level response to our client.
+    ///
+    /// Precondition: The last readiness status generated must be `Readiness::Compute`.
+    async fn process_compute_response(
+        &mut self,
+    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        let response = self.active_compute().process().await;
+
+        let response = response.and_then(|r| match r {
+            ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
+                Some(ControllerResponse::PeekResponse(uuid, peek, otel_ctx))
+            }
+            ComputeControllerResponse::SubscribeResponse(id, tail) => {
+                Some(ControllerResponse::SubscribeResponse(id, tail))
+            }
+            ComputeControllerResponse::CopyToResponse(id, tail) => {
+                Some(ControllerResponse::CopyToResponse(id, tail))
+            }
+            ComputeControllerResponse::FrontierUpper { id, upper } => {
+                self.handle_frontier_updates(&[(id, upper)])
+            }
+        });
+        Ok(response)
     }
 
     /// Processes the work queued by [`Controller::ready`].
@@ -305,33 +384,8 @@ where
     pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
-            Readiness::Storage => {
-                let maybe_response = self.storage.process().await?;
-                Ok(maybe_response.and_then(
-                    |mz_storage_client::controller::Response::FrontierUpdates(r)| {
-                        self.handle_frontier_updates(&r)
-                    },
-                ))
-            }
-            Readiness::Compute => {
-                let response = self.active_compute().process().await;
-
-                let response = response.and_then(|r| match r {
-                    ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
-                        Some(ControllerResponse::PeekResponse(uuid, peek, otel_ctx))
-                    }
-                    ComputeControllerResponse::SubscribeResponse(id, tail) => {
-                        Some(ControllerResponse::SubscribeResponse(id, tail))
-                    }
-                    ComputeControllerResponse::CopyToResponse(id, tail) => {
-                        Some(ControllerResponse::CopyToResponse(id, tail))
-                    }
-                    ComputeControllerResponse::FrontierUpper { id, upper } => {
-                        self.handle_frontier_updates(&[(id, upper)])
-                    }
-                });
-                Ok(response)
-            }
+            Readiness::Storage => self.process_storage_response().await,
+            Readiness::Compute => self.process_compute_response().await,
             Readiness::Metrics => Ok(self
                 .metrics_rx
                 .next()
@@ -341,14 +395,13 @@ where
                 self.record_frontiers().await;
                 Ok(None)
             }
-            Readiness::Internal => {
-                let immediate_watch_sets = std::mem::take(&mut self.immediate_watch_sets);
-                Ok((!immediate_watch_sets.is_empty())
-                    .then(|| ControllerResponse::WatchSetFinished(immediate_watch_sets)))
-            }
+            Readiness::Internal(message) => Ok(Some(message)),
         }
     }
 
+    /// Record updates to frontiers, and propagate any necessary responses.
+    // As of this writing (2/29/2024), the only response that can be generated
+    // from a frontier update is `WatchSetCompleted`.
     fn handle_frontier_updates(
         &mut self,
         updates: &[(GlobalId, Antichain<T>)],
@@ -356,7 +409,7 @@ where
         let mut finished = vec![];
         for (id, antichain) in updates {
             let mut remove = None;
-            if let Some(x) = self.watch_sets.get_mut(id) {
+            if let Some(x) = self.objects_to_unfulfilled_watch_sets.get_mut(id) {
                 let mut i = 0;
                 while i < x.len() {
                     if !antichain.less_equal(&x[i].0) {
@@ -372,7 +425,7 @@ where
                 }
             }
             if let Some(id) = remove {
-                self.watch_sets.remove(id);
+                self.objects_to_unfulfilled_watch_sets.remove(id);
             }
         }
         (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
@@ -465,7 +518,7 @@ where
             persist_pubsub_url: config.persist_pubsub_url,
             persist_txn_tables,
             secrets_args: config.secrets_args,
-            watch_sets: BTreeMap::new(),
+            objects_to_unfulfilled_watch_sets: BTreeMap::new(),
             immediate_watch_sets: Vec::new(),
         }
     }
