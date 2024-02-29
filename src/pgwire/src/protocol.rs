@@ -1842,7 +1842,7 @@ where
                     // Drain panics if it's > len, so cap it.
                     let drain_rows = cmp::min(want_rows, batch_rows.len());
                     self.send_all(batch_rows.drain(..drain_rows).map(|row| {
-                        BackendMessage::DataRow(mz_pgrepr::values_from_row(row, row_desc.typ()))
+                        BackendMessage::DataRow(mz_pgrepr::values_from_row(&row, row_desc.typ()))
                     }))
                     .await?;
                     total_sent_rows += drain_rows;
@@ -1913,13 +1913,13 @@ where
         mut stream: RecordFirstRowStream,
     ) -> Result<(State, SendRowsEndedReason), io::Error> {
         let (encode_fn, encode_format): (
-            fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
+            fn(&Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
             Format,
         ) = match format {
             // TODO (mouli): refactor to use `mz_pgcopy::encode_copy_format` and
             // handle `Binary` there as well.
             CopyFormat::Text => {
-                let encode_fn = |row: Row, typ: &RelationType, out: &mut Vec<u8>| {
+                let encode_fn = |row: &Row, typ: &RelationType, out: &mut Vec<u8>| {
                     mz_pgcopy::encode_copy_row_text(CopyTextFormatParams::default(), row, typ, out)
                 };
                 (encode_fn, Format::Text)
@@ -1984,7 +1984,7 @@ where
                     Some(PeekResponseUnary::Rows(rows)) => {
                         count += rows.len();
                         for row in rows {
-                            encode_fn(row, typ, &mut out)?;
+                            encode_fn(&row, typ, &mut out)?;
                             self.send(BackendMessage::CopyData(mem::take(&mut out)))
                                 .await?;
                         }

@@ -958,12 +958,18 @@ fn plan_copy_to(
 
     let to = plan_expr(ecx, &to_expr)?.type_as(ecx, &ScalarType::String)?;
 
+    if options.max_file_size.as_bytes() < ByteSize::mb(16).as_bytes() {
+        sql_bail!("MAX FILE SIZE cannot be less than 16MB");
+    }
+
     Ok(Plan::CopyTo(CopyToPlan {
         select_plan,
         desc,
         to,
         connection: connection.to_owned(),
+        connection_id: conn_id,
         format_params,
+        max_file_size: options.max_file_size.as_bytes(),
     }))
 }
 
@@ -997,13 +1003,8 @@ fn plan_copy_from(
             only_available_with_csv(options.quote, "quote")?;
             only_available_with_csv(options.escape, "escape")?;
             only_available_with_csv(options.header, "HEADER")?;
-            let delimiter = match options.delimiter {
-                Some(delimiter) if delimiter.len() > 1 => {
-                    sql_bail!("COPY delimiter must be a single one-byte character");
-                }
-                Some(delimiter) => Cow::from(delimiter),
-                None => Cow::from("\t"),
-            };
+            let delimiter =
+                extract_byte_param_value(options.delimiter, "delimiter")?.unwrap_or(b'\t');
             let null = match options.null {
                 Some(null) => Cow::from(null),
                 None => Cow::from("\\N"),
@@ -1045,7 +1046,7 @@ generate_extracted_config!(
     (Quote, String),
     (Header, bool),
     (AwsConnection, with_options::Object),
-    (MaxFileSize, ByteSize)
+    (MaxFileSize, ByteSize, Default(ByteSize::mb(256)))
 );
 
 pub fn plan_copy(

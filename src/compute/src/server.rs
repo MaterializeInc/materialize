@@ -29,6 +29,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_storage_types::connections::ConnectionContext;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::source;
@@ -51,6 +52,9 @@ pub struct ComputeInstanceContext {
     pub scratch_directory: Option<PathBuf>,
     /// Whether to set core affinity for Timely workers.
     pub worker_core_affinity: bool,
+    /// Context required to connect to an external sink from compute,
+    /// like the `CopyToS3OneshotSink` compute sink.
+    pub connection_context: ConnectionContext,
 }
 
 /// Configures the server with compute-specific metrics.

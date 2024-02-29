@@ -413,10 +413,18 @@ impl PeekStage {
 
 #[derive(Debug)]
 pub struct CopyToContext {
+    /// The `RelationDesc` of the data to be copied.
     pub desc: RelationDesc,
+    /// The destination uri of the external service where the data will be copied.
     pub uri: Uri,
+    /// Connection information required to connect to the external service to copy the data.
     pub connection: StorageConnection<ReferencedConnection>,
+    /// The ID of the CONNECTION object to be used for copying the data.
+    pub connection_id: GlobalId,
+    /// Format params to format the data.
     pub format_params: CopyFormatParams<'static>,
+    /// Approximate max file size of each uploaded file.
+    pub max_file_size: u64,
 }
 
 #[derive(Debug)]

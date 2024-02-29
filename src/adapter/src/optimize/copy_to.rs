@@ -12,19 +12,17 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use http::Uri;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, CopyToS3OneshotSinkConnection,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::HirRelationExpr;
-use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::Connection;
+use mz_storage_types::sinks::S3UploadInfo;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -33,6 +31,7 @@ use timely::progress::Antichain;
 use tracing::warn;
 
 use crate::catalog::Catalog;
+use crate::coord::CopyToContext;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
@@ -53,15 +52,8 @@ pub struct Optimizer {
     compute_instance: ComputeInstanceSnapshot,
     /// A transient GlobalId to be used when constructing the dataflow.
     select_id: GlobalId,
-    /// The [`RelationDesc`] for the optimized statement.
-    desc: RelationDesc,
-    /// The destination [`Uri`].
-    copy_to_uri: Uri,
-    /// The connection to be used by the the `COPY TO` sink.
-    copy_to_connection: Connection<ReferencedConnection>,
-    /// Formatting parameters for the `COPY TO` sink.
-    #[allow(dead_code)] // TODO(#7256): remove if not used when the epic is closed.
-    copy_to_format_params: CopyFormatParams<'static>,
+    /// Data required to do a COPY TO query.
+    copy_to_context: CopyToContext,
     // Optimizer config.
     config: OptimizerConfig,
 }
@@ -71,10 +63,7 @@ impl Optimizer {
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
         select_id: GlobalId,
-        desc: RelationDesc,
-        copy_to_uri: http::Uri,
-        copy_to_connection: Connection<ReferencedConnection>,
-        copy_to_format_params: CopyFormatParams<'static>,
+        copy_to_context: CopyToContext,
         config: OptimizerConfig,
     ) -> Self {
         Self {
@@ -82,10 +71,7 @@ impl Optimizer {
             catalog,
             compute_instance,
             select_id,
-            desc,
-            copy_to_uri,
-            copy_to_connection,
-            copy_to_format_params,
+            copy_to_context,
             config,
         }
     }
@@ -223,11 +209,17 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Creating an S3 sink as currently only s3 sinks are supported. It
         // might be possible in the future for COPY TO to write to different
         // sinks, which should be set here depending upon the url scheme.
-        let connection = match &self.copy_to_connection {
+        let connection = match &self.copy_to_context.connection {
             Connection::Aws(aws_connection) => {
                 ComputeSinkConnection::CopyToS3Oneshot(CopyToS3OneshotSinkConnection {
+                    upload_info: S3UploadInfo {
+                        prefix: self.copy_to_context.uri.to_string(),
+                        max_file_size: self.copy_to_context.max_file_size,
+                        desc: self.copy_to_context.desc.clone(),
+                        format: self.copy_to_context.format_params.clone(),
+                    },
                     aws_connection: aws_connection.clone(),
-                    prefix: self.copy_to_uri.to_string(),
+                    connection_id: self.copy_to_context.connection_id,
                 })
             }
             _ => {
@@ -238,7 +230,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             }
         };
         let sink_desc = ComputeSinkDesc {
-            from_desc: self.desc.clone(),
+            from_desc: self.copy_to_context.desc.clone(),
             from: self.select_id,
             connection,
             with_snapshot: true,

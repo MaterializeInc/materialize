@@ -1,8 +1,18 @@
 # Note that this file will not work on PG due to the not standard COPY TO s3 command
 
+send
+Query {"query": "CREATE SECRET aws_secret_access_key AS 'secret'"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE SECRET"}
+ReadyForQuery {"status":"I"}
+
 # Create aws connection to be used
 send
-Query {"query": "CREATE CONNECTION aws_conn TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name')"}
+Query {"query": "CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET aws_secret_access_key)"}
 ----
 
 until
@@ -12,12 +22,13 @@ CommandComplete {"tag":"CREATE CONNECTION"}
 ReadyForQuery {"status":"I"}
 
 # Ensure COPY TO works and returns COPY tag.
+# Using a SELECT query with zero rows so that it does not try to write to s3.
 send
-Query {"query": "COPY (VALUES (1, '2'), (3, '4')) TO 's3://path' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv', MAX FILE SIZE = '100MB')"}
+Query {"query": "COPY (SELECT generate_series(1, 0)) TO 's3://path' WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv', MAX FILE SIZE = '100MB')"}
 ----
 
 until
 ReadyForQuery
 ----
-CommandComplete {"tag":"COPY 2"}
+CommandComplete {"tag":"COPY 0"}
 ReadyForQuery {"status":"I"}

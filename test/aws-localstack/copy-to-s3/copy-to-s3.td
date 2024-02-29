@@ -18,8 +18,14 @@ ALTER SYSTEM SET enable_copy_to_expr = true;
 > INSERT INTO t VALUES (1);
 > INSERT INTO t VALUES (2);
 
+> CREATE SECRET aws_secret_access_key as '${arg.secret-key}';
 > CREATE CONNECTION aws_conn
-  TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name');
+  TO AWS (
+    ACCESS KEY ID = '${arg.access-key}',
+    SECRET ACCESS KEY = SECRET aws_secret_access_key,
+    ENDPOINT = '${arg.endpoint}',
+    REGION = '${arg.region}'
+  );
 
 ! COPY t TO 's3://path/to/dir';
 contains:AWS CONNECTION is required for COPY ... TO <expr>
@@ -65,26 +71,34 @@ contains:COPY TO target must have type text, not type integer
   );
 contains:ORDER BY is not supported in SELECT query for COPY statements
 
-# Creating cluster with multiple replicas
-> CREATE CLUSTER c1 REPLICAS (r1 (size '1'), r2 (size '1'));
+! COPY t TO 's3://path/to/dir'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    FORMAT = 'csv',
+    MAX FILE SIZE = '1kB'
+  );
+contains:MAX FILE SIZE cannot be less than 16MB
+
+# Creating cluster with multiple replicas, each with multiple workers
+> CREATE CLUSTER c1 REPLICAS (r1 (size '2'), r2 (size '2'));
 > SET cluster = c1;
 
 # functions like now() should work in the s3 path
-> COPY t TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
+> COPY t TO 's3://${arg.s3-prefix}/1/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 
-> COPY (SELECT a FROM t) TO 's3://path/to/'
+> COPY (SELECT a FROM t) TO 's3://${arg.s3-prefix}/2/'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 
-> COPY (SELECT 1000) TO 's3://path/to/'
+> COPY (SELECT 1000) TO 's3://${arg.s3-prefix}/3/'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",

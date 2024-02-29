@@ -90,7 +90,9 @@ impl Coordinator {
             desc,
             to,
             connection,
+            connection_id,
             format_params,
+            max_file_size,
         }: plan::CopyToPlan,
         target_cluster: TargetCluster,
     ) {
@@ -131,7 +133,9 @@ impl Coordinator {
                     desc,
                     uri,
                     connection,
+                    connection_id,
                     format_params,
+                    max_file_size,
                 }),
                 explain_ctx: ExplainContext::None,
             }),
@@ -307,10 +311,7 @@ impl Coordinator {
                     Arc::clone(&catalog),
                     compute_instance,
                     view_id,
-                    copy_to_ctx.desc,
-                    copy_to_ctx.uri,
-                    copy_to_ctx.connection,
-                    copy_to_ctx.format_params,
+                    copy_to_ctx,
                     optimizer_config,
                 ))
             }

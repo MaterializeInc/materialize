@@ -5065,7 +5065,14 @@ dependencies = [
  "csv",
  "mz-ore",
  "mz-pgrepr",
+ "mz-proto",
  "mz-repr",
+ "proptest",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "tonic-build",
  "workspace-hack",
 ]
 
@@ -5991,14 +5998,20 @@ dependencies = [
 name = "mz-storage-operators"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-stream",
+ "aws-types",
+ "bytesize",
  "differential-dataflow",
  "futures",
+ "http",
+ "mz-aws-util",
  "mz-expr",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-txn",
  "mz-persist-types",
+ "mz-pgcopy",
  "mz-repr",
  "mz-storage-types",
  "mz-timely-util",
@@ -6008,6 +6021,7 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -6042,6 +6056,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-txn",
  "mz-persist-types",
+ "mz-pgcopy",
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
