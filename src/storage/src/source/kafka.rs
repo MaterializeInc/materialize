@@ -483,17 +483,9 @@ impl SourceRender for KafkaSourceConnection {
 
             let resume_uppers_process_loop = async move {
                 tokio::pin!(resume_uppers);
-                while let Some(frontier) = resume_uppers.next().await {
-                    if let Err(e) = offset_committer.process_frontier(frontier.clone()).await {
-                        offset_commit_metrics.offset_commit_failures.inc();
-                        tracing::warn!(
-                            %e,
-                            "timely-{} source({}) failed to commit offsets: resume_upper={}",
-                            config.id,
-                            config.worker_id,
-                            frontier.pretty()
-                        );
-                    }
+                while let Some(_) = resume_uppers.next().await {
+                    // Do nothing to dodge reclocking CPU leak.
+                    // https://github.com/MaterializeInc/materialize/issues/22128
                 }
                 // During dataflow shutdown this loop can end due to the general chaos caused by
                 // dropping tokens as a means to shutdown. This call ensures this future never ends
