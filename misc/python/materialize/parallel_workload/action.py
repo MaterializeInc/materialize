@@ -214,9 +214,6 @@ class SelectAction(Action):
         else:
             expressions = "*"
 
-        if self.rng.choice([True, False]):
-            expressions += f", mz_unsafe.mz_sleep({self.rng.randint(1, 5)})"
-
         query = f"SELECT {expressions} FROM {obj_name} "
 
         if join:
