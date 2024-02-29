@@ -1981,12 +1981,6 @@ impl Coordinator {
             })
             .collect();
 
-        self.controller
-            .storage
-            .migrate_collections(collections.clone())
-            .await
-            .unwrap_or_terminate("cannot fail to migrate collections");
-
         let register_ts = self.get_local_write_ts().await.timestamp;
 
         let storage_metadata = self.catalog.state().storage_metadata();
