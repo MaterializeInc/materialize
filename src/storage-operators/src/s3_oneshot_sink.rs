@@ -205,16 +205,24 @@ impl CopyToS3Uploader {
             "starting upload at bucket: {}, file {}",
             &bucket, &file_path
         );
-        let uploader = S3MultiPartUploader::try_new(
-            &self.sdk_config,
-            bucket,
-            file_path,
-            S3MultiPartUploaderConfig {
-                part_size_limit: ByteSize::mib(10).as_u64(),
-                file_size_limit: self.max_file_size,
-            },
-        )
-        .await?;
+
+        // TODO: remove clone?
+        let sdk_config = self.sdk_config.clone();
+        let max_file_size = self.max_file_size;
+        let handle = mz_ore::task::spawn(|| "s3_uploader::try_new", async move {
+            let uploader = S3MultiPartUploader::try_new(
+                &sdk_config,
+                bucket,
+                file_path,
+                S3MultiPartUploaderConfig {
+                    part_size_limit: ByteSize::mib(10).as_u64(),
+                    file_size_limit: max_file_size,
+                },
+            )
+            .await;
+            uploader
+        });
+        let uploader = handle.await.unwrap()?;
         self.current_file_uploader = Some(uploader);
         Ok(())
     }
@@ -229,7 +237,24 @@ impl CopyToS3Uploader {
     /// Finishes any remaining in-progress upload.
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
         if let Some(uploader) = self.current_file_uploader.take() {
-            uploader.finish().await?;
+            let handle =
+                mz_ore::task::spawn(|| "s3_uploader::finish", async { uploader.finish().await });
+            handle.await.unwrap()?;
+        }
+        Ok(())
+    }
+
+    async fn upload_buffer(&mut self) -> Result<(), anyhow::Error> {
+        if let Some(uploader) = self.current_file_uploader.as_mut() {
+            // TODO: spawn task
+            // let buf = std::mem::take(&mut self.buf);
+            // // Clear and move the buffer contents into the task to do the upload.
+            // let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
+            //     uploader.buffer_chunk(&buf).await
+            // });
+            // handle.await.unwrap()?;
+            uploader.buffer_chunk(&self.buf).await?;
+            self.buf.clear();
         }
         Ok(())
     }
@@ -251,22 +276,19 @@ impl CopyToS3Uploader {
         // Ideally it would be nice to get a `&mut uploader` returned from the `start_new_file`,
         // but that runs into borrow checker issues when trying to add the `&self.buf` to the
         // `uploader.add_chunk`.
-        let Some(uploader) = self.current_file_uploader.as_mut() else {
+        let Some(uploader) = self.current_file_uploader.as_ref() else {
             unreachable!("uploader initialized above");
         };
         if buffer_length <= uploader.remaining_bytes_limit() || uploader.added_bytes() == 0 {
             // Add to ongoing upload of the current file if still within limit.
             // Or in the unlikely even the size of a single row is more than the max_file_size
             // upload it anyway.
-            uploader.buffer_chunk(&self.buf).await?;
+            self.upload_buffer().await?;
         } else {
             // Start a multi part upload of next file.
             self.start_new_file().await?;
             // Upload data for the new part.
-            let Some(uploader) = self.current_file_uploader.as_mut() else {
-                unreachable!("uploader initialized above");
-            };
-            uploader.buffer_chunk(&self.buf).await?;
+            self.upload_buffer().await?;
         }
 
         Ok(())
