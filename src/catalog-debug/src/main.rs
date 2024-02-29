@@ -30,6 +30,7 @@ use mz_catalog::durable::debug::{
     IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
     StorageMetadataCollection, StorageUsageCollection, SystemConfigurationCollection,
     SystemItemMappingCollection, SystemPrivilegeCollection, TimestampCollection, Trace,
+    UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
@@ -245,6 +246,7 @@ macro_rules! for_collection {
             CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
             CollectionType::Timestamp => $fn::<TimestampCollection>($($arg),*).await?,
             CollectionType::StorageMetadata => $fn::<StorageMetadataCollection>($($arg),*).await?,
+            CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
         }
     };
 }
@@ -359,6 +361,7 @@ async fn dump(
         system_privileges,
         timestamps,
         storage_metadata,
+        unfinalized_shards,
     } = openable_state.trace().await?;
 
     if !ignore_large_collections {
@@ -384,6 +387,7 @@ async fn dump(
     dump_col(&mut data, system_privileges, &ignore);
     dump_col(&mut data, timestamps, &ignore);
     dump_col(&mut data, storage_metadata, &ignore);
+    dump_col(&mut data, unfinalized_shards, &ignore);
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())

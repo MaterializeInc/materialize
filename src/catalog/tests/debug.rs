@@ -64,6 +64,7 @@ impl Debug for HiddenUserVersionTrace<'_> {
             system_privileges,
             timestamps,
             storage_metadata,
+            unfinalized_shards,
         } = self.0;
         let configs: CollectionTrace<ConfigCollection> = CollectionTrace {
             values: configs
@@ -93,6 +94,7 @@ impl Debug for HiddenUserVersionTrace<'_> {
             .field("system_privileges", system_privileges)
             .field("timestamps", timestamps)
             .field("storage_metadata", storage_metadata)
+            .field("unfinalized_shards", unfinalized_shards)
             .finish()
     }
 }

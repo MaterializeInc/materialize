@@ -91,6 +91,7 @@ impl StateUpdate {
             default_privileges,
             system_privileges,
             storage_metadata,
+            unfinalized_shards,
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
@@ -121,6 +122,8 @@ impl StateUpdate {
             from_batch(default_privileges, ts, StateUpdateKind::DefaultPrivilege);
         let system_privileges = from_batch(system_privileges, ts, StateUpdateKind::SystemPrivilege);
         let storage_metadata = from_batch(storage_metadata, ts, StateUpdateKind::StorageMetadata);
+        let unfinalized_shards =
+            from_batch(unfinalized_shards, ts, StateUpdateKind::UnfinalizedShard);
         let audit_logs = from_batch(audit_log_updates, ts, StateUpdateKind::AuditLog);
         let storage_usage_updates =
             from_batch(storage_usage_updates, ts, StateUpdateKind::StorageUsage);
@@ -142,6 +145,7 @@ impl StateUpdate {
             .chain(default_privileges)
             .chain(system_privileges)
             .chain(storage_metadata)
+            .chain(unfinalized_shards)
             .chain(audit_logs)
             .chain(storage_usage_updates)
             .collect()
@@ -221,6 +225,7 @@ pub enum StateUpdateKind {
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
     Timestamp(proto::TimestampKey, proto::TimestampValue),
     StorageMetadata(proto::StorageMetadataKey, proto::StorageMetadataValue),
+    UnfinalizedShard(proto::UnfinalizedShardKey, ()),
 }
 
 impl RustType<proto::StateUpdateKind> for StateUpdateKind {
@@ -357,6 +362,13 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         proto::state_update_kind::StorageMetadata {
                             key: Some(key.clone()),
                             value: Some(value.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::UnfinalizedShard(key, ()) => {
+                    proto::state_update_kind::Kind::UnfinalizedShard(
+                        proto::state_update_kind::UnfinalizedShard {
+                            key: Some(key.clone()),
                         },
                     )
                 }
@@ -585,6 +597,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                             "state_update_kind::StorageMetadata::value",
                         )
                     })?,
+                ),
+                proto::state_update_kind::Kind::UnfinalizedShard(
+                    proto::state_update_kind::UnfinalizedShard { key },
+                ) => StateUpdateKind::UnfinalizedShard(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field("state_update_kind::StorageMetadata::key")
+                    })?,
+                    (),
                 ),
             },
         )

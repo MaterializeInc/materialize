@@ -1056,6 +1056,9 @@ impl PersistCatalogState {
                 StateUpdateKind::StorageMetadata(key, value) => {
                     apply(&mut self.snapshot.storage_metadata, key, value, diff);
                 }
+                StateUpdateKind::UnfinalizedShard(key, ()) => {
+                    apply(&mut self.snapshot.unfinalized_shards, key, (), diff);
+                }
             }
         }
 
@@ -1586,6 +1589,12 @@ impl Trace {
                         .storage_metadata
                         .values
                         .push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::UnfinalizedShard(k, ()) => {
+                    trace
+                        .unfinalized_shards
+                        .values
+                        .push(((k, ()), ts.to_string(), diff))
                 }
             }
         }

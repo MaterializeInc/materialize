@@ -41,6 +41,7 @@ use crate::durable::objects::{
     ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
     ServerConfigurationValue, SettingKey, SettingValue, StorageMetadataKey, StorageMetadataValue,
     StorageUsageKey, SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -706,6 +707,18 @@ impl RustType<proto::StorageMetadataValue> for StorageMetadataValue {
 
     fn from_proto(proto: proto::StorageMetadataValue) -> Result<Self, TryFromProtoError> {
         Ok(StorageMetadataValue { shard: proto.shard })
+    }
+}
+
+impl RustType<proto::UnfinalizedShardKey> for UnfinalizedShardKey {
+    fn into_proto(&self) -> proto::UnfinalizedShardKey {
+        proto::UnfinalizedShardKey {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::UnfinalizedShardKey) -> Result<Self, TryFromProtoError> {
+        Ok(UnfinalizedShardKey { shard: proto.shard })
     }
 }
 

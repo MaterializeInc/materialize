@@ -209,6 +209,12 @@ message StorageMetadataValue {
     string shard = 1;
 }
 
+// This value is stored transparently, however, it should only ever be
+// manipulated by the storage controller.
+message UnfinalizedShardKey {
+    string shard = 1;
+}
+
 // ---- Common Types
 //
 // Note: Normally types like this would go in some sort of `common.proto` file, but we want to keep
@@ -783,6 +789,10 @@ message StateUpdateKind {
     StorageMetadataKey key = 1;
     StorageMetadataValue value = 2;
   }
+  
+  message UnfinalizedShard {
+    UnfinalizedShardKey key = 1;
+  }
 
   oneof kind {
     AuditLog audit_log = 1;
@@ -805,5 +815,6 @@ message StateUpdateKind {
     SystemPrivileges system_privileges = 18;
     Timestamp timestamp = 19;
     StorageMetadata storage_metadata = 20;
+    UnfinalizedShard unfinalized_shard = 21;
   }
 }

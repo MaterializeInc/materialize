@@ -1199,8 +1199,6 @@ pub enum CatalogError {
     ConfigAlreadyExists(String),
     /// Builtin migrations failed.
     FailedBuiltinSchemaMigration(String),
-    /// StorageMetadata already exists.
-    StorageMetadataAlreadyExists(GlobalId),
 }
 
 impl fmt::Display for CatalogError {
