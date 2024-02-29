@@ -1847,7 +1847,7 @@ impl MirRelationExpr {
     /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     pub fn could_run_expensive_function(&self) -> bool {
         let mut result = false;
-        self.visit_pre(&mut |e: &MirRelationExpr| {
+        self.visit_pre(|e: &MirRelationExpr| {
             use MirRelationExpr::*;
             use MirScalarExpr::*;
             if let Err(_) = self.try_visit_scalars::<_, RecursionLimitError>(&mut |scalar| {
@@ -1881,6 +1881,13 @@ impl MirRelationExpr {
             worklist.extend(expr.children());
         }
         false
+    }
+
+    /// Return the number of sub-expressions in the tree (including self).
+    pub fn size(&self) -> usize {
+        let mut size = 0;
+        self.visit_pre(|_| size += 1);
+        size
     }
 
     /// Given the ids and values of a LetRec, it computes the subset of ids that are used across
