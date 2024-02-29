@@ -9,9 +9,6 @@
 
 # MySQL specifies that pg type INTERVAL is mapped to TIME in MySQL.
 
-$ set-sql-timeout duration=1s
-$ set-max-tries max-tries=2
-
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_mysql_source = true
 
@@ -36,23 +33,45 @@ USE public;
 # Insert data pre-snapshot
 CREATE TABLE t1 (f1 TIME(6));
 
-INSERT INTO t1 VALUES (TIME '838:59:59')
+INSERT INTO t1 VALUES (TIME '23:59:59')
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
 
-# TODO: #25410 (query on table with time gets stuck)
-# > SELECT COUNT(*) > 0 FROM t1;
-# true
-#
-# # Insert the same data post-snapshot
-# $ mysql-execute name=mysql
-# INSERT INTO t1 SELECT * FROM t1;
-#
-# > SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-# time
-#
-# > SELECT * FROM t1;
-# "838:59:59"
-# "838:59:59"
+> SELECT COUNT(*) > 0 FROM t1;
+true
+
+# Insert the same data post-snapshot
+$ mysql-execute name=mysql
+INSERT INTO t1 SELECT * FROM t1;
+
+> SELECT pg_typeof(f1) FROM t1 LIMIT 1;
+time
+
+> SELECT * FROM t1;
+"23:59:59"
+"23:59:59"
+
+# Now insert an out-of-bounds time value that should
+# put us into an error state
+
+$ mysql-execute name=mysql
+INSERT INTO t1 VALUES (TIME '838:59:59')
+
+! SELECT * FROM t1;
+contains: error decoding value
+
+# Drop and recreate the source to confirm the decoding
+# error is also encountered in the snapshot phase
+
+> DROP SOURCE mz_source;
+
+> CREATE SOURCE mz_source
+  FROM MYSQL CONNECTION mysql_conn
+  FOR ALL TABLES;
+
+! SELECT * FROM t1;
+contains: error decoding value
+
+> DROP SOURCE mz_source;

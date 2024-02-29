@@ -430,7 +430,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 let mut final_row = Row::default();
 
                 let mut snapshot_staged = 0;
-                for (table, (output_index, table_desc)) in reader_snapshot_table_info {
+                'outer: for (table, (output_index, table_desc)) in reader_snapshot_table_info {
                     let query = format!("SELECT * FROM {}", table);
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
@@ -438,7 +438,23 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     let mut count = 0;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
-                        let packed_row = pack_mysql_row(&mut final_row, row, &table_desc)?;
+                        let packed_row = match pack_mysql_row(&mut final_row, row, &table_desc) {
+                            Ok(row) => row,
+                            Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                                // If we hit an error decoding there's nothing more we can do
+                                let err = DefiniteError::ValueDecodeError(err.to_string());
+                                raw_handle
+                                    .give(
+                                        &data_cap_set[0],
+                                        ((output_index, Err(err)), GtidPartition::minimum(), 1),
+                                    )
+                                    .await;
+                                trace!(%id, "timely-{worker_id} stopping snapshot of table \
+                                             {table} due to decode error");
+                                break 'outer;
+                            }
+                            Err(err) => Err(err)?,
+                        };
                         raw_handle
                             .give(
                                 &data_cap_set[0],

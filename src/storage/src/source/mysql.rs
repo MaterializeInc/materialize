@@ -243,6 +243,8 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
+    #[error("unable to decode: {0}")]
+    ValueDecodeError(String),
     #[error("table was truncated: {0}")]
     TableTruncated(String),
     #[error("table was dropped: {0}")]

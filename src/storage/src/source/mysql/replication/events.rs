@@ -12,7 +12,7 @@ use mysql_common::binlog::events::{QueryEvent, RowsEventData};
 use timely::progress::Timestamp;
 use tracing::trace;
 
-use mz_mysql_util::pack_mysql_row;
+use mz_mysql_util::{pack_mysql_row, MySqlError};
 use mz_repr::Row;
 use mz_storage_types::sources::mysql::GtidPartition;
 
@@ -233,7 +233,23 @@ pub(super) async fn handle_rows_event(
         let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
-            let packed_row = pack_mysql_row(&mut final_row, row, table_desc)?;
+            let packed_row = match pack_mysql_row(&mut final_row, row, table_desc) {
+                Ok(row) => row,
+                Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                    // If we hit an error decoding there's nothing more we can do
+                    let err = DefiniteError::ValueDecodeError(err.to_string());
+                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
+                    ctx.data_output
+                        .give(&gtid_cap, ((*output_index, Err(err)), new_gtid.clone(), 1))
+                        .await;
+                    ctx.errored_tables.insert(table.clone());
+                    trace!(%id, "timely-{worker_id} stopping replication of table {table} \
+                                 due to decode error");
+                    return Ok(());
+                }
+                Err(err) => Err(err)?,
+            };
+
             let data = (*output_index, Ok(packed_row));
 
             // Rewind this update if it was already present in the snapshot
