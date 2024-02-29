@@ -3013,19 +3013,19 @@ pub fn serve(
     .boxed()
 }
 
-// While we have two implementations of TimestampOracle (catalog-backed and
-// postgres/crdb-backed), we determine the highest timestamp for each timeline
-// on bootstrap, to initialize the currently-configured oracle. This mostly
-// works, but there can be linearizability violations, because there is no
-// central moment where do distributed coordination for both oracle types.
-// Working around this seems prohibitively hard, maybe even impossible so we
-// have to live with this window of potential violations during the upgrade
+// Determines and returns the highest timestamp for each timeline, for all known
+// timestamp oracle implementations.
+//
+// Initially, we did this so that we can switch between implementations of
+// timestamp oracle, but now we also do this to determine a monotonic boot
+// timestamp, a timestamp that does not regress across reboots.
+//
+// This mostly works, but there can be linearizability violations, because there
+// is no central moment where we do distributed coordination for all oracle
+// types. Working around this seems prohibitively hard, maybe even impossible so
+// we have to live with this window of potential violations during the upgrade
 // window (which is the only point where we should switch oracle
 // implementations).
-//
-// NOTE: We can remove all this code, including the pre-existing code below that
-// initializes oracles on bootstrap, once we have fully migrated to the new
-// postgres/crdb-backed oracle.
 async fn get_initial_oracle_timestamps(
     pg_timestamp_oracle_config: &Option<PostgresTimestampOracleConfig>,
 ) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
