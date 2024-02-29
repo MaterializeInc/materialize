@@ -9,7 +9,7 @@
 
 mode cockroach
 
-# Check that EXPLAIN FILTER PUSHDOWN statements parse, though they're not yet supported
+# EXPLAIN FILTER PUSHDOWN statements are blocked by a feature flag
 statement ok
 CREATE TABLE numbers (
     value int
@@ -30,7 +30,7 @@ EOF
 query error db error: ERROR: EXPLAIN FILTER PUSHDOWN is not supported
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10;
 
-# Even when the feature flag is enabled, the feature is blocked in adapter
+# Even when the feature flag is enabled, the feature is blocked in adapter for most queries
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = true
@@ -39,6 +39,28 @@ COMPLETE 0
 
 query error db error: ERROR: EXPLAIN FILTER PUSHDOWN queries for this query type are not supported
 EXPLAIN FILTER PUSHDOWN FOR CREATE MATERIALIZED VIEW foo AS SELECT * FROM numbers where value > 10;
+
+# However, EXPLAIN FILTER PUSHDOWN FOR SELECT is now supported
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10;
+----
+materialize.public.numbers  0  0  0  0
+
+statement ok
+INSERT INTO numbers VALUES (1), (2), (3);
+
+# The next two queries may be slightly brittle, since they depend on part sizes.
+# Feel free to --rewrite-results or delete them if they prove difficult to maintain.
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10;
+----
+materialize.public.numbers  1039  0  1  0
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value < 10;
+----
+materialize.public.numbers  1039  1039  1  1
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = false
