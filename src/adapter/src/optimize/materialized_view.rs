@@ -222,8 +222,14 @@ impl Optimize<LocalMirPlan> for Optimizer {
             refresh_schedule: self.refresh_schedule.clone(),
         };
 
-        let df_meta =
-            df_builder.build_sink_dataflow_into(&mut df_desc, self.sink_id, sink_description)?;
+        df_desc.export_sink(self.sink_id, sink_description);
+
+        let df_meta = mz_transform::optimize_dataflow(
+            &mut df_desc,
+            &df_builder,
+            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
+            &self.config.features,
+        )?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.

@@ -21,8 +21,8 @@ use maplit::{btreemap, btreeset};
 
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_types::sinks::ComputeSinkDesc;
+use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
+
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
@@ -39,7 +39,6 @@ use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_transform::dataflow::DataflowMetainfo;
 use tracing::warn;
 
 use crate::catalog::CatalogState;
@@ -253,33 +252,6 @@ impl<'a> DataflowBuilder<'a> {
         }
         dataflow.insert_plan(*view_id, view.clone());
         Ok(())
-    }
-
-    /// Builds a dataflow description for the sink with the specified name,
-    /// ID, source, and output connection.
-    ///
-    /// For as long as this dataflow is active, `id` can be used to reference
-    /// the sink (primarily to drop it, at the moment).
-    pub fn build_sink_dataflow_into(
-        &mut self,
-        dataflow: &mut DataflowDesc,
-        id: GlobalId,
-        sink_description: ComputeSinkDesc,
-    ) -> Result<DataflowMetainfo, OptimizerError> {
-        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(plan, ExprPrepStyle::Index)?;
-        }
-        dataflow.export_sink(id, sink_description);
-
-        // Optimize the dataflow across views, and any other ways that appeal.
-        let dataflow_metainfo = mz_transform::optimize_dataflow(
-            dataflow,
-            self,
-            &mz_transform::EmptyStatisticsOracle,
-            &self.features,
-        )?;
-
-        Ok(dataflow_metainfo)
     }
 
     // Re-optimize the imported view plans using the current optimizer

@@ -179,7 +179,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
-        let (df_desc, df_meta) = match plan {
+        let mut df_desc = match plan {
             SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
@@ -211,14 +211,9 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     // No `REFRESH` for subscribes
                     refresh_schedule: None,
                 };
+                df_desc.export_sink(self.sink_id, sink_description);
 
-                let df_meta = df_builder.build_sink_dataflow_into(
-                    &mut df_desc,
-                    self.sink_id,
-                    sink_description,
-                )?;
-
-                (df_desc, df_meta)
+                df_desc
             }
             SubscribeFrom::Query { expr, desc } => {
                 // TODO: Change the `expr` type to be `HirRelationExpr` and run
@@ -249,16 +244,18 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     // No `REFRESH` for subscribes
                     refresh_schedule: None,
                 };
+                df_desc.export_sink(self.sink_id, sink_description);
 
-                let df_meta = df_builder.build_sink_dataflow_into(
-                    &mut df_desc,
-                    self.sink_id,
-                    sink_description,
-                )?;
-
-                (df_desc, df_meta)
+                df_desc
             }
         };
+
+        let df_meta = mz_transform::optimize_dataflow(
+            &mut df_desc,
+            &df_builder,
+            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
+            &self.config.features,
+        )?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.
