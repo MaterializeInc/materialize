@@ -1458,7 +1458,7 @@ impl Coordinator {
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
         debug!("coordinator init: initializing storage collections");
-        self.bootstrap_storage_collections().await;
+        self.bootstrap_storage_collections().await?;
 
         // Load catalog entries based on topological dependency sorting. We do
         // this to reinforce that `GlobalId`'s `Ord` implementation does not
@@ -1917,7 +1917,17 @@ impl Coordinator {
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
     #[instrument]
-    async fn bootstrap_storage_collections(&mut self) {
+    async fn bootstrap_storage_collections(&mut self) -> Result<(), AdapterError> {
+        // We re-implement `catalog_mut` here so that we don't take a mutable
+        // reference over `self` for the lifetime of the return result because
+        // we also need to take a mutable reference to the storage controller.
+        {
+            let catalog = Arc::make_mut(&mut self.catalog);
+            catalog
+                .initialize_storage_controller_state(&mut *self.controller.storage)
+                .await?;
+        }
+
         // Reset the txns and table shards to a known set of invariants.
         //
         // TODO: This can be removed once we've flipped to the new txns system
@@ -2005,6 +2015,8 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to create collections");
 
         self.apply_local_write(register_ts).await;
+
+        Ok(())
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the

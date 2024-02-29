@@ -157,6 +157,41 @@ pub struct CatalogPlans {
 }
 
 impl Catalog {
+    /// Initializess the `storage_controller` to understand all shards that
+    /// `self` expects to exist.
+    pub async fn initialize_storage_controller_state(
+        &mut self,
+        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        let collections = self
+            .entries()
+            .filter(|entry| entry.item().is_storage_collection())
+            .map(|entry| entry.id())
+            .collect();
+
+        // Clone the state so that any errors that occur do not leak any
+        // transformations on error.
+        let mut state = self.state.clone();
+
+        let mut storage = self.storage().await;
+        let mut txn = storage.transaction().await?;
+
+        storage_controller
+            .initialize_collections(&mut txn, collections)
+            .await
+            .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+
+        // Ensure the state changes from initialization are visible in the
+        // state.
+        state.update_storage_metadata(&txn);
+        txn.commit().await?;
+        drop(storage);
+
+        // Save updated state.
+        self.state = state;
+        Ok(())
+    }
+
     /// Set the optimized plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
