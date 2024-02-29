@@ -30,7 +30,7 @@ CREATE DATABASE public;
 USE public;
 CREATE TABLE t1 (f1 JSON, f2 ENUM('small', 'medium', 'large'));
 
-INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false}' AS JSON), 'large');
+INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false, "nest": {"birds": ["seagull", "robin"]}}' AS JSON), 'large');
 
 > CREATE SOURCE da
   FROM MYSQL CONNECTION mysqc (
@@ -51,6 +51,13 @@ INSERT INTO t1 SELECT * FROM t1;
 "large"
 "large"
 
+# verify JSON representation is consistent between snapshot and replication
+> SELECT f1 FROM t1;
+"{\"bar\":\"baz\",\"nest\":{\"birds\":[\"seagull\",\"robin\"]},\"active\":false,\"balance\":7.77}"
+"{\"bar\":\"baz\",\"nest\":{\"birds\":[\"seagull\",\"robin\"]},\"active\":false,\"balance\":7.77}"
+
+> DROP SOURCE da;
+
 #
 # Validate that unsupported types error even as TEXT COLUMNS
 #
@@ -63,7 +70,7 @@ CREATE TABLE t1 (f1 BIT(5));
 
 INSERT INTO t1 VALUES (b'11111');
 
-! CREATE SOURCE da
+! CREATE SOURCE da_other
   FROM MYSQL CONNECTION mysqc (
     TEXT COLUMNS (public.t1.f1)
   )

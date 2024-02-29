@@ -135,6 +135,21 @@ fn val_to_datum<'a>(
                             ))?,
                         }
                     }
+                    Some(MySqlColumnMeta::Json) => {
+                        // JSON types in a query response are encoded as a string with whitespace,
+                        // but when parsed from the binlog event by mysql-common they are provided
+                        // as an encoded string sans-whitespace.
+                        if let Value::Bytes(data) = value {
+                            let json = serde_json::from_slice::<serde_json::Value>(&data)?;
+                            temp_strs.push(json.to_string());
+                            Datum::from(temp_strs.last().unwrap().as_str())
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "received unexpected value for json type: {:?}",
+                                value
+                            ))?
+                        }
+                    }
                     _ => {
                         temp_strs.push(from_value_opt::<String>(value)?);
                         Datum::from(temp_strs.last().unwrap().as_str())

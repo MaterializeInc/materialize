@@ -381,7 +381,7 @@ fn parse_as_text_column(
     table_name: &str,
 ) -> Result<(ScalarType, Option<MySqlColumnMeta>), UnsupportedDataType> {
     match info.data_type.as_str() {
-        "json" => Ok((ScalarType::String, None)),
+        "json" => Ok((ScalarType::String, Some(MySqlColumnMeta::Json))),
         "enum" => Ok((
             ScalarType::String,
             Some(MySqlColumnMeta::Enum(MySqlColumnMetaEnum {

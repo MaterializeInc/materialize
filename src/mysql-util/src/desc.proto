@@ -24,12 +24,15 @@ message ProtoMySqlColumnMetaEnum {
     repeated string values = 1;
 }
 
+message ProtoMySqlColumnMetaJson {}
+
 message ProtoMySqlColumnDesc {
     string name = 1;
     mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
 
     oneof meta {
         ProtoMySqlColumnMetaEnum enum = 3;
+        ProtoMySqlColumnMetaJson json = 4;
     }
 }
 

@@ -157,6 +157,8 @@ impl RustType<ProtoMySqlColumnMetaEnum> for MySqlColumnMetaEnum {
 pub enum MySqlColumnMeta {
     /// The described column is an enum, with the given possible values.
     Enum(MySqlColumnMetaEnum),
+    /// The described column is a json value.
+    Json,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
@@ -176,6 +178,7 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
             column_type: Some(self.column_type.into_proto()),
             meta: self.meta.as_ref().and_then(|meta| match meta {
                 MySqlColumnMeta::Enum(e) => Some(Meta::Enum(e.into_proto())),
+                MySqlColumnMeta::Json => Some(Meta::Json(ProtoMySqlColumnMetaJson {})),
             }),
         }
     }
@@ -193,6 +196,7 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                         MySqlColumnMetaEnum::from_proto(e)
                             .and_then(|e| Ok(MySqlColumnMeta::Enum(e))),
                     ),
+                    Meta::Json(_) => Some(Ok(MySqlColumnMeta::Json)),
                 })
                 .transpose()?,
         })

@@ -4761,6 +4761,7 @@ dependencies = [
  "protobuf-src",
  "regex",
  "serde",
+ "serde_json",
  "thiserror",
  "tonic-build",
  "tracing",
