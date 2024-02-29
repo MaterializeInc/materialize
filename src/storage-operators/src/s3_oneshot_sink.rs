@@ -40,7 +40,7 @@ pub fn copy_to<G, F>(
     aws_connection: AwsConnection,
     connection_id: GlobalId,
     active_worker: usize,
-    one_time_callback: F,
+    onetime_callback: F,
 ) where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
@@ -58,7 +58,7 @@ pub fn copy_to<G, F>(
             // Returning 0 count for non-active workers.
             // If nothing is returned, then a `CopyToResponse::Dropped` message
             // will be sent instead upon drop, making the accumulated response a `Dropped` as well.
-            one_time_callback(Ok(0));
+            onetime_callback(Ok(0));
             return;
         }
 
@@ -67,7 +67,7 @@ pub fn copy_to<G, F>(
                 AsyncEvent::Data(_ts, data) => {
                     if let Some(((error, _), ts, _)) = data.first() {
                         if !up_to.less_equal(ts) {
-                            one_time_callback(Err(error.to_string()));
+                            onetime_callback(Err(error.to_string()));
                             return;
                         }
                     }
@@ -87,7 +87,7 @@ pub fn copy_to<G, F>(
         {
             Ok(sdk_config) => sdk_config,
             Err(e) => {
-                one_time_callback(Err(e.to_string()));
+                onetime_callback(Err(e.to_string()));
                 return;
             }
         };
@@ -101,7 +101,7 @@ pub fn copy_to<G, F>(
                     for ((row, ()), ts, diff) in data {
                         if !up_to.less_equal(&ts) {
                             if diff < 0 {
-                                one_time_callback(Err(format!(
+                                onetime_callback(Err(format!(
                                     "Invalid data in source errors, saw retractions ({}) for row that does not exist", diff * -1,
                                 )));
                                 return;
@@ -111,7 +111,7 @@ pub fn copy_to<G, F>(
                                 match uploader.append_row(&row).await {
                                     Ok(()) => {}
                                     Err(e) => {
-                                        one_time_callback(Err(e.to_string()));
+                                        onetime_callback(Err(e.to_string()));
                                         return;
                                     }
                                 }
@@ -124,11 +124,11 @@ pub fn copy_to<G, F>(
                         match uploader.flush().await {
                             Ok(()) => {
                                 // We are done, send the final count.
-                                one_time_callback(Ok(row_count));
+                                onetime_callback(Ok(row_count));
                                 return;
                             }
                             Err(e) => {
-                                one_time_callback(Err(e.to_string()));
+                                onetime_callback(Err(e.to_string()));
                                 return;
                             }
                         }
@@ -188,8 +188,8 @@ impl CopyToS3Uploader {
         }
     }
 
-    /// Creates the uploader for the next file which starts the multi part upload.
-    async fn start_new_file(&mut self) -> Result<(), anyhow::Error> {
+    /// Creates the uploader for the next file and starts the multi part upload.
+    async fn start_new_file_upload(&mut self) -> Result<(), anyhow::Error> {
         self.flush().await?;
         assert!(self.current_file_uploader.is_none());
 
@@ -246,27 +246,27 @@ impl CopyToS3Uploader {
         let buffer_length = u64::cast_from(self.buf.len());
 
         if self.current_file_uploader.is_none() {
-            self.start_new_file().await?;
+            self.start_new_file_upload().await?;
         }
-        // Ideally it would be nice to get a `&mut uploader` returned from the `start_new_file`,
+        // Ideally it would be nice to get a `&mut uploader` returned from the `start_new_file_upload`,
         // but that runs into borrow checker issues when trying to add the `&self.buf` to the
-        // `uploader.add_chunk`.
-        let Some(uploader) = self.current_file_uploader.as_mut() else {
+        // `uploader.buffer_chunk`.
+        let Some(file_uploader) = self.current_file_uploader.as_mut() else {
             unreachable!("uploader initialized above");
         };
-        if buffer_length <= uploader.remaining_bytes_limit() || uploader.added_bytes() == 0 {
-            // Add to ongoing upload of the current file if still within limit.
-            // Or in the unlikely even the size of a single row is more than the max_file_size
-            // upload it anyway.
-            uploader.buffer_chunk(&self.buf).await?;
+        if file_uploader.can_add_more_bytes(buffer_length) || file_uploader.added_bytes() == 0 {
+            // Add to ongoing upload of the current file if still within max_file_size limit.
+            // Or in the unlikely event the size of a single row is more than the max_file_size
+            // and no data has been added to the uploader yet, upload it anyway.
+            file_uploader.buffer_chunk(&self.buf).await?;
         } else {
             // Start a multi part upload of next file.
-            self.start_new_file().await?;
+            self.start_new_file_upload().await?;
             // Upload data for the new part.
-            let Some(uploader) = self.current_file_uploader.as_mut() else {
+            let Some(file_uploader) = self.current_file_uploader.as_mut() else {
                 unreachable!("uploader initialized above");
             };
-            uploader.buffer_chunk(&self.buf).await?;
+            file_uploader.buffer_chunk(&self.buf).await?;
         }
 
         Ok(())

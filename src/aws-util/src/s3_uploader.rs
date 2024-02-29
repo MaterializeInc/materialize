@@ -90,6 +90,10 @@ pub struct S3MultiPartUploaderConfig {
     /// Size of data buffered in memory before being uploaded as a part.
     pub part_size_limit: u64,
     /// The max file size of the file uploaded to s3 by an `S3MultiPartUploader` instance.
+    /// This limit is not strictly enforced, but allows the caller to
+    /// stay under this limit by calling `can_add_more_bytes` before adding more data.
+    /// There's also validation that file_size_limit / part_size_limit should not
+    /// exceed 10000, the max total number of possible parts.
     pub file_size_limit: u64,
 }
 
@@ -127,10 +131,11 @@ impl S3MultiPartUploaderConfig {
             )));
         }
         let max_parts_count: u64 = AWS_S3_MAX_PART_COUNT.try_into().expect("i32 to u64");
-        if file_size_limit / part_size_limit > max_parts_count {
+        let estimated_parts_count = file_size_limit.div_ceil(*part_size_limit);
+        if estimated_parts_count > max_parts_count {
             return Err(anyhow!(format!(
                 "total number of possible parts (file_size_limit / part_size_limit): {}, cannot exceed {}",
-                file_size_limit / part_size_limit,
+                estimated_parts_count,
                 AWS_S3_MAX_PART_COUNT
             )));
         }
@@ -188,8 +193,8 @@ impl S3MultiPartUploader {
 
     /// Adds the `data` to the internal buffer and flushes the buffer if it is more than
     /// the part threshold defined in `S3MultiPartUploaderConfig`.
-    /// Note, it's the caller's responsibility to stay under configured `max_file_size`
-    /// by calling `remaining_bytes_limit()` method.
+    /// Note, it's the caller's responsibility to stay under configured limits
+    /// by calling `can_add_more_bytes` method.
     pub async fn buffer_chunk(&mut self, data: &[u8]) -> Result<(), S3MultiPartUploadError> {
         self.buffer.extend_from_slice(data);
         self.flush_chunks().await?;
@@ -242,21 +247,27 @@ impl S3MultiPartUploader {
         u64::cast_from(self.buffer.len())
     }
 
-    // Returns the amount of bytes which can still be added to the multi-part upload
-    // without exceeding `file_size_limit`.
-    pub fn remaining_bytes_limit(&self) -> u64 {
+    /// Returns if more data can be added to stay under the `file_size_limit`
+    // and without exceeding the maximum total number of possible parts.
+    pub fn can_add_more_bytes(&self, bytes_len: u64) -> bool {
+        bytes_len <= self.remaining_bytes_limit() && self.part_count < AWS_S3_MAX_PART_COUNT
+    }
+
+    /// Internal method, returns the amount of bytes which can still be added to the multi-part upload.
+    /// without exceeding `file_size_limit`.
+    fn remaining_bytes_limit(&self) -> u64 {
         self.config
             .file_size_limit
             .saturating_sub(self.added_bytes())
     }
 
-    // Returns the amount of bytes which has been processed by this uploader
+    /// Returns the amount of bytes which has been processed by this uploader.
     pub fn added_bytes(&self) -> u64 {
         self.total_bytes_uploaded + self.buffer_size()
     }
 
-    // Internal method to continuously flush and upload part from the buffer till it is
-    // under the configured `part_size_limit`.
+    /// Internal method to continuously flush and upload part from the buffer till it is
+    /// under the configured `part_size_limit`.
     async fn flush_chunks(&mut self) -> Result<(), S3MultiPartUploadError> {
         let part_size_limit = self.config.part_size_limit;
         // TODO (mouli): can probably parallelize the calls here.
@@ -267,7 +278,7 @@ impl S3MultiPartUploader {
         Ok(())
     }
 
-    // Internal method which actually uploads a single part and updates state.
+    /// Internal method which actually uploads a single part and updates state.
     async fn upload_part_internal(&mut self, data: Bytes) -> Result<(), S3MultiPartUploadError> {
         let num_of_bytes: u64 = u64::cast_from(data.len());
 
@@ -430,6 +441,11 @@ mod tests {
         uploader.buffer_chunk(&expected_data).await?;
 
         assert_eq!(uploader.remaining_bytes_limit(), ByteSize::mib(4).as_u64());
+        assert_eq!(uploader.added_bytes(), ByteSize::mib(6).as_u64());
+        // Can still add 4MiB of bytes to stay under configured limits.
+        assert!(uploader.can_add_more_bytes(ByteSize::mib(4).as_u64()));
+        // Adding additional 6MiB will exceed the configured `file_size_limit` of 10MiB.
+        assert!(!uploader.can_add_more_bytes(ByteSize::mib(6).as_u64()));
 
         let CompletedUpload {
             part_count,
@@ -506,7 +522,8 @@ mod tests {
 
         let config = S3MultiPartUploaderConfig {
             part_size_limit: ByteSize::mib(5).as_u64(),
-            file_size_limit: ByteSize::mib(5).as_u64() * 10001,
+            // Subtracting 1 so that the overall multiplier is a fraction between 10000 and 10001.
+            file_size_limit: (ByteSize::mib(5).as_u64() * 10001) - 1,
         };
         let error = S3MultiPartUploader::try_new(&sdk_config, bucket, path, config)
             .await
