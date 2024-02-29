@@ -18,6 +18,7 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -28,6 +29,7 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 SERVICES = [
     Cockroach(setup_materialize=True),
     Postgres(),
+    MySql(),
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
@@ -59,6 +61,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     service_names = [
         "cockroach",
         "postgres",
+        "mysql",
         "zookeeper",
         "kafka",
         "schema-registry",
