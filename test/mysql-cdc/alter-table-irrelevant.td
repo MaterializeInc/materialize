@@ -70,39 +70,37 @@ INSERT INTO irrelevant_table VALUES ('ab');
   FOR ALL TABLES;
 
 # Check the first view still works
-# TODO: #25066 (irrelevant table breaks source)
-# > SELECT * FROM base_table;
-# 1
-# 2
+> SELECT * FROM base_table;
+1
+2
 
 # Confirm the second table now has a corresponding view and it has the expected data
-# TODO: #25066 (irrelevant table breaks source)
-# > SELECT * FROM irrelevant_table
-# <null>
-# ab
+> SELECT * FROM irrelevant_table
+<null>
+ab
 
 # Alter the irrelevant_table now that it is relevant
 $ mysql-execute name=mysql
 ALTER TABLE irrelevant_table ADD COLUMN f3 char(2);
 INSERT INTO irrelevant_table VALUES ('bc', 'de');
 
-# TODO: #25066 (irrelevant table breaks source)
-# > SELECT * FROM base_table;
-# 1
-# 2
+> SELECT * FROM base_table;
+1
+2
 
-# TODO: #25066 (irrelevant table breaks source)
-# > SELECT * FROM irrelevant_table
-# <null>
-# ab
-# bc
+> SELECT * FROM irrelevant_table
+<null>
+ab
+bc
 
 # Alter in an incompatible way and ensure replication error does not occur
 $ mysql-execute name=mysql
 ALTER TABLE irrelevant_table DROP COLUMN f2;
 INSERT INTO irrelevant_table VALUES ('gh');
 
-# TODO: #25066 (irrelevant table breaks source)
-# > SELECT * FROM base_table;
-# 1
-# 2
+> SELECT * FROM base_table;
+1
+2
+
+# Drop source since sanity check restart requires it is in a good state
+> DROP SOURCE mz_source

@@ -44,12 +44,9 @@ pub fn pack_mysql_row(
                     table_desc.name
                 )))?
             }
-            EitherOrBoth::Right(value) => {
-                tracing::error!("mysql: extra value {value:?} for table {}", table_desc.name);
-                Err(MySqlError::DecodeError(format!(
-                    "extra value found: {value:?} for table {}",
-                    table_desc.name
-                )))?
+            EitherOrBoth::Right(_) => {
+                // If there are extra columns on the upstream table we can safely ignore them
+                break;
             }
         };
         let datum = match val_to_datum(value, col_desc, &mut temp_strs, &mut temp_bytes) {

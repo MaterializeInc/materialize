@@ -118,9 +118,8 @@ $ mysql-execute name=mysql
 ALTER TABLE remove_column DROP COLUMN f2;
 INSERT INTO remove_column VALUES (3);
 
-# TODO: #25451 (schema change not detected)
-# ! select * from remove_column;
-# contains:incompatible schema change
+! select * from remove_column;
+contains:incompatible schema change
 
 
 #
@@ -134,9 +133,8 @@ UPDATE alter_column SET f2 = '12';
 ALTER TABLE alter_column MODIFY f2 int;
 INSERT INTO alter_column VALUES (3, 23);
 
-# TODO: #25451 (schema change not detected)
-# ! select * from alter_column;
-# contains:incompatible schema change
+! select * from alter_column;
+contains:incompatible schema change
 
 
 #
@@ -149,9 +147,8 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_drop_nullability MODIFY f1 INTEGER;
 INSERT INTO alter_drop_nullability VALUES (NULL);
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
-# contains:incompatible schema change
+! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
+contains:incompatible schema change
 
 # We have guaranteed that this column is not null so the optimizer eagerly
 # returns the empty set.
@@ -220,9 +217,8 @@ ALTER TABLE alter_cycle_pk DROP PRIMARY KEY;
 ALTER TABLE alter_cycle_pk ADD PRIMARY KEY(f1);
 INSERT INTO alter_cycle_pk VALUES (2);
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT * FROM alter_cycle_pk;
-# contains:incompatible schema change
+! SELECT * FROM alter_cycle_pk;
+contains:incompatible schema change
 
 #
 # Cycle PK off (no pk, pk, no pk)
@@ -252,9 +248,8 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_drop_unique DROP INDEX f1;
 INSERT INTO alter_drop_unique VALUES (1);
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT f1 FROM alter_drop_unique;
-# contains:incompatible schema change
+! SELECT f1 FROM alter_drop_unique;
+contains:incompatible schema change
 
 
 #
@@ -283,21 +278,20 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_extend_column MODIFY f1 VARCHAR(20);
 INSERT INTO alter_extend_column VALUES ('abcd');
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT * FROM alter_extend_column;
-# contains:incompatible schema change
+! SELECT * FROM alter_extend_column;
+contains:incompatible schema change
 
 #
 # Alter decimal
 > SELECT * from alter_decimal
 123.45
 
-# $ mysql-execute name=mysql
-# ALTER TABLE alter_decimal ALTER COLUMN f1 TYPE DECIMAL(6,1);
-# INSERT INTO alter_decimal VALUES (12345.6);
+$ mysql-execute name=mysql
+ALTER TABLE alter_decimal MODIFY COLUMN f1 DECIMAL(6,1);
+INSERT INTO alter_decimal VALUES (12345.6);
 
-# ! SELECT * FROM alter_decimal;
-# contains:altered
+! SELECT * FROM alter_decimal;
+contains:altered
 
 
 #
@@ -310,9 +304,8 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
 INSERT INTO alter_table_renamed VALUES (2);
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT * FROM alter_table_rename;
-# contains:table was dropped
+! SELECT * FROM alter_table_rename;
+contains:table was dropped
 
 $ mysql-execute name=mysql
 INSERT INTO alter_table_renamed VALUES (3);
@@ -333,9 +326,8 @@ ALTER TABLE alter_table_rename_column RENAME COLUMN f2 TO f1;
 ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
 INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed');
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT * FROM alter_table_rename_column;
-# contains:incompatible schema change
+! SELECT * FROM alter_table_rename_column;
+contains:incompatible schema change
 
 
 #
@@ -350,9 +342,8 @@ ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
 INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT * FROM alter_table_change_attnum;
-# contains:incompatible schema change
+! SELECT * FROM alter_table_change_attnum;
+contains:incompatible schema change
 
 > SELECT * from alter_table_supported;
 1 1
@@ -385,9 +376,8 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_table_supported DROP COLUMN f2;
 INSERT INTO alter_table_supported (f1) VALUES (1);
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT * from alter_table_supported;
-# contains:incompatible schema change
+! SELECT * from alter_table_supported;
+contains:incompatible schema change
 
 
 #
@@ -412,14 +402,12 @@ TRUNCATE truncate_table;
 $ mysql-execute name=mysql
 DROP TABLE drop_table;
 
-# TODO: #25451 (schema change not detected)
-# > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'drop_table';
-# ceased
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'drop_table';
+ceased
 
 # this should not brick the whole source
-# TODO: #25451 (schema change not detected)
-# > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
-# running
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+running
 
 # TODO: #25365 (source bricked after restart)
 > DROP SOURCE mz_source CASCADE;
