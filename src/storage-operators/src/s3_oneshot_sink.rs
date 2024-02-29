@@ -40,10 +40,10 @@ pub fn copy_to<G, F>(
     aws_connection: AwsConnection,
     connection_id: GlobalId,
     active_worker: usize,
-    callback: F,
+    one_time_callback: F,
 ) where
     G: Scope<Timestamp = Timestamp>,
-    F: Fn(Result<u64, String>) -> () + 'static,
+    F: FnOnce(Result<u64, String>) -> () + 'static,
 {
     let scope = input_collection.scope();
     let worker_id = scope.index();
@@ -58,7 +58,7 @@ pub fn copy_to<G, F>(
             // Returning 0 count for non-active workers.
             // If nothing is returned, then a `CopyToResponse::Dropped` message
             // will be sent instead upon drop, making the accumulated response a `Dropped` as well.
-            callback(Ok(0));
+            one_time_callback(Ok(0));
             return;
         }
 
@@ -67,7 +67,7 @@ pub fn copy_to<G, F>(
                 AsyncEvent::Data(_ts, data) => {
                     if let Some(((error, _), ts, _)) = data.first() {
                         if !up_to.less_equal(ts) {
-                            callback(Err(error.to_string()));
+                            one_time_callback(Err(error.to_string()));
                             return;
                         }
                     }
@@ -87,7 +87,7 @@ pub fn copy_to<G, F>(
         {
             Ok(sdk_config) => sdk_config,
             Err(e) => {
-                callback(Err(e.to_string()));
+                one_time_callback(Err(e.to_string()));
                 return;
             }
         };
@@ -101,7 +101,7 @@ pub fn copy_to<G, F>(
                     for ((row, ()), ts, diff) in data {
                         if !up_to.less_equal(&ts) {
                             if diff < 0 {
-                                callback(Err(format!(
+                                one_time_callback(Err(format!(
                                     "Invalid data in source errors, saw retractions ({}) for row that does not exist", diff * -1,
                                 )));
                                 return;
@@ -111,7 +111,7 @@ pub fn copy_to<G, F>(
                                 match uploader.append_row(&row).await {
                                     Ok(()) => {}
                                     Err(e) => {
-                                        callback(Err(e.to_string()));
+                                        one_time_callback(Err(e.to_string()));
                                         return;
                                     }
                                 }
@@ -124,11 +124,11 @@ pub fn copy_to<G, F>(
                         match uploader.flush().await {
                             Ok(()) => {
                                 // We are done, send the final count.
-                                callback(Ok(row_count));
+                                one_time_callback(Ok(row_count));
                                 return;
                             }
                             Err(e) => {
-                                callback(Err(e.to_string()));
+                                one_time_callback(Err(e.to_string()));
                                 return;
                             }
                         }

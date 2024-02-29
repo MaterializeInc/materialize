@@ -52,7 +52,7 @@ where
         let response_protocol_weak = Rc::downgrade(&response_protocol_handle);
         let connection_context = compute_state.context.connection_context.clone();
 
-        let callback = move |count: Result<u64, String>| {
+        let one_time_callback = move |count: Result<u64, String>| {
             if let Some(response_protocol) = response_protocol_handle.borrow_mut().deref_mut() {
                 response_protocol.send(count);
             }
@@ -86,7 +86,7 @@ where
             self.aws_connection.clone(),
             self.connection_id,
             active_worker,
-            callback,
+            one_time_callback,
         );
 
         Some(Rc::new(scopeguard::guard((), move |_| {
@@ -104,17 +104,16 @@ struct ResponseProtocol {
 }
 
 impl ResponseProtocol {
-    // This method should only be called once.
+    // This method should only be called once otherwise this will panic.
     fn send(&mut self, count: Result<u64, String>) {
         // The dataflow's input has been exhausted, clear the channel,
         // to avoid sending `CopyToResponse::Dropped`.
-        if let Some(buffer) = self.response_buffer.take() {
-            let response = match count {
-                Ok(count) => CopyToResponse::RowCount(count),
-                Err(error) => CopyToResponse::Error(error),
-            };
-            buffer.borrow_mut().push((self.sink_id, response));
-        }
+        let buffer = self.response_buffer.take().expect("expect response buffer");
+        let response = match count {
+            Ok(count) => CopyToResponse::RowCount(count),
+            Err(error) => CopyToResponse::Error(error),
+        };
+        buffer.borrow_mut().push((self.sink_id, response));
     }
 }
 
