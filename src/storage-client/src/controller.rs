@@ -18,8 +18,9 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -28,7 +29,7 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-use mz_persist_types::Codec64;
+use mz_persist_types::{Codec64, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
@@ -193,6 +194,79 @@ pub enum Response<T> {
     FrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
 }
 
+/// Metadata that the storage controller must know to properly handle the life
+/// cycle of creating and dropping collections.j
+///
+/// This data should be kept consistent with the state modified using
+/// [`StorageTxn`].
+///
+/// n.b. the "persist txn shard" is also metadata that's persisted, but if we
+/// included it in this struct it would never be read.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct StorageMetadata {
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub collection_metadata: BTreeMap<GlobalId, String>,
+    pub unfinalized_shards: BTreeSet<String>,
+}
+
+impl StorageMetadata {
+    pub fn get_collection_shard<T>(&self, id: GlobalId) -> Result<ShardId, StorageError<T>> {
+        let shard_str = self
+            .collection_metadata
+            .get(&id)
+            .ok_or(StorageError::IdentifierMissing(id))?;
+
+        ShardId::from_str(shard_str).map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))
+    }
+}
+
+/// Provides an interface for the storage controller to read and write data that
+/// is recorded elsewhere.
+///
+/// Data written to the implementor of this trait should make a consistent view
+/// of the data available through [`StorageMetadata`].
+#[async_trait(?Send)]
+pub trait StorageTxn<T: Timestamp> {
+    /// Retrieve all of the visible storage metadata.
+    ///
+    /// The value of this map should be treated as opaque.
+    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String>;
+
+    /// Add new storage metadata for a collection.
+    ///
+    /// Subsequent calls to [`StorageTxn::get_collection_metadata`] must include
+    /// this data.
+    fn insert_collection_metadata(
+        &mut self,
+        s: BTreeMap<GlobalId, String>,
+    ) -> Result<(), StorageError<T>>;
+
+    /// Remove the metadata associated with the identified collections.
+    ///
+    /// Subsequent calls to [`StorageTxn::get_collection_metadata`] must not
+    /// include these keys.
+    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)>;
+
+    /// Retrieve all of the shards that are no longer in use by an active
+    /// collection but are yet to be finalized.
+    fn get_unfinalized_shards(&self) -> BTreeSet<String>;
+
+    /// Insert the specified values as unfinalized shards.
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<String>) -> Result<(), StorageError<T>>;
+
+    /// Mark the specified shards as finalized, deleting them from the
+    /// unfinalized shard collection.
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>);
+
+    /// Get the persist txn shard for this environment if it exists.
+    fn get_persist_txn_shard(&self) -> Option<String>;
+
+    /// Store the specified shard as the environment's persist txn shard.
+    ///
+    /// The implementor should error if the shard is already specified.
+    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError<T>>;
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     type Timestamp;
@@ -281,6 +355,7 @@ pub trait StorageController: Debug {
     /// collections are a table (i.e. all materialized views, sources, etc).
     async fn create_collections(
         &mut self,
+        storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
@@ -561,6 +636,27 @@ pub trait StorageController: Debug {
     async fn init_txns(
         &mut self,
         init_ts: Self::Timestamp,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// On boot, seed our set of collections with this data.
+    ///
+    /// Most likely, this data comes from a persisted source outside of the
+    /// storage controller.
+    async fn initialize_collections(
+        &mut self,
+        txn: &mut dyn StorageTxn<Self::Timestamp>,
+        ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Provisionally synchronize the storage controller state with the
+    /// implementor of [`StorageTxn`].
+    ///
+    /// The data modified in the `StorageTxn` must be made available in all
+    /// subsequent calls that require [`StateState`] as a parameter.
+    async fn prepare_collections(
+        &mut self,
+        txn: &mut dyn StorageTxn<Self::Timestamp>,
+        ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 }
 

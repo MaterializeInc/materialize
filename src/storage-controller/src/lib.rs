@@ -57,6 +57,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
     ExportState, IntrospectionType, MonotonicAppender, Response, SnapshotCursor, StorageController,
+    StorageMetadata, StorageTxn,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
@@ -257,6 +258,7 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
+        // TODO: reconcile dangling persist shards.
         self.reconcile_dangling_statistics();
         self.initialized = true;
         for client in self.clients.values_mut() {
@@ -364,6 +366,7 @@ where
     #[instrument(name = "storage::create_collections")]
     async fn create_collections(
         &mut self,
+        storage_metadata: &StorageMetadata,
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
@@ -387,54 +390,25 @@ where
             }
         }
 
-        // Install collection state for each bound description. Note that this
-        // method implementation attempts to do AS MUCH work concurrently as
-        // possible. There are inline comments explaining the motivation behind
-        // each section.
-        let mut entries = Vec::with_capacity(collections.len());
-
-        for (id, _desc) in &collections {
-            entries.push((
-                *id,
-                DurableCollectionMetadata {
-                    data_shard: ShardId::new(),
-                },
-            ))
-        }
-
-        // Perform all stash writes in a single transaction, to minimize transaction overhead and
-        // the time spent waiting for stash.
-        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
-            .insert_without_overwrite(
-                &mut self.stash,
-                entries
-                    .into_iter()
-                    .map(|(key, val)| (key.into_proto(), val.into_proto())),
-            )
-            .await?
-            .into_iter()
-            .map(RustType::from_proto)
-            .collect::<Result<_, _>>()
-            .map_err(|e| StorageError::IOError(e.into()))?;
-
         // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
         let enriched_with_metadata = collections
             .into_iter()
             .map(|(id, description)| {
-                let collection_shards = durable_metadata.get(&id).expect("inserted above");
+                let data_shard = storage_metadata.get_collection_shard(id)?;
 
-                let status_shard =
-                    if let Some(status_collection_id) = description.status_collection_id {
-                        Some(
-                            durable_metadata
-                                .get(&status_collection_id)
-                                .ok_or(StorageError::IdentifierMissing(status_collection_id))?
-                                .data_shard,
-                        )
-                    } else {
-                        None
+                let get_shard = |id| -> Result<ShardId, StorageError<T>> {
+                    let shard = match self.collections.get(&id) {
+                        Some(col) => col.collection_metadata.data_shard,
+                        None => storage_metadata.get_collection_shard::<T>(id)?,
                     };
+                    Ok(shard)
+                };
+
+                let status_shard = match description.status_collection_id {
+                    Some(status_collection_id) => Some(get_shard(status_collection_id)?),
+                    None => None,
+                };
 
                 let remap_shard = match &description.data_source {
                     // Only ingestions can have remap shards.
@@ -444,12 +418,7 @@ where
                     }) => {
                         // Iff ingestion has a remap collection, its metadata must
                         // exist (and be correct) by this point.
-                        Some(
-                            durable_metadata
-                                .get(remap_collection_id)
-                                .ok_or(StorageError::IdentifierMissing(*remap_collection_id))?
-                                .data_shard,
-                        )
+                        Some(get_shard(*remap_collection_id)?)
                     }
                     _ => None,
                 };
@@ -475,7 +444,7 @@ where
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
                     remap_shard,
-                    data_shard: collection_shards.data_shard,
+                    data_shard,
                     status_shard,
                     relation_desc: description.desc.clone(),
                     txns_shard,
@@ -2171,6 +2140,49 @@ where
 
         self.txns_init_run = true;
         Ok(())
+    }
+
+    async fn initialize_collections(
+        &mut self,
+        txn: &mut dyn StorageTxn<T>,
+        ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError<T>> {
+        let metadata = txn.get_collection_metadata();
+        let processed_metadata: Result<Vec<_>, _> = metadata
+            .into_iter()
+            .map(|(id, shard)| ShardId::from_str(&shard).map(|shard| (id, shard)))
+            .collect();
+        let metadata = processed_metadata.map_err(|e| StorageError::Generic(anyhow::anyhow!(e)))?;
+        let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
+
+        // Determine which collections we do not yet have metadata for.
+        let new_collections: BTreeSet<GlobalId> = ids
+            .iter()
+            .filter(|id| !existing_metadata.contains(id))
+            .cloned()
+            .collect();
+
+        mz_ore::soft_assert_or_log!(
+            new_collections.iter().all(|id| id.is_system()),
+            "initializing collections should only be missing metadata for new system objects, but got {:?}",
+            new_collections
+        );
+
+        self.prepare_collections(txn, new_collections).await?;
+
+        Ok(())
+    }
+
+    async fn prepare_collections(
+        &mut self,
+        txn: &mut dyn StorageTxn<T>,
+        ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError<T>> {
+        txn.insert_collection_metadata(
+            ids.into_iter()
+                .map(|id| (id, ShardId::new().to_string()))
+                .collect(),
+        )
     }
 }
 

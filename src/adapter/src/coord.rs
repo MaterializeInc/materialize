@@ -1992,9 +1992,11 @@ impl Coordinator {
 
         let register_ts = self.get_local_write_ts().await.timestamp;
 
+        let storage_metadata = self.catalog.state().storage_metadata();
+
         self.controller
             .storage
-            .create_collections(Some(register_ts), collections)
+            .create_collections(storage_metadata, Some(register_ts), collections)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 

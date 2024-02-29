@@ -22,7 +22,7 @@ use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -30,7 +30,8 @@ use mz_sql::catalog::{
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_client::controller::StorageTxn;
+use mz_storage_types::controller::{PersistTxnTablesImpl, StorageError};
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY};
@@ -1541,6 +1542,110 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
+    }
+}
+
+use crate::durable::async_trait;
+
+#[async_trait]
+impl StorageTxn<Timestamp> for Transaction<'_> {
+    fn get_collection_metadata(&self) -> BTreeMap<GlobalId, String> {
+        self.storage_collection_metadata
+            .items()
+            .into_iter()
+            .map(
+                |(
+                    StorageCollectionMetadataKey { id },
+                    StorageCollectionMetadataValue { shard },
+                )| { (id, shard.clone()) },
+            )
+            .collect()
+    }
+
+    fn insert_collection_metadata(
+        &mut self,
+        metadata: BTreeMap<GlobalId, String>,
+    ) -> Result<(), StorageError<Timestamp>> {
+        for (id, shard) in metadata {
+            self.storage_collection_metadata
+                .insert(
+                    StorageCollectionMetadataKey { id },
+                    StorageCollectionMetadataValue {
+                        shard: shard.clone(),
+                    },
+                )
+                .map_err(|err| match err {
+                    DurableCatalogError::DuplicateKey => {
+                        StorageError::CollectionMetadataAlreadyExists(id)
+                    }
+                    DurableCatalogError::UniquenessViolation => {
+                        StorageError::PersistShardAlreadyInUse(shard)
+                    }
+                    err => StorageError::Generic(anyhow::anyhow!(err)),
+                })?;
+        }
+        Ok(())
+    }
+
+    fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)> {
+        self.storage_collection_metadata
+            .delete(|StorageCollectionMetadataKey { id }, _| ids.contains(id))
+            .into_iter()
+            .map(
+                |(
+                    StorageCollectionMetadataKey { id },
+                    StorageCollectionMetadataValue { shard },
+                )| (id, shard),
+            )
+            .collect()
+    }
+
+    fn get_unfinalized_shards(&self) -> BTreeSet<String> {
+        self.unfinalized_shards
+            .items()
+            .into_iter()
+            .map(|(UnfinalizedShardKey { shard }, ())| shard)
+            .collect()
+    }
+
+    fn insert_unfinalized_shards(
+        &mut self,
+        s: BTreeSet<String>,
+    ) -> Result<(), StorageError<Timestamp>> {
+        for shard in s {
+            match self
+                .unfinalized_shards
+                .insert(UnfinalizedShardKey { shard }, ())
+            {
+                // Inserting duplicate keys has no effect.
+                Ok(()) | Err(DurableCatalogError::DuplicateKey) => {}
+                Err(e) => Err(StorageError::Generic(anyhow::anyhow!(e)))?,
+            };
+        }
+        Ok(())
+    }
+
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>) {
+        let _ = self
+            .unfinalized_shards
+            .delete(|UnfinalizedShardKey { shard }, _| shards.contains(shard.as_str()));
+    }
+
+    fn get_persist_txn_shard(&self) -> Option<String> {
+        let items = self.persist_txn_shard.items();
+        items
+            .into_values()
+            .next()
+            .map(|PersistTxnShardValue { shard }| shard)
+    }
+
+    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError<Timestamp>> {
+        self.persist_txn_shard
+            .insert((), PersistTxnShardValue { shard })
+            .map_err(|err| match err {
+                DurableCatalogError::DuplicateKey => StorageError::PersistTxnShardAlreadyExists,
+                err => StorageError::Generic(anyhow::anyhow!(err)),
+            })
     }
 }
 

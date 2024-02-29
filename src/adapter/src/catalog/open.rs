@@ -251,6 +251,7 @@ impl Catalog {
                 default_privileges: DefaultPrivileges::default(),
                 system_privileges: PrivilegeMap::default(),
                 comments: CommentsMap::default(),
+                storage_metadata: Default::default(),
             };
 
             let is_read_only = storage.is_read_only();
