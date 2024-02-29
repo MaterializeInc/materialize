@@ -1532,27 +1532,7 @@ where
     ) -> Option<ComputeControllerResponse<T>> {
         match response {
             ComputeResponse::FrontierUpper { id, upper } => {
-                let old_upper = self
-                    .compute
-                    .collection(id)
-                    .ok()
-                    .map(|state| state.write_frontier.clone());
-
-                self.handle_frontier_upper(id, upper.clone(), replica_id);
-
-                let new_upper = self
-                    .compute
-                    .collection(id)
-                    .ok()
-                    .map(|state| state.write_frontier.clone());
-
-                if let (Some(old), Some(new)) = (old_upper, new_upper) {
-                    (old != new).then_some(ComputeControllerResponse::FrontierUpper { id, upper })
-                } else {
-                    // this is surprising, but we should already log something in `handle_frontier_upper`,
-                    // so no need to do so here
-                    None
-                }
+                self.handle_frontier_upper(id, upper.clone(), replica_id)
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
@@ -1570,12 +1550,20 @@ where
         }
     }
 
+    /// Handle new frontiers, returning any compute response that needs to
+    /// be sent to the client.
     fn handle_frontier_upper(
         &mut self,
         id: GlobalId,
         new_frontier: Antichain<T>,
         replica_id: ReplicaId,
-    ) {
+    ) -> Option<ComputeControllerResponse<T>> {
+        let old_upper = self
+            .compute
+            .collection(id)
+            .ok()
+            .map(|state| state.write_frontier.clone());
+
         // According to the compute protocol, replicas are not allowed to send `FrontierUpper`s
         // that regress frontiers they have reported previously. We still perform a check here,
         // rather than risking the controller becoming confused trying to handle regressions.
@@ -1586,7 +1574,7 @@ where
                 new_frontier.elements(),
             );
             tracing::error!("Replica reported an untracked collection frontier");
-            return;
+            return None;
         };
 
         if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
@@ -1598,13 +1586,25 @@ where
                     new_frontier.elements(),
                 );
                 tracing::error!("Replica reported a regressed collection frontier");
-                return;
+                return None;
             }
         }
 
         self.compute
             .update_hydration_status(id, replica_id, &new_frontier);
         self.update_write_frontiers(replica_id, &[(id, new_frontier)].into());
+
+        let new_upper = self
+            .compute
+            .collection(id)
+            .ok()
+            .map(|state| state.write_frontier.clone());
+
+        if let (Some(old), Some(new)) = (old_upper, new_upper) {
+            (old != new).then_some(ComputeControllerResponse::FrontierUpper { id, upper })
+        } else {
+            None
+        }
     }
 
     fn handle_peek_response(
