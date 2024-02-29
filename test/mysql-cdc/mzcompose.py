@@ -10,7 +10,7 @@
 import threading
 from textwrap import dedent
 
-from materialize.mysql import (
+from materialize.mysql_util import (
     retrieve_invalid_ssl_context_for_mysql,
     retrieve_ssl_context_for_mysql,
 )
