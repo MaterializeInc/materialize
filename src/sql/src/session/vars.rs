@@ -1114,6 +1114,7 @@ impl SystemVars {
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER,
+            &USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION,
         ];
 
         let persist_configs = mz_dyncfgs::all_dyncfgs();
@@ -2010,6 +2011,11 @@ impl SystemVars {
         *self.expect_value(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
     }
 
+    /// Returns the `user_storage_managed_collections_batch_duration` configuration parameter.
+    pub fn user_storage_managed_collections_batch_duration(&self) -> Duration {
+        *self.expect_value(&USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION)
+    }
+
     /// Returns whether the named variable is a compute configuration parameter
     /// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
     /// commands).
@@ -2055,6 +2061,7 @@ impl SystemVars {
             || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
             || name == STORAGE_STATISTICS_INTERVAL.name()
             || name == STORAGE_STATISTICS_COLLECTION_INTERVAL.name()
+            || name == USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION.name()
             || is_upsert_rocksdb_config_var(name)
             || self.is_persist_config_var(name)
             || is_tracing_var(name)

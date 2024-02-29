@@ -25,6 +25,7 @@ use mz_repr::bytes::ByteSize;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
 use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use once_cell::sync::Lazy;
 use uncased::UncasedStr;
@@ -1442,6 +1443,13 @@ pub static WEBHOOK_CONCURRENT_REQUEST_LIMIT: VarDefinition = VarDefinition::new(
     "webhook_concurrent_request_limit",
     value!(usize; WEBHOOK_CONCURRENCY_LIMIT),
     "Maximum number of concurrent requests for appending to a webhook source.",
+    true,
+);
+
+pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarDefinition::new(
+    "user_storage_managed_collections_batch_duration",
+    value!(Duration; STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT),
+    "Duration which we'll wait to collect a batch of events for a webhook source.",
     true,
 );
 

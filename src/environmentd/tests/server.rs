@@ -3634,3 +3634,88 @@ async fn test_github_25388() {
         .await
         .unwrap();
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_webhook_source_batch_interval() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone)]
+    struct WebhookEvent {
+        name: &'static str,
+    }
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE SOURCE webhook_batch_interval_test FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .await
+        .expect("failed to create source");
+
+    let http_client = reqwest::Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_batch_interval_test",
+        server.inner.http_local_addr()
+    );
+
+    // Send one event to our webhook source.
+    let start = Instant::now();
+    let event = WebhookEvent { name: "first" };
+    let resp = http_client
+        .post(&webhook_url)
+        .json(&event)
+        .send()
+        .await
+        .expect("failed to POST event");
+    let first_duration = start.elapsed();
+    assert!(resp.status().is_success());
+    // All is normal, the request should be fast.
+    assert!(first_duration < Duration::from_secs(2));
+
+    // Change our batch interval to be very high.
+    let sys_client = server
+        .connect()
+        .internal()
+        .user(&SYSTEM_USER.name)
+        .await
+        .unwrap();
+    sys_client
+        .execute(
+            "ALTER SYSTEM SET user_storage_managed_collections_batch_duration TO '10s'",
+            &[],
+        )
+        .await
+        .expect("failed to set batch duration");
+
+    // Send a second event...
+    let start = Instant::now();
+    let event = WebhookEvent { name: "second" };
+    let resp = http_client
+        .post(&webhook_url)
+        .json(&event)
+        .send()
+        .await
+        .expect("failed to POST event");
+    let second_duration = start.elapsed();
+    assert!(resp.status().is_success());
+
+    // ... and then quickly follow up with a third.
+    let start = Instant::now();
+    let event = WebhookEvent { name: "third" };
+    let resp = http_client
+        .post(&webhook_url)
+        .json(&event)
+        .send()
+        .await
+        .expect("failed to POST event");
+    let third_duration = start.elapsed();
+    assert!(resp.status().is_success());
+
+    // The second event should finish quickly like the first!
+    assert!(second_duration < Duration::from_secs(2));
+    // But the third will now be stuck behind the batch interval so it will take longer!
+    assert!(third_duration > Duration::from_secs(7));
+}
