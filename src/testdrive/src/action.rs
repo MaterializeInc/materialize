@@ -358,26 +358,6 @@ impl State {
                     )
                     .await?
                 }
-                CatalogConfig::Shadow {
-                    url,
-                    persist_consensus_url,
-                    persist_blob_url,
-                } => {
-                    let stash_config = stash_config(url.clone(), self.postgres_factory.clone());
-                    let persist_client = persist_client(
-                        persist_consensus_url.clone(),
-                        persist_blob_url.clone(),
-                        &self.persist_clients,
-                    )
-                    .await?;
-                    Catalog::open_debug_read_only_shadow_catalog_config(
-                        stash_config,
-                        persist_client,
-                        SYSTEM_TIME.clone(),
-                        self.environment_id.clone(),
-                    )
-                    .await?
-                }
             };
             let res = f(catalog.for_session(&Session::dummy()));
             catalog.expire().await;
@@ -657,16 +637,6 @@ pub enum CatalogConfig {
     },
     /// The catalog contents are stored in persist.
     Persist {
-        /// Handle to the persist consensus system.
-        persist_consensus_url: String,
-        /// Handle to the persist blob storage.
-        persist_blob_url: String,
-    },
-    /// The catalog contents are stored in both persist and the stash and their contents are
-    /// compared. This is mostly used for testing purposes.
-    Shadow {
-        /// The PostgreSQL URL for the adapter stash.
-        url: String,
         /// Handle to the persist consensus system.
         persist_consensus_url: String,
         /// Handle to the persist blob storage.

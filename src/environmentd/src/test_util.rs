@@ -411,9 +411,10 @@ impl Listeners {
             (TracingHandle::disabled(), None)
         };
         let host_name = format!("localhost:{}", self.inner.http_local_addr().port());
-        let catalog_config = CatalogConfig::Shadow {
+        let catalog_config = CatalogConfig::Persist {
             url: adapter_stash_url,
             persist_clients: Arc::clone(&persist_clients),
+            metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
         };
 
         let inner = self

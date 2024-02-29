@@ -9,5 +9,4 @@
 
 pub(crate) mod migrate;
 pub(crate) mod persist;
-pub(crate) mod shadow;
 pub(crate) mod stash;
