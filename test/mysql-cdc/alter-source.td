@@ -425,3 +425,10 @@ contains:SOURCE "mz_source" must retain at least one non-progress subsource
 #
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
 # "\"mysql\".\"public\".\"table_f\".\"f2\""
+
+# add a table after having created the source
+$ mysql-execute name=mysql
+CREATE TABLE t2 (f1 BOOLEAN);
+
+! SELECT COUNT(*) > 0 FROM t2;
+contains:unknown catalog item 't2'
