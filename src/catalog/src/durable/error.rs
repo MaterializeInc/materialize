@@ -11,6 +11,7 @@ use std::fmt::Debug;
 
 use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_stash_types::StashError;
 use mz_storage_types::controller::StorageError;
 
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +68,9 @@ pub enum DurableCatalogError {
     /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
     #[error(transparent)]
     Storage(StorageError),
+    /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
+    #[error(transparent)]
+    Stash(StashError),
 }
 
 impl DurableCatalogError {
@@ -76,7 +80,8 @@ impl DurableCatalogError {
             DurableCatalogError::Fence(_)
             | DurableCatalogError::IncompatibleDataVersion { .. }
             | DurableCatalogError::IncompatiblePersistVersion { .. }
-            | DurableCatalogError::Proto(_) => true,
+            | DurableCatalogError::Proto(_)
+            | DurableCatalogError::Stash(_) => true,
             DurableCatalogError::Uninitialized
             | DurableCatalogError::NotWritable(_)
             | DurableCatalogError::DuplicateKey
@@ -112,5 +117,11 @@ impl From<StorageError> for DurableCatalogError {
 impl From<TryFromProtoError> for DurableCatalogError {
     fn from(e: TryFromProtoError) -> Self {
         DurableCatalogError::Proto(e)
+    }
+}
+
+impl From<StashError> for DurableCatalogError {
+    fn from(e: StashError) -> Self {
+        DurableCatalogError::Stash(e)
     }
 }
