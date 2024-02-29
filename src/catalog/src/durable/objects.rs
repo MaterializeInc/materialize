@@ -686,7 +686,7 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
 // Structs used internally to represent on-disk state.
 
 /// A snapshot of the current on-disk state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
@@ -711,58 +711,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn empty() -> Snapshot {
-        Snapshot {
-            databases: BTreeMap::new(),
-            schemas: BTreeMap::new(),
-            roles: BTreeMap::new(),
-            items: BTreeMap::new(),
-            comments: BTreeMap::new(),
-            clusters: BTreeMap::new(),
-            cluster_replicas: BTreeMap::new(),
-            introspection_sources: BTreeMap::new(),
-            id_allocator: BTreeMap::new(),
-            configs: BTreeMap::new(),
-            settings: BTreeMap::new(),
-            system_object_mappings: BTreeMap::new(),
-            system_configurations: BTreeMap::new(),
-            default_privileges: BTreeMap::new(),
-            system_privileges: BTreeMap::new(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        let Snapshot {
-            databases,
-            schemas,
-            roles,
-            items,
-            comments,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            system_object_mappings,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-        } = self;
-        databases.is_empty()
-            && schemas.is_empty()
-            && roles.is_empty()
-            && items.is_empty()
-            && comments.is_empty()
-            && clusters.is_empty()
-            && cluster_replicas.is_empty()
-            && introspection_sources.is_empty()
-            && id_allocator.is_empty()
-            && configs.is_empty()
-            && settings.is_empty()
-            && system_object_mappings.is_empty()
-            && system_configurations.is_empty()
-            && default_privileges.is_empty()
-            && system_privileges.is_empty()
+        Snapshot::default()
     }
 }
 
