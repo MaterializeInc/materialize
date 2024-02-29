@@ -57,9 +57,9 @@ pub struct Optimizer {
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported materialized view sink.
-    exported_sink_id: GlobalId,
+    sink_id: GlobalId,
     /// A transient GlobalId to be used when constructing the dataflow.
-    internal_view_id: GlobalId,
+    view_id: GlobalId,
     /// The resulting column names.
     column_names: Vec<ColumnName>,
     /// Output columns that are asserted to be not null in the `CREATE VIEW`
@@ -77,8 +77,8 @@ impl Optimizer {
     pub fn new(
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
-        exported_sink_id: GlobalId,
-        internal_view_id: GlobalId,
+        sink_id: GlobalId,
+        view_id: GlobalId,
         column_names: Vec<ColumnName>,
         non_null_assertions: Vec<usize>,
         refresh_schedule: Option<RefreshSchedule>,
@@ -89,8 +89,8 @@ impl Optimizer {
             typecheck_ctx: empty_context(),
             catalog,
             compute_instance,
-            exported_sink_id,
-            internal_view_id,
+            sink_id,
+            view_id,
             column_names,
             non_null_assertions,
             refresh_schedule,
@@ -202,7 +202,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
-        df_builder.import_view_into_dataflow(&self.internal_view_id, &expr, &mut df_desc)?;
+        df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
@@ -210,7 +210,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         }
 
         let sink_description = ComputeSinkDesc {
-            from: self.internal_view_id,
+            from: self.view_id,
             from_desc: rel_desc.clone(),
             connection: ComputeSinkConnection::Persist(PersistSinkConnection {
                 value_desc: rel_desc,
@@ -222,11 +222,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
             refresh_schedule: self.refresh_schedule.clone(),
         };
 
-        let df_meta = df_builder.build_sink_dataflow_into(
-            &mut df_desc,
-            self.exported_sink_id,
-            sink_description,
-        )?;
+        let df_meta =
+            df_builder.build_sink_dataflow_into(&mut df_desc, self.sink_id, sink_description)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.

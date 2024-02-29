@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::connection::ConnectionId;
+use mz_compute_types::dataflows::BuildDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_compute_types::ComputeInstanceId;
@@ -28,7 +29,8 @@ use timely::progress::Antichain;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
-    dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
+    dataflow_import_id_bundle, prep_relation_expr, ComputeInstanceSnapshot, DataflowBuilder,
+    ExprPrepStyle,
 };
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
@@ -43,14 +45,19 @@ pub struct Optimizer {
     catalog: Arc<Catalog>,
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
-    /// A transient GlobalId to be used when constructing the dataflow.
-    transient_id: GlobalId,
+    /// A transient GlobalId to be used for the exported sink.
+    sink_id: GlobalId,
+    /// A transient GlobalId to be used when constructing a dataflow for
+    /// `SUBSCRIBE FROM <SELECT>` variants.
+    view_id: GlobalId,
     /// The id of the session connection in which the optimizer will run.
     conn_id: ConnectionId,
     /// Should the plan produce an initial snapshot?
     with_snapshot: bool,
     /// Sink timestamp.
     up_to: Option<Timestamp>,
+    /// A human-readable name exposed internally (useful for debugging).
+    debug_name: String,
     // Optimizer config.
     config: OptimizerConfig,
 }
@@ -72,20 +79,24 @@ impl Optimizer {
     pub fn new(
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
-        transient_id: GlobalId,
+        view_id: GlobalId,
+        sink_id: GlobalId,
         conn_id: ConnectionId,
         with_snapshot: bool,
         up_to: Option<Timestamp>,
+        debug_name: String,
         config: OptimizerConfig,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
             catalog,
             compute_instance,
-            transient_id,
+            view_id,
+            sink_id,
             conn_id,
             with_snapshot,
             up_to,
+            debug_name,
             config,
         }
     }
@@ -161,7 +172,12 @@ impl Optimize<SubscribeFrom> for Optimizer {
     type To = GlobalMirPlan<Unresolved>;
 
     fn optimize(&mut self, plan: SubscribeFrom) -> Result<Self::To, OptimizerError> {
-        let sink_name = format!("subscribe-{}", self.transient_id);
+        let mut df_builder = {
+            let catalog = self.catalog.state();
+            let compute = self.compute_instance.clone();
+            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+        };
+        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
         let (df_desc, df_meta) = match plan {
             SubscribeFrom::Id(from_id) => {
@@ -176,9 +192,15 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
 
+                df_builder.import_into_dataflow(&from_id, &mut df_desc)?;
+                df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
+
+                for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
+                    prep_relation_expr(plan, ExprPrepStyle::Index)?;
+                }
+
                 // Make SinkDesc
-                let sink_id = self.transient_id;
-                let sink_desc = ComputeSinkDesc {
+                let sink_description = ComputeSinkDesc {
                     from: from_id,
                     from_desc,
                     connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
@@ -190,14 +212,11 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     refresh_schedule: None,
                 };
 
-                let mut df_builder = {
-                    let catalog = self.catalog.state();
-                    let compute = self.compute_instance.clone();
-                    DataflowBuilder::new(catalog, compute).with_config(&self.config)
-                };
-
-                let (df_desc, df_meta) =
-                    df_builder.build_sink_dataflow(sink_name, sink_id, sink_desc)?;
+                let df_meta = df_builder.build_sink_dataflow_into(
+                    &mut df_desc,
+                    self.sink_id,
+                    sink_description,
+                )?;
 
                 (df_desc, df_meta)
             }
@@ -211,13 +230,17 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // MIR ⇒ MIR optimization (local)
                 let expr = optimize_mir_local(expr, &self.typecheck_ctx)?;
 
-                let from_desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let from_id = self.transient_id;
+                df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
+                df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
+
+                for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
+                    prep_relation_expr(plan, ExprPrepStyle::Index)?;
+                }
 
                 // Make SinkDesc
-                let sink_desc = ComputeSinkDesc {
-                    from: from_id,
-                    from_desc,
+                let sink_description = ComputeSinkDesc {
+                    from: self.view_id,
+                    from_desc: RelationDesc::new(expr.typ(), desc.iter_names()),
                     connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                     with_snapshot: self.with_snapshot,
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
@@ -227,19 +250,11 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     refresh_schedule: None,
                 };
 
-                let mut df_builder = {
-                    let catalog = self.catalog.state();
-                    let compute = self.compute_instance.clone();
-                    DataflowBuilder::new(catalog, compute).with_config(&self.config)
-                };
-
-                let mut df_desc = MirDataflowDescription::new(sink_name);
-
-                df_builder.import_view_into_dataflow(&from_id, &expr, &mut df_desc)?;
-                df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
-
-                let df_meta =
-                    df_builder.build_sink_dataflow_into(&mut df_desc, from_id, sink_desc)?;
+                let df_meta = df_builder.build_sink_dataflow_into(
+                    &mut df_desc,
+                    self.sink_id,
+                    sink_description,
+                )?;
 
                 (df_desc, df_meta)
             }

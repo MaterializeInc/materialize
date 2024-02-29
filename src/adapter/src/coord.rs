@@ -662,7 +662,7 @@ pub struct CreateMaterializedViewOptimize {
 #[derive(Debug)]
 pub struct CreateMaterializedViewFinish {
     validity: PlanValidity,
-    exported_sink_id: GlobalId,
+    sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
@@ -673,7 +673,7 @@ pub struct CreateMaterializedViewFinish {
 #[derive(Debug)]
 pub struct CreateMaterializedViewExplain {
     validity: PlanValidity,
-    exported_sink_id: GlobalId,
+    sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,

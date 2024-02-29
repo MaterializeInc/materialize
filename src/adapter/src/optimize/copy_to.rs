@@ -229,7 +229,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 return Err(OptimizerError::Internal(msg.to_string()));
             }
         };
-        let sink_desc = ComputeSinkDesc {
+        let sink_description = ComputeSinkDesc {
             from_desc: self.copy_to_context.desc.clone(),
             from: self.select_id,
             connection,
@@ -241,7 +241,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             // No `REFRESH` for copy_to.
             refresh_schedule: None,
         };
-        df_desc.export_sink(self.select_id, sink_desc);
+        df_desc.export_sink(self.select_id, sink_description);
 
         // Resolve all unmaterializable function calls except mz_now(), because
         // we don't yet have a timestamp.

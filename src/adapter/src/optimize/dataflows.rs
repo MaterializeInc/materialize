@@ -260,27 +260,12 @@ impl<'a> DataflowBuilder<'a> {
     ///
     /// For as long as this dataflow is active, `id` can be used to reference
     /// the sink (primarily to drop it, at the moment).
-    pub fn build_sink_dataflow(
-        &mut self,
-        name: String,
-        id: GlobalId,
-        sink_description: ComputeSinkDesc,
-    ) -> Result<(DataflowDesc, DataflowMetainfo), OptimizerError> {
-        let mut dataflow = DataflowDesc::new(name);
-        let dataflow_metainfo =
-            self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
-        Ok((dataflow, dataflow_metainfo))
-    }
-
-    /// Like `build_sink_dataflow`, but builds the sink dataflow into the
-    /// existing dataflow description instead of creating one from scratch.
     pub fn build_sink_dataflow_into(
         &mut self,
         dataflow: &mut DataflowDesc,
         id: GlobalId,
         sink_description: ComputeSinkDesc,
     ) -> Result<DataflowMetainfo, OptimizerError> {
-        self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
