@@ -47,8 +47,7 @@ use mz_persist_types::{Codec64, Opaque};
 use mz_proto::RustType;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
-use mz_stash_types::metrics::Metrics as StashMetrics;
+use mz_stash::{self, TypedCollection};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
@@ -2281,6 +2280,21 @@ impl From<NonZeroI64> for PersistEpoch {
     }
 }
 
+/// Seed [`StorageTxn`] with any state required to instantiate a
+/// [`StorageController`].
+///
+/// This cannot be a member of [`StorageController`] because it cannot take a
+/// `self` parameter.
+///
+pub fn prepare_initialization(txn: &mut dyn StorageTxn) -> Result<(), StorageError> {
+    if txn.get_persist_txn_shard().is_none() {
+        let txns_id = ShardId::new();
+        txn.write_persist_txn_shard(txns_id.to_string())?;
+    }
+
+    Ok(())
+}
+
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
@@ -2293,86 +2307,35 @@ where
     ///
     /// Note that when creating a new storage controller, you must also
     /// reconcile it with the previous state.
+    ///
+    /// # Panics
+    /// If this function is called before [`prepare_initialization`].
     pub async fn new(
         build_info: &'static BuildInfo,
-        postgres_url: String,
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         now: NowFn,
-        stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
         persist_txn_tables: PersistTxnTablesImpl,
         connection_context: ConnectionContext,
+        txn: &dyn StorageTxn,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let tls = mz_tls_util::make_tls(
-            &tokio_postgres::config::Config::from_str(&postgres_url)
-                .expect("invalid postgres url for storage stash"),
-        )
-        .expect("could not make storage TLS connection");
-        let mut stash = StashFactory::from_metrics(stash_metrics)
-            .open(postgres_url, None, tls, None)
-            .await
-            .expect("could not connect to postgres storage stash");
-
-        // Ensure all collections are initialized, otherwise they cannot
-        // be read.
-        async fn maybe_get_init_batch<'tx, K, V>(
-            tx: &'tx mz_stash::Transaction<'tx>,
-            typed: &TypedCollection<K, V>,
-        ) -> Option<AppendBatch>
-        where
-            K: mz_stash::Data,
-            V: mz_stash::Data,
-        {
-            let collection = tx
-                .collection::<K, V>(typed.name())
-                .await
-                .expect("named collection must exist");
-            if !collection
-                .is_initialized(tx)
-                .await
-                .expect("collection known to exist")
-            {
-                Some(
-                    collection
-                        .make_batch_tx(tx)
-                        .await
-                        .expect("stash operation must succeed"),
-                )
-            } else {
-                None
-            }
-        }
-
-        stash
-            .with_transaction(move |tx| {
-                Box::pin(async move {
-                    // Query all collections in parallel. Makes for triplicated
-                    // names, but runs quick.
-                    let persist_txns_shard = maybe_get_init_batch(&tx, &PERSIST_TXNS_SHARD).await;
-                    let batches: Vec<AppendBatch> = persist_txns_shard.into_iter().collect();
-
-                    // Drop the notification future we don't need.
-                    tx.append(batches).await.map(drop)
-                })
-            })
-            .await
-            .expect("stash operation must succeed");
+        // This value must be already installed because we must ensure it's
+        // durably recorded before it is used, otherwise we risk leaking persist
+        // state.
+        let txns_id = txn
+            .get_persist_txn_shard()
+            .expect("must call prepare initialization before creating storage controller");
+        let txns_id = ShardId::from_str(txns_id.as_str()).expect("shard ID must be valid");
 
         let txns_client = persist_clients
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
         let txns_metrics = Arc::new(TxnMetrics::new(&metrics_registry));
-        let txns_id = PERSIST_TXNS_SHARD
-            .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
-            .await
-            .expect("could not get txns shard id")
-            .parse::<ShardId>()
-            .expect("should be valid shard id");
         let txns = TxnsHandle::open(
             T::minimum(),
             txns_client.clone(),

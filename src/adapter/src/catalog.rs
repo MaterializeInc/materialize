@@ -86,6 +86,7 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
@@ -161,7 +162,11 @@ pub struct CatalogPlans {
 impl Catalog {
     /// Initializess the `storage_controller` to understand all shards that
     /// `self` expects to exist.
-    pub async fn initialize_storage_controller_state(
+    ///
+    /// Note that this must be done before creating/rendering collections
+    /// because the storage controller might not be aware of new system
+    /// collections created between versions.
+    async fn initialize_storage_controller_state(
         &mut self,
         storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
@@ -180,6 +185,36 @@ impl Catalog {
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
         txn.commit().await
+    }
+
+    /// [`mz_controller::Controller`] depends on durable catalog state to boot,
+    /// so make it available and initialize the controller.
+    pub async fn initialize_controller(
+        &mut self,
+        config: mz_controller::ControllerConfig,
+        envd_epoch: core::num::NonZeroI64,
+        // Whether to use the new persist-txn tables implementation or the
+        // legacy one.
+        persist_txn_tables: PersistTxnTablesImpl,
+    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
+    {
+        let mut controller = {
+            let mut storage = self.storage().await;
+            let mut tx = storage.transaction().await?;
+            mz_controller::prepare_initialization(&mut tx)
+                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+            tx.commit().await?;
+
+            let read_only_tx = storage.transaction().await?;
+
+            mz_controller::Controller::new(config, envd_epoch, persist_txn_tables, &read_only_tx)
+                .await
+        };
+
+        self.initialize_storage_controller_state(&mut *controller.storage)
+            .await?;
+
+        Ok(controller)
     }
 
     /// Set the optimized plan for the item identified by `id`.

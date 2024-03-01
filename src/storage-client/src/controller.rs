@@ -193,7 +193,7 @@ pub enum Response<T> {
     FrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 pub trait StorageTxn {
     /// Retrieve all of the visible storage metadata.
     ///
