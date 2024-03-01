@@ -42,7 +42,7 @@ SERVICES = [
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
-        catalog_store="shadow",
+        catalog_store="persist",
     ),
     # N.B.: we need to use `validate_catalog_store=None` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
@@ -133,7 +133,7 @@ def test_upgrade_from_version(
     c.up("zookeeper", "kafka", "schema-registry", "postgres")
 
     catalog_store = (
-        "shadow"
+        "persist"
         if from_version == "current_source"
         or MzVersion.parse_mz(from_version) >= MzVersion.parse_mz("v0.82.0-dev")
         else "stash"
