@@ -561,7 +561,7 @@ class Composition:
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
             end_time = time.time()
-            error_message = f"{str(type(e))}: {e}"
+            error_message = f"{e.__class__.__module__}.{e.__class__.__name__}: {e}"
             ui.header(f"mzcompose: test case {name} failed: {error_message}")
             errors = self.extract_test_errors(e, error_message)
 
