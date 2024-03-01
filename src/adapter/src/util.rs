@@ -343,7 +343,8 @@ impl ShouldHalt for StorageError {
             | StorageError::ShuttingDown(_)
             | StorageError::StorageMetadataAlreadyExists(_)
             | StorageError::PersistShardAlreadyInUse(_)
-            | StorageError::PersistTxnShardAlreadyExists => false,
+            | StorageError::PersistTxnShardAlreadyExists
+            | StorageError::DanglingProvisionalState => false,
             StorageError::IOError(e) => e.is_unrecoverable(),
         }
     }

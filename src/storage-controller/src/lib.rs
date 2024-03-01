@@ -161,6 +161,13 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// To allocate these values, use [`Self::provisionally_synchronize_state`].
     provisional_shard_mappings: BTreeMap<GlobalId, ShardId>,
 
+    /// The set of [`GlobalId`]s eligible to be dropped via
+    /// [`Self::drop_sources`].
+    ///
+    /// To identify these collections, use
+    /// [`Self::provisionally_synchronize_state`].
+    provisional_dropped_collections: BTreeSet<GlobalId>,
+
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -267,7 +274,7 @@ where
             self.provisional_shard_mappings
         );
 
-        self.clear_prepared_collections();
+        self.clear_provisional_state();
 
         self.reconcile_dangling_statistics();
         self.initialized = true;
@@ -1156,6 +1163,15 @@ where
     }
 
     fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
+        for id in &identifiers {
+            let present = self.provisional_dropped_collections.remove(id);
+            mz_ore::soft_assert_or_log!(
+                present,
+                "dropping {id}, but drop was not synchronized with storage \
+                controller via `synchronzize_collections`"
+            );
+        }
+
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
@@ -2150,6 +2166,7 @@ where
             "seeding collections should occur only on start up"
         );
 
+        // Determine all of the existing metadata.
         let metadata = txn.get_storage_metadata();
         let processed_metadata: Result<Vec<_>, _> = metadata
             .into_iter()
@@ -2171,26 +2188,33 @@ where
             new_collections
         );
 
-        self.prepare_collections(txn, new_collections).await?;
+        self.synchronize_collections(txn, new_collections, BTreeSet::new())
+            .await?;
 
-        // Add all previous metadata to the set of provisional metadata
+        // Add all previous metadata to the set of provisional metadata. We
+        // expect to call `create_collections` for each of these.
         self.provisional_shard_mappings.extend(storage_metadata);
 
         Ok(())
     }
 
-    async fn prepare_collections(
+    async fn synchronize_collections(
         &mut self,
         txn: &mut dyn StorageTxn,
-        ids: BTreeSet<GlobalId>,
+        ids_to_add: BTreeSet<GlobalId>,
+        ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
-        if !self.provisional_shard_mappings.is_empty() {
-            return Err(StorageError::Generic(anyhow::anyhow!(
-                "must either create or clear prepared collections before preparing more collections"
-            )));
+        use itertools::Either;
+        if !self.provisional_shard_mappings.is_empty()
+            || !self.provisional_dropped_collections.is_empty()
+        {
+            return Err(StorageError::DanglingProvisionalState);
         }
 
-        self.provisional_shard_mappings = ids.into_iter().map(|id| (id, ShardId::new())).collect();
+        self.provisional_shard_mappings = ids_to_add
+            .into_iter()
+            .map(|id| (id, ShardId::new()))
+            .collect();
 
         let durably_recorded_mappings = self
             .provisional_shard_mappings
@@ -2200,11 +2224,23 @@ where
 
         txn.insert_storage_metadata(durably_recorded_mappings)?;
 
+        // Delete the metadata for any dropped collections.
+        let dropped_mappings = txn.delete_storage_metadata(ids_to_drop);
+        let (dropped_ids, dropped_shards) = dropped_mappings
+            .into_iter()
+            .flat_map(|(id, shard)| [Either::Left(id), Either::Right(shard)])
+            .partition_map(|v| v);
+
+        txn.insert_unfinalized_shards(dropped_shards)?;
+
+        self.provisional_dropped_collections = dropped_ids;
+
         Ok(())
     }
 
-    fn clear_prepared_collections(&mut self) {
+    fn clear_provisional_state(&mut self) {
         self.provisional_shard_mappings.clear();
+        self.provisional_dropped_collections.clear();
     }
 }
 
@@ -2396,6 +2432,7 @@ where
         Self {
             build_info,
             provisional_shard_mappings: BTreeMap::new(),
+            provisional_dropped_collections: BTreeSet::new(),
             collections: BTreeMap::default(),
             exports: BTreeMap::default(),
             stash,

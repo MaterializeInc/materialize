@@ -623,13 +623,16 @@ pub trait StorageController: Debug {
     ///   movement.
     /// - The storage controller must be able to be made into a trait object, so
     ///   cannot provide a trait for some "downstream" crate to implement.
-    async fn prepare_collections(
+    async fn synchronize_collections(
         &mut self,
         txn: &mut dyn StorageTxn,
-        ids: BTreeSet<GlobalId>,
+        ids_to_add: BTreeSet<GlobalId>,
+        ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError>;
 
-    fn clear_prepared_collections(&mut self);
+    /// Clears any state generated from
+    /// [`StorageController::provisionally_synchronize_state`].
+    fn clear_provisional_state(&mut self);
 }
 
 /// State maintained about individual collections.

@@ -207,6 +207,8 @@ pub enum StorageError {
     PersistShardAlreadyInUse(String),
     /// Persist txn shard already exists.
     PersistTxnShardAlreadyExists,
+    /// Some provisional state left unconsumed
+    DanglingProvisionalState,
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -233,6 +235,7 @@ impl Error for StorageError {
             Self::StorageMetadataAlreadyExists(_) => None,
             Self::PersistShardAlreadyInUse(_) => None,
             Self::PersistTxnShardAlreadyExists => None,
+            Self::DanglingProvisionalState => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -304,6 +307,9 @@ impl fmt::Display for StorageError {
             }
             Self::PersistTxnShardAlreadyExists => {
                 write!(f, "persist txn shard already exists")
+            }
+            Self::DanglingProvisionalState => {
+                write!(f, "not all state from last provisional sync consumed")
             }
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
