@@ -52,6 +52,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::fmt;
 use std::io;
 use std::rc::Rc;
 
@@ -65,11 +66,10 @@ use uuid::Uuid;
 
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlError,
+    MySqlError, MySqlTableDesc,
 };
 use mz_ore::error::ErrorExt;
 use mz_repr::{Diff, Row};
-use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
@@ -126,7 +126,7 @@ impl SourceRender for MySqlSourceConnection {
         let mut table_info = BTreeMap::new();
         for (i, desc) in self.details.tables.iter().enumerate() {
             table_info.insert(
-                table_name(&desc.schema_name, &desc.name).expect("valid idents"),
+                MySqlTableName::new(&desc.schema_name, &desc.name),
                 (
                     // Index zero maps to the main source
                     i + 1,
@@ -269,23 +269,37 @@ impl From<DefiniteError> for SourceReaderError {
     }
 }
 
+/// A reference to a MySQL table. (schema_name, table_name)
+/// NOTE: We do not use `mz_sql_parser::ast:UnresolvedItemName` because the serialization
+/// behavior is not what we need for mysql.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+pub(crate) struct MySqlTableName(pub(crate) String, pub(crate) String);
+
+impl MySqlTableName {
+    pub(crate) fn new(schema_name: &str, table_name: &str) -> Self {
+        Self(schema_name.to_string(), table_name.to_string())
+    }
+}
+
+impl fmt::Display for MySqlTableName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`{}`.`{}`", self.0, self.1)
+    }
+}
+
+impl From<&MySqlTableDesc> for MySqlTableName {
+    fn from(desc: &MySqlTableDesc) -> Self {
+        Self::new(&desc.schema_name, &desc.name)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct RewindRequest {
     /// The table that should be rewound.
-    pub(crate) table: UnresolvedItemName,
+    pub(crate) table: MySqlTableName,
     /// The frontier of GTIDs that this snapshot represents; all GTIDs that are not beyond this
     /// frontier have been committed by the snapshot operator at timestamp 0.
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
-}
-
-pub(crate) fn table_name(
-    schema_name: &str,
-    table_name: &str,
-) -> Result<UnresolvedItemName, TransientError> {
-    Ok(UnresolvedItemName::qualified(&[
-        Ident::new(schema_name)?,
-        Ident::new(table_name)?,
-    ]))
 }
 
 async fn return_definite_error(

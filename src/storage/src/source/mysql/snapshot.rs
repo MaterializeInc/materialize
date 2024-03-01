@@ -101,8 +101,6 @@ use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, MySqlTableDesc, E
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_sql_parser::ast::UnresolvedItemName;
-use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -113,8 +111,8 @@ use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 use super::schemas::verify_schemas;
 use super::{
-    return_definite_error, validate_mysql_repl_settings, DefiniteError, ReplicationError,
-    RewindRequest, TransientError,
+    return_definite_error, validate_mysql_repl_settings, DefiniteError, MySqlTableName,
+    ReplicationError, RewindRequest, TransientError,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -123,7 +121,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
-    table_info: BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
+    table_info: BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
@@ -222,7 +220,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                 let lock_clauses = reader_snapshot_table_info
                     .keys()
-                    .map(|t| format!("{} READ", t.to_ast_string()))
+                    .map(|t| format!("{} READ", t))
                     .collect::<Vec<String>>()
                     .join(", ");
                 let mut lock_conn = connection_config
@@ -243,6 +241,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         message,
                         ..
                     })) if code == ER_NO_SUCH_TABLE => {
+                        trace!(%id, "timely-{worker_id} received unknown table error from lock query");
                         let err = DefiniteError::TableDropped(message);
                         return Ok(return_definite_error(
                             err,
@@ -366,11 +365,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     reader_snapshot_table_info
                         .values()
                         .map(|(_, table_desc)| {
-                            (
-                                Ident::new_unchecked(table_desc.name.clone()).to_ast_string(),
-                                Ident::new_unchecked(table_desc.schema_name.clone())
-                                    .to_ast_string(),
-                            )
+                            Into::<MySqlTableName>::into(table_desc)
                         })
                         .collect(),
                     metrics,
@@ -408,7 +403,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                 let mut snapshot_staged = 0;
                 for (table, (output_index, table_desc)) in reader_snapshot_table_info {
-                    let query = format!("SELECT * FROM {}", table.to_ast_string());
+                    let query = format!("SELECT * FROM {}", table);
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
                     let mut results = tx.exec_stream(query, ()).await?;
@@ -474,17 +469,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 /// Fetch the size of the snapshot on this worker.
 async fn fetch_snapshot_size<'a, Q>(
     conn: &mut Q,
-    // Tables and their schemas.
-    tables: Vec<(String, String)>,
+    tables: Vec<MySqlTableName>,
     metrics: MySqlSnapshotMetrics,
 ) -> Result<u64, anyhow::Error>
 where
     Q: Queryable,
 {
     let mut total = 0;
-    for (table, schema) in tables {
-        let stats = collect_table_statistics(conn, &table, &schema).await?;
-        metrics.record_table_count_latency(table.clone(), schema.clone(), stats.count_latency);
+    for table in tables {
+        let stats = collect_table_statistics(conn, &table).await?;
+        metrics.record_table_count_latency(table.1, table.0, stats.count_latency);
         total += stats.count;
     }
     Ok(total)
@@ -498,8 +492,7 @@ struct TableStatistics {
 
 async fn collect_table_statistics<Q>(
     conn: &mut Q,
-    table: &str,
-    schema: &str,
+    table: &MySqlTableName,
 ) -> Result<TableStatistics, anyhow::Error>
 where
     Q: Queryable,
@@ -507,12 +500,11 @@ where
     let mut stats = TableStatistics::default();
 
     let count_row: Option<u64> = conn
-        .query_first(format!("SELECT COUNT(*) FROM {schema}.{table}"))
+        .query_first(format!("SELECT COUNT(*) FROM {}", table))
         .wall_time()
         .set_at(&mut stats.count_latency)
         .await?;
-    stats.count =
-        count_row.ok_or_else(|| anyhow::anyhow!("failed to COUNT(*) {schema}.{table}"))?;
+    stats.count = count_row.ok_or_else(|| anyhow::anyhow!("failed to COUNT(*) {table}"))?;
 
     Ok(stats)
 }

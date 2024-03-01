@@ -106,6 +106,9 @@ CREATE TABLE escaped_text_table (f1 TEXT, f2 TEXT);
 INSERT INTO escaped_text_table VALUES ('escaped\\ntext\\twith\\nnewlines\\tand\\ntabs', 'more\\tescaped\\ntext');
 INSERT INTO escaped_text_table VALUES ('second\\nrow\\twith\\tmore\\ttabs', 'and\\nmore\\n\\nnewlines\\n');
 
+CREATE TABLE mixED_CAse (spECialCase INTEGER);
+INSERT INTO mixED_CAse VALUES (1), (2);
+
 CREATE TABLE conflict_table (f1 INTEGER);
 INSERT INTO conflict_table VALUES (123);
 
@@ -249,19 +252,20 @@ contains: CREATE SOURCE specifies DETAILS option
     public."nulls_table",
     public."utf8_table",
     public."escaped_text_table",
+    public."mixED_CAse",
     conflict_schema.conflict_table AS public.conflict_table,
-    public."create"
+    public."create",
+    public."space table",
+    public."таблица",
+    public."""literal_quotes"""
   );
-# TODO: #25415 (tables with special characters)
-#    public."space table",
-#    public."таблица",
-#    public."""literal_quotes""",
 
 > SHOW SOURCES
 conflict_table        subsource <null>  <null>
 create                subsource <null>  <null>
 escaped_text_table    subsource <null>  <null>
 large_text            subsource <null>  <null>
+mixED_CAse            subsource <null>  <null>
 multipart_pk          subsource <null>  <null>
 mz_source             mysql  ${arg.default-replica-size}  cdc_cluster
 mz_source_progress    progress  <null>  <null>
@@ -272,10 +276,9 @@ trailing_space_nopk   subsource <null>  <null>
 trailing_space_pk     subsource <null>  <null>
 types_table           subsource <null>  <null>
 utf8_table            subsource <null>  <null>
-# TODO: #25415 (tables with special characters)
-# "\"literal_quotes\""  subsource <null>  <null>
-# "space table"         subsource <null>  <null>
-# таблица               subsource <null>  <null>
+"\"literal_quotes\""  subsource <null>  <null>
+"space table"         subsource <null>  <null>
+таблица               subsource <null>  <null>
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
@@ -337,9 +340,8 @@ contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER 
 > SELECT * FROM utf8_table;
 "това е текст" "това \'е\' \"текст\""
 
-# TODO: #25415 (tables with special characters)
-# > SELECT * FROM "таблица";
-# стойност
+> SELECT * FROM "таблица";
+стойност
 
 > SELECT * FROM escaped_text_table;
 "escaped\\ntext\\twith\\nnewlines\\tand\\ntabs" "more\\tescaped\\ntext"
@@ -348,12 +350,15 @@ contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER 
 > SELECT * FROM conflict_table;
 234
 
-# TODO: #25415 (tables with special characters)
-# > SELECT * FROM """literal_quotes"""
-# v
+> SELECT * FROM """literal_quotes"""
+v
 
 > SELECT * FROM "create"
 v
+
+> SELECT * FROM "mixED_CAse"
+1
+2
 
 #
 # Confirm that the new sources can be used to build upon
@@ -418,8 +423,9 @@ UPDATE nulls_table SET f2 = NULL WHERE f2 = 2;
 INSERT INTO utf8_table VALUES ('това е текст 2', 'това ''е'' "текст" 2');
 UPDATE utf8_table SET f1 = concat(f1, f1), f2 = concat(f2, f2);
 
-# TODO: #25415 (tables with special characters)
-# INSERT INTO "таблица" SELECT * FROM "таблица";
+INSERT INTO `таблица` SELECT * FROM `таблица`;
+
+INSERT INTO mixED_CAse SELECT * FROM mixED_CAse;
 
 #
 # Check the updated data on the Materialize side
@@ -465,10 +471,15 @@ UPDATE utf8_table SET f1 = concat(f1, f1), f2 = concat(f2, f2);
 "това е текст 2това е текст 2" "това \'е\' \"текст\" 2това \'е\' \"текст\" 2"
 "това е тексттова е текст" "това \'е\' \"текст\"това \'е\' \"текст\""
 
-# TODO: #25415 (tables with special characters)
-# > SELECT * FROM "таблица";
-# стойност
-# стойност
+> SELECT * FROM "таблица";
+стойност
+стойност
+
+> SELECT * FROM "mixED_CAse";
+1
+2
+1
+2
 
 > SELECT * FROM join_view;
 "2" "two_two" "2" "2"
@@ -523,9 +534,8 @@ DELETE FROM multipart_pk;
 DELETE FROM nulls_table;
 DELETE FROM utf8_table;
 DELETE FROM conflict_schema.conflict_table;
-
-# TODO: #25415 (tables with special characters)
-# DELETE FROM "таблица";
+DELETE FROM `таблица`;
+DELETE FROM mixED_CAse;
 
 #
 # Check that all data sources empty out on the Materialize side
@@ -558,9 +568,11 @@ DELETE FROM conflict_schema.conflict_table;
 > SELECT COUNT(*) FROM join_view;
 0
 
-# TODO: #25415 (tables with special characters)
-# > SELECT COUNT(*) FROM "таблица";
-# 0
+> SELECT COUNT(*) FROM "таблица";
+0
+
+> SELECT COUNT(*) FROM "mixED_CAse";
+0
 
 > SELECT COUNT(*) FROM conflict_table;
 0
