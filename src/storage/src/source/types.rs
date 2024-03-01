@@ -82,7 +82,7 @@ pub trait SourceRender {
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceOutput<Self::Time>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,

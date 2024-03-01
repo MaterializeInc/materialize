@@ -84,7 +84,7 @@ use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::Collection;
+use differential_dataflow::{AsCollection, Collection};
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -103,8 +103,8 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::types::{ProgressStatisticsUpdate, SourceOutput, SourceRender};
+use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 mod replication;
 mod snapshot;
@@ -123,7 +123,7 @@ impl SourceRender for PostgresSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceOutput<Self::Time>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -185,14 +185,19 @@ impl SourceRender for PostgresSourceConnection {
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
-        let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
-            let res = res.map(|row| SourceMessage {
-                key: Row::default(),
-                value: row,
-                metadata: Row::default(),
-            });
-            (output, res)
-        });
+        let updates = snapshot_updates
+            .concat(&repl_updates)
+            .inner
+            .map(|((output, res), time, diff)| {
+                let res = res.map(|row| SourceOutput {
+                    key: Row::default(),
+                    value: row,
+                    metadata: Row::default(),
+                    from_time: time,
+                });
+                ((output, res), time, diff)
+            })
+            .as_collection();
 
         let init = std::iter::once(HealthStatusMessage {
             index: 0,

@@ -50,7 +50,7 @@ use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
+use crate::source::types::{ProgressStatisticsUpdate, SourceOutput, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 #[derive(Default)]
@@ -81,6 +81,9 @@ pub struct KafkaSourceReader {
     last_offsets: BTreeMap<PartitionId, i64>,
     /// The offset to start reading from for each partition.
     start_offsets: BTreeMap<PartitionId, i64>,
+    /// The offset to fast forward messages to for each partition. This offset is determined the
+    /// first time this operator discovers a partition and is set to the high watermark - 1.
+    partition_as_of: BTreeMap<PartitionId, u64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     /// Progress statistics as collected from the `resume_uppers` stream and the partition metadata
@@ -155,7 +158,7 @@ impl SourceRender for KafkaSourceConnection {
             + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceOutput<Self::Time>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -439,6 +442,7 @@ impl SourceRender for KafkaSourceConnection {
                 worker_id: config.worker_id,
                 worker_count: config.worker_count,
                 last_offsets: BTreeMap::new(),
+                partition_as_of: BTreeMap::new(),
                 start_offsets,
                 stats_rx,
                 progress_statistics: Default::default(),
@@ -557,7 +561,7 @@ impl SourceRender for KafkaSourceConnection {
                     for (&pid, watermarks) in &partitions {
                         if config.responsible_for(pid) {
                             upstream_stat += watermarks.high;
-                            reader.ensure_partition(pid);
+                            reader.ensure_partition(pid, watermarks);
                             if let Entry::Vacant(entry) = reader.partition_capabilities.entry(pid) {
                                 let start_offset = match reader.start_offsets.get(&pid) {
                                     Some(&offset) => offset.try_into().unwrap(),
@@ -882,7 +886,7 @@ impl KafkaResumeUpperProcessor {
 
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
-    fn ensure_partition(&mut self, pid: PartitionId) {
+    fn ensure_partition(&mut self, pid: PartitionId, watermarks: &WatermarkOffsets) {
         if self.last_offsets.contains_key(&pid) {
             return;
         }
@@ -891,7 +895,11 @@ impl KafkaSourceReader {
         self.create_partition_queue(pid, Offset::Offset(start_offset));
 
         let prev = self.last_offsets.insert(pid, start_offset - 1);
+        assert!(prev.is_none());
 
+        let prev = self
+            .partition_as_of
+            .insert(pid, watermarks.high.saturating_sub(1));
         assert!(prev.is_none());
     }
 
@@ -1053,7 +1061,7 @@ impl KafkaSourceReader {
         message: Result<SourceMessage, KafkaHeaderParseError>,
         (partition, offset): (PartitionId, MzOffset),
     ) -> Option<(
-        Result<SourceMessage, KafkaHeaderParseError>,
+        Result<SourceOutput<Partitioned<RangeBound<PartitionId>, MzOffset>>, KafkaHeaderParseError>,
         Partitioned<RangeBound<PartitionId>, MzOffset>,
         Diff,
     )> {
@@ -1073,6 +1081,11 @@ impl KafkaSourceReader {
         let last_offset_ref = self
             .last_offsets
             .get_mut(&partition)
+            .expect("partition known to be installed");
+
+        let partition_as_of = self
+            .partition_as_of
+            .get(&partition)
             .expect("partition known to be installed");
 
         let last_offset = *last_offset_ref;
@@ -1100,8 +1113,15 @@ impl KafkaSourceReader {
         } else {
             *last_offset_ref = offset_as_i64;
 
-            let ts = Partitioned::new_singleton(RangeBound::exact(partition), offset);
-            Some((message, ts, 1))
+            let output = message.map(|msg| SourceOutput {
+                key: msg.key,
+                value: msg.value,
+                metadata: msg.metadata,
+                from_time: Partitioned::new_singleton(RangeBound::exact(partition), offset),
+            });
+            let emit_offset = MzOffset::from(std::cmp::max(offset.offset, *partition_as_of));
+            let ts = Partitioned::new_singleton(RangeBound::exact(partition), emit_offset);
+            Some((output, ts, 1))
         }
     }
 }
