@@ -121,10 +121,33 @@ pub(crate) async fn run_line_reader(
 
     let mut errors = Vec::new();
 
+    let mut skipping = false;
+
     for cmd in cmds {
+        if skipping {
+            if let Command::Builtin(builtin, _) = cmd.command {
+                if builtin.name == "skip-end" {
+                    println!("skip-end reached");
+                    skipping = false;
+                } else if builtin.name == "skip-if" {
+                    errors.push(PosError {
+                        source: anyhow!("nested skip-if not allowed"),
+                        pos: Some(cmd.pos),
+                    });
+                    break;
+                }
+            }
+            continue;
+        }
+
         match cmd.run(&mut state).await {
             Ok(ControlFlow::Continue) => (),
-            Ok(ControlFlow::Break) => break,
+            Ok(ControlFlow::SkipBegin) => {
+                skipping = true;
+                ()
+            }
+            // ignore, already handled above
+            Ok(ControlFlow::SkipEnd) => (),
             Err(e) => {
                 errors.push(e);
                 break;

@@ -63,6 +63,7 @@ mod protobuf;
 mod psql;
 mod schema_registry;
 mod set;
+mod skip_end;
 mod skip_if;
 mod sleep;
 mod sql;
@@ -675,7 +676,8 @@ pub enum CatalogConfig {
 
 pub enum ControlFlow {
     Continue,
-    Break,
+    SkipBegin,
+    SkipEnd,
 }
 
 #[async_trait]
@@ -750,6 +752,7 @@ impl Run for PosCommand {
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
                     "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
                     "skip-if" => skip_if::run_skip_if(builtin, state).await,
+                    "skip-end" => skip_end::run_skip_end(),
                     "sql-server-connect" => sql_server::run_connect(builtin, state).await,
                     "sql-server-execute" => sql_server::run_execute(builtin, state).await,
                     "persist-force-compaction" => {
