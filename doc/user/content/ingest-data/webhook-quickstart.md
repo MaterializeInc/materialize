@@ -35,8 +35,10 @@ a secure location.
 
 ## Step 2. Set up a webhook source
 
-Using the secret from the previous step, create a webhook source to ingest data from
-the webhook event generator. Replace `my_cluster` with the cluster where you want the source to run.
+Using the secret from the previous step, create a webhook source to ingest data
+from the webhook event generator. Replace `my_cluster` with the cluster you
+want the source to be maintained in, or omit the `IN CLUSTER` clause to use the
+current cluster.
 
 ```sql
 CREATE SOURCE webhook_demo IN CLUSTER my_cluster FROM WEBHOOK
@@ -64,13 +66,14 @@ to shape the events.
 
 {{% plugins/webhooks-datagen %}}
 
-In the SQL shell, select from the source to see one of the records.
+In the SQL Shell, validate that the source is ingesting data:
 
 ```sql
 SELECT jsonb_pretty(body) AS body FROM webhook_demo LIMIT 1;
 ```
 
-Here is an example payload:
+As an example, if you use the `Sensor data` module of the webhook event
+generator, the data will look like:
 ```json
 {
   "location": {
@@ -87,9 +90,8 @@ Here is an example payload:
 
 {{< json-parser >}}
 
-Paste a sample payload into the widget above. Then generate a `CREATE VIEW` statement using the view name `webhook_demo_parsed`, the source name `webhook_demo`, and JSON column name `body`. Execute the resulting `CREATE VIEW` statement in the SQL shell.
+Webhook data is ingested as a JSON blob. We recommend creating a parsing view on top of your webhook source that uses [jsonb operators](https://materialize.com/docs/sql/types/jsonb/#operators) to map the individual fields to columns with the required data types. Using the previous example:
 
-For example, here is the `CREATE VIEW` statement if you are using the sensor data generator:
 ```sql
 CREATE VIEW webhook_demo_parsed AS SELECT
     (body->'location'->>'latitude')::numeric AS location_latitude,
@@ -102,19 +104,25 @@ FROM webhook_demo;
 
 ## Step 5. Subscribe to see the output
 
-To see your data stream into Materialize, you can [subscribe](/sql/subscribe/) to the view you made in the previous step. Execute this statement in the SQL shell:
+To see results change over time, let’s [`SUBSCRIBE`](/sql/subscribe/) to the
+`webhook_demo_parsed ` view:
 
 ```sql
 SUBSCRIBE(SELECT * FROM webhook_demo_parsed) WITH (SNAPSHOT = FALSE);
 ```
-Press the "Stop Streaming" button when you want to cancel the subscription.
+
+You'll see results change as new webhook events are ingested. When you’re done,
+cancel out of the `SUBSCRIBE` using **Stop streaming**.
 
 ## Step 6. Clean up
 
-Be kind and rewind. Execute this statement to drop all resources created in this tutorial.
+Once you’re done exploring the generated webhook data, remember to clean up your
+environment:
 
 ```sql
-DROP SECRET demo_webhook CASCADE;
+DROP SOURCE webhook_demo CASCADE;
+
+DROP SECRET demo_webhook;
 ```
 
 ## Next steps
