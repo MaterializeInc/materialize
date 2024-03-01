@@ -472,7 +472,7 @@ impl Usage {
                     connection_context: ConnectionContext::for_tests(Arc::new(
                         InMemorySecretsController::new(),
                     )),
-                    active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
+                    active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
                 },
                 &mut storage,
             )

@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::io::Write as _;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,22 +24,29 @@ use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use http::{Request, StatusCode};
 use itertools::Itertools;
+use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_environmentd::http::{
     BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
 };
-use mz_environmentd::test_util::{self, PostgresErrorExt, KAFKA_ADDRS};
+use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_frontegg_auth::{
+    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
+};
+use mz_frontegg_mock::{FronteggMockServer, UserConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{to_datetime, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
-
+use openssl::ssl::SslVerifyMode;
+use postgres::config::SslMode;
 use postgres_array::Array;
 use rand::RngCore;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
@@ -53,6 +60,7 @@ use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
+use uuid::Uuid;
 
 // Allow the use of banned rdkafka methods, because we are just in tests.
 #[allow(clippy::disallowed_methods)]
@@ -1863,6 +1871,9 @@ fn test_max_connections_on_all_interfaces() {
     mz_client
         .batch_execute("ALTER SYSTEM SET max_connections = 1")
         .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        .unwrap();
 
     let client = server.connect(postgres::NoTls).unwrap();
 
@@ -1951,98 +1962,207 @@ fn test_max_connections_on_all_interfaces() {
     assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
 }
 
-#[mz_ore::test]
-fn test_max_connections() {
-    mz_ore::test::init_logging();
-    let server = test_util::TestHarness::default().start_blocking();
-
-    let mut mz_client = server
-        .pg_config_internal()
-        .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
+// Test max_connections and superuser_reserved_connections.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_max_connections_limits() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let regular_user = UserConfig::generate(tenant_id.clone(), "user@_.com", Vec::new());
+    let admin_user = UserConfig::generate(tenant_id.clone(), "admin@_.com", vec!["mzadmin".into()]);
+    let users = BTreeMap::from([
+        (regular_user.email.clone(), regular_user.clone()),
+        (admin_user.email.clone(), admin_user.clone()),
+    ]);
+
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        SYSTEM_TIME.clone(),
+        500,
+        None,
+    )
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let tls = make_pg_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE)));
+
+    let connect_regular_user = || async {
+        server
+            .connect()
+            .ssl_mode(SslMode::Require)
+            .with_tls(tls.clone())
+            .user(&regular_user.email)
+            .password(&regular_user.frontegg_password())
+            .await
+    };
+    let connect_external_admin = || async {
+        server
+            .connect()
+            .ssl_mode(SslMode::Require)
+            .with_tls(tls.clone())
+            .user(&admin_user.email)
+            .password(&admin_user.frontegg_password())
+            .await
+    };
+    let connect_system_user = || async { server.connect().internal().await };
+
+    let mz_client = connect_system_user().await.unwrap();
     mz_client
         .batch_execute("ALTER SYSTEM SET max_connections TO 1")
+        .await
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 1")
+        .await
+        .unwrap();
+
+    // No regular user connections when max_connections = superuser_reserved_connections.
+    assert_contains!(
+        connect_regular_user()
+            .await
+            .expect_err("connect should fail")
+            .to_string(),
+        "creating connection would violate max_connections limit"
+    );
+
+    // Set this real high to make sure nothing bad happens.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 100")
+        .await
+        .unwrap();
+    assert_contains!(
+        connect_regular_user()
+            .await
+            .expect_err("connect should fail")
+            .to_string(),
+        "creating connection would violate max_connections limit"
+    );
+
+    mz_client
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        .await
         .unwrap();
 
     {
-        let mut client1 = server.connect(postgres::NoTls).unwrap();
-        let _ = client1.batch_execute("SELECT 1").unwrap();
+        let client1 = connect_regular_user().await.unwrap();
+        let _ = client1.batch_execute("SELECT 1").await.unwrap();
 
-        let e = server
-            .connect(postgres::NoTls)
-            .map(|_| ())
-            .expect_err("connect should fail");
-        let e = e
-            .as_db_error()
-            .unwrap_or_else(|| panic!("expect db error: {}", e));
-        assert!(
-            e.message()
-                .starts_with("creating connection would violate max_connections limit"),
-            "e={}; msg: {}",
-            e,
-            e.message()
+        assert_contains!(
+            connect_regular_user()
+                .await
+                .expect_err("connect should fail")
+                .to_string(),
+            "creating connection would violate max_connections limit"
         );
 
-        let e = server
-            .connect(postgres::NoTls)
-            .map(|_| ())
-            .expect_err("connect should fail");
-        let e = e
-            .as_db_error()
-            .unwrap_or_else(|| panic!("expect db error: {}", e));
-        assert!(
-            e.message()
-                .starts_with("creating connection would violate max_connections limit"),
-            "e={}",
-            e
+        assert_contains!(
+            connect_regular_user()
+                .await
+                .expect_err("connect should fail")
+                .to_string(),
+            "creating connection would violate max_connections limit"
         );
 
-        let mut mz_client2 = server
-            .pg_config_internal()
-            .user(&SYSTEM_USER.name)
-            .connect(postgres::NoTls)
-            .unwrap();
+        let mz_client2 = connect_system_user().await.unwrap();
         mz_client2
             .batch_execute("SELECT 1")
+            .await
             .expect("super users are still allowed to do queries");
+
+        // External admins can't get around the connection limit.
+        assert_contains!(
+            connect_external_admin()
+                .await
+                .expect_err("connect should fail")
+                .to_string(),
+            "creating connection would violate max_connections limit"
+        );
+
+        // Bump the limits.
+        mz_client
+            .batch_execute("ALTER SYSTEM SET max_connections TO 2")
+            .await
+            .unwrap();
+        mz_client
+            .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 1")
+            .await
+            .unwrap();
+
+        // Regular users still should not connect.
+        assert_contains!(
+            connect_regular_user()
+                .await
+                .expect_err("connect should fail")
+                .to_string(),
+            "creating connection would violate max_connections limit"
+        );
+
+        // But external admin should succeed.
+        connect_external_admin().await.unwrap();
     }
     // after a client disconnects we can connect once the server notices the close
     Retry::default()
         .max_tries(10)
-        .retry(|_state| {
-            let mut client = match server.connect(postgres::NoTls) {
+        .retry_async(|_state| async {
+            let client = match connect_regular_user().await {
                 Err(e) => {
-                    let e = e
-                        .as_db_error()
-                        .unwrap_or_else(|| panic!("expect db error: {}", e));
-                    assert!(
-                        e.message()
-                            .starts_with("creating connection would violate max_connections limit"),
-                        "e={}",
-                        e
+                    assert_contains!(
+                        e.to_string(),
+                        "creating connection would violate max_connections limit"
                     );
                     return Err(());
                 }
                 Ok(client) => client,
             };
-            let _ = client.batch_execute("SELECT 1").unwrap();
+            let _ = client.batch_execute("SELECT 1").await.unwrap();
             Ok(())
         })
+        .await
         .unwrap();
 
     mz_client
         .batch_execute("ALTER SYSTEM RESET max_connections")
+        .await
         .unwrap();
 
     // We can create lots of clients now
-    (0..10)
-        .map(|_| {
-            let mut client = server.connect(postgres::NoTls).unwrap();
-            client.batch_execute("SELECT 1").unwrap();
-            client
-        })
-        .collect_vec();
+    let mut clients = Vec::new();
+    for _ in 0..10 {
+        let client = connect_regular_user().await.unwrap();
+        client.batch_execute("SELECT 1").await.unwrap();
+        clients.push(client);
+    }
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]

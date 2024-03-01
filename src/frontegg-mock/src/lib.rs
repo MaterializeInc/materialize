@@ -385,6 +385,33 @@ pub struct UserConfig {
     pub roles: Vec<String>,
 }
 
+impl UserConfig {
+    pub fn generate(tenant_id: Uuid, email: impl Into<String>, roles: Vec<String>) -> Self {
+        Self {
+            email: email.into(),
+            password: Uuid::new_v4().to_string(),
+            tenant_id,
+            initial_api_tokens: vec![UserApiToken {
+                client_id: Uuid::new_v4(),
+                secret: Uuid::new_v4(),
+            }],
+            roles,
+        }
+    }
+
+    pub fn client_id(&self) -> &Uuid {
+        &self.initial_api_tokens[0].client_id
+    }
+
+    pub fn secret(&self) -> &Uuid {
+        &self.initial_api_tokens[0].secret
+    }
+
+    pub fn frontegg_password(&self) -> String {
+        format!("mzp_{}{}", self.client_id(), self.secret())
+    }
+}
+
 struct Context {
     issuer: String,
     encoding_key: EncodingKey,

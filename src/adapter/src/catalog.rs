@@ -672,7 +672,7 @@ impl Catalog {
         environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
+        let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0, 0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         // Used as a lower boundary of the boot_ts, but it's ok to use now() for
         // debugging/testing.
