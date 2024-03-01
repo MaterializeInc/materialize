@@ -27,9 +27,10 @@ use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
-    StorageMetadataCollection, StorageUsageCollection, SystemConfigurationCollection,
-    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, UnfinalizedShardsCollection,
+    IdAllocatorCollection, ItemCollection, PersistTxnShardCollection, RoleCollection,
+    SchemaCollection, SettingCollection, StorageMetadataCollection, StorageUsageCollection,
+    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
+    UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
@@ -263,6 +264,7 @@ macro_rules! for_collection {
             CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
             CollectionType::StorageMetadata => $fn::<StorageMetadataCollection>($($arg),*).await?,
             CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
+            CollectionType::PersistTxnShard => $fn::<PersistTxnShardCollection>($($arg),*).await?,
         }
     };
 }
@@ -398,6 +400,7 @@ async fn dump(
         system_privileges,
         storage_collection_metadata,
         unfinalized_shards,
+        persist_txn_shard,
     } = if consolidate {
         openable_state.trace_consolidated().await?
     } else {
@@ -471,6 +474,13 @@ async fn dump(
     dump_col(
         &mut data,
         unfinalized_shards,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        persist_txn_shard,
         &ignore,
         stats_only,
         consolidate,

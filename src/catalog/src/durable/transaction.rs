@@ -42,11 +42,11 @@ use crate::durable::objects::{
     ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
     Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
-    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageMetadataKey, StorageMetadataValue, StorageUsageKey,
-    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
-    UnfinalizedShardKey,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, PersistTxnShardValue, ReplicaConfig, Role,
+    RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, StorageUsageKey, SystemObjectDescription, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
@@ -80,6 +80,7 @@ pub struct Transaction<'a> {
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
+    persist_txn_shard: TableTransaction<(), PersistTxnShardValue>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
@@ -107,6 +108,7 @@ impl<'a> Transaction<'a> {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
+            persist_txn_shard,
         }: Snapshot,
     ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
@@ -144,6 +146,7 @@ impl<'a> Transaction<'a> {
                 |a: &StorageCollectionMetadataValue, b| a.shard == b.shard,
             )?,
             unfinalized_shards: TableTransaction::new(unfinalized_shards, |_a, _b| false)?,
+            persist_txn_shard: TableTransaction::new(persist_txn_shard, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
         })
@@ -1484,6 +1487,7 @@ impl<'a> Transaction<'a> {
             system_privileges: self.system_privileges.pending(),
             storage_collection_metadata: self.storage_collection_metadata.pending(),
             unfinalized_shards: self.unfinalized_shards.pending(),
+            persist_txn_shard: self.persist_txn_shard.pending(),
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
@@ -1515,6 +1519,7 @@ impl<'a> Transaction<'a> {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
+            persist_txn_shard,
             audit_log_updates,
             storage_usage_updates,
         } = &mut txn_batch;
@@ -1537,6 +1542,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
         differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
         differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
+        differential_dataflow::consolidation::consolidate_updates(persist_txn_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
         differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
@@ -1583,6 +1589,7 @@ pub struct TransactionBatch {
         Diff,
     )>,
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
+    pub(crate) persist_txn_shard: Vec<((), proto::PersistTxnShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
 }
