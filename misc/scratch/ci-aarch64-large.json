@@ -1,0 +1,8 @@
+{
+    "name": "c7g.12xlarge as used by CI, when a large box is needed (aarch64-large)",
+    "launch_script": "true",
+    "instance_type": "c7g.12xlarge",
+    "ami": "ami-0568072f574d822a4",
+    "size_gb": 128,
+    "tags": {}
+}
