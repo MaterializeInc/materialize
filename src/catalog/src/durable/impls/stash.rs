@@ -32,7 +32,6 @@ use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::session::vars::CatalogKind;
 use mz_stash::{AppendBatch, DebugStashFactory, Diff, Stash, StashFactory, TypedCollection};
 use mz_stash_types::StashError;
-use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
 use crate::durable::initialize::{
@@ -40,10 +39,7 @@ use crate::durable::initialize::{
     TOMBSTONE_KEY, USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
-use crate::durable::objects::{
-    AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
-    TimelineTimestamp, TimestampValue,
-};
+use crate::durable::objects::{AuditLogKey, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey};
 use crate::durable::transaction::{Transaction, TransactionBatch};
 use crate::durable::upgrade::stash::upgrade;
 use crate::durable::{
@@ -609,18 +605,6 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[mz_ore::instrument]
-    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
-        let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
-        let timestamps = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-
-        Ok(timestamps)
-    }
-
-    #[mz_ore::instrument]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         let entries = AUDIT_LOG_COLLECTION.peek_one(&mut self.stash).await?;
         let logs: Vec<_> = entries
@@ -1180,31 +1164,6 @@ impl DurableCatalogState for Connection {
         }
 
         Ok(events)
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: Timestamp,
-    ) -> Result<(), CatalogError> {
-        let key = proto::TimestampKey {
-            id: timeline.to_string(),
-        };
-        let (prev, next) = TIMESTAMP_COLLECTION
-            .upsert_key(&mut self.stash, key, move |_| {
-                Ok::<_, CatalogError>(TimestampValue { ts: timestamp }.into_proto())
-            })
-            .await??;
-        if let Some(prev) = prev {
-            assert!(
-                next >= prev,
-                "global timestamp must always go up; prev = {:?}, next = {:?}",
-                prev,
-                next
-            );
-        }
-        Ok(())
     }
 
     #[mz_ore::instrument(level = "debug")]

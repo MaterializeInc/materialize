@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp::max;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::time::Duration;
 
@@ -20,16 +19,12 @@ use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::cast::u64_to_usize;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_assert_eq_or_log;
-use mz_proto::RustType;
 use mz_repr::Timestamp;
 use mz_sql::session::vars::CatalogKind;
-use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::objects::serialization::proto;
-use crate::durable::objects::{
-    DurableType, Snapshot, TimelineTimestamp, TimestampKey, TimestampValue,
-};
+use crate::durable::objects::Snapshot;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{
     BootstrapArgs, CatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
@@ -208,7 +203,6 @@ impl ShadowCatalogState {
         persist: Box<dyn DurableCatalogState>,
     ) -> Result<ShadowCatalogState, CatalogError> {
         let mut state = ShadowCatalogState { stash, persist };
-        state.fix_timestamps().await?;
         state.fix_storage_usage().await?;
         Ok(state)
     }
@@ -220,67 +214,6 @@ impl ShadowCatalogState {
         // We cannot fix timestamp discrepancies in a read-only catalog, so we'll just have to
         // ignore them.
         ShadowCatalogState { stash, persist }
-    }
-
-    /// The Coordinator will update the timestamps of every timeline continuously on an interval.
-    /// If we shut down the Coordinator while it's updating the timestamps, then it's possible that
-    /// only one catalog implementation is updated, while the other is not. This will leave the two
-    /// catalogs in an inconsistent state. Since this implementation is just used for tests, and
-    /// that specific inconsistency is expected, we fix it during open.
-    async fn fix_timestamps(&mut self) -> Result<(), CatalogError> {
-        let stash_timestamps = self.stash_timestamps().await?;
-        let persist_timestamps = self.persist_timestamps().await?;
-        let reconciled_timestamps =
-            self.reconciled_timestamps(stash_timestamps, persist_timestamps);
-        for (timeline, timestamp) in reconciled_timestamps {
-            self.stash.set_timestamp(&timeline, timestamp).await?;
-            self.persist.set_timestamp(&timeline, timestamp).await?;
-        }
-
-        Ok(())
-    }
-
-    async fn stash_timestamps(&mut self) -> Result<BTreeMap<Timeline, Timestamp>, CatalogError> {
-        Ok(self
-            .stash
-            .get_timestamps()
-            .await?
-            .into_iter()
-            .map(|timeline_timestamp| (timeline_timestamp.timeline, timeline_timestamp.ts))
-            .collect())
-    }
-
-    async fn persist_timestamps(&mut self) -> Result<BTreeMap<Timeline, Timestamp>, CatalogError> {
-        Ok(self
-            .persist
-            .get_timestamps()
-            .await?
-            .into_iter()
-            .map(|timeline_timestamp| (timeline_timestamp.timeline, timeline_timestamp.ts))
-            .collect())
-    }
-
-    fn reconciled_timestamps(
-        &mut self,
-        stash_timestamps: BTreeMap<Timeline, Timestamp>,
-        persist_timestamps: BTreeMap<Timeline, Timestamp>,
-    ) -> BTreeMap<Timeline, Timestamp> {
-        let mut reconciled = stash_timestamps;
-
-        for (timeline, ts) in persist_timestamps {
-            match reconciled.get(&timeline) {
-                Some(reconciled_ts) => {
-                    if reconciled_ts < &ts {
-                        reconciled.insert(timeline, ts);
-                    }
-                }
-                None => {
-                    reconciled.insert(timeline, ts);
-                }
-            }
-        }
-
-        reconciled
     }
 
     /// The Coordinator will update storage usage continuously on an interval.
@@ -339,22 +272,6 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
         futures::future::join(self.stash.expire(), self.persist.expire()).await;
     }
 
-    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
-        if self.is_read_only() {
-            // Read-only catalogs cannot fix timestamps so we must ignore them. See
-            // `Self::fix_timestamps`.
-            let stash_timestamps = self.stash_timestamps().await?;
-            let persist_timestamps = self.persist_timestamps().await?;
-            Ok(self
-                .reconciled_timestamps(stash_timestamps, persist_timestamps)
-                .into_iter()
-                .map(|(timeline, ts)| TimelineTimestamp { timeline, ts })
-                .collect())
-        } else {
-            compare_and_return_async!(self, get_timestamps)
-        }
-    }
-
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         compare_and_return_async!(self, get_audit_logs)
     }
@@ -396,45 +313,6 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
             );
             let mut stash = stash?;
             let mut persist = persist?;
-            let stash_timestamps = stash
-                .timestamps
-                .into_iter()
-                .map(|(timeline, timestamp)| {
-                    (
-                        TimestampKey::from_proto(timeline).expect("invalid proto persisted"),
-                        TimestampValue::from_proto(timestamp).expect("invalid proto persisted"),
-                    )
-                })
-                .map(|(k, v)| DurableType::from_key_value(k, v))
-                .map(|timeline_timestamp: TimelineTimestamp| {
-                    (timeline_timestamp.timeline, timeline_timestamp.ts)
-                })
-                .collect();
-            let persist_timestamps = persist
-                .timestamps
-                .into_iter()
-                .map(|(timeline, timestamp)| {
-                    (
-                        TimestampKey::from_proto(timeline).expect("invalid proto persisted"),
-                        TimestampValue::from_proto(timestamp).expect("invalid proto persisted"),
-                    )
-                })
-                .map(|(k, v)| DurableType::from_key_value(k, v))
-                .map(|timeline_timestamp: TimelineTimestamp| {
-                    (timeline_timestamp.timeline, timeline_timestamp.ts)
-                })
-                .collect();
-            let reconciled_timestamps: BTreeMap<_, _> = self
-                .reconciled_timestamps(stash_timestamps, persist_timestamps)
-                .into_iter()
-                .map(|(timeline, ts)| {
-                    let timeline_timestamp = TimelineTimestamp { timeline, ts };
-                    timeline_timestamp.into_key_value()
-                })
-                .map(|(k, v)| (k.into_proto(), v.into_proto()))
-                .collect();
-            stash.timestamps = reconciled_timestamps.clone();
-            persist.timestamps = reconciled_timestamps;
             let stash_storage_usage_id = stash
                 .id_allocator
                 .get(&proto::IdAllocKey {
@@ -570,14 +448,6 @@ impl DurableCatalogState for ShadowCatalogState {
         }
     }
 
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: Timestamp,
-    ) -> Result<(), CatalogError> {
-        compare_and_return_async!(self, set_timestamp, timeline, timestamp)
-    }
-
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
         compare_and_return_async!(self, allocate_id, id_type, amount)
     }
@@ -590,14 +460,13 @@ mod tests {
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::PersistClient;
     use mz_repr::Timestamp;
-    use mz_storage_types::sources::Timeline;
     use timely::progress::Timestamp as TimelyTimestamp;
     use uuid::Uuid;
 
     use crate::durable::{
         shadow_catalog_state, test_bootstrap_args, test_persist_backed_catalog_state,
         test_stash_backed_catalog_state, test_stash_config, OpenableDurableCatalogState,
-        TimelineTimestamp, STORAGE_USAGE_ID_ALLOC_KEY,
+        STORAGE_USAGE_ID_ALLOC_KEY,
     };
 
     #[mz_ore::test(tokio::test)]
@@ -718,109 +587,6 @@ mod tests {
                 .await
                 .expect("failed to get storage usage");
             assert_eq!(shadow_storage_usage, storage_usages)
-        }
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
-    async fn test_fix_timestamps_persist() {
-        let persist_client = PersistClient::new_for_tests().await;
-        let organization_id = Uuid::new_v4();
-        let (debug_factory, stash_config) = test_stash_config().await;
-
-        let openable_persist_state =
-            test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-        let openable_stash_state = test_stash_backed_catalog_state(&debug_factory);
-        let openable_shadow_state = shadow_catalog_state(
-            stash_config.clone(),
-            persist_client.clone(),
-            organization_id,
-        )
-        .await;
-
-        test_fix_timestamps(
-            openable_persist_state,
-            openable_stash_state,
-            openable_shadow_state,
-        )
-        .await;
-
-        debug_factory.drop().await;
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
-    async fn test_fix_timestamps_stash() {
-        let persist_client = PersistClient::new_for_tests().await;
-        let organization_id = Uuid::new_v4();
-        let (debug_factory, stash_config) = test_stash_config().await;
-
-        let openable_persist_state =
-            test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-        let openable_stash_state = test_stash_backed_catalog_state(&debug_factory);
-        let openable_shadow_state = shadow_catalog_state(
-            stash_config.clone(),
-            persist_client.clone(),
-            organization_id,
-        )
-        .await;
-
-        test_fix_timestamps(
-            openable_stash_state,
-            openable_persist_state,
-            openable_shadow_state,
-        )
-        .await;
-
-        debug_factory.drop().await;
-    }
-
-    async fn test_fix_timestamps(
-        ahead: impl OpenableDurableCatalogState,
-        behind: impl OpenableDurableCatalogState,
-        shadow: impl OpenableDurableCatalogState,
-    ) {
-        let ahead_ts = Timestamp::new(200);
-        let behind_ts = Timestamp::new(100);
-        assert!(ahead_ts > behind_ts);
-        let user_timeline = Timeline::User("test".to_string());
-
-        {
-            let mut ahead_state = Box::new(ahead)
-                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
-                .await
-                .expect("failed to open");
-            ahead_state
-                .set_timestamp(&user_timeline, ahead_ts)
-                .await
-                .expect("failed to set timestamp");
-        }
-
-        {
-            let mut behind_state = Box::new(behind)
-                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
-                .await
-                .expect("failed to open");
-            behind_state
-                .set_timestamp(&user_timeline, behind_ts)
-                .await
-                .expect("failed to set timestamp");
-        }
-
-        {
-            let mut shadow_state = Box::new(shadow)
-                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
-                .await
-                .expect("failed to open");
-            let ts = shadow_state
-                .get_timestamps()
-                .await
-                .expect("failed to get timestamp")
-                .iter()
-                .find(|TimelineTimestamp { timeline, ts: _ }| timeline == &user_timeline)
-                .expect("failed to find timestamp")
-                .ts;
-            assert_eq!(ts, ahead_ts)
         }
     }
 }

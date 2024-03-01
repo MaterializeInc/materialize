@@ -34,7 +34,7 @@ use tracing::{debug, info};
 use crate::metrics::{Metrics, RetryMetrics};
 use crate::retry::Retry;
 use crate::WriteTimestamp;
-use crate::{GenericNowFn, ShareableTimestampOracle, TimestampOracle};
+use crate::{GenericNowFn, TimestampOracle};
 
 // The timestamp columns are a `DECIMAL` that is big enough to hold
 // `18446744073709551615`, the maximum value of `u64` which is our underlying
@@ -472,7 +472,7 @@ where
             // Forward timestamps to what we're given from outside. Remember,
             // the above query will only create the row at the initial timestamp
             // if it didn't exist before.
-            ShareableTimestampOracle::apply_write(&oracle, initially).await;
+            TimestampOracle::apply_write(&oracle, initially).await;
 
             Result::<_, anyhow::Error>::Ok(oracle)
         };
@@ -672,7 +672,7 @@ where
 // generic. But in practice we only use oracles for [`mz_repr::Timestamp`] so
 // don't do that extra work for now.
 #[async_trait]
-impl<N> ShareableTimestampOracle<Timestamp> for PostgresTimestampOracle<N>
+impl<N> TimestampOracle<Timestamp> for PostgresTimestampOracle<N>
 where
     N: GenericNowFn<Timestamp> + std::fmt::Debug + 'static,
 {
@@ -793,43 +793,6 @@ where
     }
 }
 
-#[async_trait(?Send)]
-impl<N> TimestampOracle<Timestamp> for PostgresTimestampOracle<N>
-where
-    N: GenericNowFn<Timestamp> + std::fmt::Debug + 'static,
-{
-    #[mz_ore::instrument(name = "oracle::write_ts", level = "debug")]
-    async fn write_ts(&mut self) -> WriteTimestamp<Timestamp> {
-        ShareableTimestampOracle::write_ts(self).await
-    }
-
-    #[mz_ore::instrument(name = "oracle::peek_write_ts", level = "debug")]
-    async fn peek_write_ts(&self) -> Timestamp {
-        ShareableTimestampOracle::peek_write_ts(self).await
-    }
-
-    #[mz_ore::instrument(name = "oracle::read_ts", level = "debug")]
-    async fn read_ts(&self) -> Timestamp {
-        ShareableTimestampOracle::read_ts(self).await
-    }
-
-    #[mz_ore::instrument(name = "oracle::apply_write", level = "debug")]
-    async fn apply_write(&mut self, write_ts: Timestamp) {
-        ShareableTimestampOracle::apply_write(self, write_ts).await
-    }
-
-    fn get_shared(&self) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
-        let shallow_clone = Self {
-            timeline: self.timeline.clone(),
-            next: self.next.clone(),
-            postgres_client: Arc::clone(&self.postgres_client),
-            metrics: Arc::clone(&self.metrics),
-        };
-
-        Some(Arc::new(shallow_clone))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,36 +815,11 @@ mod tests {
             let oracle =
                 PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
 
-            oracle
-        })
-        .await?;
-
-        Ok(())
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    async fn test_shareable_postgres_timestamp_oracle() -> Result<(), anyhow::Error> {
-        let config = match PostgresTimestampOracleConfig::new_for_test() {
-            Some(config) => config,
-            None => {
-                info!(
-                    "{} env not set: skipping test that uses external service",
-                    PostgresTimestampOracleConfig::EXTERNAL_TESTS_POSTGRES_URL
-                );
-                return Ok(());
-            }
-        };
-
-        crate::tests::shareable_timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
-            let oracle =
-                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
-
             async {
-                oracle
-                    .await
-                    .get_shared()
-                    .expect("postgres oracle is shareable")
+                let arced_oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
+                    Arc::new(oracle.await);
+
+                arced_oracle
             }
         })
         .await?;

@@ -86,7 +86,6 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::{DebugStashFactory, StashFactory};
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
@@ -762,20 +761,6 @@ impl Catalog {
         self.state.allocate_oid()
     }
 
-    /// Get all global timestamps that has been persisted to disk.
-    pub async fn get_all_persisted_timestamps(
-        &self,
-    ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        Ok(self
-            .storage()
-            .await
-            .get_timestamps()
-            .await?
-            .into_iter()
-            .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
-            .collect())
-    }
-
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
         self.storage()
@@ -790,19 +775,6 @@ impl Catalog {
         self.storage()
             .await
             .get_next_user_replica_id()
-            .await
-            .err_into()
-    }
-
-    /// Persist new global timestamp for a timeline to disk.
-    pub async fn persist_timestamp(
-        &self,
-        timeline: &Timeline,
-        timestamp: mz_repr::Timestamp,
-    ) -> Result<(), Error> {
-        self.storage()
-            .await
-            .set_timestamp(timeline, timestamp)
             .await
             .err_into()
     }

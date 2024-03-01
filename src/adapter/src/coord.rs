@@ -131,7 +131,7 @@ use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -146,7 +146,6 @@ use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
-use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -164,7 +163,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
-use mz_catalog::durable::{DurableCatalogState, OpenableDurableCatalogState};
+use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -172,8 +171,8 @@ use mz_timestamp_oracle::postgres_oracle::{
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
-pub(crate) mod catalog_oracle;
 pub(crate) mod id_bundle;
+pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
@@ -2743,7 +2742,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         controller_persist_txn_tables,
-        mut storage,
+        storage,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -2803,14 +2802,14 @@ pub fn serve(
         let pg_timestamp_oracle_config = timestamp_oracle_url
             .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
         let mut initial_timestamps =
-            get_initial_oracle_timestamps(&mut storage, &pg_timestamp_oracle_config).await?;
+            get_initial_oracle_timestamps(&pg_timestamp_oracle_config).await?;
 
         // A candidate for the boot_ts. Catalog::open will further advance this,
         // based on the "now" timestamp, if/when needed.
         let previous_ts = initial_timestamps
             .get(&Timeline::EpochMilliseconds)
-            .expect("missing EpochMillisseconds timestamp")
-            .clone();
+            .cloned()
+            .unwrap_or_else(mz_repr::Timestamp::minimum);
 
         // Choose a time at which to boot. This is used, for example, to prune
         // old storage usage data. Crucially, it is _not_ linearizable, we do
@@ -2821,14 +2820,9 @@ pub fn serve(
         // This time is usually the current system time, but with protection
         // against backwards time jumps, even across restarts.
         let boot_ts_not_linearizable = {
-            // SUBTLE: This method will block if/when `max(now, previous_ts)` is
-            // larger than some upper bound, depending on how far that maximum
-            // is beyond the upper bound. This gives some measure of protection
-            // about the chosen boot_ts advancing beyond what was previously
-            // known, which could in turn make us delete storage usage records
-            // that we are not meant to delete.
-            let boot_ts = catalog_oracle::monotonic_now(now.clone(), previous_ts);
-            info!(%previous_ts, %boot_ts, "determining boot_ts");
+            let now_ts: Timestamp = now().into();
+            let boot_ts = std::cmp::max(now_ts, previous_ts);
+            info!(%previous_ts, %now_ts, %boot_ts, "determining boot_ts");
 
             boot_ts
         };
@@ -2915,15 +2909,11 @@ pub fn serve(
 
                 let mut timestamp_oracles = BTreeMap::new();
                 for (timeline, initial_timestamp) in initial_timestamps {
-                    let persistence =
-                        CatalogTimestampPersistence::new(timeline.clone(), Arc::clone(&catalog));
-
                     handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                         &timeline,
                         initial_timestamp,
                         coord_now.clone(),
                         timestamp_oracle_impl,
-                        persistence,
                         pg_timestamp_oracle_config.clone(),
                         &mut timestamp_oracles,
                     ));
@@ -3031,41 +3021,24 @@ pub fn serve(
     .boxed()
 }
 
-// While we have two implementations of TimestampOracle (catalog-backed and
-// postgres/crdb-backed), we determine the highest timestamp for each timeline
-// on bootstrap, to initialize the currently-configured oracle. This mostly
-// works, but there can be linearizability violations, because there is no
-// central moment where do distributed coordination for both oracle types.
-// Working around this seems prohibitively hard, maybe even impossible so we
-// have to live with this window of potential violations during the upgrade
+// Determines and returns the highest timestamp for each timeline, for all known
+// timestamp oracle implementations.
+//
+// Initially, we did this so that we can switch between implementations of
+// timestamp oracle, but now we also do this to determine a monotonic boot
+// timestamp, a timestamp that does not regress across reboots.
+//
+// This mostly works, but there can be linearizability violations, because there
+// is no central moment where we do distributed coordination for all oracle
+// types. Working around this seems prohibitively hard, maybe even impossible so
+// we have to live with this window of potential violations during the upgrade
 // window (which is the only point where we should switch oracle
 // implementations).
-//
-// NOTE: We can remove all this code, including the pre-existing code below that
-// initializes oracles on bootstrap, once we have fully migrated to the new
-// postgres/crdb-backed oracle.
 async fn get_initial_oracle_timestamps(
-    storage: &mut Box<dyn DurableCatalogState>,
     pg_timestamp_oracle_config: &Option<PostgresTimestampOracleConfig>,
 ) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
-    let catalog_oracle_timestamps: BTreeMap<_, _> = storage
-        .get_timestamps()
-        .await?
-        .into_iter()
-        .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
-        .collect();
-    let debug_msg = || {
-        catalog_oracle_timestamps
-            .iter()
-            .map(|(timeline, ts)| format!("{:?} -> {}", timeline, ts))
-            .join(", ")
-    };
-    info!(
-        "current timestamps from the catalog-backed timestamp oracle: {}",
-        debug_msg()
-    );
+    let mut initial_timestamps = BTreeMap::new();
 
-    let mut initial_timestamps = catalog_oracle_timestamps;
     if let Some(pg_timestamp_oracle_config) = pg_timestamp_oracle_config {
         let postgres_oracle_timestamps =
             PostgresTimestampOracle::<NowFn>::get_all_timelines(pg_timestamp_oracle_config.clone())

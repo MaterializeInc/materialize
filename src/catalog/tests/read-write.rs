@@ -15,8 +15,7 @@ use mz_audit_log::{
 use mz_catalog::durable::objects::{DurableType, IdAlloc, Snapshot};
 use mz_catalog::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state, test_stash_backed_catalog_state,
-    CatalogError, DurableCatalogError, Item, OpenableDurableCatalogState, TimelineTimestamp,
-    USER_ITEM_ALLOC_KEY,
+    CatalogError, DurableCatalogError, Item, OpenableDurableCatalogState, USER_ITEM_ALLOC_KEY,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::SYSTEM_TIME;
@@ -27,7 +26,6 @@ use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::names::SchemaId;
 use mz_stash::DebugStashFactory;
-use mz_storage_types::sources::Timeline;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use uuid::Uuid;
@@ -230,56 +228,6 @@ async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCa
         .unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events.into_element(), recent_event);
-    Box::new(state).expire().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_timestamps() {
-    let debug_factory = DebugStashFactory::new().await;
-    let openable_state = test_stash_backed_catalog_state(&debug_factory);
-    test_timestamps(openable_state).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_timestamps() {
-    let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let openable_state =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    test_timestamps(openable_state).await;
-}
-
-async fn test_timestamps(openable_state: impl OpenableDurableCatalogState) {
-    let timeline_timestamp = TimelineTimestamp {
-        timeline: Timeline::User("Mars".to_string()),
-        ts: mz_repr::Timestamp::new(42),
-    };
-    let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
-        .await
-        .unwrap();
-
-    state
-        .set_timestamp(&timeline_timestamp.timeline, timeline_timestamp.ts)
-        .await
-        .unwrap();
-
-    let persisted_timestamps = state.get_timestamps().await.unwrap();
-    assert!(persisted_timestamps.contains(&timeline_timestamp),);
-    let snapshot_timeline_timestamps: Vec<_> = state
-        .snapshot()
-        .await
-        .unwrap()
-        .timestamps
-        .into_iter()
-        .map(RustType::from_proto)
-        .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert!(snapshot_timeline_timestamps.contains(&timeline_timestamp));
     Box::new(state).expire().await;
 }
 
