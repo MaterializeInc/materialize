@@ -63,7 +63,7 @@ DATE_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01",
     "99999-12-31",
-    ["2023-06-01"],
+    ["2023-06-01", "2024-02-29"],
     is_max_value_pg_compatible=False,
 )
 TIME_TYPE = DateTimeDataType(
@@ -75,7 +75,7 @@ TIMESTAMP_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-06-01 11:22:33.44444"],
+    ["2023-02-28 11:22:33.44444", "2024-02-29 23:50:00"],
     is_max_value_pg_compatible=False,
 )
 TIMESTAMPTZ_TYPE = DateTimeDataType(
@@ -84,7 +84,12 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    ["2023-06-01 11:22:33.44444", "2023-09-01 14:00:02.46464646"],
+    [
+        "2023-06-01 11:22:33.44444",
+        # leap year
+        "2024-02-29 11:50:00 EST",
+        "2024-02-28 19:50:00 America/Los_Angeles",
+    ],
     has_time_zone=True,
     is_max_value_pg_compatible=False,
 )
