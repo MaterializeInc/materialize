@@ -77,13 +77,6 @@ class UpgradeEntireMz(Scenario):
         ]
 
 
-class UpgradeEntireMzPreviousVersion(UpgradeEntireMz):
-    """Upgrade the entire Mz instance from the previous released version."""
-
-    def base_version(self) -> MzVersion:
-        return get_previous_version()
-
-
 class UpgradeEntireMzTwoVersions(Scenario):
     """Upgrade the entire Mz instance starting from the previous
     released version and passing through the last released version."""
