@@ -21,6 +21,7 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::HirRelationExpr;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::S3UploadInfo;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -40,7 +41,6 @@ use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,
 };
-use crate::session::SessionMeta;
 use crate::TimestampContext;
 
 pub struct Optimizer {
@@ -111,7 +111,7 @@ pub struct LocalMirPlan<T = Unresolved> {
 pub struct Resolved<'s> {
     timestamp_ctx: TimestampContext<Timestamp>,
     stats: Box<dyn StatisticsOracle>,
-    session: &'s SessionMeta,
+    session: &'s dyn SessionMetadata,
 }
 
 /// The (final) result after
@@ -163,7 +163,7 @@ impl LocalMirPlan<Unresolved> {
     pub fn resolve(
         self,
         timestamp_ctx: TimestampContext<Timestamp>,
-        session: &SessionMeta,
+        session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> LocalMirPlan<Resolved> {
         LocalMirPlan {

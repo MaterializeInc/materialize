@@ -72,6 +72,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use im::OrdMap;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates as PersistConfigUpdates, ConfigVal};
 use mz_ore::cast::CastFrom;
@@ -270,14 +271,26 @@ impl SessionVar {
         }
     }
 
-    pub fn end_transaction(&mut self, action: EndTransactionAction) {
-        self.local_value = None;
-        match action {
-            EndTransactionAction::Commit if self.staged_value.is_some() => {
-                self.session_value = self.staged_value.take()
-            }
-            _ => self.staged_value = None,
+    /// Returns a possibly new SessionVar if this needs to mutate at transaction end.
+    #[must_use]
+    pub fn end_transaction(&self, action: EndTransactionAction) -> Option<Self> {
+        if !self.is_mutating() {
+            return None;
         }
+        let mut next: Self = self.clone();
+        next.local_value = None;
+        match action {
+            EndTransactionAction::Commit if next.staged_value.is_some() => {
+                next.session_value = next.staged_value.take()
+            }
+            _ => next.staged_value = None,
+        }
+        Some(next)
+    }
+
+    /// Whether this Var needs to mutate at the end of a transaction.
+    pub fn is_mutating(&self) -> bool {
+        self.local_value.is_some() || self.staged_value.is_some()
     }
 
     pub fn value_dyn(&self) -> &dyn Value {
@@ -331,7 +344,7 @@ impl Var for SessionVar {
 #[derive(Debug, Clone)]
 pub struct SessionVars {
     /// The set of all session variables.
-    vars: BTreeMap<&'static UncasedStr, SessionVar>,
+    vars: OrdMap<&'static UncasedStr, SessionVar>,
     /// Inputs to computed variables.
     build_info: &'static BuildInfo,
     /// Information about the user associated with this Session.
@@ -431,8 +444,9 @@ impl SessionVars {
 
     /// Resets all variables to their default value.
     pub fn reset_all(&mut self) {
-        for (_name, var) in &mut self.vars {
-            var.reset(false);
+        let names: Vec<_> = self.vars.keys().copied().collect();
+        for name in names {
+            self.vars[name].reset(false);
         }
     }
 
@@ -568,16 +582,22 @@ impl SessionVars {
         action: EndTransactionAction,
     ) -> BTreeMap<&'static str, String> {
         let mut changed = BTreeMap::new();
-        for var in self.vars.values_mut() {
+        let mut updates = Vec::new();
+        for (name, var) in self.vars.iter() {
+            if !var.is_mutating() {
+                continue;
+            }
             let before = var.value();
-            var.end_transaction(action);
-            let after = var.value();
+            let next = var.end_transaction(action).expect("must mutate");
+            let after = next.value();
+            updates.push((*name, next));
 
             // Report the new value of the parameter.
             if before != after {
                 changed.insert(var.name(), after);
             }
         }
+        self.vars.extend(updates);
         changed
     }
 

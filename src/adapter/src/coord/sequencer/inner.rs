@@ -95,7 +95,7 @@ use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
-use crate::util::{ClientTransmitter, ResultExt};
+use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
 mod create_index;
@@ -1397,7 +1397,9 @@ impl Coordinator {
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut rows = session.viewable_vars(self.catalog().system_config());
+        let mut rows = viewable_variables(self.catalog().state(), session)
+            .map(|v| (v.name(), v.value(), v.description()))
+            .collect::<Vec<_>>();
         rows.sort_by_cached_key(|(name, _, _)| name.to_lowercase());
         Ok(Self::send_immediate_rows(
             rows.into_iter()
@@ -3717,7 +3719,7 @@ impl Coordinator {
             secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: EvalTime::NotAvailable,
-                session: &session.meta(self.catalog().system_config()),
+                session,
                 catalog_state: self.catalog().state(),
             },
         )?;

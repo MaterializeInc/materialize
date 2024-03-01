@@ -37,7 +37,7 @@ pub use mz_sql::session::vars::{
     EndTransactionAction, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
-use mz_sql::session::vars::{IsolationLevel, SystemVars, VarInput};
+use mz_sql::session::vars::{IsolationLevel, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{StatementKind, TransactionIsolationLevel};
 use mz_storage_types::sources::Timeline;
@@ -115,18 +115,6 @@ where
     T: Debug + Clone + Send + Sync,
     T: TimestampManipulation,
 {
-    fn user(&self) -> &User {
-        self.vars.user()
-    }
-
-    fn database(&self) -> &str {
-        self.vars.database()
-    }
-
-    fn search_path(&self) -> &[mz_sql_parser::ast::Ident] {
-        self.vars.search_path()
-    }
-
     fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
     }
@@ -139,34 +127,14 @@ where
             .pcx
     }
 
-    fn current_role_id(&self) -> &RoleId {
-        &self
-            .role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-            .current_role
-    }
-
-    fn session_role_id(&self) -> &RoleId {
-        &self
-            .role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-            .session_role
-    }
-
-    fn is_superuser(&self) -> bool {
-        self.vars.is_superuser()
-    }
-
-    fn enable_session_rbac_checks(&self) -> bool {
-        self.vars.enable_session_rbac_checks()
-    }
-
     fn role_metadata(&self) -> &RoleMetadata {
         self.role_metadata
             .as_ref()
             .expect("role_metadata invariant violated")
+    }
+
+    fn vars(&self) -> &SessionVars {
+        &self.vars
     }
 }
 
@@ -174,40 +142,15 @@ where
 /// properties.
 #[derive(Debug)]
 pub struct SessionMeta {
-    database: String,
-    search_path: Vec<mz_sql_parser::ast::Ident>,
-    user: User,
     conn_id: ConnectionId,
     pcx: PlanContext,
     role_metadata: RoleMetadata,
-    is_superuser: bool,
-    enable_session_rbac_checks: bool,
-    // TODO: Make this a cheap snapshot of the session vars, possibly by using an immutable map.
-    visible_vars: Vec<(&'static str, String, &'static str)>,
-}
-
-impl SessionMeta {
-    /// Returns the visible session and system vars as (name, val, desc).
-    pub fn visible_vars(&self) -> impl Iterator<Item = (&str, &str, &str)> {
-        Box::new(
-            self.visible_vars
-                .iter()
-                .map(|(name, val, desc)| (*name, val.as_str(), *desc)),
-        )
-    }
+    vars: SessionVars,
 }
 
 impl SessionMetadata for SessionMeta {
-    fn user(&self) -> &User {
-        &self.user
-    }
-
-    fn database(&self) -> &str {
-        &self.database
-    }
-
-    fn search_path(&self) -> &[mz_sql_parser::ast::Ident] {
-        &self.search_path
+    fn vars(&self) -> &SessionVars {
+        &self.vars
     }
 
     fn conn_id(&self) -> &ConnectionId {
@@ -216,22 +159,6 @@ impl SessionMetadata for SessionMeta {
 
     fn pcx(&self) -> &PlanContext {
         &self.pcx
-    }
-
-    fn current_role_id(&self) -> &RoleId {
-        &self.role_metadata.current_role
-    }
-
-    fn session_role_id(&self) -> &RoleId {
-        &self.role_metadata.session_role
-    }
-
-    fn is_superuser(&self) -> bool {
-        self.is_superuser
-    }
-
-    fn enable_session_rbac_checks(&self) -> bool {
-        self.enable_session_rbac_checks
     }
 
     fn role_metadata(&self) -> &RoleMetadata {
@@ -260,33 +187,15 @@ impl<T: TimestampManipulation> Session<T> {
 
     /// Returns a reference-less collection of data usable by other tasks that don't have ownership
     /// of the Session.
-    pub fn meta(&self, system_vars: &SystemVars) -> SessionMeta {
+    pub fn meta(&self) -> SessionMeta {
         SessionMeta {
-            user: self.user().clone(),
-            database: self.vars.database().into(),
-            search_path: self.vars.search_path().to_vec(),
             conn_id: self.conn_id().clone(),
             pcx: self.pcx().clone(),
             role_metadata: self.role_metadata().clone(),
-            is_superuser: self.is_superuser(),
-            enable_session_rbac_checks: self.enable_session_rbac_checks(),
-            visible_vars: self.viewable_vars(system_vars),
+            vars: self.vars.clone(),
         }
 
         // TODO: soft_assert that these are the same as Session.
-    }
-
-    /// Returns the viewable session and system variables.
-    pub(crate) fn viewable_vars(
-        &self,
-        system_vars: &SystemVars,
-    ) -> Vec<(&'static str, String, &'static str)> {
-        self.vars()
-            .iter()
-            .chain(system_vars.iter())
-            .filter(|v| v.visible(self.user(), Some(system_vars)).is_ok())
-            .map(|var| (var.name(), var.value(), var.description()))
-            .collect()
     }
 
     /// Creates new statement logging metadata for a one-off

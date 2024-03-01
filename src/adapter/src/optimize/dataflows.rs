@@ -45,7 +45,8 @@ use tracing::warn;
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::optimize::{view, Optimize, OptimizerConfig, OptimizerError};
-use crate::session::{SessionMeta, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
+use crate::session::{SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
+use crate::util::viewable_variables;
 
 /// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
 /// to exist after this has been made.
@@ -115,9 +116,7 @@ pub enum ExprPrepStyle<'a> {
     /// time in the specified session.
     OneShot {
         logical_time: EvalTime,
-        // TODO: A `dyn SessionMetadata` would be nice here, but `Var` is not easily shareable or
-        // Clone, so has been difficult to add to that trait. For now stick with a struct.
-        session: &'a SessionMeta,
+        session: &'a dyn SessionMetadata,
         catalog_state: &'a CatalogState,
     },
     /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
@@ -547,7 +546,7 @@ fn eval_unmaterializable_func(
     state: &CatalogState,
     f: &UnmaterializableFunc,
     logical_time: EvalTime,
-    session: &SessionMeta,
+    session: &dyn SessionMetadata,
 ) -> Result<MirScalarExpr, OptimizerError> {
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
@@ -614,9 +613,8 @@ fn eval_unmaterializable_func(
             )
         }
         UnmaterializableFunc::ViewableVariables => pack_dict(
-            session
-                .visible_vars()
-                .map(|(name, val, _desc)| (name.to_lowercase(), val.to_string()))
+            viewable_variables(state, session)
+                .map(|var| (var.name().to_lowercase(), var.value()))
                 .collect(),
         ),
         UnmaterializableFunc::CurrentTimestamp => {

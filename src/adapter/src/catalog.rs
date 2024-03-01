@@ -5347,7 +5347,7 @@ mod tests {
             .expect("must succeed");
         let prep_style = ExprPrepStyle::OneShot {
             logical_time: EvalTime::Time(Timestamp::MIN),
-            session: &session.meta(catalog.system_config()),
+            session: &session,
             catalog_state: &catalog.state,
         };
 

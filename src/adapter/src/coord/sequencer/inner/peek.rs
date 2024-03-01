@@ -100,7 +100,7 @@ impl Coordinator {
         let eval_uri = |to: HirScalarExpr| -> Result<Uri, AdapterError> {
             let style = ExprPrepStyle::OneShot {
                 logical_time: EvalTime::NotAvailable,
-                session: &ctx.session().meta(self.catalog().system_config()),
+                session: ctx.session(),
                 catalog_state: self.catalog().state(),
             };
             let mut to = to.lower_uncorrelated()?;
@@ -527,7 +527,7 @@ impl Coordinator {
             )
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
-        let session = ctx.session().meta(self.catalog().system_config());
+        let session = ctx.session().meta();
 
         mz_ore::task::spawn_blocking(
             || "optimize peek",

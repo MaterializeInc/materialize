@@ -20,6 +20,7 @@ use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
@@ -29,7 +30,7 @@ use mz_transform::TransformError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, Response};
 use crate::coord::{Message, PendingTxnResponse};
 use crate::error::AdapterError;
@@ -411,4 +412,19 @@ impl ShouldHalt for InstanceMissing {
     fn should_halt(&self) -> bool {
         false
     }
+}
+
+/// Returns the viewable session and system variables.
+pub(crate) fn viewable_variables<'a>(
+    catalog: &'a CatalogState,
+    session: &'a dyn SessionMetadata,
+) -> impl Iterator<Item = &'a dyn Var> {
+    session
+        .vars()
+        .iter()
+        .chain(catalog.system_config().iter())
+        .filter(|v| {
+            v.visible(session.user(), Some(catalog.system_config()))
+                .is_ok()
+        })
 }
