@@ -25,7 +25,6 @@ use mz_catalog::builtin::{
     BUILTIN_ROLES,
 };
 use mz_catalog::config::StateConfig;
-use mz_catalog::durable::initialize::MZ_UNSAFE_SCHEMA_ID;
 use mz_catalog::durable::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
     SystemObjectUniqueIdentifier,
@@ -47,8 +46,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
-use mz_repr::namespaces::MZ_UNSAFE_SCHEMA;
+use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -60,7 +58,7 @@ use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaId, SchemaSpecifier,
 };
-use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars, VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -279,32 +277,6 @@ impl Catalog {
                 state.database_by_name.insert(name.clone(), id.clone());
             }
 
-            // TODO(jkosh44) Remove after next release.
-            let contains_unsafe_schema = txn
-                .get_schemas()
-                .filter_map(|schema| match schema.id {
-                    SchemaId::User(_) => None,
-                    SchemaId::System(id) => Some(id),
-                })
-                .any(|id| id == MZ_UNSAFE_SCHEMA_ID);
-            if !contains_unsafe_schema {
-                let schema_privileges = vec![
-                    rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
-                    MzAclItem {
-                        grantee: MZ_SUPPORT_ROLE_ID,
-                        grantor: MZ_SYSTEM_ROLE_ID,
-                        acl_mode: AclMode::USAGE,
-                    },
-                    rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
-                ];
-                let schema_id = SchemaId::System(MZ_UNSAFE_SCHEMA_ID);
-                txn.insert_system_schema(
-                    schema_id,
-                    MZ_UNSAFE_SCHEMA,
-                    MZ_SYSTEM_ROLE_ID,
-                    schema_privileges.clone(),
-                )?;
-            }
             let schemas = txn.get_schemas();
             for mz_catalog::durable::Schema {
                 id,
