@@ -72,7 +72,7 @@ use tracing::{info, trace};
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::StorageMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
-use crate::source::types::{SourceOutput, SourceReaderError, SourceRender};
+use crate::source::types::{SourceMessage, SourceOutput, SourceReaderError, SourceRender};
 use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
@@ -245,7 +245,7 @@ fn source_render_operator<G, C>(
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<G, (usize, Result<SourceOutput<C::Time>, SourceReaderError>), Diff>,
+    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -558,7 +558,7 @@ fn reclock_operator<G, FromTime, D, M>(
         Event<
             FromTime,
             (
-                (usize, Result<SourceOutput<FromTime>, SourceReaderError>),
+                (usize, Result<SourceMessage, SourceReaderError>),
                 FromTime,
                 D,
             ),
@@ -620,7 +620,7 @@ where
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
-        type Batch<T, D> = Vec<((usize, Result<SourceOutput<T>, SourceReaderError>), T, D)>;
+        type Batch<T, D> = Vec<((usize, Result<SourceMessage, SourceReaderError>), T, D)>;
         let mut untimestamped_batches: Vec<(FromTime, Batch<FromTime, D>)> = Vec::new();
 
         // Stash of reclock updates that are still beyond the upper frontier
@@ -712,7 +712,7 @@ where
                     let mut bytes_read = 0;
 
                     let mut total_processed = 0;
-                    for (((idx, msg), _from_ts, diff), into_ts) in timestamper.reclock(msgs) {
+                    for (((idx, msg), from_ts, diff), into_ts) in timestamper.reclock(msgs) {
                         let into_ts = into_ts.expect("reclock for update not beyond upper failed");
                         let output = match msg {
                             Ok(message) => {
@@ -721,7 +721,7 @@ where
                                     key: message.key,
                                     value: message.value,
                                     metadata: message.metadata,
-                                    from_time: message.from_time,
+                                    from_time: from_ts,
                                 };
                                 (idx, Ok(ok))
                             }
