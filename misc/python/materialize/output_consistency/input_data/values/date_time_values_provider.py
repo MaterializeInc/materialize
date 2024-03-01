@@ -35,24 +35,39 @@ def __create_values(
     timezone_column_suffix = re.sub("\\+", "PLUS", timezone_column_suffix)
     timezone_column_suffix = re.sub("/", "_", timezone_column_suffix)
 
-    _values_of_type.add_raw_value(
-        f"'{_date_time_data_type.min_value}{timezone_value_suffix}'",
-        f"MIN_VAL{timezone_column_suffix}",
-        {ExpressionCharacteristics.MAX_VALUE, ExpressionCharacteristics.NEGATIVE},
-    )
-    _values_of_type.add_raw_value(
-        f"'{_date_time_data_type.max_value}{timezone_value_suffix}'",
-        f"MAX_VAL{timezone_column_suffix}",
-        {ExpressionCharacteristics.MAX_VALUE},
-        is_pg_compatible=_date_time_data_type.is_max_value_pg_compatible,
-    )
+    if not _date_time_data_type.has_time_zone or _timezone is not None:
+        # do not create these values for data types with time zones but without selected time zone
 
-    for index, value in enumerate(_date_time_data_type.further_values):
         _values_of_type.add_raw_value(
-            f"'{value}{timezone_value_suffix}'",
-            f"VAL_{index + 1}{timezone_column_suffix}",
-            set(),
+            f"'{_date_time_data_type.min_value}{timezone_value_suffix}'",
+            f"MIN_VAL{timezone_column_suffix}",
+            {ExpressionCharacteristics.MAX_VALUE, ExpressionCharacteristics.NEGATIVE},
         )
+        _values_of_type.add_raw_value(
+            f"'{_date_time_data_type.max_value}{timezone_value_suffix}'",
+            f"MAX_VAL{timezone_column_suffix}",
+            {ExpressionCharacteristics.MAX_VALUE},
+            is_pg_compatible=_date_time_data_type.is_max_value_pg_compatible,
+        )
+
+        for index, value in enumerate(_date_time_data_type.further_values):
+            _values_of_type.add_raw_value(
+                f"'{value}{timezone_value_suffix}'",
+                f"VAL_{index + 1}{timezone_column_suffix}",
+                set(),
+            )
+
+    if _timezone is None:
+        for index, value in enumerate(
+            _date_time_data_type.further_values_with_fixed_timezone
+        ):
+            assert _date_time_data_type.has_time_zone
+            # time zone is already part of the value, do not add it
+            _values_of_type.add_raw_value(
+                f"'{value}'",
+                f"VAL2_{index + 1}",
+                set(),
+            )
 
 
 for date_time_data_type in DATE_TIME_DATA_TYPES:
@@ -62,5 +77,7 @@ for date_time_data_type in DATE_TIME_DATA_TYPES:
     if date_time_data_type.has_time_zone:
         for timezone in TIME_ZONE_PARAM.get_valid_values():
             __create_values(values_of_type, date_time_data_type, timezone)
+        # create values with fixed time zone
+        __create_values(values_of_type, date_time_data_type, None)
     else:
         __create_values(values_of_type, date_time_data_type, None)

@@ -27,6 +27,7 @@ class DateTimeDataType(DataType):
         min_value: str,
         max_value: str,
         further_values: list[str],
+        further_values_with_fixed_timezone: list[str] = [],
         has_time_zone: bool = False,
         is_pg_compatible: bool = True,
         is_max_value_pg_compatible: bool = True,
@@ -40,6 +41,7 @@ class DateTimeDataType(DataType):
         self.min_value = min_value
         self.max_value = max_value
         self.further_values = further_values
+        self.further_values_with_fixed_timezone = further_values_with_fixed_timezone
         self.has_time_zone = has_time_zone
         self.is_max_value_pg_compatible = is_max_value_pg_compatible
 
@@ -84,8 +86,8 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
     # BC, AD not working, see: https://github.com/MaterializeInc/materialize/issues/19637
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
-    [
-        "2023-06-01 11:22:33.44444",
+    further_values=["2023-06-01 11:22:33.44444"],
+    further_values_with_fixed_timezone=[
         # leap year
         "2024-02-29 11:50:00 EST",
         "2024-02-28 19:50:00 America/Los_Angeles",
