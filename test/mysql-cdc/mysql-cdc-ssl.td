@@ -199,42 +199,6 @@ DELETE FROM numbers WHERE number = 2;
 # $ mysql-execute name=mysql
 # DELETE FROM numbers WHERE number = 2;
 
-# TODO: #25673 (no verify_full)
-# # server: hostssl, client: verify-full => ERROR
-# > CREATE CONNECTION mysql_conn TO MYSQL (
-#     HOST mysql,
-#     USER hostssl,
-#     SSL MODE verify_full
-#   );
-# ! CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
-# contains:self signed certificate in certificate chain
-# > DROP CONNECTION mysql_conn;
-
-# TODO: #25673 (no verify_full)
-# # server: hostssl, client: verify-full => OK
-# > CREATE CONNECTION mysql_conn TO MYSQL (
-#   HOST mysql,
-#   USER hostssl,
-#   SSL MODE verify_full,
-#   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
-#   );
-# > CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
-# > SELECT * FROM "numbers";
-# 1 1 one
-# $ mysql-execute name=mysql
-# INSERT INTO numbers VALUES (2, true, 'two');
-# > SELECT * FROM "numbers";
-# 1 1 one
-# 2 1 two
-# > DROP SOURCE "mz_source";
-# > DROP CONNECTION mysql_conn;
-# $ mysql-execute name=mysql
-# DELETE FROM numbers WHERE number = 2;
-
 # server: hostnossl, client: disable => OK
 > CREATE CONNECTION mysql_conn TO MYSQL (
   HOST mysql,
@@ -269,19 +233,6 @@ DELETE FROM numbers WHERE number = 2;
 # contains:self signed certificate in certificate chain
 # > DROP CONNECTION mysql_conn;
 
-# TODO: #25673 (no verify_full)
-# # server: hostnossl, client: verify-full => ERROR
-# > CREATE CONNECTION mysql_conn TO MYSQL (
-#   HOST mysql,
-#   USER hostnossl,
-#   SSL MODE verify_full
-#   );
-# ! CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
-# contains:self signed certificate in certificate chain
-# > DROP CONNECTION mysql_conn;
-
 # server: certuser, client: require => OK
 > CREATE CONNECTION mysql_conn TO MYSQL (
   HOST mysql,
@@ -306,19 +257,27 @@ INSERT INTO numbers VALUES (2, true, 'two');
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
 
-# TODO #25679 (unexpected ssl validation outcome)
-# # server: certuser, client: verify-ca => ERROR
-# > CREATE CONNECTION mysql_conn TO MYSQL (
-#   HOST mysql,
-#   USER certuser,
-#   SSL MODE verify_ca,
-#   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
-#   );
-# ! CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
-# contains:db error: FATAL: connection requires a valid client certificate
-# > DROP CONNECTION mysql_conn;
+# server: certuser, client: verify-ca => OK in MySQL
+> CREATE CONNECTION mysql_conn TO MYSQL (
+  HOST mysql,
+  USER certuser,
+  SSL MODE verify_ca,
+  SSL CERTIFICATE AUTHORITY SECRET ssl_ca
+  );
+> CREATE SOURCE "mz_source"
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.numbers);
+> SELECT * FROM "numbers";
+1 1 one
+$ mysql-execute name=mysql
+INSERT INTO numbers VALUES (2, true, 'two');
+> SELECT * FROM "numbers";
+1 1 one
+2 1 two
+> DROP SOURCE "mz_source";
+> DROP CONNECTION mysql_conn;
+$ mysql-execute name=mysql
+DELETE FROM numbers WHERE number = 2;
 
 # TODO: #25676 (error not handled properly)
 # # server: certuser, client: verify-ca (wrong cert) => ERROR
@@ -365,31 +324,6 @@ DELETE FROM numbers WHERE number = 2;
 #   HOST mysql,
 #   USER certuser,
 #   SSL MODE verify_identity,
-#   SSL CERTIFICATE SECRET ssl_cert,
-#   SSL KEY SECRET ssl_key,
-#   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
-#   );
-# > CREATE SOURCE "mz_source"
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR TABLES (public.numbers);
-# > SELECT * FROM "numbers";
-# 1 1 one
-# $ mysql-execute name=mysql
-# INSERT INTO numbers VALUES (2, true, 'two');
-# > SELECT * FROM "numbers";
-# 1 1 one
-# 2 1 two
-# > DROP SOURCE "mz_source";
-# > DROP CONNECTION mysql_conn;
-# $ mysql-execute name=mysql
-# DELETE FROM numbers WHERE number = 2;
-
-# TODO: #25673 (no verify_full)
-# # server: certuser, client: verify-full => OK
-# > CREATE CONNECTION mysql_conn TO MYSQL (
-#   HOST mysql,
-#   USER certuser,
-#   SSL MODE verify_full,
 #   SSL CERTIFICATE SECRET ssl_cert,
 #   SSL KEY SECRET ssl_key,
 #   SSL CERTIFICATE AUTHORITY SECRET ssl_ca
