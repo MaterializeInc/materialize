@@ -27,10 +27,10 @@ use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
-    StorageMetadataCollection, StorageUsageCollection, SystemConfigurationCollection,
-    SystemItemMappingCollection, SystemPrivilegeCollection, TimestampCollection, Trace,
-    UnfinalizedShardsCollection,
+    IdAllocatorCollection, ItemCollection, PersistTxnShardCollection, RoleCollection,
+    SchemaCollection, SettingCollection, StorageMetadataCollection, StorageUsageCollection,
+    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection,
+    TimestampCollection, Trace, UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
@@ -247,6 +247,7 @@ macro_rules! for_collection {
             CollectionType::Timestamp => $fn::<TimestampCollection>($($arg),*).await?,
             CollectionType::StorageMetadata => $fn::<StorageMetadataCollection>($($arg),*).await?,
             CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
+            CollectionType::PersistTxnShard => $fn::<PersistTxnShardCollection>($($arg),*).await?,
         }
     };
 }
@@ -362,6 +363,7 @@ async fn dump(
         timestamps,
         storage_metadata,
         unfinalized_shards,
+        persist_txn_shard,
     } = openable_state.trace().await?;
 
     if !ignore_large_collections {
@@ -388,6 +390,7 @@ async fn dump(
     dump_col(&mut data, timestamps, &ignore);
     dump_col(&mut data, storage_metadata, &ignore);
     dump_col(&mut data, unfinalized_shards, &ignore);
+    dump_col(&mut data, persist_txn_shard, &ignore);
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())

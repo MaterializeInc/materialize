@@ -1059,6 +1059,9 @@ impl PersistCatalogState {
                 StateUpdateKind::UnfinalizedShard(key, ()) => {
                     apply(&mut self.snapshot.unfinalized_shards, key, (), diff);
                 }
+                StateUpdateKind::PersistTxnShard((), value) => {
+                    apply(&mut self.snapshot.persist_txn_shard, (), value, diff);
+                }
             }
         }
 
@@ -1595,6 +1598,12 @@ impl Trace {
                         .unfinalized_shards
                         .values
                         .push(((k, ()), ts.to_string(), diff))
+                }
+                StateUpdateKind::PersistTxnShard((), v) => {
+                    trace
+                        .persist_txn_shard
+                        .values
+                        .push((((), v), ts.to_string(), diff))
                 }
             }
         }

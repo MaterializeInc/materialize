@@ -65,6 +65,7 @@ impl Debug for HiddenUserVersionTrace<'_> {
             timestamps,
             storage_metadata,
             unfinalized_shards,
+            persist_txn_shard,
         } = self.0;
         let configs: CollectionTrace<ConfigCollection> = CollectionTrace {
             values: configs
@@ -95,6 +96,7 @@ impl Debug for HiddenUserVersionTrace<'_> {
             .field("timestamps", timestamps)
             .field("storage_metadata", storage_metadata)
             .field("unfinalized_shards", unfinalized_shards)
+            .field("persist_txn_shard", persist_txn_shard)
             .finish()
     }
 }

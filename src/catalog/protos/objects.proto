@@ -215,6 +215,12 @@ message UnfinalizedShardKey {
     string shard = 1;
 }
 
+// This value is stored transparently, however, it should only ever be
+// manipulated by the storage controller.
+message PersistTxnShardValue {
+    string shard = 1;
+}
+
 // ---- Common Types
 //
 // Note: Normally types like this would go in some sort of `common.proto` file, but we want to keep
@@ -794,6 +800,10 @@ message StateUpdateKind {
     UnfinalizedShardKey key = 1;
   }
 
+  message PersistTxnShard {
+    PersistTxnShardValue value = 1;
+  }
+
   oneof kind {
     AuditLog audit_log = 1;
     Cluster cluster = 2;
@@ -816,5 +826,6 @@ message StateUpdateKind {
     Timestamp timestamp = 19;
     StorageMetadata storage_metadata = 20;
     UnfinalizedShard unfinalized_shard = 21;
+    PersistTxnShard persist_txn_shard = 22;
   }
 }

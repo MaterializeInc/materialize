@@ -73,6 +73,7 @@ pub enum CollectionType {
     Timestamp,
     StorageMetadata,
     UnfinalizedShard,
+    PersistTxnShard,
 }
 
 derive_display_from_serialize!(CollectionType);
@@ -279,6 +280,14 @@ collection_impl!({
     trace_field: unfinalized_shards,
     update: StateUpdateKind::UnfinalizedShard,
 });
+collection_impl!({
+    name: PersistTxnShardCollection,
+    key: (),
+    value: proto::PersistTxnShardValue,
+    collection_type: CollectionType::PersistTxnShard,
+    trace_field: persist_txn_shard,
+    update: StateUpdateKind::PersistTxnShard,
+});
 
 /// A trace of timestamped diffs for a particular [`Collection`].
 ///
@@ -318,6 +327,7 @@ pub struct Trace {
     pub timestamps: CollectionTrace<TimestampCollection>,
     pub storage_metadata: CollectionTrace<StorageMetadataCollection>,
     pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
+    pub persist_txn_shard: CollectionTrace<PersistTxnShardCollection>,
 }
 
 impl Trace {
@@ -343,6 +353,7 @@ impl Trace {
             timestamps: CollectionTrace::new(),
             storage_metadata: CollectionTrace::new(),
             unfinalized_shards: CollectionTrace::new(),
+            persist_txn_shard: CollectionTrace::new(),
         }
     }
 }
