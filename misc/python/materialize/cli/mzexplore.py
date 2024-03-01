@@ -113,7 +113,7 @@ class Opt:
         type=click.Choice([str(v.name.lower()) for v in list(api.ExplainFormat)]),
         default=["TEXT"],
         callback=lambda ctx, param, v: api.ExplainFormat[v.upper()],
-        help="AS ... clause to pass to the EXPLAIN command.",
+        help="AS [FORMAT] clause to pass to the EXPLAIN command.",
         metavar="FORMAT",
     )
 
