@@ -185,9 +185,8 @@ $ mysql-execute name=mysql
 ALTER TABLE alter_drop_pk DROP PRIMARY KEY;
 INSERT INTO alter_drop_pk VALUES (1);
 
-# TODO: #25451 (schema change not detected)
-# ! SELECT f1 FROM alter_drop_pk;
-# contains:incompatible schema change
+! SELECT f1 FROM alter_drop_pk;
+contains:incompatible schema change
 
 
 #
