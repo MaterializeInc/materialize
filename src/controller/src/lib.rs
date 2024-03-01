@@ -115,7 +115,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// Notification that a watch set has finished. See [`Self::install_watch_set`] for details.
+    /// Notification that a watch set has finished. See [`Controller::install_watch_set`] for details.
     WatchSetFinished(Vec<Box<dyn Any>>),
 }
 
