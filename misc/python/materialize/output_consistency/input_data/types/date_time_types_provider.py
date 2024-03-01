@@ -89,6 +89,10 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
         # leap year
         "2024-02-29 11:50:00 EST",
         "2024-02-28 19:50:00 America/Los_Angeles",
+        # change to DST
+        "2024-03-31 01:20:00 Europe/Vienna",
+        "2024-03-31 02:20:00 Europe/Vienna",
+        "2024-03-31 03:20:00 Europe/Vienna",
     ],
     has_time_zone=True,
     is_max_value_pg_compatible=False,
@@ -98,7 +102,13 @@ INTERVAL_TYPE = DateTimeDataType(
     "INTERVAL",
     "-178956970 years -8 months -2147483648 days -2562047788:00:54.775808",
     "178956970 years 7 months 2147483647 days 2562047788:00:54.775807",
-    ["2 years 3 months 4 days 11:22:33.456789", "100 months 100 days", "44:45:45"],
+    [
+        "2 years 3 months 4 days 11:22:33.456789",
+        "100 months 100 days",
+        "44:45:45",
+        "45 minutes",
+        "70 minutes",
+    ],
     # type is compatible but causes too many issues for now
     is_pg_compatible=False,
     is_max_value_pg_compatible=True,
