@@ -524,6 +524,76 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
     }
 }
 
+impl<T: Clone> FlatPlan<T> {
+    /// Partitions the plan into `parts` many disjoint pieces.
+    ///
+    /// This is used to partition `Plan::Constant` stages so that the work
+    /// can be distributed across many workers.
+    pub fn partition_among(self, parts: usize) -> Vec<Self> {
+        if parts == 0 {
+            return Vec::new();
+        } else if parts == 1 {
+            return vec![self];
+        }
+
+        let mut part_plans = vec![
+            Self {
+                nodes: BTreeMap::new(),
+                root: self.root
+            };
+            parts
+        ];
+
+        for (id, node) in self.nodes {
+            let partition = node.partition_among(parts);
+            for (plan, partial_node) in part_plans.iter_mut().zip(partition) {
+                plan.nodes.insert(id, partial_node);
+            }
+        }
+
+        part_plans
+    }
+}
+
+impl<T: Clone> FlatPlanNode<T> {
+    /// Partitions the node into `parts` many disjoint pieces.
+    ///
+    /// This is used to partition `Plan::Constant` stages so that the work
+    /// can be distributed across many workers.
+    fn partition_among(self, parts: usize) -> Vec<Self> {
+        use FlatPlanNode::Constant;
+
+        // For constants, balance the rows across the workers.
+        // For all other variants, just create copies.
+        if let Constant { rows } = self {
+            match rows {
+                Ok(rows) => {
+                    let mut rows_parts = vec![Vec::new(); parts];
+                    for (index, row) in rows.into_iter().enumerate() {
+                        rows_parts[index % parts].push(row);
+                    }
+                    rows_parts
+                        .into_iter()
+                        .map(|rows| Constant { rows: Ok(rows) })
+                        .collect()
+                }
+                Err(err) => {
+                    let mut result = vec![
+                        Constant {
+                            rows: Ok(Vec::new()),
+                        };
+                        parts
+                    ];
+                    result[0] = Constant { rows: Err(err) };
+                    result
+                }
+            }
+        } else {
+            vec![self; parts]
+        }
+    }
+}
+
 impl<T> FlatPlanNode<T> {
     /// Returns mutable references to the IDs of input nodes to this node.
     fn input_node_ids_mut(&mut self) -> impl Iterator<Item = &mut NodeId> {
