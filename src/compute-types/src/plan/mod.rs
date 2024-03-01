@@ -41,6 +41,7 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
+pub mod flat_plan;
 pub mod interpret;
 pub mod join;
 pub mod reduce;
