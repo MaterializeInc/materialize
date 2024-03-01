@@ -16,7 +16,7 @@ use aws_types::sdk_config::SdkConfig;
 use bytesize::ByteSize;
 use differential_dataflow::Collection;
 use http::Uri;
-use mz_aws_util::s3_uploader::{S3MultiPartUploader, S3MultiPartUploaderConfig};
+use mz_aws_util::s3_uploader::{CompletedUpload, S3MultiPartUploader, S3MultiPartUploaderConfig};
 use mz_ore::cast::CastFrom;
 use mz_pgcopy::{encode_copy_format, CopyFormatParams};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
@@ -157,7 +157,9 @@ struct CopyToS3Uploader {
     /// when the size exceeds this amount.
     max_file_size: u64,
     /// The aws sdk config.
-    sdk_config: SdkConfig,
+    /// This is an option so that we can get an owned value later to move to a
+    /// spawned tokio task.
+    sdk_config: Option<SdkConfig>,
     /// Multi-part uploader for the current file.
     /// Keeping the uploader in an `Option` to later take owned value.
     current_file_uploader: Option<S3MultiPartUploader>,
@@ -176,7 +178,7 @@ impl CopyToS3Uploader {
         let (bucket, path_prefix) = Self::extract_s3_bucket_path(&connection_details.prefix);
         CopyToS3Uploader {
             desc: connection_details.desc,
-            sdk_config,
+            sdk_config: Some(sdk_config),
             format: connection_details.format,
             file_name_prefix,
             bucket,
@@ -194,19 +196,14 @@ impl CopyToS3Uploader {
         assert!(self.current_file_uploader.is_none());
 
         self.file_index += 1;
-        // TODO: remove hard-coded file extension .csv
-        let file_path = format!(
-            "{}/{}-{:04}.csv",
-            self.path_prefix, self.file_name_prefix, self.file_index
-        );
+        let file_path = self.current_file_path();
 
         let bucket = self.bucket.clone();
-        info!(
-            "starting upload at bucket: {}, file {}",
-            &bucket, &file_path
-        );
-        // TODO: remove clone?
-        let sdk_config = self.sdk_config.clone();
+        info!("starting upload: bucket {}, file {}", &bucket, &file_path);
+        let sdk_config = self
+            .sdk_config
+            .take()
+            .expect("sdk_config should always be present");
         let max_file_size = self.max_file_size;
         let handle = mz_ore::task::spawn(|| "s3_uploader::try_new", async move {
             let uploader = S3MultiPartUploader::try_new(
@@ -219,14 +216,24 @@ impl CopyToS3Uploader {
                 },
             )
             .await;
-            uploader
+            (uploader, sdk_config)
         });
-        let uploader = handle.await.unwrap()?;
-        self.current_file_uploader = Some(uploader);
+        let (uploader, sdk_config) = handle.await.unwrap();
+        self.current_file_uploader = Some(uploader?);
+        self.sdk_config = Some(sdk_config);
         Ok(())
     }
 
+    fn current_file_path(&self) -> String {
+        // TODO: remove hard-coded file extension .csv
+        format!(
+            "{}/{}-{:04}.csv",
+            self.path_prefix, self.file_name_prefix, self.file_index
+        )
+    }
+
     fn extract_s3_bucket_path(prefix: &str) -> (String, String) {
+        // This url is already validated to be a valid s3 url in sequencer.
         let uri = Uri::from_str(prefix).expect("valid s3 url");
         let bucket = uri.host().expect("s3 bucket");
         let path = uri.path().trim_start_matches('/').trim_end_matches('/');
@@ -236,9 +243,17 @@ impl CopyToS3Uploader {
     /// Finishes any remaining in-progress upload.
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
         if let Some(uploader) = self.current_file_uploader.take() {
+            let current_file = self.current_file_path();
             let handle =
                 mz_ore::task::spawn(|| "s3_uploader::finish", async { uploader.finish().await });
-            handle.await.unwrap()?;
+            let CompletedUpload {
+                part_count,
+                total_bytes_uploaded,
+            } = handle.await.unwrap()?;
+            info!(
+                "finished upload: bucket {}, file {}, bytes_uploaded {}, parts_uploaded {}",
+                &self.bucket, current_file, total_bytes_uploaded, part_count
+            );
         }
         Ok(())
     }
@@ -246,18 +261,17 @@ impl CopyToS3Uploader {
     async fn upload_buffer(&mut self) -> Result<(), anyhow::Error> {
         assert!(!self.buf.is_empty());
         assert!(self.current_file_uploader.is_some());
-        let Some(uploader) = self.current_file_uploader.as_mut() else {
-            unreachable!();
-        };
-        // TODO: spawn task
-        // let buf = std::mem::take(&mut self.buf);
-        // // Clear and move the buffer contents into the task to do the upload.
-        // let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
-        //     uploader.buffer_chunk(&buf).await
-        // });
-        // handle.await.unwrap()?;
-        uploader.buffer_chunk(&self.buf).await?;
-        self.buf.clear();
+
+        let mut uploader = self.current_file_uploader.take().unwrap();
+        let buf = std::mem::take(&mut self.buf);
+        // Clear and move the buffer contents into the task to do the upload.
+        let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
+            let result = uploader.buffer_chunk(&buf).await;
+            (uploader, result)
+        });
+        let (uploader, result) = handle.await.unwrap();
+        let _ = result?;
+        self.current_file_uploader = Some(uploader);
         Ok(())
     }
 
