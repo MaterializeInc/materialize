@@ -835,17 +835,6 @@ steps:
               composition: platform-checks
               args: [--scenario=PersistCatalogToggle, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-timestamp-oracle-toggle
-        label: "Checks + Toggle timestamp oracle"
-        timeout_in_minutes: 45
-        artifact_paths: junit_*.xml
-        agents:
-          queue: builder-linux-aarch64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TimestampOracleToggle, "--seed=$BUILDKITE_JOB_ID"]
-
       - id: checks-migrate-x86-64-aarch64
         label: "Checks migrate from x86-64 to aarch64"
         timeout_in_minutes: 180
