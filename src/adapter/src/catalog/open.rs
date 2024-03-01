@@ -561,7 +561,7 @@ impl Catalog {
                             // This OID is never used. `func` has a `Vec` of implementations and
                             // each implementation has it's own OID. Those are the OIDs that are
                             // actually used by the system.
-                            let oid = state.allocate_oid()?;
+                            let oid = 0;
                             state.insert_item(
                                 id,
                                 oid,
