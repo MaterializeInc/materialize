@@ -69,7 +69,7 @@ def workflow_disruptions(c: Composition) -> None:
 
     for scenario in scenarios:
         overrides = (
-            [Postgres(volumes=["pgdata_512Mb:/var/lib/postgresql/data"])]
+            [Postgres(volumes=["sourcedata_512Mb:/var/lib/postgresql/data"])]
             if scenario == pg_out_of_disk_space
             else []
         )
