@@ -35,11 +35,11 @@ a secure location.
 
 ## Step 2. Set up a webhook source
 
-Using the secret from **Step 1.**, create a webhook source to ingest data from
-the webhook event generator:
+Using the secret from the previous step, create a webhook source to ingest data from
+the webhook event generator.
 
 ```sql
-CREATE SOURCE webhook_demo IN CLUSTER my_cluster FROM WEBHOOK
+CREATE SOURCE webhook_demo FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
     WITH (
