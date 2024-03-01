@@ -198,8 +198,10 @@ pub struct EquivalenceClasses {
 
 impl EquivalenceClasses {
     /// Sorts and deduplicates each class, and the classes themselves.
-    fn sort_dedup(&mut self) {
+    fn tidy(&mut self) {
         for class in self.classes.iter_mut() {
+            // Remove all literal errors, as they cannot be equated to other things.
+            class.retain(|e| !e.is_literal_err());
             class.sort_by(|e1, e2| match (e1, e2) {
                 (MirScalarExpr::Literal(_, _), MirScalarExpr::Literal(_, _)) => e1.cmp(e2),
                 (MirScalarExpr::Literal(_, _), _) => std::cmp::Ordering::Less,
@@ -233,7 +235,7 @@ impl EquivalenceClasses {
         // Repeatedly, we reduce each of the classes themselves, then unify the classes.
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
-        self.sort_dedup();
+        self.tidy();
 
         // We continue as long as any simplification has occurred.
         // An expression can be simplified, a duplication found, or two classes unified.
@@ -392,7 +394,7 @@ impl EquivalenceClasses {
         self.classes.extend(to_add);
 
         // Tidy up classes, restore representative.
-        self.sort_dedup();
+        self.tidy();
 
         stable
     }

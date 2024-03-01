@@ -43,10 +43,9 @@ use crate::{TransformCtx, TransformError};
 pub struct EquivalencePropagation;
 
 impl crate::Transform for EquivalencePropagation {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer"
         level = "trace",
-        skip_all,
         fields(path.segment = "equivalence_propagation")
     )]
     fn transform(
@@ -61,7 +60,6 @@ impl crate::Transform for EquivalencePropagation {
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
-        // let relation_index = derived.results::<Equivalences>().unwrap().len() - 1;
         let mut get_equivalences = BTreeMap::default();
         self.apply(
             relation,
