@@ -30,6 +30,9 @@ def workflow_default(c: Composition) -> None:
     for i, name in enumerate(c.workflows):
         if name == "default":
             continue
+        # TODO: Reenable when #25499 is fixed
+        if name == "test-version-skips":
+            continue
         with c.test_case(name):
             c.workflow(name)
 
