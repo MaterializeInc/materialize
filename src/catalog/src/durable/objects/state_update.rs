@@ -118,6 +118,7 @@ impl StateUpdate {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
+            persist_txn_shard,
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
@@ -146,6 +147,7 @@ impl StateUpdate {
             StateUpdateKind::StorageCollectionMetadata,
         );
         let unfinalized_shards = from_batch(unfinalized_shards, StateUpdateKind::UnfinalizedShard);
+        let persist_txn_shard = from_batch(persist_txn_shard, StateUpdateKind::PersistTxnShard);
         let audit_logs = from_batch(audit_log_updates, StateUpdateKind::AuditLog);
         let storage_usage_updates =
             from_batch(storage_usage_updates, StateUpdateKind::StorageUsage);
@@ -167,6 +169,7 @@ impl StateUpdate {
             .chain(system_privileges)
             .chain(storage_collection_metadata)
             .chain(unfinalized_shards)
+            .chain(persist_txn_shard)
             .chain(audit_logs)
             .chain(storage_usage_updates)
     }
@@ -260,6 +263,7 @@ pub enum StateUpdateKind {
         proto::StorageCollectionMetadataValue,
     ),
     UnfinalizedShard(proto::UnfinalizedShardKey, ()),
+    PersistTxnShard((), proto::PersistTxnShardValue),
 }
 
 impl StateUpdateKind {
@@ -289,6 +293,7 @@ impl StateUpdateKind {
                 Some(CollectionType::StorageCollectionMetadata)
             }
             StateUpdateKind::UnfinalizedShard(_, _) => Some(CollectionType::UnfinalizedShard),
+            StateUpdateKind::PersistTxnShard(_, _) => Some(CollectionType::PersistTxnShard),
         }
     }
 }
@@ -428,6 +433,13 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     proto::state_update_kind::Kind::UnfinalizedShard(
                         proto::state_update_kind::UnfinalizedShard {
                             key: Some(key.clone()),
+                        },
+                    )
+                }
+                StateUpdateKind::PersistTxnShard((), value) => {
+                    proto::state_update_kind::Kind::PersistTxnShard(
+                        proto::state_update_kind::PersistTxnShard {
+                            value: Some(value.clone()),
                         },
                     )
                 }
@@ -659,6 +671,16 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     })?,
                     (),
                 ),
+                proto::state_update_kind::Kind::PersistTxnShard(
+                    proto::state_update_kind::PersistTxnShard { value },
+                ) => StateUpdateKind::PersistTxnShard(
+                    (),
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field(
+                            "state_update_kind::PersistTxnShard::value",
+                        )
+                    })?,
+                ),
             },
         )
     }
@@ -773,7 +795,8 @@ impl TryFrom<StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
             | StateUpdateKind::SystemConfiguration(_, _)
             | StateUpdateKind::SystemObjectMapping(_, _)
             | StateUpdateKind::StorageCollectionMetadata(_, _)
-            | StateUpdateKind::UnfinalizedShard(_, _) => None,
+            | StateUpdateKind::UnfinalizedShard(_, _)
+            | StateUpdateKind::PersistTxnShard(_, _) => None,
         })
     }
 }
