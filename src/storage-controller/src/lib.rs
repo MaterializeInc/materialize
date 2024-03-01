@@ -271,7 +271,6 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
-        // TODO: reconcile dangling persist shards.
         self.reconcile_dangling_statistics();
         self.initialized = true;
         for client in self.clients.values_mut() {
@@ -2153,7 +2152,7 @@ where
         Ok(())
     }
 
-    async fn initialize_collections(
+    async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn<T>,
         ids: BTreeSet<GlobalId>,
@@ -2179,13 +2178,27 @@ where
             new_collections
         );
 
-        self.synchronize_collections(txn, new_collections, BTreeSet::new())
+        self.prepare_state(txn, new_collections, BTreeSet::new())
             .await?;
+
+        // All shards that belong to collections dropped in the last epoch are
+        // eligible for finalization. This intentionally includes any built-in
+        // collections present in `drop_ids`.
+        //
+        // n.b. this introduces an unlikely race condition: if a collection is
+        // dropped from the catalog, but the dataflow is still running on a
+        // worker, assuming the shard is safe to finalize on reboot may cause
+        // the cluster to panic.
+        self.finalizable_shards.extend(
+            txn.get_unfinalized_shards()
+                .into_iter()
+                .map(|shard| ShardId::from_str(&shard).expect("deserialization corrupted")),
+        );
 
         Ok(())
     }
 
-    async fn synchronize_collections(
+    async fn prepare_state(
         &mut self,
         txn: &mut dyn StorageTxn<T>,
         ids_to_add: BTreeSet<GlobalId>,
@@ -2208,8 +2221,14 @@ where
 
         txn.insert_unfinalized_shards(dropped_shards)?;
 
-        let finalized_shards = self.finalized_shards.iter().map(|shard| shard.to_string());
-        txn.mark_shards_as_finalized(finalized_shards.collect());
+        // Reconcile any shards we've successfully finalized with the shard
+        // finalization collection.
+        txn.mark_shards_as_finalized(
+            self.finalized_shards
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
+        );
 
         Ok(())
     }

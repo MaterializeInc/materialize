@@ -177,7 +177,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         storage_controller
-            .initialize_collections(&mut txn, collections)
+            .initialize_state(&mut txn, collections)
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
@@ -1197,7 +1197,7 @@ impl Catalog {
             None => return Ok(()),
         };
 
-        let mut storage_collections_to_prepare = BTreeSet::new();
+        let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
 
         for op in ops {
@@ -1672,7 +1672,7 @@ impl Catalog {
                     state.check_unstable_dependencies(&item)?;
 
                     if item.is_storage_collection() {
-                        storage_collections_to_prepare.insert(id);
+                        storage_collections_to_create.insert(id);
                     }
 
                     if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
@@ -2988,9 +2988,9 @@ impl Catalog {
 
         if dry_run_ops.is_empty() {
             storage_controller
-                .synchronize_collections(
+                .prepare_state(
                     tx,
-                    storage_collections_to_prepare,
+                    storage_collections_to_create,
                     storage_collections_to_drop,
                 )
                 .await?;

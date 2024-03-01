@@ -638,11 +638,8 @@ pub trait StorageController: Debug {
         init_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// On boot, seed our set of collections with this data.
-    ///
-    /// Most likely, this data comes from a persisted source outside of the
-    /// storage controller.
-    async fn initialize_collections(
+    /// On boot, seed the controller's metadata/state.
+    async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn<Self::Timestamp>,
         ids: BTreeSet<GlobalId>,
@@ -653,7 +650,7 @@ pub trait StorageController: Debug {
     ///
     /// The data modified in the `StorageTxn` must be made available in all
     /// subsequent calls that require [`StorageMetadata`] as a parameter.
-    async fn synchronize_collections(
+    async fn prepare_state(
         &mut self,
         txn: &mut dyn StorageTxn<Self::Timestamp>,
         ids_to_add: BTreeSet<GlobalId>,
