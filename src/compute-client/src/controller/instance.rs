@@ -1601,7 +1601,10 @@ where
             .map(|state| state.write_frontier.clone());
 
         if let (Some(old), Some(new)) = (old_upper, new_upper) {
-            (old != new).then_some(ComputeControllerResponse::FrontierUpper { id, upper: new_frontier })
+            (old != new).then_some(ComputeControllerResponse::FrontierUpper {
+                id,
+                upper: new_frontier,
+            })
         } else {
             None
         }
