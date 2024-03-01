@@ -21,10 +21,14 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
+use std::collections::BTreeMap;
+
 use mz_expr::visit::Visit;
 use mz_expr::{BinaryFunc, VariadicFunc};
 use mz_expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
 
+use crate::canonicalize_mfp::CanonicalizeMfp;
+use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformCtx, TransformError};
 
 /// Fuses multiple `Join` operators into one `Join` operator.
@@ -48,7 +52,24 @@ impl crate::Transform for Join {
         // We need to stick with post-order here because `action` only fuses a
         // Join with its direct children. This means that we can only fuse a
         // tree of Join nodes in a single pass if we work bottom-up.
-        relation.try_visit_mut_post(&mut Self::action)?;
+        let mut transformed = false;
+        relation.try_visit_mut_post(&mut |relation| {
+            transformed |= Self::action(relation)?;
+            Ok::<_, TransformError>(())
+        })?;
+        // If the action applied in the non-trivial case, run PredicatePushdown
+        // and CanonicalizeMfp in order to re-construct an equi-Join which would
+        // be de-constructed as a Filter + CrossJoin by the action application.
+        //
+        // TODO(#24155): This is a temporary solution which fixes the "Product
+        // limits" issue observed in a failed Nightly run when the PR was first
+        // tested (https://buildkite.com/materialize/nightlies/builds/6670). We
+        // should re-evaluate if we need this ad-hoc re-normalization step when
+        // LiteralLifting is removed in favor of EquivalencePropagation.
+        if transformed {
+            PredicatePushdown::default().action(relation, &mut BTreeMap::new())?;
+            CanonicalizeMfp.action(relation)?
+        }
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
@@ -56,7 +77,10 @@ impl crate::Transform for Join {
 
 impl Join {
     /// Fuses multiple `Join` operators into one `Join` operator.
-    pub fn action(relation: &mut MirRelationExpr) -> Result<(), TransformError> {
+    ///
+    /// Return Ok(true) iff the action manipulated the tree after detecting the
+    /// most general pattern.
+    pub fn action(relation: &mut MirRelationExpr) -> Result<bool, TransformError> {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
@@ -67,11 +91,11 @@ impl Join {
             inputs.retain(|e| !e.is_constant_singleton());
             if inputs.len() == 0 {
                 *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty());
-                return Ok(());
+                return Ok(false);
             }
             if inputs.len() == 1 && equivalences.is_empty() {
                 *relation = inputs.pop().unwrap();
-                return Ok(());
+                return Ok(false);
             }
 
             // Bail early if no children are MFPs around a Join
@@ -207,10 +231,12 @@ impl Join {
                 .map(map)
                 .filter(filter)
                 .project(project);
+
+                return Ok(true);
             }
         }
 
-        Ok(())
+        Ok(false)
     }
 }
 
