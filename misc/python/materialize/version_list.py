@@ -44,6 +44,7 @@ INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.81.0"),  # incompatible for upgrades
     MzVersion.parse_mz("v0.81.1"),  # incompatible for upgrades
     MzVersion.parse_mz("v0.81.2"),  # incompatible for upgrades
+    MzVersion.parse_mz("v0.89.7"),
 }
 
 _SKIP_IMAGE_CHECK_BELOW_THIS_VERSION = MzVersion.parse_mz("v0.77.0")
@@ -423,7 +424,7 @@ def get_commits_of_accepted_regressions_between_versions(
 
 
 class VersionsFromDocs:
-    """Materialize versions as listed in doc/user/content/versions
+    """Materialize versions as listed in doc/user/content/releases
 
     Only versions that declare `versiond: true` in their
     frontmatter are considered.
