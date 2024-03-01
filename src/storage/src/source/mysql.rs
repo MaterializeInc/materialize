@@ -55,7 +55,7 @@ use std::convert::Infallible;
 use std::io;
 use std::rc::Rc;
 
-use differential_dataflow::Collection;
+use differential_dataflow::{AsCollection, Collection};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
@@ -77,8 +77,8 @@ use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::types::{ProgressStatisticsUpdate, SourceOutput, SourceRender};
+use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 mod replication;
 mod schemas;
@@ -99,7 +99,7 @@ impl SourceRender for MySqlSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceOutput<Self::Time>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -162,14 +162,19 @@ impl SourceRender for MySqlSourceConnection {
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
-        let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
-            let res = res.map(|row| SourceMessage {
-                key: Row::default(),
-                value: row,
-                metadata: Row::default(),
-            });
-            (output, res)
-        });
+        let updates = snapshot_updates
+            .concat(&repl_updates)
+            .inner
+            .map(|((output, res), time, diff)| {
+                let res = res.map(|row| SourceOutput {
+                    key: Row::default(),
+                    value: row,
+                    metadata: Row::default(),
+                    from_time: time.clone(),
+                });
+                ((output, res), time, diff)
+            })
+            .as_collection();
 
         let health = snapshot_err
             .concat(&repl_err)

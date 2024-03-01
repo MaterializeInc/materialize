@@ -23,8 +23,8 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
-use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+use crate::source::types::{ProgressStatisticsUpdate, SourceOutput, SourceRender};
+use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 mod auction;
 mod counter;
@@ -78,7 +78,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceOutput<Self::Time>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -134,10 +134,11 @@ impl SourceRender for LoadGeneratorSourceConnection {
                     Event::Message(offset, (value, diff)) => {
                         let message = (
                             output,
-                            Ok(SourceMessage {
+                            Ok(SourceOutput {
                                 key: Row::default(),
                                 value,
                                 metadata: Row::default(),
+                                from_time: offset,
                             }),
                         );
 
