@@ -110,10 +110,10 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
-use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
+use mz_compute_types::plan::NodeId;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
@@ -164,16 +164,13 @@ pub use join::LinearJoinSpec;
 pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<Plan, CollectionMetadata>,
+    dataflow: DataflowDescription<FlatPlan, CollectionMetadata>,
 ) {
     // Mutually recursive view definitions require special handling.
-    let recursive = dataflow.objects_to_build.iter().any(|object| {
-        if let Plan::LetRec { .. } = object.plan {
-            true
-        } else {
-            false
-        }
-    });
+    let recursive = dataflow
+        .objects_to_build
+        .iter()
+        .any(|object| object.plan.is_recursive());
 
     // Determine indexes to export, and their dependencies.
     let indexes = dataflow
@@ -434,7 +431,7 @@ where
     G: Scope,
     G::Timestamp: RenderTimestamp,
 {
-    pub(crate) fn build_object(&mut self, object: BuildDesc<Plan>) {
+    pub(crate) fn build_object(&mut self, object: BuildDesc<FlatPlan>) {
         // First, transform the relation expression into a render plan.
         let bundle = self.render_plan(object.plan);
         self.insert_id(Id::Global(object.id), bundle);
@@ -635,17 +632,11 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G> {
-        if let Plan::LetRec {
-            ids,
-            values,
-            limits,
-            body,
-            node_id: _,
-        } = plan
-        {
-            assert_eq!(ids.len(), values.len());
-            assert_eq!(ids.len(), limits.len());
+    pub fn render_recursive_plan(&mut self, level: usize, plan: FlatPlan) -> CollectionBundle<G> {
+        if plan.is_recursive() {
+            let (values, body) = plan.split_recursive();
+            let ids: Vec<_> = values.iter().map(|(id, _, _)| *id).collect();
+
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
             let mut variables = BTreeMap::new();
@@ -666,13 +657,13 @@ where
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
             // Now render each of the bindings.
-            for (id, value, limit) in izip!(ids.iter(), values.into_iter(), limits.into_iter()) {
+            for (id, value, limit) in values {
                 let bundle = self.render_recursive_plan(level + 1, value);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
-                self.insert_id(Id::Local(*id), bundle);
-                let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
+                self.insert_id(Id::Local(id), bundle);
+                let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
                 let mut oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("LetRecConsolidation");
@@ -733,7 +724,7 @@ where
                 );
             }
 
-            self.render_recursive_plan(level, *body)
+            self.render_recursive_plan(level, body)
         } else {
             self.render_plan(plan)
         }
@@ -749,21 +740,52 @@ where
     ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-    pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
-        let lir_id = plan.node_id();
+    pub fn render_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
+        let (nodes, root_id) = plan.destruct();
 
-        let mut bundle = mz_ore::stack::maybe_grow(|| self.render_plan_inner(plan));
+        // Rendered collections by their `NodeId`.
+        let mut collections = BTreeMap::new();
 
-        if ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING.get(&self.worker_config) {
-            self.log_operator_hydration(&mut bundle, lir_id);
+        // Render the nodes, from the leafs to the root.
+        // This assumes node IDs are in dependency order.
+        // TODO: either enforce or remove this assumption
+        for (id, node) in nodes {
+            let mut bundle = self.render_plan_node(node, &collections);
+
+            if ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING.get(&self.worker_config) {
+                self.log_operator_hydration(&mut bundle, id);
+            }
+
+            collections.insert(id, bundle);
         }
 
-        bundle
+        collections
+            .remove(&root_id)
+            .expect("FlatPlan invariant (1)")
     }
 
-    fn render_plan_inner(&mut self, plan: Plan) -> CollectionBundle<G> {
-        match plan {
-            Plan::Constant { rows, node_id: _ } => {
+    /// Renders a plan node, producing the collection of results.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the node's inputs is not found in `collections`.
+    /// Callers must ensure that input nodes have been rendered previously.
+    fn render_plan_node(
+        &mut self,
+        node: FlatPlanNode,
+        collections: &BTreeMap<NodeId, CollectionBundle<G>>,
+    ) -> CollectionBundle<G> {
+        use FlatPlanNode::*;
+
+        let expect_input = |id| {
+            collections
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| panic!("missing input collection: {id}"))
+        };
+
+        match node {
+            Constant { rows } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
@@ -806,12 +828,7 @@ where
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Plan::Get {
-                id,
-                keys,
-                plan,
-                node_id: _,
-            } => {
+            Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let mut collection = self
@@ -846,31 +863,15 @@ where
                     }
                 }
             }
-            Plan::Let {
-                id,
-                value,
-                body,
-                node_id: _,
-            } => {
-                // Render `value` and bind it to `id`. Complain if this shadows an id.
-                let value = self.render_plan(*value);
-                let prebound = self.insert_id(Id::Local(id), value);
-                assert!(prebound.is_none());
-
-                let body = self.render_plan(*body);
-                self.remove_id(Id::Local(id));
-                body
-            }
-            Plan::LetRec { .. } => {
+            LetRec { .. } => {
                 unreachable!("LetRec should have been extracted and rendered");
             }
-            Plan::Mfp {
+            Mfp {
                 input,
                 mfp,
                 input_key_val,
-                node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = expect_input(input);
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
                 if mfp.is_identity() {
                     input
@@ -880,26 +881,18 @@ where
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
-            Plan::FlatMap {
+            FlatMap {
                 input,
                 func,
                 exprs,
                 mfp_after: mfp,
                 input_key,
-                node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = expect_input(input);
                 self.render_flat_map(input, func, exprs, mfp, input_key)
             }
-            Plan::Join {
-                inputs,
-                plan,
-                node_id: _,
-            } => {
-                let inputs = inputs
-                    .into_iter()
-                    .map(|input| self.render_plan(input))
-                    .collect();
+            Join { inputs, plan } => {
+                let inputs = inputs.into_iter().map(expect_input).collect();
                 match plan {
                     mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
                         self.render_join(inputs, linear_plan)
@@ -909,48 +902,41 @@ where
                     }
                 }
             }
-            Plan::Reduce {
+            Reduce {
                 input,
                 key_val_plan,
                 plan,
                 input_key,
                 mfp_after,
-                node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = expect_input(input);
                 let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
                 self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
             }
-            Plan::TopK {
-                input,
-                top_k_plan,
-                node_id: _,
-            } => {
-                let input = self.render_plan(*input);
+            TopK { input, top_k_plan } => {
+                let input = expect_input(input);
                 self.render_topk(input, top_k_plan)
             }
-            Plan::Negate { input, node_id: _ } => {
-                let input = self.render_plan(*input);
+            Negate { input } => {
+                let input = expect_input(input);
                 let (oks, errs) = input.as_specific_collection(None);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
-            Plan::Threshold {
+            Threshold {
                 input,
                 threshold_plan,
-                node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = expect_input(input);
                 self.render_threshold(input, threshold_plan)
             }
-            Plan::Union {
+            Union {
                 inputs,
                 consolidate_output,
-                node_id: _,
             } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) = self.render_plan(input).as_specific_collection(None);
+                    let (os, es) = expect_input(input).as_specific_collection(None);
                     oks.push(os);
                     errs.push(es);
                 }
@@ -961,14 +947,13 @@ where
                 let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
-            Plan::ArrangeBy {
+            ArrangeBy {
                 input,
                 forms: keys,
                 input_key,
                 input_mfp,
-                node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = expect_input(input);
                 input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
             }
         }

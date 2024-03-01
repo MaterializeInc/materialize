@@ -10,11 +10,13 @@
 //! [`FlatPlan`], a flat representation of LIR plans used in the compute protocol and rendering,
 //! and support for for flatting [`Plan`]s into this representation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use mz_expr::{EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc};
+use mz_expr::{
+    CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,
+};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, Row};
+use mz_repr::{Diff, GlobalId, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -524,6 +526,98 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
     }
 }
 
+impl<T> CollectionPlan for FlatPlan<T> {
+    fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
+        for node in self.nodes.values() {
+            if let FlatPlanNode::Get { id, .. } = node {
+                if let Id::Global(id) = id {
+                    out.insert(*id);
+                }
+            }
+        }
+    }
+}
+
+impl<T> FlatPlan<T> {
+    /// Return the ID of the root node.
+    pub fn root_id(&self) -> NodeId {
+        self.root
+    }
+
+    /// Return the root node.
+    fn root(&self) -> &FlatPlanNode<T> {
+        self.nodes.get(&self.root).expect("invariant (1)")
+    }
+
+    /// Return whether the plan contains recursion.
+    pub fn is_recursive(&self) -> bool {
+        // Because of invariant (3), every recursive plan must have a `LetRec` at its root.
+        matches!(self.root(), FlatPlanNode::LetRec { .. })
+    }
+
+    /// Split a recursive plan into its constituent (values, body) subplans.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this plan does not have a `LetRec` at the root.
+    pub fn split_recursive(
+        self,
+    ) -> (
+        Vec<(LocalId, FlatPlan<T>, Option<LetRecLimit>)>,
+        FlatPlan<T>,
+    ) {
+        let (mut nodes, root_id) = self.destruct();
+        let root = nodes.remove(&root_id).expect("invariant (1)");
+        let FlatPlanNode::LetRec {
+            ids,
+            values,
+            limits,
+            body,
+        } = root
+        else {
+            panic!("attempt to split a non-recursive plan");
+        };
+
+        // For each value and the body, find the (transitively) referenced nodes and split them out
+        // into new plan. We know that nodes cannot be shared between these subplans because of
+        // invariant (5).
+
+        assert_eq!(ids.len(), values.len());
+        assert_eq!(ids.len(), limits.len());
+        let value_iter = ids.into_iter().zip(values).zip(limits);
+
+        let value_plans = value_iter
+            .map(|((id, root_id), limit)| {
+                let mut value_nodes = BTreeMap::new();
+                let mut todo = vec![root_id];
+                while let Some(node_id) = todo.pop() {
+                    let node = nodes.remove(&node_id).expect("FlatPlan invariants");
+                    todo.extend(node.input_node_ids());
+                    value_nodes.insert(node_id, node);
+                }
+
+                let plan = FlatPlan {
+                    nodes: value_nodes,
+                    root: root_id,
+                };
+                (id, plan, limit)
+            })
+            .collect();
+
+        let body_plan = FlatPlan { nodes, root: body };
+
+        (value_plans, body_plan)
+    }
+
+    /// Destruct the plan and return its raw parts.
+    ///
+    /// This allows consuming the plan without being required to uphold the [`FlatPlan`]
+    /// invariants.
+    pub fn destruct(self) -> (BTreeMap<NodeId, FlatPlanNode<T>>, NodeId) {
+        (self.nodes, self.root)
+    }
+}
+
 impl<T: Clone> FlatPlan<T> {
     /// Partitions the plan into `parts` many disjoint pieces.
     ///
@@ -595,6 +689,36 @@ impl<T: Clone> FlatPlanNode<T> {
 }
 
 impl<T> FlatPlanNode<T> {
+    /// Returns the IDs of input nodes to this node.
+    fn input_node_ids(&self) -> impl Iterator<Item = NodeId> {
+        use FlatPlanNode::*;
+
+        let mut list = Vec::new();
+        let mut last = None;
+
+        match self {
+            Constant { .. } | Get { .. } => (),
+            LetRec { values, body, .. } => {
+                list = values.clone();
+                last = Some(*body);
+            }
+            Mfp { input, .. }
+            | FlatMap { input, .. }
+            | Reduce { input, .. }
+            | TopK { input, .. }
+            | Negate { input, .. }
+            | Threshold { input, .. }
+            | ArrangeBy { input, .. } => {
+                last = Some(*input);
+            }
+            Join { inputs, .. } | Union { inputs, .. } => {
+                list = inputs.clone();
+            }
+        }
+
+        list.into_iter().chain(last)
+    }
+
     /// Returns mutable references to the IDs of input nodes to this node.
     fn input_node_ids_mut(&mut self) -> impl Iterator<Item = &mut NodeId> {
         use FlatPlanNode::*;

@@ -28,7 +28,8 @@ use mz_compute_client::protocol::response::{
     SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::{NodeId, Plan};
+use mz_compute_types::plan::flat_plan::FlatPlan;
+use mz_compute_types::plan::NodeId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
@@ -300,7 +301,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         self.compute_state.apply_worker_config();
     }
 
-    fn handle_create_dataflow(&mut self, dataflow: DataflowDescription<Plan, CollectionMetadata>) {
+    fn handle_create_dataflow(
+        &mut self,
+        dataflow: DataflowDescription<FlatPlan, CollectionMetadata>,
+    ) {
         // Collect the exported object identifiers, paired with their associated "collection" identifier.
         // The latter is used to extract dependency information, which is in terms of collections ids.
         let dataflow_index = self.timely_worker.next_dataflow_index();
