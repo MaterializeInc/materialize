@@ -71,10 +71,18 @@ class K8sResource:
         assert False
 
     def image(
-        self, service: str, tag: str | None = None, release_mode: bool = True
+        self,
+        service: str,
+        tag: str | None = None,
+        release_mode: bool = True,
+        org: str | None = "materialize",
     ) -> str:
         if tag is not None:
-            return f"materialize/{service}:{tag}"
+            image_name = f"{service}:{tag}"
+            if org is not None:
+                image_name = f"{org}/{image_name}"
+
+            return image_name
         else:
             coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
             repo = mzbuild.Repository(

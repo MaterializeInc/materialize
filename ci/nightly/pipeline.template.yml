@@ -257,7 +257,7 @@ steps:
         label: Full Testdrive in Cloudtest (K8s)
         timeout_in_minutes: 300
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-large
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
