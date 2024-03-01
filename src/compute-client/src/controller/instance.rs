@@ -1592,7 +1592,7 @@ where
 
         self.compute
             .update_hydration_status(id, replica_id, &new_frontier);
-        self.update_write_frontiers(replica_id, &[(id, new_frontier)].into());
+        self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
 
         let new_upper = self
             .compute
@@ -1601,7 +1601,7 @@ where
             .map(|state| state.write_frontier.clone());
 
         if let (Some(old), Some(new)) = (old_upper, new_upper) {
-            (old != new).then_some(ComputeControllerResponse::FrontierUpper { id, upper })
+            (old != new).then_some(ComputeControllerResponse::FrontierUpper { id, upper: new_frontier })
         } else {
             None
         }
