@@ -27,6 +27,19 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        # clear to avoid issues
+        c.kill("postgres")
+        c.rm("postgres")
+
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_disruptions(c: Composition) -> None:
     """Test Postgres direct replication's failure handling by
     disrupting replication at various stages using Toxiproxy or service restarts
     """
