@@ -12,7 +12,7 @@
 //! Expressions are equivalent at a relation if they are certain to evaluate to
 //! the same `Datum` for all records in the relation.
 //!
-//! Equivalances are recorded in an `EquivalenceClasses`, which lists all known
+//! Equivalences are recorded in an `EquivalenceClasses`, which lists all known
 //! equivalences classes, each a list of equivalent expressions.
 
 use std::collections::BTreeMap;
@@ -197,6 +197,35 @@ pub struct EquivalenceClasses {
 }
 
 impl EquivalenceClasses {
+    /// Sorts and deduplicates each class, and the classes themselves.
+    fn sort_dedup(&mut self) {
+        for class in self.classes.iter_mut() {
+            class.sort_by(|e1, e2| match (e1, e2) {
+                (MirScalarExpr::Literal(_, _), MirScalarExpr::Literal(_, _)) => e1.cmp(e2),
+                (MirScalarExpr::Literal(_, _), _) => std::cmp::Ordering::Less,
+                (_, MirScalarExpr::Literal(_, _)) => std::cmp::Ordering::Greater,
+                (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => e1.cmp(e2),
+                (MirScalarExpr::Column(_), _) => std::cmp::Ordering::Less,
+                (_, MirScalarExpr::Column(_)) => std::cmp::Ordering::Greater,
+                (x, y) => {
+                    // General expressions should be ordered by their size,
+                    // to ensure we only simplify expressions by substitution.
+                    let x_size = x.size();
+                    let y_size = y.size();
+                    if x_size == y_size {
+                        x.cmp(y)
+                    } else {
+                        x_size.cmp(&y_size)
+                    }
+                }
+            });
+            class.dedup();
+        }
+        self.classes.retain(|c| c.len() > 1);
+        self.classes.sort();
+        self.classes.dedup();
+    }
+
     /// Update `self` to maintain the same equivalences which potentially reducing along `Ord::le`.
     ///
     /// Informally this means simplifying constraints, removing redundant constraints, and unifying equivalence classes.
@@ -204,138 +233,168 @@ impl EquivalenceClasses {
         // Repeatedly, we reduce each of the classes themselves, then unify the classes.
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
-
-        for class in self.classes.iter_mut() {
-            class.sort_by(|e1, e2| match (e1, e2) {
-                (MirScalarExpr::Literal(_, _), MirScalarExpr::Literal(_, _)) => e1.cmp(e2),
-                (MirScalarExpr::Literal(_, _), _) => std::cmp::Ordering::Less,
-                (_, MirScalarExpr::Literal(_, _)) => std::cmp::Ordering::Greater,
-                (x, y) => x.cmp(y),
-            });
-            class.dedup();
-        }
-        self.classes.retain(|c| c.len() > 1);
-        self.classes.sort();
+        self.sort_dedup();
 
         // We continue as long as any simplification has occurred.
         // An expression can be simplified, a duplication found, or two classes unified.
-        let mut complete = false;
-        while !complete {
-            // We are complete unless we experience an expression simplification, or an equivalence class unification.
-            complete = true;
+        let mut stable = false;
+        while !stable {
+            stable = self.minimize_once(columns);
+        }
 
-            // 0. Reduce each expression
-            if let Some(columns) = columns {
-                for class in self.classes.iter_mut() {
-                    for expr in class.iter_mut() {
-                        let prev_expr = expr.clone();
-                        expr.reduce(columns);
-                        if &prev_expr != expr {
-                            complete = false;
-                        }
+        // TODO: remove these measures once we are more confidence about idempotence.
+        let prev = self.clone();
+        self.minimize_once(columns);
+        assert_eq!(self, &prev);
+    }
+
+    /// A single iteration of minimization, which we expect to repeat but benefit from factoring out.
+    fn minimize_once(&mut self, columns: &Option<Vec<ColumnType>>) -> bool {
+        // We are complete unless we experience an expression simplification, or an equivalence class unification.
+        let mut stable = true;
+
+        // 0. Reduce each expression
+        //
+        // This is optional in that `columns` may not be provided (`reduce` requires type information).
+        if let Some(columns) = columns {
+            for class in self.classes.iter_mut() {
+                for expr in class.iter_mut() {
+                    let prev_expr = expr.clone();
+                    expr.reduce(columns);
+                    if &prev_expr != expr {
+                        stable = false;
                     }
                 }
             }
+        }
 
-            // 1. Reduce each class.
-            //    Each class can be reduced in the context of *other* classes, which are available for substitution.
-            for class_index in 0..self.classes.len() {
-                for index in 0..self.classes[class_index].len() {
-                    let mut cloned = self.classes[class_index][index].clone();
-                    // Use `reduce_child` rather than `reduce_expr` to avoid entire expression replacement.
-                    let reduced = self.reduce_child(&mut cloned);
-                    if reduced {
-                        self.classes[class_index][index] = cloned;
-                        complete = false;
-                    }
+        // 1. Reduce each class.
+        //    Each class can be reduced in the context of *other* classes, which are available for substitution.
+        for class_index in 0..self.classes.len() {
+            for index in 0..self.classes[class_index].len() {
+                let mut cloned = self.classes[class_index][index].clone();
+                // Use `reduce_child` rather than `reduce_expr` to avoid entire expression replacement.
+                let reduced = self.reduce_child(&mut cloned);
+                if reduced {
+                    self.classes[class_index][index] = cloned;
+                    stable = false;
                 }
             }
+        }
 
-            // 2. Unify classes.
-            //    If the same expression is in two classes, we can unify the classes.
-            //    This element may not be the representative.
-            //    TODO: If all lists are sorted, this could be a linear merge among all.
-            //          They stop being sorted as soon as we make any modification, though.
-            //          But, it would be a fast rejection when faced with lots of data.
-            for index1 in 0..self.classes.len() {
-                for index2 in 0..index1 {
-                    if self.classes[index1]
-                        .iter()
-                        .any(|x| self.classes[index2].iter().any(|y| x == y))
+        // 2. Unify classes.
+        //    If the same expression is in two classes, we can unify the classes.
+        //    This element may not be the representative.
+        //    TODO: If all lists are sorted, this could be a linear merge among all.
+        //          They stop being sorted as soon as we make any modification, though.
+        //          But, it would be a fast rejection when faced with lots of data.
+        for index1 in 0..self.classes.len() {
+            for index2 in 0..index1 {
+                if self.classes[index1]
+                    .iter()
+                    .any(|x| self.classes[index2].iter().any(|y| x == y))
+                {
+                    let prior = std::mem::take(&mut self.classes[index2]);
+                    self.classes[index1].extend(prior);
+                    stable = false;
+                }
+            }
+        }
+
+        // 3. Identify idioms
+        //    E.g. If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
+        let mut to_add = Vec::new();
+        for class in self.classes.iter_mut() {
+            if class.iter().any(|c| c.is_literal_true()) {
+                for expr in class.iter() {
+                    // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
+                    // This substitution replaces a complex expression with several smaller expressions, and cannot
+                    // cycle if we follow that practice.
+                    if let MirScalarExpr::CallBinary {
+                        func: mz_expr::BinaryFunc::Eq,
+                        expr1,
+                        expr2,
+                    } = expr
                     {
-                        let prior = std::mem::take(&mut self.classes[index2]);
-                        self.classes[index1].extend(prior);
-                        complete = false;
+                        to_add.push(vec![*expr1.clone(), *expr2.clone()]);
+                        to_add.push(vec![
+                            MirScalarExpr::literal_false(),
+                            expr1.clone().call_is_null(),
+                            expr2.clone().call_is_null(),
+                        ]);
+                        stable = false;
                     }
                 }
-            }
-
-            // 3. Identify idioms
-            //    E.g. If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[true, Not(IsNull(x), Not(IsNull(y))]`.
-            let mut to_add = Vec::new();
-            for class in self.classes.iter_mut() {
-                if class.iter().any(|c| c.is_literal_true()) {
-                    for expr in class.iter() {
-                        if let MirScalarExpr::CallBinary {
-                            func: mz_expr::BinaryFunc::Eq,
-                            expr1,
-                            expr2,
-                        } = expr
-                        {
-                            to_add.push(vec![*expr1.clone(), *expr2.clone()]);
-                            to_add.push(vec![
-                                MirScalarExpr::literal_true(),
-                                expr1.clone().call_is_null().not(),
-                                expr2.clone().call_is_null().not(),
-                            ]);
-                        }
-                    }
-                    class.retain(|expr| {
-                        if let MirScalarExpr::CallBinary {
-                            func: mz_expr::BinaryFunc::Eq,
-                            expr1: _,
-                            expr2: _,
-                        } = expr
-                        {
-                            false
-                        } else {
-                            true
-                        }
-                    });
-                }
-            }
-            self.classes.extend(to_add);
-
-            // Tidy up classes, restore representative.
-            for class in self.classes.iter_mut() {
-                // TODO: Ideally we put literals as representatives, to reduce dependencies on rows.
-                // It is important that this order be "by complexity", so that
-                class.sort_by(|e1, e2| match (e1, e2) {
-                    (MirScalarExpr::Literal(_, _), MirScalarExpr::Literal(_, _)) => e1.cmp(e2),
-                    (MirScalarExpr::Literal(_, _), _) => std::cmp::Ordering::Less,
-                    (_, MirScalarExpr::Literal(_, _)) => std::cmp::Ordering::Greater,
-                    (MirScalarExpr::Column(_), MirScalarExpr::Column(_)) => e1.cmp(e2),
-                    (MirScalarExpr::Column(_), _) => std::cmp::Ordering::Less,
-                    (_, MirScalarExpr::Column(_)) => std::cmp::Ordering::Greater,
-                    (x, y) => {
-                        // General expressions should be ordered by their size,
-                        // to ensure we only simplify expressions by substititution.
-                        let x_size = x.size();
-                        let y_size = y.size();
-                        if x_size == y_size {
-                            x.cmp(y)
-                        } else {
-                            x_size.cmp(&y_size)
-                        }
+                // Remove the more complex form of the expression.
+                class.retain(|expr| {
+                    if let MirScalarExpr::CallBinary {
+                        func: mz_expr::BinaryFunc::Eq,
+                        ..
+                    } = expr
+                    {
+                        false
+                    } else {
+                        true
                     }
                 });
-                class.dedup();
+                for expr in class.iter() {
+                    // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
+                    // This substitution replaces a complex expression with several smaller expressions, and cannot
+                    // cycle if we follow that practice.
+                    if let MirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::Not(_),
+                        expr: e,
+                    } = expr
+                    {
+                        to_add.push(vec![MirScalarExpr::literal_false(), (**e).clone()]);
+                        stable = false;
+                    }
+                }
+                class.retain(|expr| {
+                    if let MirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::Not(_),
+                        ..
+                    } = expr
+                    {
+                        false
+                    } else {
+                        true
+                    }
+                });
             }
-
-            // Discard trivial equivalence classes.
-            self.classes.retain(|class| class.len() > 1);
-            self.classes.sort();
+            if class.iter().any(|c| c.is_literal_false()) {
+                for expr in class.iter() {
+                    // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
+                    // This substitution replaces a complex expression with several smaller expressions, and cannot
+                    // cycle if we follow that practice.
+                    if let MirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::Not(_),
+                        expr: e,
+                    } = expr
+                    {
+                        to_add.push(vec![MirScalarExpr::literal_true(), (**e).clone()]);
+                        stable = false;
+                    }
+                }
+                class.retain(|expr| {
+                    if let MirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::Not(_),
+                        ..
+                    } = expr
+                    {
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
         }
+        self.classes.extend(to_add);
+
+        // Tidy up classes, restore representative.
+        self.sort_dedup();
+
+        stable
     }
 
     /// Produce the equivalences present in both inputs.
@@ -344,7 +403,7 @@ impl EquivalenceClasses {
         //       We may removed non-shared constraints, but ones that remain could take over
         //       and substitute in to retain more equivalences.
 
-        // For each pair of equivalence clasess, their intersection.
+        // For each pair of equivalence classes, their intersection.
         let mut equivalences = EquivalenceClasses {
             classes: Vec::new(),
         };
@@ -522,39 +581,3 @@ impl EquivalenceClasses {
         false
     }
 }
-
-// fn preserves_equivalences(func: &AggregateFunc) -> bool {
-//     match func {
-//           AggregateFunc::MaxInt16
-//         | AggregateFunc::MaxInt32
-//         | AggregateFunc::MaxInt64
-//         | AggregateFunc::MaxUInt16
-//         | AggregateFunc::MaxUInt32
-//         | AggregateFunc::MaxUInt64
-//         | AggregateFunc::MaxMzTimestamp
-//         | AggregateFunc::MaxFloat32
-//         | AggregateFunc::MaxFloat64
-//         | AggregateFunc::MaxBool
-//         | AggregateFunc::MaxString
-//         | AggregateFunc::MaxDate
-//         | AggregateFunc::MaxTimestamp
-//         | AggregateFunc::MaxTimestampTz
-//         | AggregateFunc::MinInt16
-//         | AggregateFunc::MinInt32
-//         | AggregateFunc::MinInt64
-//         | AggregateFunc::MinUInt16
-//         | AggregateFunc::MinUInt32
-//         | AggregateFunc::MinUInt64
-//         | AggregateFunc::MinMzTimestamp
-//         | AggregateFunc::MinFloat32
-//         | AggregateFunc::MinFloat64
-//         | AggregateFunc::MinBool
-//         | AggregateFunc::MinString
-//         | AggregateFunc::MinDate
-//         | AggregateFunc::MinTimestamp
-//         | AggregateFunc::MinTimestampTz
-//         | AggregateFunc::Any
-//         | AggregateFunc::All => true,
-//         _ => false,
-//     }
-// }
