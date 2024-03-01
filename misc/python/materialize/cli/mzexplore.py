@@ -109,6 +109,14 @@ class Opt:
         metavar="SUFFIX",
     )
 
+    explain_format = dict(
+        type=click.Choice([str(v.name.lower()) for v in list(api.ExplainFormat)]),
+        default=["TEXT"],
+        callback=lambda ctx, param, v: api.ExplainFormat[v.upper()],
+        help="AS [FORMAT] clause to pass to the EXPLAIN command.",
+        metavar="FORMAT",
+    )
+
 
 def is_documented_by(original: Any) -> Any:
     def wrapper(target):
@@ -178,8 +186,9 @@ def defs(
 @click.option("--explainee-type", "-t", **Opt.explainee_type)
 @click.option("--with", "-w", "explain_flags", **Opt.explain_flags)
 @click.option("--stage", "-s", "explain_stages", **Opt.explain_stage)
+@click.option("--format", "-f", "explain_format", **Opt.explain_format)
 @click.option("--suffix", **Opt.explain_suffix)
-@is_documented_by(api.extract.defs)
+@is_documented_by(api.extract.plans)
 def plans(
     target: Path,
     database: str,
@@ -193,6 +202,7 @@ def plans(
     explainee_type: api.ExplaineeType,
     explain_flags: list[api.ExplainFlag],
     explain_stages: set[api.ExplainStage],
+    explain_format: api.ExplainFormat,
     suffix: str | None = None,
 ) -> None:
     try:
@@ -209,6 +219,7 @@ def plans(
             explainee_type,
             explain_flags,
             explain_stages,
+            explain_format,
             suffix,
         )
     except Exception as e:

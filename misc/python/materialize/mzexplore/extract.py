@@ -23,6 +23,7 @@ from materialize.mzexplore import sql
 from materialize.mzexplore.common import (
     ExplaineeType,
     ExplainFlag,
+    ExplainFormat,
     ExplainStage,
     ItemType,
     info,
@@ -124,6 +125,7 @@ def plans(
     explainee_type: ExplaineeType,
     explain_flags: list[ExplainFlag],
     explain_stages: set[ExplainStage],
+    explain_format: ExplainFormat,
     suffix: str | None = None,
 ) -> None:
     """
@@ -183,9 +185,9 @@ def plans(
                                 ExplaineeType.CATALOG_ITEM,
                                 stage.name.lower(),
                                 suffix,
-                                "txt",
+                                explain_format.suffix(),
                             ]
-                            if part is not None
+                            if part is not None and part != ""
                         )
                         info(f"Explaining {stage} for {explainee} in `{file_name}`")
                         try:
@@ -194,6 +196,7 @@ def plans(
                                 stage,
                                 explainee,
                                 explain_flags,
+                                explain_format,
                             )
                         except DatabaseError as e:
                             warn(f"Cannot explain {stage} for {explainee}: {e}")
@@ -237,6 +240,7 @@ def plans(
                             stage,
                             explainee,
                             explain_flags,
+                            explain_format,
                         )
                     except DatabaseError as e:
                         warn(f"Cannot explain {stage} for CREATE {fqname}: {e}")
@@ -257,13 +261,14 @@ def explain(
     explain_stage: ExplainStage,
     explainee: str,
     explain_flags: list[ExplainFlag],
+    explain_format: ExplainFormat,
 ) -> str:
     explain_query = "\n".join(
         line
         for line in [
             f"EXPLAIN {explain_stage}",
             f"WITH({', '.join(map(str, explain_flags))})" if explain_flags else "",
-            "AS TEXT FOR",
+            f"AS {explain_format} FOR",
             explainee,
         ]
         if line != ""
