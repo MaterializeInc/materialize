@@ -554,7 +554,7 @@ impl PackableStats for SourceStatisticsUpdate {
             rehydration_latency_ms: Gauge::gauge(
                 <Option<mz_repr::adt::interval::Interval>>::try_from(iter.next().unwrap())
                     .unwrap()
-                    .map(|int| int.micros),
+                    .map(|int| int.micros / 1000),
             ),
             snapshot_records_known: Gauge::gauge(
                 <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),

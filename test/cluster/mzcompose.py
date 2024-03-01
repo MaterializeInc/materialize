@@ -1241,6 +1241,40 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         )
 
 
+def workflow_test_gh_25633(c: Composition) -> None:
+    """Regression test for 25633"""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True, consistent_seed=True),
+    ):
+        c.up(
+            "cockroach",
+            "materialized",
+        )
+
+        c.run_testdrive_files("gh-25633/01-create-source.td")
+
+        latency = c.sql_query(
+            """
+            SELECT
+                (u.rehydration_latency)::text
+            FROM mz_sources s
+            JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+            WHERE s.name IN ('count')
+            """
+        )[0][0]
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.run_testdrive_files(
+            f"--var=rehydration-latency={latency}",
+            "gh-25633/02-after-environmentd-restart.td",
+        )
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
