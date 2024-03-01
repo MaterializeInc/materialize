@@ -44,6 +44,7 @@ INSERT INTO t1 VALUES (1);
 $ mysql-execute name=mysql
 TRUNCATE TABLE t1;
 
-# TODO: #25051 (truncate table)
-# > SELECT count(*) FROM t1;
-# 0
+! SELECT count(*) FROM t1;
+contains: table was truncated
+
+> DROP SOURCE mz_source;
