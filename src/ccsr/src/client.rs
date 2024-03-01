@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::bail;
 use reqwest::{Method, Url};
@@ -24,6 +25,7 @@ pub struct Client {
     inner: reqwest::Client,
     url: Arc<dyn Fn() -> Url + Send + Sync + 'static>,
     auth: Option<Auth>,
+    timeout: Duration,
 }
 
 impl fmt::Debug for Client {
@@ -41,11 +43,17 @@ impl Client {
         inner: reqwest::Client,
         url: Arc<dyn Fn() -> Url + Send + Sync + 'static>,
         auth: Option<Auth>,
+        timeout: Duration,
     ) -> Result<Self, anyhow::Error> {
         if url().cannot_be_a_base() {
             bail!("cannot construct a CCSR client with a cannot-be-a-base URL");
         }
-        Ok(Client { inner, url, auth })
+        Ok(Client {
+            inner,
+            url,
+            auth,
+            timeout,
+        })
     }
 
     fn make_request<P>(&self, method: Method, path: P) -> reqwest::RequestBuilder
@@ -64,6 +72,10 @@ impl Client {
             request = request.basic_auth(&auth.username, auth.password.as_ref());
         }
         request
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.timeout
     }
 
     /// Gets the schema with the associated ID.

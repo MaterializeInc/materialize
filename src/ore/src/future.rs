@@ -36,9 +36,10 @@ use tokio::task::futures::TaskLocalFuture;
 use tokio::time::{self, Duration, Instant};
 
 use crate::panic::CATCHING_UNWIND_ASYNC;
-use crate::task;
+use crate::task::{self, JoinHandleExt};
 
 /// Extension methods for futures.
+#[async_trait::async_trait]
 pub trait OreFutureExt {
     /// Wraps a future in a [`SpawnIfCanceled`] future, which will spawn a
     /// task to poll the inner future to completion if it is dropped.
@@ -52,6 +53,15 @@ pub trait OreFutureExt {
         Self: Future + Send + 'static,
         Self::Output: Send + 'static;
 
+    /// Run a `'static` future in a Tokio task, naming that task, using a convenient
+    /// postfix call notation.
+    async fn run_in_task<Name, NameClosure>(self, nc: NameClosure) -> Self::Output
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name + Unpin + Send,
+        Self: Future + Send + 'static,
+        Self::Output: Send + 'static;
+
     /// Like [`FutureExt::catch_unwind`], but can unwind panics even if
     /// [`set_abort_on_panic`] has been called.
     ///
@@ -61,6 +71,7 @@ pub trait OreFutureExt {
         Self: Sized + UnwindSafe;
 }
 
+#[async_trait::async_trait]
 impl<T> OreFutureExt for T
 where
     T: Future,
@@ -79,6 +90,16 @@ where
             inner: Some(Box::pin(self)),
             nc: Some(nc),
         }
+    }
+
+    async fn run_in_task<Name, NameClosure>(self, nc: NameClosure) -> T::Output
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name + Unpin + Send,
+        T: Send + 'static,
+        T::Output: Send + 'static,
+    {
+        task::spawn(nc, self).wait_and_assert_finished().await
     }
 
     fn ore_catch_unwind(self) -> OreCatchUnwind<Self>
