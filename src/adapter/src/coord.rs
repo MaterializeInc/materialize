@@ -1440,15 +1440,19 @@ impl Coordinator {
             .create_replicas(replicas_to_start, enable_worker_core_affinity)
             .await?;
 
+        let storage_metadata = self.catalog.state().storage_metadata();
+
         debug!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
-        self.controller
-            .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_materialized_view_ids);
+        self.controller.storage.drop_sources_unvalidated(
+            storage_metadata,
+            builtin_migration_metadata.previous_materialized_view_ids,
+        );
 
-        self.controller
-            .storage
-            .drop_sources_unvalidated(builtin_migration_metadata.previous_source_ids);
+        self.controller.storage.drop_sources_unvalidated(
+            storage_metadata,
+            builtin_migration_metadata.previous_source_ids,
+        );
         self.controller
             .storage
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);

@@ -395,7 +395,7 @@ where
         let enriched_with_metadata = collections
             .into_iter()
             .map(|(id, description)| {
-                let data_shard = storage_metadata.get_collection_shard(id)?;
+                let data_shard = storage_metadata.get_collection_shard::<T>(id)?;
 
                 let get_shard = |id| -> Result<ShardId, StorageError<T>> {
                     let shard = match self.collections.get(&id) {
@@ -1122,14 +1122,28 @@ where
 
     fn drop_sources(
         &mut self,
+        storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
-        self.drop_sources_unvalidated(identifiers);
+        self.drop_sources_unvalidated(storage_metadata, identifiers);
         Ok(())
     }
 
-    fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
+    fn drop_sources_unvalidated(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+        identifiers: Vec<GlobalId>,
+    ) {
+        for id in &identifiers {
+            let metadata = storage_metadata.get_collection_shard::<T>(*id);
+            mz_ore::soft_assert_or_log!(
+                matches!(metadata, Err(StorageError::IdentifierMissing(_))),
+                "dropping {id}, but drop was not synchronized with storage \
+                controller via `synchronize_collections`"
+            );
+        }
+
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
@@ -2168,21 +2182,36 @@ where
             new_collections
         );
 
-        self.prepare_collections(txn, new_collections).await?;
+        self.synchronize_collections(txn, new_collections, BTreeSet::new())
+            .await?;
 
         Ok(())
     }
 
-    async fn prepare_collections(
+    async fn synchronize_collections(
         &mut self,
         txn: &mut dyn StorageTxn<T>,
-        ids: BTreeSet<GlobalId>,
+        ids_to_add: BTreeSet<GlobalId>,
+        ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         txn.insert_collection_metadata(
-            ids.into_iter()
+            ids_to_add
+                .into_iter()
                 .map(|id| (id, ShardId::new().to_string()))
                 .collect(),
-        )
+        )?;
+
+        // Delete the metadata for any dropped collections.
+        let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
+
+        let dropped_shards = dropped_mappings
+            .into_iter()
+            .map(|(_id, shard)| shard)
+            .collect();
+
+        txn.insert_unfinalized_shards(dropped_shards)?;
+
+        Ok(())
     }
 }
 

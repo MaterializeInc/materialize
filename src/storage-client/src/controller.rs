@@ -403,6 +403,7 @@ pub trait StorageController: Debug {
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     fn drop_sources(
         &mut self,
+        storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
@@ -434,7 +435,11 @@ pub trait StorageController: Debug {
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
     ///     `drop_sources`.
-    fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>);
+    fn drop_sources_unvalidated(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+        identifiers: Vec<GlobalId>,
+    );
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
@@ -648,15 +653,16 @@ pub trait StorageController: Debug {
         ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Provisionally synchronize the storage controller state with the
-    /// implementor of [`StorageTxn`].
+    /// Update the implementor of [`StorageTxn`] with the appropriate metadata
+    /// given the IDs to add and drop.
     ///
     /// The data modified in the `StorageTxn` must be made available in all
-    /// subsequent calls that require [`StateState`] as a parameter.
-    async fn prepare_collections(
+    /// subsequent calls that require [`StorageMetadata`] as a parameter.
+    async fn synchronize_collections(
         &mut self,
         txn: &mut dyn StorageTxn<Self::Timestamp>,
-        ids: BTreeSet<GlobalId>,
+        ids_to_add: BTreeSet<GlobalId>,
+        ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 }
 

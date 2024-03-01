@@ -688,9 +688,10 @@ impl Coordinator {
             self.active_webhooks.remove(id);
             self.drop_storage_read_policy(id);
         }
+        let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_sources(sources)
+            .drop_sources(storage_metadata, sources)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 

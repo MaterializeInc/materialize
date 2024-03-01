@@ -1163,6 +1163,7 @@ impl Catalog {
         };
 
         let mut storage_collections_to_prepare = BTreeSet::new();
+        let mut storage_collections_to_drop = BTreeSet::new();
 
         for op in ops {
             match op {
@@ -2032,6 +2033,10 @@ impl Catalog {
                             }
                             if !entry.item().is_temporary() {
                                 tx.remove_item(id)?;
+                            }
+
+                            if entry.item().is_storage_collection() {
+                                storage_collections_to_drop.insert(id);
                             }
 
                             builtin_table_updates.extend(state.pack_item_update(id, -1));
@@ -2948,7 +2953,11 @@ impl Catalog {
 
         if dry_run_ops.is_empty() {
             storage_controller
-                .prepare_collections(tx, storage_collections_to_prepare)
+                .synchronize_collections(
+                    tx,
+                    storage_collections_to_prepare,
+                    storage_collections_to_drop,
+                )
                 .await?;
 
             state.update_storage_metadata(tx);
