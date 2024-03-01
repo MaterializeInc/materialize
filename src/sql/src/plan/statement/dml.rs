@@ -255,20 +255,24 @@ pub fn describe_explain_plan(
 
     match stage {
         ExplainStage::RawPlan => {
-            relation_desc =
-                relation_desc.with_column("Raw Plan", ScalarType::String.nullable(false));
+            let name = "Raw Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::DecorrelatedPlan => {
-            relation_desc =
-                relation_desc.with_column("Decorrelated Plan", ScalarType::String.nullable(false));
+            let name = "Decorrelated Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
-        ExplainStage::OptimizedPlan => {
-            relation_desc =
-                relation_desc.with_column("Optimized Plan", ScalarType::String.nullable(false));
+        ExplainStage::LocalPlan => {
+            let name = "Locally Optimized Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+        }
+        ExplainStage::GlobalPlan => {
+            let name = "Optimized Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::PhysicalPlan => {
-            relation_desc =
-                relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
+            let name = "Physical Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::Trace => {
             relation_desc = relation_desc
@@ -404,16 +408,20 @@ fn plan_explainee(
 
     let is_replan = matches!(
         explainee,
-        Explainee::ReplanView(_) | Explainee::ReplanMaterializedView(_) | Explainee::ReplanIndex(_),
+        Explainee::ReplanView(_) | Explainee::ReplanMaterializedView(_) | Explainee::ReplanIndex(_)
     );
 
     let explainee = match explainee {
-        Explainee::View(_) | Explainee::ReplanView(_) => {
-            bail_never_supported!(
-                "EXPLAIN ... VIEW <view_name>",
-                "sql/explain-plan",
-                "Use `EXPLAIN ... SELECT * FROM <view_name>` (if the view is not indexed) or `EXPLAIN ... INDEX <idx_name>` (if the view is indexed) instead."
-            );
+        Explainee::View(name) | Explainee::ReplanView(name) => {
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let item_type = item.item_type();
+            if item_type != CatalogItemType::View {
+                sql_bail!("Expected {name} to be a view, not a {item_type}");
+            }
+            match is_replan {
+                true => crate::plan::Explainee::ReplanView(item.id()),
+                false => crate::plan::Explainee::View(item.id()),
+            }
         }
         Explainee::MaterializedView(name) | Explainee::ReplanMaterializedView(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
@@ -438,14 +446,31 @@ fn plan_explainee(
             }
         }
         Explainee::Select(select, broken) => {
-            let copy_to = None;
-            let (plan, desc) = plan_select_inner(scx, *select, params, copy_to)?;
-
+            let (plan, desc) = plan_select_inner(scx, *select, params, None)?;
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
             }
-
             crate::plan::Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc })
+        }
+        Explainee::CreateView(mut stmt, broken) => {
+            if stmt.if_exists != IfExistsBehavior::Skip {
+                // If we don't force this parameter to Skip planning will
+                // fail for names that already exist in the catalog. This
+                // can happen even in `Replace` mode if the existing item
+                // has dependencies.
+                stmt.if_exists = IfExistsBehavior::Skip;
+            } else {
+                sql_bail!(
+                    "Cannot EXPLAIN a CREATE VIEW that explictly sets IF NOT EXISTS \
+                     (the behavior is implied within the scope of an enclosing EXPLAIN)"
+                );
+            }
+
+            let Plan::CreateView(plan) = ddl::plan_create_view(scx, *stmt, params)? else {
+                sql_bail!("expected CreateViewPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateView { broken, plan })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {
             if stmt.if_exists != IfExistsBehavior::Skip {

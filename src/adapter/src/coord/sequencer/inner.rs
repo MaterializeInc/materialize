@@ -1855,6 +1855,10 @@ impl Coordinator {
     ) {
         match &plan.explainee {
             plan::Explainee::Statement(stmt) => match stmt {
+                plan::ExplaineeStatement::CreateView { .. } => {
+                    let msg = "EXPLAIN CREATE VIEW is currently not supported";
+                    ctx.retire(Err(AdapterError::Unsupported(msg)));
+                }
                 plan::ExplaineeStatement::CreateMaterializedView { .. } => {
                     self.explain_create_materialized_view(ctx, plan).await;
                 }
@@ -1865,6 +1869,10 @@ impl Coordinator {
                     self.explain_peek(ctx, plan, target_cluster).await;
                 }
             },
+            plan::Explainee::View(_) => {
+                let msg = "EXPLAIN VIEW is currently not supported";
+                ctx.retire(Err(AdapterError::Unsupported(msg)));
+            }
             plan::Explainee::MaterializedView(_) => {
                 let result = self.explain_materialized_view(&ctx, plan);
                 ctx.retire(result);
@@ -1872,6 +1880,10 @@ impl Coordinator {
             plan::Explainee::Index(_) => {
                 let result = self.explain_index(&ctx, plan);
                 ctx.retire(result);
+            }
+            plan::Explainee::ReplanView(_) => {
+                let msg = "EXPLAIN REPLAN VIEW is currently not supported";
+                ctx.retire(Err(AdapterError::Unsupported(msg)));
             }
             plan::Explainee::ReplanMaterializedView(_) => {
                 self.explain_replan_materialized_view(ctx, plan).await;
@@ -1909,7 +1921,7 @@ impl Coordinator {
         };
 
         let explain = match stage {
-            ExplainStage::OptimizedPlan => {
+            ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
@@ -1968,7 +1980,7 @@ impl Coordinator {
         };
 
         let explain = match stage {
-            ExplainStage::OptimizedPlan => {
+            ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");

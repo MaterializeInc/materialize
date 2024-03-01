@@ -321,8 +321,8 @@ impl PlanTrace<UsedIndexes> {
         // Compute the path from which we are going to lookup the `UsedIndexes`
         // instance from the requested path.
         let path = match NamedPlan::of_path(plan_path) {
-            Some(NamedPlan::Optimized) => Some(NamedPlan::Optimized),
-            Some(NamedPlan::Physical) => Some(NamedPlan::Optimized),
+            Some(NamedPlan::Global) => Some(NamedPlan::Global),
+            Some(NamedPlan::Physical) => Some(NamedPlan::Global),
             Some(NamedPlan::FastPath) => Some(NamedPlan::FastPath),
             _ => None,
         };
