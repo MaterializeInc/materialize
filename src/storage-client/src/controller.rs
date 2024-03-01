@@ -609,7 +609,7 @@ pub trait StorageController: Debug {
     ///
     /// Most likely, this data comes from a persisted source outside of the
     /// storage controller.
-    async fn initialize_collections(
+    async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn,
         ids: BTreeSet<GlobalId>,
@@ -620,7 +620,7 @@ pub trait StorageController: Debug {
     ///
     /// The data modified in the `StorageTxn` must be made available in all
     /// subsequent calls that require [`StorageMetadata`] as a parameter.
-    async fn synchronize_collections(
+    async fn prepare_state(
         &mut self,
         txn: &mut dyn StorageTxn,
         ids_to_add: BTreeSet<GlobalId>,
