@@ -74,26 +74,44 @@ impl Join {
                 return Ok(());
             }
 
-            // Each input is either an MFP around a Join, or just an expression.
-            let children = inputs
-                .iter()
-                .map(|expr| {
-                    let (mfp, inner) = MapFilterProject::extract_from_expression(expr);
-                    if let MirRelationExpr::Join {
-                        inputs,
-                        equivalences,
-                        ..
-                    } = inner
-                    {
-                        Ok((mfp, (inputs, equivalences)))
-                    } else {
-                        Err((mfp.projection.len(), expr))
+            // Bail early if no children are MFPs around a Join
+            if inputs.iter().any(|mut expr| {
+                let mut result = None;
+                while result.is_none() {
+                    match expr {
+                        MirRelationExpr::Map { input, .. }
+                        | MirRelationExpr::Filter { input, .. }
+                        | MirRelationExpr::Project { input, .. } => {
+                            expr = &**input;
+                        }
+                        MirRelationExpr::Join { .. } => {
+                            result = Some(true);
+                        }
+                        _ => {
+                            result = Some(false);
+                        }
                     }
-                })
-                .collect::<Vec<_>>();
+                }
+                result.unwrap()
+            }) {
+                // Each input is either an MFP around a Join, or just an expression.
+                let children = inputs
+                    .iter()
+                    .map(|expr| {
+                        let (mfp, inner) = MapFilterProject::extract_from_expression(expr);
+                        if let MirRelationExpr::Join {
+                            inputs,
+                            equivalences,
+                            ..
+                        } = inner
+                        {
+                            Ok((mfp, (inputs, equivalences)))
+                        } else {
+                            Err((mfp.projection.len(), expr))
+                        }
+                    })
+                    .collect::<Vec<_>>();
 
-            // If any child is a join, we should initiate fusion.
-            if children.iter().any(|child| child.is_ok()) {
                 // Our plan is to append all subjoin inputs, and non-join expressions.
                 // Each join will lift its MFP to act on the whole product (via arity).
                 // The final join will also be wrapped with `equivalences` as predicates.
