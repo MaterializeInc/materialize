@@ -205,16 +205,23 @@ impl CopyToS3Uploader {
             "starting upload at bucket: {}, file {}",
             &bucket, &file_path
         );
-        let uploader = S3MultiPartUploader::try_new(
-            &self.sdk_config,
-            bucket,
-            file_path,
-            S3MultiPartUploaderConfig {
-                part_size_limit: ByteSize::mib(10).as_u64(),
-                file_size_limit: self.max_file_size,
-            },
-        )
-        .await?;
+        // TODO: remove clone?
+        let sdk_config = self.sdk_config.clone();
+        let max_file_size = self.max_file_size;
+        let handle = mz_ore::task::spawn(|| "s3_uploader::try_new", async move {
+            let uploader = S3MultiPartUploader::try_new(
+                &sdk_config,
+                bucket,
+                file_path,
+                S3MultiPartUploaderConfig {
+                    part_size_limit: ByteSize::mib(10).as_u64(),
+                    file_size_limit: max_file_size,
+                },
+            )
+            .await;
+            uploader
+        });
+        let uploader = handle.await.unwrap()?;
         self.current_file_uploader = Some(uploader);
         Ok(())
     }
@@ -229,8 +236,28 @@ impl CopyToS3Uploader {
     /// Finishes any remaining in-progress upload.
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
         if let Some(uploader) = self.current_file_uploader.take() {
-            uploader.finish().await?;
+            let handle =
+                mz_ore::task::spawn(|| "s3_uploader::finish", async { uploader.finish().await });
+            handle.await.unwrap()?;
         }
+        Ok(())
+    }
+
+    async fn upload_buffer(&mut self) -> Result<(), anyhow::Error> {
+        assert!(!self.buf.is_empty());
+        assert!(self.current_file_uploader.is_some());
+        let Some(uploader) = self.current_file_uploader.as_mut() else {
+            unreachable!();
+        };
+        // TODO: spawn task
+        // let buf = std::mem::take(&mut self.buf);
+        // // Clear and move the buffer contents into the task to do the upload.
+        // let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
+        //     uploader.buffer_chunk(&buf).await
+        // });
+        // handle.await.unwrap()?;
+        uploader.buffer_chunk(&self.buf).await?;
+        self.buf.clear();
         Ok(())
     }
 
@@ -248,25 +275,20 @@ impl CopyToS3Uploader {
         if self.current_file_uploader.is_none() {
             self.start_new_file_upload().await?;
         }
-        // Ideally it would be nice to get a `&mut uploader` returned from the `start_new_file_upload`,
-        // but that runs into borrow checker issues when trying to add the `&self.buf` to the
-        // `uploader.buffer_chunk`.
-        let Some(file_uploader) = self.current_file_uploader.as_mut() else {
+
+        let Some(file_uploader) = self.current_file_uploader.as_ref() else {
             unreachable!("uploader initialized above");
         };
         if file_uploader.can_add_more_bytes(buffer_length) || file_uploader.added_bytes() == 0 {
             // Add to ongoing upload of the current file if still within max_file_size limit.
             // Or in the unlikely event the size of a single row is more than the max_file_size
             // and no data has been added to the uploader yet, upload it anyway.
-            file_uploader.buffer_chunk(&self.buf).await?;
+            self.upload_buffer().await?;
         } else {
             // Start a multi part upload of next file.
             self.start_new_file_upload().await?;
             // Upload data for the new part.
-            let Some(file_uploader) = self.current_file_uploader.as_mut() else {
-                unreachable!("uploader initialized above");
-            };
-            file_uploader.buffer_chunk(&self.buf).await?;
+            self.upload_buffer().await?;
         }
 
         Ok(())
@@ -322,7 +344,7 @@ mod tests {
         };
         let typ: RelationType = RelationType::new(vec![ColumnType {
             scalar_type: mz_repr::ScalarType::String,
-            nullable: false,
+            nullable: true,
         }]);
         let column_names = vec![ColumnName::from("col1")];
         let desc = RelationDesc::new(typ, column_names.into_iter());
@@ -343,6 +365,9 @@ mod tests {
         uploader.append_row(&row).await?;
 
         // Since the max_file_size is 6B, this row will be uploaded to a new file.
+        row.packer().push(Datum::Null);
+        uploader.append_row(&row).await?;
+
         row.packer().push(Datum::from("5678"));
         uploader.append_row(&row).await?;
 
@@ -372,7 +397,7 @@ mod tests {
             .unwrap();
 
         let body = second_file.body.collect().await.unwrap().into_bytes();
-        let expected_body: &[u8] = b"5678\n";
+        let expected_body: &[u8] = b"\n5678\n";
         assert_eq!(body, *expected_body);
 
         Ok(())
