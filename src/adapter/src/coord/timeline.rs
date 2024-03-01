@@ -626,7 +626,7 @@ impl Coordinator {
         for (
             timeline,
             TimelineState {
-                mut oracle,
+                oracle,
                 mut read_holds,
             },
         ) in global_timelines
