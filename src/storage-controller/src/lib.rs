@@ -277,7 +277,6 @@ where
     type Timestamp = T;
 
     fn initialization_complete(&mut self) {
-        // TODO: reconcile dangling persist shards.
         mz_ore::soft_assert_or_log!(
             self.provisional_shard_mappings.is_empty(),
             "dangling collections {:?}",
@@ -2126,7 +2125,7 @@ where
         Ok(())
     }
 
-    async fn initialize_collections(
+    async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn,
         ids: BTreeSet<GlobalId>,
@@ -2158,17 +2157,35 @@ where
             new_collections
         );
 
-        self.synchronize_collections(txn, new_collections, BTreeSet::new())
+        self.provisionally_synchronize_state(txn, new_collections, BTreeSet::new())
             .await?;
 
         // Add all previous metadata to the set of provisional metadata. We
         // expect to call `create_collections` for each of these.
         self.provisional_shard_mappings.extend(storage_metadata);
 
+        // All shards that belong to collections dropped in the last epoch are
+        // eligible for finalization. This intentionally includes any built-in
+        // collections present in `drop_ids`.
+        //
+        // n.b. this introduces an unlikely race condition: if a collection is
+        // dropped from the catalog, but the dataflow is still running on a
+        // worker, assuming the shard is safe to finalize on reboot may cause
+        // the cluster to panic.
+        self.finalizable_shards.extend(
+            txn.get_unfinalized_shards()
+                .into_iter()
+                .map(|shard| ShardId::from_str(&shard).expect("deserialization corrupted")),
+        );
+
+        // We will not call any additional function to drop built-in
+        // collections.
+        self.provisional_dropped_collections.clear();
+
         Ok(())
     }
 
-    async fn synchronize_collections(
+    async fn provisionally_synchronize_state(
         &mut self,
         txn: &mut dyn StorageTxn,
         ids_to_add: BTreeSet<GlobalId>,
@@ -2202,8 +2219,16 @@ where
             .partition_map(|v| v);
 
         txn.insert_unfinalized_shards(dropped_shards)?;
-
         self.provisional_dropped_collections = dropped_ids;
+
+        // Reconcile any shards we've successfully finalized with the shard
+        // finalization collection.
+        txn.mark_shards_as_finalized(
+            self.finalized_shards
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
+        );
 
         Ok(())
     }
@@ -2211,6 +2236,14 @@ where
     fn clear_provisional_state(&mut self) {
         self.provisional_shard_mappings.clear();
         self.provisional_dropped_collections.clear();
+    }
+
+    fn mark_state_synchronized(&mut self, txn: &dyn StorageTxn) {
+        let unfinalized_shards = txn.get_unfinalized_shards();
+        // If the durable state believes the shard is unfinalized, retain it for
+        // the next synchronization.
+        self.finalized_shards
+            .retain(|shard| unfinalized_shards.contains(&shard.to_string()));
     }
 }
 

@@ -583,7 +583,7 @@ pub trait StorageController: Debug {
     ///
     /// Most likely, this data comes from a persisted source outside of the
     /// storage controller.
-    async fn initialize_collections(
+    async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn,
         ids: BTreeSet<GlobalId>,
@@ -601,19 +601,7 @@ pub trait StorageController: Debug {
     ///   `drop_sources_unvalidated` for each in `ids_to_drop`.
     /// - Call `clear_provisional_state`. This is the case if the operation
     ///   preparing the collections fails.
-    ///
-    /// Because persist shard mappings should remain consistent across restarts,
-    /// the caller of this function must durably record the returned value.
-    ///
-    /// In the future we might be able to delegate this responsibility to the
-    /// storage controller itself, but right now:
-    /// - Components that provide durable storage depend either directly or
-    ///   transitively on this crate, so this module cannot depend on them.
-    ///   Changing that dependency structure requires a large amount of code
-    ///   movement.
-    /// - The storage controller must be able to be made into a trait object, so
-    ///   cannot provide a trait for some "downstream" crate to implement.
-    async fn synchronize_collections(
+    async fn provisionally_synchronize_state(
         &mut self,
         txn: &mut dyn StorageTxn,
         ids_to_add: BTreeSet<GlobalId>,
@@ -623,6 +611,11 @@ pub trait StorageController: Debug {
     /// Clears any state generated from
     /// [`StorageController::provisionally_synchronize_state`].
     fn clear_provisional_state(&mut self);
+
+    /// Opportunistically clean up any state that is no longer ambiguous if the
+    /// last call to [`StorageController::provisionally_synchronize_state`]
+    /// committed.
+    fn mark_state_synchronized(&mut self, txn: &dyn StorageTxn);
 }
 
 /// State maintained about individual collections.

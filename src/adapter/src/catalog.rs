@@ -175,7 +175,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         storage_controller
-            .initialize_collections(&mut txn, collections)
+            .initialize_state(&mut txn, collections)
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
@@ -1131,6 +1131,12 @@ impl Catalog {
         tx.commit()
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
+
+        // Open a new tx so we can understand what impact the commit had on the
+        // storage controller's state.
+        let tx = storage.transaction().await?;
+        storage_controller.mark_state_synchronized(&tx);
+        drop(tx);
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
@@ -2932,7 +2938,7 @@ impl Catalog {
 
         if dry_run_ops.is_empty() {
             storage_controller
-                .synchronize_collections(
+                .provisionally_synchronize_state(
                     tx,
                     storage_collections_to_prepare,
                     storage_collections_to_drop,
