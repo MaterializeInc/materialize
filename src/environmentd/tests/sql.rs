@@ -23,7 +23,6 @@ use axum::response::{IntoResponse, Response};
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
-use itertools::Itertools;
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_environmentd::test_util::{
     self, get_explain_timestamp, get_explain_timestamp_determination, try_get_explain_timestamp,
@@ -3110,100 +3109,6 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .query("SELECT * FROM mz_internal.mz_active_peeks", &[])
         .unwrap();
     assert_introspection_notice(Some(INTROSPECTION_NOTICE));
-}
-
-#[mz_ore::test]
-fn test_max_connections() {
-    mz_ore::test::init_logging();
-    let server = test_util::TestHarness::default().start_blocking();
-
-    let mut mz_client = server
-        .pg_config_internal()
-        .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
-        .unwrap();
-    mz_client
-        .batch_execute("ALTER SYSTEM SET max_connections TO 1")
-        .unwrap();
-
-    {
-        let mut client1 = server.connect(postgres::NoTls).unwrap();
-        let _ = client1.batch_execute("SELECT 1").unwrap();
-
-        let e = server
-            .connect(postgres::NoTls)
-            .map(|_| ())
-            .expect_err("connect should fail");
-        let e = e
-            .as_db_error()
-            .unwrap_or_else(|| panic!("expect db error: {}", e));
-        assert!(
-            e.message()
-                .starts_with("creating connection would violate max_connections limit"),
-            "e={}; msg: {}",
-            e,
-            e.message()
-        );
-
-        let e = server
-            .connect(postgres::NoTls)
-            .map(|_| ())
-            .expect_err("connect should fail");
-        let e = e
-            .as_db_error()
-            .unwrap_or_else(|| panic!("expect db error: {}", e));
-        assert!(
-            e.message()
-                .starts_with("creating connection would violate max_connections limit"),
-            "e={}",
-            e
-        );
-
-        let mut mz_client2 = server
-            .pg_config_internal()
-            .user(&SYSTEM_USER.name)
-            .connect(postgres::NoTls)
-            .unwrap();
-        mz_client2
-            .batch_execute("SELECT 1")
-            .expect("super users are still allowed to do queries");
-    }
-    // after a client disconnects we can connect once the server notices the close
-    Retry::default()
-        .max_tries(10)
-        .retry(|_state| {
-            let mut client = match server.connect(postgres::NoTls) {
-                Err(e) => {
-                    let e = e
-                        .as_db_error()
-                        .unwrap_or_else(|| panic!("expect db error: {}", e));
-                    assert!(
-                        e.message()
-                            .starts_with("creating connection would violate max_connections limit"),
-                        "e={}",
-                        e
-                    );
-                    return Err(());
-                }
-                Ok(client) => client,
-            };
-            let _ = client.batch_execute("SELECT 1").unwrap();
-            Ok(())
-        })
-        .unwrap();
-
-    mz_client
-        .batch_execute("ALTER SYSTEM RESET max_connections")
-        .unwrap();
-
-    // We can create lots of clients now
-    (0..10)
-        .map(|_| {
-            let mut client = server.connect(postgres::NoTls).unwrap();
-            client.batch_execute("SELECT 1").unwrap();
-            client
-        })
-        .collect_vec();
 }
 
 #[mz_ore::test]

@@ -1381,8 +1381,15 @@ pub static AUTO_ROUTE_INTROSPECTION_QUERIES: VarDefinition = VarDefinition::new(
 
 pub static MAX_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_connections",
-    value!(u32; 1000),
-    "The maximum number of concurrent connections (Materialize).",
+    value!(u32; 5000),
+    "The maximum number of concurrent connections (PostgreSQL).",
+    false,
+);
+
+pub static SUPERUSER_RESERVED_CONNECTIONS: VarDefinition = VarDefinition::new(
+    "superuser_reserved_connections",
+    value!(u32; 3),
+    "The number of connections that are reserved for superusers (PostgreSQL).",
     false,
 );
 
