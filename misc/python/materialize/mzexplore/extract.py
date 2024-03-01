@@ -236,7 +236,7 @@ def plans(
                     info(f"Explaining {stage} for CREATE {fqname} in `{file_name}`")
                     try:
                         plans[file_name] = explain(
-                            db, stage, explainee, explain_flags, explain_format
+                            db, stage, explainee, explain_flags, explain_format,
                         )
                     except DatabaseError as e:
                         warn(f"Cannot explain {stage} for CREATE {fqname}: {e}")
