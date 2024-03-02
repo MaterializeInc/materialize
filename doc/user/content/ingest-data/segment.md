@@ -26,6 +26,8 @@ To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/crea
 
 ```sql
 CREATE CLUSTER webhooks_cluster (SIZE = '3xsmall');
+
+SET CLUSTER = webhooks_cluster;
 ```
 
 ## Step 2. Create a secret
@@ -41,7 +43,9 @@ Change the `<secret_value>` to a unique value that only you know and store it in
 ## Step 3. Set up a webhook source
 
 Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/)
-in Materialize to ingest data from Segment:
+in Materialize to ingest data from Segment. By default, the source will be
+created in the active cluster; to use a different cluster, use the `IN
+CLUSTER` clause.
 
 ```sql
 CREATE SOURCE segment_source IN CLUSTER webhooks_cluster FROM WEBHOOK
