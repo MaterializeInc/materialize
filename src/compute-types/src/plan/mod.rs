@@ -554,14 +554,14 @@ impl Arbitrary for Plan {
             (rows, any::<NodeId>()).prop_map(|(rows, node_id)| Plan::Constant { rows, node_id });
 
         let get = (
-            any::<Id>(),
+            any::<GlobalId>(),
             any::<AvailableCollections>(),
             any::<GetPlan>(),
             any::<NodeId>(),
         )
             .prop_map(
                 |(id, keys, plan, node_id)| Plan::<mz_repr::Timestamp>::Get {
-                    id,
+                    id: Id::Global(id),
                     keys,
                     plan,
                     node_id,

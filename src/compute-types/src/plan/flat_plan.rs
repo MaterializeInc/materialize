@@ -13,14 +13,21 @@
 use std::collections::BTreeMap;
 
 use mz_expr::{EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, Row};
+use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, NodeId, Plan};
+use crate::plan::{AvailableCollections, GetPlan, NodeId, Plan, ProtoLetRecLimit};
+
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_compute_types.plan.flat_plan.rs"
+));
 
 /// A flat representation of LIR plans.
 ///
@@ -546,5 +553,368 @@ impl<T> FlatPlanNode<T> {
         }
 
         list.into_iter().flatten().chain(last)
+    }
+}
+
+impl Arbitrary for FlatPlan {
+    type Strategy = BoxedStrategy<FlatPlan>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        any::<Plan>().prop_map(FlatPlan::from).boxed()
+    }
+}
+
+impl RustType<ProtoFlatPlan> for FlatPlan {
+    fn into_proto(&self) -> ProtoFlatPlan {
+        ProtoFlatPlan {
+            nodes: self.nodes.into_proto(),
+            root: self.root,
+        }
+    }
+
+    fn from_proto(proto: ProtoFlatPlan) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(Self {
+            nodes: proto.nodes.into_rust()?,
+            root: proto.root,
+        })
+    }
+}
+
+impl ProtoMapEntry<NodeId, FlatPlanNode> for proto_flat_plan::ProtoNode {
+    fn from_rust(entry: (&NodeId, &FlatPlanNode)) -> Self {
+        Self {
+            id: *entry.0,
+            node: Some(entry.1.into_proto()),
+        }
+    }
+
+    fn into_rust(self) -> Result<(NodeId, FlatPlanNode), TryFromProtoError> {
+        Ok((self.id, self.node.into_rust_if_some("ProtoNode::node")?))
+    }
+}
+
+impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
+    fn into_proto(&self) -> ProtoFlatPlanNode {
+        use proto_flat_plan_node::*;
+
+        fn input_kv_into(
+            input_key_val: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        ) -> Option<ProtoInputKeyVal> {
+            input_key_val.as_ref().map(|(key, val)| ProtoInputKeyVal {
+                key: key.into_proto(),
+                val: val.into_proto(),
+            })
+        }
+
+        fn input_k_into(input_key: &Option<Vec<MirScalarExpr>>) -> Option<ProtoInputKey> {
+            input_key.as_ref().map(|vec| ProtoInputKey {
+                key: vec.into_proto(),
+            })
+        }
+
+        let kind = match self {
+            Self::Constant { rows } => Kind::Constant(ProtoConstant {
+                rows: Some(rows.into_proto()),
+            }),
+            Self::Get { id, keys, plan } => Kind::Get(ProtoGet {
+                id: Some(id.into_proto()),
+                keys: Some(keys.into_proto()),
+                plan: Some(plan.into_proto()),
+            }),
+            Self::LetRec {
+                ids,
+                values,
+                limits,
+                body,
+            } => {
+                let mut proto_limits = Vec::with_capacity(limits.len());
+                let mut proto_limit_is_some = Vec::with_capacity(limits.len());
+                for limit in limits {
+                    match limit {
+                        Some(limit) => {
+                            proto_limits.push(limit.into_proto());
+                            proto_limit_is_some.push(true);
+                        }
+                        None => {
+                            // The actual value doesn't matter here, because the limit_is_some
+                            // field will be false, so we won't read this value when converting
+                            // back.
+                            proto_limits.push(ProtoLetRecLimit {
+                                max_iters: 1,
+                                return_at_limit: false,
+                            });
+                            proto_limit_is_some.push(false);
+                        }
+                    }
+                }
+
+                Kind::LetRec(ProtoLetRec {
+                    ids: ids.into_proto(),
+                    values: values.into_proto(),
+                    limits: proto_limits,
+                    limit_is_some: proto_limit_is_some,
+                    body: *body,
+                })
+            }
+            Self::Mfp {
+                input,
+                mfp,
+                input_key_val,
+            } => Kind::Mfp(ProtoMfp {
+                input: *input,
+                mfp: Some(mfp.into_proto()),
+                input_key_val: input_kv_into(input_key_val),
+            }),
+            Self::FlatMap {
+                input,
+                func,
+                exprs,
+                mfp_after,
+                input_key,
+            } => Kind::FlatMap(ProtoFlatMap {
+                input: *input,
+                func: Some(func.into_proto()),
+                exprs: exprs.into_proto(),
+                mfp_after: Some(mfp_after.into_proto()),
+                input_key: input_k_into(input_key),
+            }),
+            Self::Join { inputs, plan } => Kind::Join(ProtoJoin {
+                inputs: inputs.into_proto(),
+                plan: Some(plan.into_proto()),
+            }),
+            Self::Reduce {
+                input,
+                key_val_plan,
+                plan,
+                input_key,
+                mfp_after,
+            } => Kind::Reduce(ProtoReduce {
+                input: *input,
+                key_val_plan: Some(key_val_plan.into_proto()),
+                plan: Some(plan.into_proto()),
+                input_key: input_k_into(input_key),
+                mfp_after: Some(mfp_after.into_proto()),
+            }),
+            Self::TopK { input, top_k_plan } => Kind::TopK(ProtoTopK {
+                input: *input,
+                top_k_plan: Some(top_k_plan.into_proto()),
+            }),
+            Self::Negate { input } => Kind::Negate(ProtoNegate { input: *input }),
+            Self::Threshold {
+                input,
+                threshold_plan,
+            } => Kind::Threshold(ProtoThreshold {
+                input: *input,
+                threshold_plan: Some(threshold_plan.into_proto()),
+            }),
+            Self::Union {
+                inputs,
+                consolidate_output,
+            } => Kind::Union(ProtoUnion {
+                inputs: inputs.into_proto(),
+                consolidate_output: *consolidate_output,
+            }),
+            Self::ArrangeBy {
+                input,
+                forms,
+                input_key,
+                input_mfp,
+            } => Kind::ArrangeBy(ProtoArrangeBy {
+                input: *input,
+                forms: Some(forms.into_proto()),
+                input_key: input_k_into(input_key),
+                input_mfp: Some(input_mfp.into_proto()),
+            }),
+        };
+
+        ProtoFlatPlanNode { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoFlatPlanNode) -> Result<Self, TryFromProtoError> {
+        use proto_flat_plan_node::*;
+
+        fn input_kv_try_into(
+            input_key_val: Option<ProtoInputKeyVal>,
+        ) -> Result<Option<(Vec<MirScalarExpr>, Option<Row>)>, TryFromProtoError> {
+            let option = match input_key_val {
+                Some(kv) => Some((kv.key.into_rust()?, kv.val.into_rust()?)),
+                None => None,
+            };
+            Ok(option)
+        }
+
+        fn input_k_try_into(
+            input_key: Option<ProtoInputKey>,
+        ) -> Result<Option<Vec<MirScalarExpr>>, TryFromProtoError> {
+            let option = match input_key {
+                Some(k) => Some(k.key.into_rust()?),
+                None => None,
+            };
+            Ok(option)
+        }
+
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoPlan::kind"))?;
+
+        let result = match kind {
+            Kind::Constant(proto) => Self::Constant {
+                rows: proto.rows.into_rust_if_some("ProtoConstant::rows")?,
+            },
+            Kind::Get(proto) => Self::Get {
+                id: proto.id.into_rust_if_some("ProtoGet::id")?,
+                keys: proto.keys.into_rust_if_some("ProtoGet::keys")?,
+                plan: proto.plan.into_rust_if_some("ProtoGet::plan")?,
+            },
+            Kind::LetRec(proto) => {
+                let mut limits = Vec::with_capacity(proto.limits.len());
+                for (limit, is_some) in proto.limits.into_iter().zip(proto.limit_is_some) {
+                    let limit = match is_some {
+                        true => Some(limit.into_rust()?),
+                        false => None,
+                    };
+                    limits.push(limit);
+                }
+
+                Self::LetRec {
+                    ids: proto.ids.into_rust()?,
+                    values: proto.values.into_rust()?,
+                    limits,
+                    body: proto.body,
+                }
+            }
+            Kind::Mfp(proto) => Self::Mfp {
+                input: proto.input,
+                mfp: proto.mfp.into_rust_if_some("ProtoMfp::mfp")?,
+                input_key_val: input_kv_try_into(proto.input_key_val)?,
+            },
+            Kind::FlatMap(proto) => Self::FlatMap {
+                input: proto.input,
+                func: proto.func.into_rust_if_some("ProtoFlatMap::func")?,
+                exprs: proto.exprs.into_rust()?,
+                mfp_after: proto
+                    .mfp_after
+                    .into_rust_if_some("ProtoFlatMap::mfp_after")?,
+                input_key: input_k_try_into(proto.input_key)?,
+            },
+            Kind::Join(proto) => Self::Join {
+                inputs: proto.inputs.into_rust()?,
+                plan: proto.plan.into_rust_if_some("ProtoJoin::plan")?,
+            },
+            Kind::Reduce(proto) => Self::Reduce {
+                input: proto.input,
+                key_val_plan: proto
+                    .key_val_plan
+                    .into_rust_if_some("ProtoReduce::key_val_plan")?,
+                plan: proto.plan.into_rust_if_some("ProtoReduce::plan")?,
+                input_key: input_k_try_into(proto.input_key)?,
+                mfp_after: proto.mfp_after.into_rust_if_some("Proto::mfp_after")?,
+            },
+            Kind::TopK(proto) => Self::TopK {
+                input: proto.input,
+                top_k_plan: proto
+                    .top_k_plan
+                    .into_rust_if_some("ProtoTopK::top_k_plan")?,
+            },
+            Kind::Negate(proto) => Self::Negate { input: proto.input },
+            Kind::Threshold(proto) => Self::Threshold {
+                input: proto.input,
+                threshold_plan: proto
+                    .threshold_plan
+                    .into_rust_if_some("ProtoThreshold::threshold_plan")?,
+            },
+            Kind::Union(proto) => Self::Union {
+                inputs: proto.inputs.into_rust()?,
+                consolidate_output: proto.consolidate_output,
+            },
+            Kind::ArrangeBy(proto) => Self::ArrangeBy {
+                input: proto.input,
+                forms: proto.forms.into_rust_if_some("ProtoArrangeBy::forms")?,
+                input_key: input_k_try_into(proto.input_key)?,
+                input_mfp: proto
+                    .input_mfp
+                    .into_rust_if_some("ProtoArrangeBy::input_mfp")?,
+            },
+        };
+
+        Ok(result)
+    }
+}
+
+impl RustType<proto_flat_plan_node::ProtoConstantRows>
+    for Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>
+{
+    fn into_proto(&self) -> proto_flat_plan_node::ProtoConstantRows {
+        use proto_flat_plan_node::proto_constant_rows::Result;
+
+        proto_flat_plan_node::ProtoConstantRows {
+            result: Some(match self {
+                Ok(ok) => Result::Ok(ok.into_proto()),
+                Err(err) => Result::Err(err.into_proto()),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto_flat_plan_node::ProtoConstantRows,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto_flat_plan_node::proto_constant_rows::Result;
+
+        match proto.result {
+            Some(Result::Ok(ok)) => Ok(Ok(ok.into_rust()?)),
+            Some(Result::Err(err)) => Ok(Err(err.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoConstantRows::result",
+            )),
+        }
+    }
+}
+
+impl RustType<proto_flat_plan_node::ProtoUpdateVec> for Vec<(Row, mz_repr::Timestamp, i64)> {
+    fn into_proto(&self) -> proto_flat_plan_node::ProtoUpdateVec {
+        proto_flat_plan_node::ProtoUpdateVec {
+            rows: self.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto_flat_plan_node::ProtoUpdateVec) -> Result<Self, TryFromProtoError> {
+        proto.rows.into_rust()
+    }
+}
+
+impl RustType<proto_flat_plan_node::ProtoUpdate> for (Row, mz_repr::Timestamp, i64) {
+    fn into_proto(&self) -> proto_flat_plan_node::ProtoUpdate {
+        proto_flat_plan_node::ProtoUpdate {
+            row: Some(self.0.into_proto()),
+            timestamp: self.1.into(),
+            diff: self.2,
+        }
+    }
+
+    fn from_proto(proto: proto_flat_plan_node::ProtoUpdate) -> Result<Self, TryFromProtoError> {
+        Ok((
+            proto.row.into_rust_if_some("ProtoUpdate::row")?,
+            proto.timestamp.into(),
+            proto.diff,
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_proto::protobuf_roundtrip;
+
+    use super::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+        #[mz_ore::test]
+        fn flat_plan_protobuf_roundtrip(expect in any::<FlatPlan>()) {
+            let actual = protobuf_roundtrip::<_, ProtoFlatPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
     }
 }
