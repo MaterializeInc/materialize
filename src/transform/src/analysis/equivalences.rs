@@ -244,7 +244,7 @@ impl EquivalenceClasses {
             stable = self.minimize_once(columns);
         }
 
-        // TODO: remove these measures once we are more confidence about idempotence.
+        // TODO: remove these measures once we are more confident about idempotence.
         let prev = self.clone();
         self.minimize_once(columns);
         assert_eq!(self, &prev);
@@ -340,9 +340,7 @@ impl EquivalenceClasses {
                     }
                 });
                 for expr in class.iter() {
-                    // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
-                    // This substitution replaces a complex expression with several smaller expressions, and cannot
-                    // cycle if we follow that practice.
+                    // If TRUE == NOT(X) then FALSE == X is a simpler form.
                     if let MirScalarExpr::CallUnary {
                         func: mz_expr::UnaryFunc::Not(_),
                         expr: e,
@@ -366,9 +364,7 @@ impl EquivalenceClasses {
             }
             if class.iter().any(|c| c.is_literal_false()) {
                 for expr in class.iter() {
-                    // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
-                    // This substitution replaces a complex expression with several smaller expressions, and cannot
-                    // cycle if we follow that practice.
+                    // If FALSE == NOT(X) then TRUE == X is a simpler form.
                     if let MirScalarExpr::CallUnary {
                         func: mz_expr::UnaryFunc::Not(_),
                         expr: e,
@@ -556,8 +552,9 @@ impl EquivalenceClasses {
                     simplified = self.reduce_expr(expr) || simplified;
                 }
             }
-            MirScalarExpr::If { cond, then, els } => {
-                simplified = self.reduce_expr(cond) || simplified;
+            MirScalarExpr::If { cond: _, then, els } => {
+                // Do not simplify `cond`, as we cannot ensure the simplification
+                // continues to hold as expressions migrate around.
                 simplified = self.reduce_expr(then) || simplified;
                 simplified = self.reduce_expr(els) || simplified;
             }
