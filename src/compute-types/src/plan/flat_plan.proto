@@ -30,6 +30,7 @@ message ProtoFlatPlan {
 
     repeated ProtoNode nodes = 1;
     uint64 root = 2;
+    repeated uint64 topological_order = 3;
 }
 
 message ProtoFlatPlanNode {

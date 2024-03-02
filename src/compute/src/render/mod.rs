@@ -741,15 +741,13 @@ where
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
-        let (nodes, root_id) = plan.destruct();
+        let (mut nodes, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `NodeId`.
         let mut collections = BTreeMap::new();
 
-        // Render the nodes, from the leafs to the root.
-        // This assumes node IDs are in dependency order.
-        // TODO: either enforce or remove this assumption
-        for (id, node) in nodes {
+        for id in topological_order {
+            let node = nodes.remove(&id).unwrap();
             let mut bundle = self.render_plan_node(node, &collections);
 
             if ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING.get(&self.worker_config) {

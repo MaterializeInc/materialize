@@ -57,12 +57,17 @@ include!(concat!(
 ///  (1) The `root` ID is contained in the `nodes` map.
 ///  (2) For each node in the `nodes` map, each [`NodeId`] contained within the node is contained
 ///      in the `nodes` map.
+///  (3) Each [`NodeId`] contained withing `topological_order` is contained in the `nodes` map.
 ///
 /// Constrained recursive structure:
 ///
-///  (3) `LetRec` nodes only occur at the root or as inputs of other `LetRec` nodes.
-///  (4) Only `LetRec` nodes may introduce cycles into the plan.
-///  (5) Each input to a `LetRec` node is the root of an independent subplan.
+///  (4) `LetRec` nodes only occur at the root or as inputs of other `LetRec` nodes.
+///  (5) Only `LetRec` nodes may introduce cycles into the plan.
+///  (6) Each input to a `LetRec` node is the root of an independent subplan.
+///
+/// Topological order:
+///
+///  (7) `topological_order` lists the nodes in a valid topological order.
 ///
 /// The implementation of [`FlatPlan`] must ensure that all its methods uphold these invariants and
 /// that users are not able to break them.
@@ -72,6 +77,8 @@ pub struct FlatPlan<T = mz_repr::Timestamp> {
     nodes: BTreeMap<NodeId, FlatPlanNode<T>>,
     /// The ID of the root node.
     root: NodeId,
+    /// The topological order of nodes (dependencies before dependants).
+    topological_order: Vec<NodeId>,
 }
 
 /// A node in a [`FlatPlan`].
@@ -299,12 +306,21 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
         let mut bindings: BTreeMap<LocalId, NodeId> = Default::default();
         // Node references to replace at the end.
         let mut replacements: BTreeMap<NodeId, NodeId> = Default::default();
+        // A list remembering the order in which nodes were flattened.
+        // Because nodes are flatten in right-to-left pre-order, reversing this list at the end
+        // yields a valid topological order.
+        let mut flatten_order: Vec<NodeId> = Default::default();
+
+        let mut insert_node = |id, node| {
+            nodes.insert(id, node);
+            flatten_order.push(id);
+        };
 
         while let Some(plan) = todo.pop() {
             match plan {
                 Plan::Constant { rows, node_id } => {
                     let node = Constant { rows };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
                 }
                 Plan::Get {
                     id,
@@ -326,7 +342,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                                         mfp,
                                         input_key_val: Some((keys, row)),
                                     };
-                                    nodes.insert(node_id, node);
+                                    insert_node(node_id, node);
                                 }
                                 GetPlan::Collection(mfp) => {
                                     let node = Mfp {
@@ -334,7 +350,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                                         mfp,
                                         input_key_val: None,
                                     };
-                                    nodes.insert(node_id, node);
+                                    insert_node(node_id, node);
                                 }
                             }
                             continue;
@@ -342,7 +358,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     }
 
                     let node = Get { id, keys, plan };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
                 }
                 Plan::Let {
                     id,
@@ -369,7 +385,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         limits,
                         body: body.node_id(),
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.extend(values);
                     todo.push(*body);
@@ -385,7 +401,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         mfp,
                         input_key_val,
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.push(*input);
                 }
@@ -404,7 +420,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         mfp_after,
                         input_key,
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.push(*input);
                 }
@@ -417,7 +433,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         inputs: inputs.iter().map(|i| i.node_id()).collect(),
                         plan,
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.extend(inputs.into_iter());
                 }
@@ -436,7 +452,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         input_key,
                         mfp_after,
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.push(*input);
                 }
@@ -449,7 +465,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         input: input.node_id(),
                         top_k_plan,
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.push(*input);
                 }
@@ -457,7 +473,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     let node = Negate {
                         input: input.node_id(),
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.push(*input);
                 }
@@ -470,7 +486,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         input: input.node_id(),
                         threshold_plan,
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.push(*input);
                 }
@@ -483,7 +499,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         inputs: inputs.iter().map(|i| i.node_id()).collect(),
                         consolidate_output,
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.extend(inputs.into_iter());
                 }
@@ -500,7 +516,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         input_key,
                         input_mfp,
                     };
-                    nodes.insert(node_id, node);
+                    insert_node(node_id, node);
 
                     todo.push(*input);
                 }
@@ -522,7 +538,14 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
         }
         replace(&mut root);
 
-        Self { nodes, root }
+        flatten_order.reverse();
+        let topological_order = flatten_order;
+
+        Self {
+            nodes,
+            root,
+            topological_order,
+        }
     }
 }
 
@@ -551,7 +574,7 @@ impl<T> FlatPlan<T> {
 
     /// Return whether the plan contains recursion.
     pub fn is_recursive(&self) -> bool {
-        // Because of invariant (3), every recursive plan must have a `LetRec` at its root.
+        // Because of invariant (4), every recursive plan must have a `LetRec` at its root.
         matches!(self.root(), FlatPlanNode::LetRec { .. })
     }
 
@@ -566,7 +589,7 @@ impl<T> FlatPlan<T> {
         Vec<(LocalId, FlatPlan<T>, Option<LetRecLimit>)>,
         FlatPlan<T>,
     ) {
-        let (mut nodes, root_id) = self.destruct();
+        let (mut nodes, root_id, mut topological_order) = self.destruct();
         let root = nodes.remove(&root_id).expect("invariant (1)");
         let FlatPlanNode::LetRec {
             ids,
@@ -578,9 +601,11 @@ impl<T> FlatPlan<T> {
             panic!("attempt to split a non-recursive plan");
         };
 
+        topological_order.retain(|id| *id != root_id);
+
         // For each value and the body, find the (transitively) referenced nodes and split them out
         // into new plan. We know that nodes cannot be shared between these subplans because of
-        // invariant (5).
+        // invariant (6).
 
         assert_eq!(ids.len(), values.len());
         assert_eq!(ids.len(), limits.len());
@@ -596,15 +621,29 @@ impl<T> FlatPlan<T> {
                     value_nodes.insert(node_id, node);
                 }
 
+                let mut value_order = Vec::with_capacity(nodes.len());
+                topological_order.retain(|id| {
+                    let in_value = value_nodes.contains_key(id);
+                    if in_value {
+                        value_order.push(*id);
+                    }
+                    !in_value
+                });
+
                 let plan = FlatPlan {
                     nodes: value_nodes,
                     root: root_id,
+                    topological_order: value_order,
                 };
                 (id, plan, limit)
             })
             .collect();
 
-        let body_plan = FlatPlan { nodes, root: body };
+        let body_plan = FlatPlan {
+            nodes,
+            root: body,
+            topological_order,
+        };
 
         (value_plans, body_plan)
     }
@@ -613,8 +652,8 @@ impl<T> FlatPlan<T> {
     ///
     /// This allows consuming the plan without being required to uphold the [`FlatPlan`]
     /// invariants.
-    pub fn destruct(self) -> (BTreeMap<NodeId, FlatPlanNode<T>>, NodeId) {
-        (self.nodes, self.root)
+    pub fn destruct(self) -> (BTreeMap<NodeId, FlatPlanNode<T>>, NodeId, Vec<NodeId>) {
+        (self.nodes, self.root, self.topological_order)
     }
 }
 
@@ -633,7 +672,8 @@ impl<T: Clone> FlatPlan<T> {
         let mut part_plans = vec![
             Self {
                 nodes: BTreeMap::new(),
-                root: self.root
+                root: self.root,
+                topological_order: self.topological_order,
             };
             parts
         ];
@@ -764,6 +804,7 @@ impl RustType<ProtoFlatPlan> for FlatPlan {
         ProtoFlatPlan {
             nodes: self.nodes.into_proto(),
             root: self.root,
+            topological_order: self.topological_order.into_proto(),
         }
     }
 
@@ -771,6 +812,7 @@ impl RustType<ProtoFlatPlan> for FlatPlan {
         Ok(Self {
             nodes: proto.nodes.into_rust()?,
             root: proto.root,
+            topological_order: proto.topological_order.into_rust()?,
         })
     }
 }
