@@ -495,23 +495,15 @@ impl HirRelationExpr {
                     input
                 }
                 Filter { input, predicates } => {
-                    // Filter expressions may contain correlated subqueries.
-                    // We extend `get_outer` with sufficient values to determine the value of the predicate,
-                    // then filter the results, then strip off any columns that were added for this purpose.
-                    let mut input =
-                        input.applied_to(id_gen, get_outer, col_map, cte_map, config)?;
-                    for predicate in predicates {
-                        let old_arity = input.arity();
-                        let predicate = predicate
-                            .applied_to(id_gen, col_map, cte_map, config, &mut input, &None)?;
-                        let new_arity = input.arity();
-                        input = input.filter(vec![predicate]);
-                        if old_arity != new_arity {
-                            // this means we added some columns to handle subqueries, and now we need to get rid of them
-                            input = input.project((0..old_arity).collect());
-                        }
-                    }
+                    // Use `Map`'s variadic expression lowering.
+                    let pred_len = predicates.len();
+                    let input = input
+                        .map(predicates)
+                        .applied_to(id_gen, get_outer, col_map, cte_map, config)?;
+                    let old_arity = input.arity();
                     input
+                        .filter((old_arity - pred_len..old_arity).map(MirScalarExpr::Column))
+                        .project((0..old_arity - pred_len).collect())
                 }
                 Join {
                     left,
