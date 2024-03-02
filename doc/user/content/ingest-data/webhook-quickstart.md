@@ -36,12 +36,11 @@ a secure location.
 ## Step 2. Set up a webhook source
 
 Using the secret from the previous step, create a webhook source to ingest data
-from the webhook event generator. Replace `my_cluster` with the cluster you
-want the source to be maintained in, or omit the `IN CLUSTER` clause to use the
+from the webhook event generator. By default, the source will be created in the
 current cluster.
 
 ```sql
-CREATE SOURCE webhook_demo IN CLUSTER my_cluster FROM WEBHOOK
+CREATE SOURCE webhook_demo FROM WEBHOOK
   BODY FORMAT JSON
   CHECK (
     WITH (
@@ -90,7 +89,10 @@ generator, the data will look like:
 
 {{< json-parser >}}
 
-Webhook data is ingested as a JSON blob. We recommend creating a parsing view on top of your webhook source that uses [jsonb operators](https://materialize.com/docs/sql/types/jsonb/#operators) to map the individual fields to columns with the required data types. Using the previous example:
+Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
+top of your webhook source that uses [jsonb operators](https://materialize.com/docs/sql/types/jsonb/#operators)
+to map the individual fields to columns with the required data types. Using the
+previous example:
 
 ```sql
 CREATE VIEW webhook_demo_parsed AS SELECT
@@ -127,4 +129,5 @@ DROP SECRET demo_webhook;
 
 ## Next steps
 
-To get started with your own data, [check out the reference documentation for the webhook source](/sql/create-source/webhook/).
+To get started with your own data, check out the [reference documentation](/sql/create-source/webhook/)
+for the webhook source.
