@@ -16,8 +16,9 @@ use aws_types::sdk_config::SdkConfig;
 use bytesize::ByteSize;
 use differential_dataflow::Collection;
 use http::Uri;
-use mz_aws_util::s3_uploader::{CompletedUpload, S3MultiPartUploader, S3MultiPartUploaderConfig};
-use mz_ore::cast::CastFrom;
+use mz_aws_util::s3_uploader::{
+    CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
+};
 use mz_pgcopy::{encode_copy_format, CopyFormatParams};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
@@ -205,6 +206,7 @@ impl CopyToS3Uploader {
             .take()
             .expect("sdk_config should always be present");
         let max_file_size = self.max_file_size;
+        // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
         let handle = mz_ore::task::spawn(|| "s3_uploader::try_new", async move {
             let uploader = S3MultiPartUploader::try_new(
                 &sdk_config,
@@ -219,8 +221,8 @@ impl CopyToS3Uploader {
             (uploader, sdk_config)
         });
         let (uploader, sdk_config) = handle.await.unwrap();
-        self.current_file_uploader = Some(uploader?);
         self.sdk_config = Some(sdk_config);
+        self.current_file_uploader = Some(uploader?);
         Ok(())
     }
 
@@ -244,6 +246,7 @@ impl CopyToS3Uploader {
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
         if let Some(uploader) = self.current_file_uploader.take() {
             let current_file = self.current_file_path();
+            // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
             let handle =
                 mz_ore::task::spawn(|| "s3_uploader::finish", async { uploader.finish().await });
             let CompletedUpload {
@@ -258,20 +261,23 @@ impl CopyToS3Uploader {
         Ok(())
     }
 
-    async fn upload_buffer(&mut self) -> Result<(), anyhow::Error> {
+    async fn upload_buffer(&mut self) -> Result<(), S3MultiPartUploadError> {
         assert!(!self.buf.is_empty());
         assert!(self.current_file_uploader.is_some());
 
         let mut uploader = self.current_file_uploader.take().unwrap();
+        // TODO: Make buf a Bytes so it can be cheaply cloned.
         let buf = std::mem::take(&mut self.buf);
-        // Clear and move the buffer contents into the task to do the upload.
+        // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
         let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
             let result = uploader.buffer_chunk(&buf).await;
-            (uploader, result)
+            (uploader, buf, result)
         });
-        let (uploader, result) = handle.await.unwrap();
-        let _ = result?;
+        let (uploader, buf, result) = handle.await.unwrap();
         self.current_file_uploader = Some(uploader);
+        self.buf = buf;
+
+        let _ = result?;
         Ok(())
     }
 
@@ -280,30 +286,26 @@ impl CopyToS3Uploader {
     /// exceed the max file size of the ongoing upload, then a new `S3MultiPartUploader` for a new file will
     /// be created and the row data will be appended there.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
-        // encode the row and write to temp buffer.
         self.buf.clear();
+        // encode the row and write to temp buffer.
         encode_copy_format(self.format.clone(), row, self.desc.typ(), &mut self.buf)
             .map_err(|_| anyhow!("error encoding row"))?;
-        let buffer_length = u64::cast_from(self.buf.len());
 
         if self.current_file_uploader.is_none() {
             self.start_new_file_upload().await?;
         }
 
-        let Some(file_uploader) = self.current_file_uploader.as_ref() else {
-            unreachable!("uploader initialized above");
-        };
-        if file_uploader.can_add_more_bytes(buffer_length) || file_uploader.added_bytes() == 0 {
-            // Add to ongoing upload of the current file if still within max_file_size limit.
-            // Or in the unlikely event the size of a single row is more than the max_file_size
-            // and no data has been added to the uploader yet, upload it anyway.
-            self.upload_buffer().await?;
-        } else {
-            // Start a multi part upload of next file.
-            self.start_new_file_upload().await?;
-            // Upload data for the new part.
-            self.upload_buffer().await?;
-        }
+        match self.upload_buffer().await {
+            Ok(_) => Ok(()),
+            Err(S3MultiPartUploadError::UploadExceedsMaxFileLimit(_)) => {
+                // Start a multi part upload of next file.
+                self.start_new_file_upload().await?;
+                // Upload data for the new part.
+                self.upload_buffer().await?;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }?;
 
         Ok(())
     }
