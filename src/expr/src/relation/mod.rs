@@ -674,98 +674,124 @@ impl MirRelationExpr {
                 // have reduced the input to a single row, in which case the
                 // keys of the input are `()`.
                 let mut input = input_keys.next().unwrap().clone();
-                let cols_equal_to_literal = predicates
-                    .iter()
-                    .filter_map(|p| {
+
+                if !input.is_empty() {
+                    // Track columns equated to literals, which we can prune.
+                    let mut cols_equal_to_literal = BTreeSet::new();
+
+                    // Perform union find on `col1 = col2` to establish connected
+                    // components of equated columns. Absent any equalities, this
+                    // will be `0 .. arity`, but each equality will orient the root
+                    // of the greater to the root of the lesser.
+                    let mut union_find = Vec::new();
+
+                    for expr in predicates.iter() {
                         if let MirScalarExpr::CallBinary {
                             func: crate::BinaryFunc::Eq,
                             expr1,
                             expr2,
-                        } = p
+                        } = expr
                         {
                             if let MirScalarExpr::Column(c) = &**expr1 {
                                 if expr2.is_literal_ok() {
-                                    return Some(c);
+                                    cols_equal_to_literal.insert(c);
                                 }
                             }
-                        }
-                        None
-                    })
-                    .collect::<Vec<_>>();
-                for key_set in &mut input {
-                    key_set.retain(|k| !cols_equal_to_literal.contains(&k));
-                }
-                if !input.is_empty() {
-                    // If `[0 1]` is an input key and there `#0 = #1` exists as a
-                    // predicate, we should present both `[0]` and `[1]` as keys
-                    // of the output. Also, if there is a key involving X column
-                    // and an equality between X and another column Y, a variant
-                    // of that key with Y instead of X should be presented as
-                    // a key of the output.
-
-                    // First, we build an iterator over the equivalences
-                    let classes = predicates.iter().filter_map(|p| {
-                        if let MirScalarExpr::CallBinary {
-                            func: crate::BinaryFunc::Eq,
-                            expr1,
-                            expr2,
-                        } = p
-                        {
+                            if let MirScalarExpr::Column(c) = &**expr2 {
+                                if expr1.is_literal_ok() {
+                                    cols_equal_to_literal.insert(c);
+                                }
+                            }
+                            // Perform union-find to equate columns.
                             if let Some(c1) = expr1.as_column() {
                                 if let Some(c2) = expr2.as_column() {
                                     if c1 != c2 {
-                                        return Some((c1, c2));
+                                        let mut x: usize = c1;
+                                        let mut y: usize = c2;
+                                        while union_find.len() <= std::cmp::max(x, y) {
+                                            union_find.push(union_find.len());
+                                        }
+                                        while x != union_find[x] {
+                                            assert!(union_find[x] < x);
+                                            x = union_find[x];
+                                        }
+                                        while y != union_find[y] {
+                                            assert!(union_find[y] < y);
+                                            y = union_find[y];
+                                        }
+                                        // Point from larger to smaller index
+                                        union_find[std::cmp::max(x, y)] = std::cmp::min(x, y);
                                     }
                                 }
                             }
-                        }
-                        None
-                    });
-
-                    // Keep doing replacements until the number of keys settles
-                    let mut prev_keys: BTreeSet<_> = input.drain(..).collect();
-                    let mut prev_keys_size = 0;
-                    while prev_keys_size != prev_keys.len() {
-                        prev_keys_size = prev_keys.len();
-                        for (c1, c2) in classes.clone() {
-                            let mut new_keys = BTreeSet::new();
-                            for key in prev_keys.into_iter() {
-                                let contains_c1 = key.contains(&c1);
-                                let contains_c2 = key.contains(&c2);
-                                if contains_c1 && contains_c2 {
-                                    new_keys.insert(
-                                        key.iter().filter(|c| **c != c1).cloned().collect_vec(),
-                                    );
-                                    new_keys.insert(
-                                        key.iter().filter(|c| **c != c2).cloned().collect_vec(),
-                                    );
-                                } else {
-                                    if contains_c1 {
-                                        new_keys.insert(
-                                            key.iter()
-                                                .map(|c| if *c == c1 { c2 } else { *c })
-                                                .sorted()
-                                                .collect_vec(),
-                                        );
-                                    } else if contains_c2 {
-                                        new_keys.insert(
-                                            key.iter()
-                                                .map(|c| if *c == c2 { c1 } else { *c })
-                                                .sorted()
-                                                .collect_vec(),
-                                        );
-                                    }
-                                    new_keys.insert(key);
-                                }
-                            }
-                            prev_keys = new_keys;
                         }
                     }
 
-                    prev_keys.into_iter().sorted().collect()
-                } else {
-                    input
+                    // Complete union-find by pointing each element at its representative column.
+                    for i in 0..union_find.len() {
+                        // Iteration not required, as each prior already references the right column.
+                        union_find[i] = union_find[union_find[i]];
+                    }
+
+                    // Remove columns bound to literals, and remap columns equated to earlier columns.
+                    // We will re-expand remapped columns in a moment, but this avoids exponential work.
+                    for key_set in &mut input {
+                        key_set.retain(|k| !cols_equal_to_literal.contains(&k));
+                        for col in key_set.iter_mut() {
+                            if let Some(equiv) = union_find.get(*col) {
+                                *col = *equiv;
+                            }
+                        }
+                        key_set.sort();
+                        key_set.dedup();
+                    }
+                    input.sort();
+                    input.dedup();
+
+                    // Expand out each key to each of its equivalent forms.
+                    // Each instance of `col` can be replaced by any equivalent column.
+                    // This has the potential to result in exponentially sized number of unique keys,
+                    // and in the future we should probably maintain unique keys modulo equivalence.
+                    let mut subs = Vec::new();
+                    for (col, sub) in union_find.iter().enumerate() {
+                        if *sub != col {
+                            assert!(*sub < col);
+                            while subs.len() <= *sub {
+                                subs.push(Vec::new());
+                            }
+                            subs[*sub].push(col);
+                        }
+                    }
+                    // For each column, substitute for it in each occurrence.
+                    let mut to_add = Vec::new();
+                    for (col, subs) in subs.iter().enumerate() {
+                        if !subs.is_empty() {
+                            for key_set in input.iter() {
+                                if key_set.contains(&col) {
+                                    let mut to_extend = key_set
+                                        .iter()
+                                        .cloned()
+                                        .filter(|c| c != &col)
+                                        .collect::<Vec<_>>();
+                                    for sub in subs {
+                                        to_extend.push(*sub);
+                                        to_add.push(to_extend.clone());
+                                        to_extend.pop();
+                                    }
+                                }
+                            }
+                        }
+                        // No deduplication, as we cannot introduce duplicates.
+                        input.append(&mut to_add);
+                    }
+                    for key_set in input.iter_mut() {
+                        key_set.sort();
+                        key_set.dedup();
+                    }
+                    input.sort();
+                    input.dedup();
                 }
+                input
             }
             Join { equivalences, .. } => {
                 // It is important the `new_from_input_arities` constructor is
