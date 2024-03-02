@@ -248,66 +248,67 @@ materialize.public.q02:
     Project (#5, #2, #8, #0, #1, #3, #4, #6) // { arity: 8 }
       Join on=(#0{p_partkey} = #9{p_partkey} AND #7{ps_supplycost} = #10) type=differential // { arity: 11 }
         implementation
-          %1[#0, #1]UKK » %0:l4[#0, #7]KK
+          %1[#0, #1]UKK » %0:l0[#0, #7]KKelf
         ArrangeBy keys=[[#0{p_partkey}, #7{ps_supplycost}]] // { arity: 9 }
-          Get l4 // { arity: 9 }
+          Project (#0, #1, #5, #6, #8..=#10, #13, #15) // { arity: 9 }
+            Filter (#3{p_size} = 15) AND (#18{r_name} = "EUROPE") AND like["%BRASS"](varchar_to_text(#2{p_type})) AND (#0{p_partkey} = #11{ps_partkey}) AND (#4{s_suppkey} = #12{ps_suppkey}) AND (#7{s_nationkey} = #14{n_nationkey}) AND (#16{n_regionkey} = #17{r_regionkey}) // { arity: 19 }
+              Get l0 // { arity: 19 }
         ArrangeBy keys=[[#0{p_partkey}, #1]] // { arity: 2 }
           Reduce group_by=[#0{p_partkey}] aggregates=[min(#1{ps_supplycost})] // { arity: 2 }
             Project (#0, #4) // { arity: 2 }
               Filter (#18{r_name} = "EUROPE") AND (#2{ps_suppkey}) IS NOT NULL AND (#9{s_nationkey}) IS NOT NULL AND (#15{n_regionkey}) IS NOT NULL // { arity: 20 }
                 Join on=(#0{p_partkey} = #1{ps_partkey} AND #2{ps_suppkey} = #6{s_suppkey} AND #9{s_nationkey} = #13{n_nationkey} AND #15{n_regionkey} = #17{r_regionkey}) type=delta // { arity: 20 }
                   implementation
-                    %0 » %1:l1[#0]KA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
-                    %1:l1 » %0[#0]UKA » %2:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
-                    %2:l0 » %1:l1[#1]KA » %0[#0]UKA » %3:l2[#0]KA » %4:l3[#0]KAef
-                    %3:l2 » %4:l3[#0]KAef » %2:l0[#3]KA » %1:l1[#1]KA » %0[#0]UKA
-                    %4:l3 » %3:l2[#2]KA » %2:l0[#3]KA » %1:l1[#1]KA » %0[#0]UKA
+                    %0 » %1:partsupp[#0]KA » %2:supplier[#0]KA » %3:nation[#0]KA » %4:region[#0]KAef
+                    %1:partsupp » %0[#0]UKA » %2:supplier[#0]KA » %3:nation[#0]KA » %4:region[#0]KAef
+                    %2:supplier » %1:partsupp[#1]KA » %0[#0]UKA » %3:nation[#0]KA » %4:region[#0]KAef
+                    %3:nation » %4:region[#0]KAef » %2:supplier[#3]KA » %1:partsupp[#1]KA » %0[#0]UKA
+                    %4:region » %3:nation[#2]KA » %2:supplier[#3]KA » %1:partsupp[#1]KA » %0[#0]UKA
                   ArrangeBy keys=[[#0{p_partkey}]] // { arity: 1 }
                     Distinct project=[#0{p_partkey}] // { arity: 1 }
                       Project (#0) // { arity: 1 }
-                        Get l4 // { arity: 9 }
-                  Get l1 // { arity: 5 }
-                  Get l0 // { arity: 7 }
-                  Get l2 // { arity: 4 }
-                  Get l3 // { arity: 3 }
+                        Get l0 // { arity: 19 }
+                  ArrangeBy keys=[[#0{ps_partkey}], [#1{ps_suppkey}]] // { arity: 5 }
+                    ReadIndex on=partsupp fk_partsupp_partkey=[delta join lookup] fk_partsupp_suppkey=[delta join lookup] // { arity: 5 }
+                  ArrangeBy keys=[[#0{s_suppkey}], [#3{s_nationkey}]] // { arity: 7 }
+                    ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
+                  ArrangeBy keys=[[#0{n_nationkey}], [#2{n_regionkey}]] // { arity: 4 }
+                    ReadIndex on=nation pk_nation_nationkey=[delta join lookup] fk_nation_regionkey=[delta join lookup] // { arity: 4 }
+                  ArrangeBy keys=[[#0{r_regionkey}]] // { arity: 3 }
+                    ReadIndex on=region pk_region_regionkey=[delta join lookup] // { arity: 3 }
   With
-    cte l4 =
-      Project (#0, #2, #10, #11, #13..=#15, #19, #22) // { arity: 9 }
-        Filter (#5{p_size} = 15) AND (#26{r_name} = "EUROPE") AND (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#23{n_regionkey}) IS NOT NULL AND like["%BRASS"](varchar_to_text(#4{p_type})) // { arity: 28 }
-          Join on=(#0{p_partkey} = #16{ps_partkey} AND #9{s_suppkey} = #17{ps_suppkey} AND #12{s_nationkey} = #21{n_nationkey} AND #23{n_regionkey} = #25{r_regionkey}) type=delta // { arity: 28 }
-            implementation
-              %0:part » %2:l1[#0]KA » %1:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
-              %1:l0 » %2:l1[#1]KA » %0:part[#0]KAelf » %3:l2[#0]KA » %4:l3[#0]KAef
-              %2:l1 » %0:part[#0]KAelf » %1:l0[#0]KA » %3:l2[#0]KA » %4:l3[#0]KAef
-              %3:l2 » %4:l3[#0]KAef » %1:l0[#3]KA » %2:l1[#1]KA » %0:part[#0]KAelf
-              %4:l3 » %3:l2[#2]KA » %1:l0[#3]KA » %2:l1[#1]KA » %0:part[#0]KAelf
-            ArrangeBy keys=[[#0{p_partkey}]] // { arity: 9 }
-              ReadIndex on=part pk_part_partkey=[delta join 1st input (full scan)] // { arity: 9 }
-            Get l0 // { arity: 7 }
-            Get l1 // { arity: 5 }
-            Get l2 // { arity: 4 }
-            Get l3 // { arity: 3 }
-    cte l3 =
-      ArrangeBy keys=[[#0{r_regionkey}]] // { arity: 3 }
-        ReadIndex on=region pk_region_regionkey=[delta join lookup] // { arity: 3 }
-    cte l2 =
-      ArrangeBy keys=[[#0{n_nationkey}], [#2{n_regionkey}]] // { arity: 4 }
-        ReadIndex on=nation pk_nation_nationkey=[delta join lookup] fk_nation_regionkey=[delta join lookup] // { arity: 4 }
-    cte l1 =
-      ArrangeBy keys=[[#0{ps_partkey}], [#1{ps_suppkey}]] // { arity: 5 }
-        ReadIndex on=partsupp fk_partsupp_partkey=[delta join lookup] fk_partsupp_suppkey=[delta join lookup] // { arity: 5 }
     cte l0 =
-      ArrangeBy keys=[[#0{s_suppkey}], [#3{s_nationkey}]] // { arity: 7 }
-        ReadIndex on=supplier pk_supplier_suppkey=[delta join lookup] fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
+      CrossJoin type=delta // { arity: 19 }
+        implementation
+          %0:part » %1:supplier[×] » %2:partsupp[×] » %3:nation[×] » %4:region[×]
+          %1:supplier » %0:part[×] » %2:partsupp[×] » %3:nation[×] » %4:region[×]
+          %2:partsupp » %0:part[×] » %1:supplier[×] » %3:nation[×] » %4:region[×]
+          %3:nation » %0:part[×] » %1:supplier[×] » %2:partsupp[×] » %4:region[×]
+          %4:region » %0:part[×] » %1:supplier[×] » %2:partsupp[×] » %3:nation[×]
+        ArrangeBy keys=[[]] // { arity: 4 }
+          Project (#0, #2, #4, #5) // { arity: 4 }
+            Filter (#0{p_partkey}) IS NOT NULL // { arity: 9 }
+              ReadIndex on=part pk_part_partkey=[*** full scan ***] // { arity: 9 }
+        ArrangeBy keys=[[]] // { arity: 7 }
+          ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Project (#0, #1, #3) // { arity: 3 }
+            ReadIndex on=partsupp fk_partsupp_partkey=[*** full scan ***] // { arity: 5 }
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            ReadIndex on=nation pk_nation_nationkey=[*** full scan ***] // { arity: 4 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            ReadIndex on=region pk_region_regionkey=[*** full scan ***] // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey (delta join lookup)
+  - materialize.public.pk_nation_nationkey (*** full scan ***, delta join lookup)
   - materialize.public.fk_nation_regionkey (delta join lookup)
-  - materialize.public.pk_region_regionkey (delta join lookup)
-  - materialize.public.pk_part_partkey (delta join 1st input (full scan))
-  - materialize.public.pk_supplier_suppkey (delta join lookup)
+  - materialize.public.pk_region_regionkey (*** full scan ***, delta join lookup)
+  - materialize.public.pk_part_partkey (*** full scan ***)
+  - materialize.public.pk_supplier_suppkey (*** full scan ***, delta join lookup)
   - materialize.public.fk_supplier_nationkey (delta join lookup)
-  - materialize.public.fk_partsupp_partkey (delta join lookup)
+  - materialize.public.fk_partsupp_partkey (*** full scan ***, delta join lookup)
   - materialize.public.fk_partsupp_suppkey (delta join lookup)
 
 EOF
@@ -406,7 +407,7 @@ materialize.public.q04:
           ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 1 }
             Distinct project=[#0{o_orderkey}] // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Filter (#4{o_orderdate} >= 1993-07-01) AND (#0{o_orderkey}) IS NOT NULL AND (date_to_timestamp(#4{o_orderdate}) < 1993-10-01 00:00:00) // { arity: 9 }
+                Filter (#0{o_orderkey}) IS NOT NULL // { arity: 9 }
                   ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
           ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 1 }
             Distinct project=[#0{l_orderkey}] // { arity: 1 }
@@ -1208,9 +1209,11 @@ materialize.public.q16:
       Project (#0..=#3) // { arity: 4 }
         Join on=(#0{ps_suppkey} = #4{ps_suppkey}) type=differential // { arity: 5 }
           implementation
-            %0:l0[#0]K » %1[#0]K
+            %0:l0[#0]Kef » %1[#0]Kef
           ArrangeBy keys=[[#0{ps_suppkey}]] // { arity: 4 }
-            Get l0 // { arity: 4 }
+            Project (#1, #3..=#5) // { arity: 4 }
+              Filter (#3{p_brand} != "Brand#45") AND (#0{ps_partkey} = #2{p_partkey}) AND NOT(like["MEDIUM POLISHED%"](varchar_to_text(#4{p_type}))) AND ((#5{p_size} = 3) OR (#5{p_size} = 9) OR (#5{p_size} = 14) OR (#5{p_size} = 19) OR (#5{p_size} = 23) OR (#5{p_size} = 36) OR (#5{p_size} = 45) OR (#5{p_size} = 49)) // { arity: 6 }
+                Get l0 // { arity: 6 }
           ArrangeBy keys=[[#0{ps_suppkey}]] // { arity: 1 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
@@ -1230,23 +1233,23 @@ materialize.public.q16:
   With
     cte l1 =
       Distinct project=[#0{ps_suppkey}] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l0 // { arity: 4 }
+        Project (#1) // { arity: 1 }
+          Get l0 // { arity: 6 }
     cte l0 =
-      Project (#1, #8..=#10) // { arity: 4 }
-        Filter (#8{p_brand} != "Brand#45") AND (#0{ps_partkey}) IS NOT NULL AND NOT(like["MEDIUM POLISHED%"](varchar_to_text(#9{p_type}))) AND ((#10{p_size} = 3) OR (#10{p_size} = 9) OR (#10{p_size} = 14) OR (#10{p_size} = 19) OR (#10{p_size} = 23) OR (#10{p_size} = 36) OR (#10{p_size} = 45) OR (#10{p_size} = 49)) // { arity: 14 }
-          Join on=(#0{ps_partkey} = #5{p_partkey}) type=differential // { arity: 14 }
-            implementation
-              %1:part[#0]KAef » %0:partsupp[#0]KAef
-            ArrangeBy keys=[[#0{ps_partkey}]] // { arity: 5 }
-              ReadIndex on=partsupp fk_partsupp_partkey=[differential join] // { arity: 5 }
-            ArrangeBy keys=[[#0{p_partkey}]] // { arity: 9 }
-              ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
+      CrossJoin type=differential // { arity: 6 }
+        implementation
+          %0:partsupp[×] » %1:part[×]
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            ReadIndex on=partsupp pk_partsupp_partkey_suppkey=[*** full scan ***] // { arity: 5 }
+        ArrangeBy keys=[[]] // { arity: 4 }
+          Project (#0, #3..=#5) // { arity: 4 }
+            ReadIndex on=part pk_part_partkey=[*** full scan ***] // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_part_partkey (differential join)
+  - materialize.public.pk_part_partkey (*** full scan ***)
   - materialize.public.pk_supplier_suppkey (*** full scan ***)
-  - materialize.public.fk_partsupp_partkey (differential join)
+  - materialize.public.pk_partsupp_partkey_suppkey (*** full scan ***)
 
 EOF
 
@@ -1278,51 +1281,53 @@ materialize.public.q17:
     Project (#1) // { arity: 1 }
       Map ((#0 / 7)) // { arity: 2 }
         Union // { arity: 1 }
-          Get l2 // { arity: 1 }
+          Get l1 // { arity: 1 }
           Map (null) // { arity: 1 }
             Union // { arity: 0 }
               Negate // { arity: 0 }
                 Project () // { arity: 0 }
-                  Get l2 // { arity: 1 }
+                  Get l1 // { arity: 1 }
               Constant // { arity: 0 }
                 - ()
   With
-    cte l2 =
+    cte l1 =
       Reduce aggregates=[sum(#0{l_extendedprice})] // { arity: 1 }
         Project (#2) // { arity: 1 }
           Filter (#1{l_quantity} < (0.2 * (#4 / bigint_to_numeric(case when (#5 = 0) then null else #5 end)))) // { arity: 6 }
-            Join on=(#0{l_partkey} = #3{l_partkey}) type=differential // { arity: 6 }
+            Join on=(#0{l_partkey} = #3{p_partkey}) type=differential // { arity: 6 }
               implementation
-                %1[#0]UKA » %0:l1[#0]K
+                %1[#0]UKA » %0:l0[#0]Kef
               ArrangeBy keys=[[#0{l_partkey}]] // { arity: 3 }
-                Get l1 // { arity: 3 }
-              ArrangeBy keys=[[#0{l_partkey}]] // { arity: 3 }
-                Reduce group_by=[#0{l_partkey}] aggregates=[sum(#1{l_quantity}), count(*)] // { arity: 3 }
+                Project (#0..=#2) // { arity: 3 }
+                  Filter (#4{p_brand} = "Brand#23") AND (#5{p_container} = "MED BOX") AND (#0{l_partkey} = #3{p_partkey}) // { arity: 6 }
+                    Get l0 // { arity: 6 }
+              ArrangeBy keys=[[#0{p_partkey}]] // { arity: 3 }
+                Reduce group_by=[#0{p_partkey}] aggregates=[sum(#1{l_quantity}), count(*)] // { arity: 3 }
                   Project (#0, #5) // { arity: 2 }
-                    Join on=(#0{l_partkey} = #2{l_partkey}) type=differential // { arity: 17 }
+                    Join on=(#0{p_partkey} = #2{l_partkey}) type=differential // { arity: 17 }
                       implementation
-                        %0[#0]UKA » %1:l0[#1]KA
-                      ArrangeBy keys=[[#0{l_partkey}]] // { arity: 1 }
-                        Distinct project=[#0{l_partkey}] // { arity: 1 }
-                          Project (#0) // { arity: 1 }
-                            Get l1 // { arity: 3 }
-                      Get l0 // { arity: 16 }
-    cte l1 =
-      Project (#1, #4, #5) // { arity: 3 }
-        Filter (#19{p_brand} = "Brand#23") AND (#22{p_container} = "MED BOX") AND (#1{l_partkey}) IS NOT NULL // { arity: 25 }
-          Join on=(#1{l_partkey} = #16{p_partkey}) type=differential // { arity: 25 }
-            implementation
-              %1:part[#0]KAef » %0:l0[#1]KAef
-            Get l0 // { arity: 16 }
-            ArrangeBy keys=[[#0{p_partkey}]] // { arity: 9 }
-              ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
+                        %0[#0]UKA » %1:lineitem[#1]KA
+                      ArrangeBy keys=[[#0{p_partkey}]] // { arity: 1 }
+                        Distinct project=[#0{p_partkey}] // { arity: 1 }
+                          Project (#3) // { arity: 1 }
+                            Get l0 // { arity: 6 }
+                      ArrangeBy keys=[[#1{l_partkey}]] // { arity: 16 }
+                        ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
     cte l0 =
-      ArrangeBy keys=[[#1{l_partkey}]] // { arity: 16 }
-        ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
+      CrossJoin type=differential // { arity: 6 }
+        implementation
+          %0:lineitem[×] » %1:part[×]
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Project (#1, #4, #5) // { arity: 3 }
+            ReadIndex on=lineitem fk_lineitem_partkey=[*** full scan ***] // { arity: 16 }
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Project (#0, #3, #6) // { arity: 3 }
+            Filter (#0{p_partkey}) IS NOT NULL // { arity: 9 }
+              ReadIndex on=part pk_part_partkey=[*** full scan ***] // { arity: 9 }
 
 Used Indexes:
-  - materialize.public.pk_part_partkey (differential join)
-  - materialize.public.fk_lineitem_partkey (differential join)
+  - materialize.public.pk_part_partkey (*** full scan ***)
+  - materialize.public.fk_lineitem_partkey (*** full scan ***, differential join)
 
 EOF
 
@@ -1371,43 +1376,45 @@ materialize.public.q18:
         Filter (#7 > 300) // { arity: 8 }
           Join on=(#2{o_orderkey} = #6{o_orderkey}) type=differential // { arity: 8 }
             implementation
-              %1[#0]UKAif » %0:l1[#2]Kif
+              %1[#0]UKAif » %0:l0[#2]Kif
             ArrangeBy keys=[[#2{o_orderkey}]] // { arity: 6 }
-              Get l1 // { arity: 6 }
+              Project (#0..=#2, #4, #5, #7) // { arity: 6 }
+                Filter (#0{c_custkey} = #3{o_custkey}) AND (#2{o_orderkey} = #6{l_orderkey}) // { arity: 8 }
+                  Get l0 // { arity: 8 }
             ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 2 }
               Reduce group_by=[#0{o_orderkey}] aggregates=[sum(#1{l_quantity})] // { arity: 2 }
                 Project (#0, #5) // { arity: 2 }
                   Join on=(#0{o_orderkey} = #1{l_orderkey}) type=differential // { arity: 17 }
                     implementation
-                      %0[#0]UKA » %1:l0[#0]KA
+                      %0[#0]UKA » %1:lineitem[#0]KA
                     ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 1 }
                       Distinct project=[#0{o_orderkey}] // { arity: 1 }
                         Project (#2) // { arity: 1 }
-                          Get l1 // { arity: 6 }
-                    Get l0 // { arity: 16 }
+                          Get l0 // { arity: 8 }
+                    ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
+                      ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
   With
-    cte l1 =
-      Project (#0, #1, #8, #11, #12, #21) // { arity: 6 }
-        Filter (#0{c_custkey}) IS NOT NULL AND (#8{o_orderkey}) IS NOT NULL // { arity: 33 }
-          Join on=(#0{c_custkey} = #9{o_custkey} AND #8{o_orderkey} = #17{l_orderkey}) type=delta // { arity: 33 }
-            implementation
-              %0:customer » %1:orders[#1]KA » %2:l0[#0]KA
-              %1:orders » %0:customer[#0]KA » %2:l0[#0]KA
-              %2:l0 » %1:orders[#0]KA » %0:customer[#0]KA
-            ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
-              ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] // { arity: 8 }
-            ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
-              ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-            Get l0 // { arity: 16 }
     cte l0 =
-      ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
-        ReadIndex on=lineitem fk_lineitem_orderkey=[differential join, delta join lookup] // { arity: 16 }
+      CrossJoin type=delta // { arity: 8 }
+        implementation
+          %0:customer » %1:orders[×] » %2:lineitem[×]
+          %1:orders » %0:customer[×] » %2:lineitem[×]
+          %2:lineitem » %0:customer[×] » %1:orders[×]
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
+        ArrangeBy keys=[[]] // { arity: 4 }
+          Project (#0, #1, #3, #4) // { arity: 4 }
+            Filter (#0{o_orderkey}) IS NOT NULL // { arity: 9 }
+              ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#0, #4) // { arity: 2 }
+            ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 16 }
 
 Used Indexes:
-  - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
-  - materialize.public.pk_orders_orderkey (delta join lookup)
-  - materialize.public.fk_orders_custkey (delta join lookup)
-  - materialize.public.fk_lineitem_orderkey (differential join, delta join lookup)
+  - materialize.public.pk_customer_custkey (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (*** full scan ***)
+  - materialize.public.fk_lineitem_orderkey (*** full scan ***, differential join)
 
 EOF
 
@@ -1531,70 +1538,69 @@ materialize.public.q20:
     Project (#1, #2) // { arity: 2 }
       Join on=(#0{s_suppkey} = #3{s_suppkey}) type=differential // { arity: 4 }
         implementation
-          %1[#0]UKA » %0:l0[#0]K
+          %1[#0]UKA » %0:l0[#0]Kef
         ArrangeBy keys=[[#0{s_suppkey}]] // { arity: 3 }
-          Get l0 // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            Filter (#5{n_name} = "CANADA") AND (#3{s_nationkey} = #4{n_nationkey}) // { arity: 6 }
+              Get l0 // { arity: 6 }
         ArrangeBy keys=[[#0{s_suppkey}]] // { arity: 1 }
           Distinct project=[#0{s_suppkey}] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Filter (integer_to_numeric(#2{ps_availqty}) > #5) // { arity: 6 }
-                Join on=(#0{s_suppkey} = #4{ps_suppkey} AND #1{ps_partkey} = #3{ps_partkey}) type=differential // { arity: 6 }
+              Filter (integer_to_numeric(#2{ps_availqty}) > (0.5 * #6)) // { arity: 7 }
+                Join on=(#0{s_suppkey} = #5{ps_suppkey} AND #1{ps_partkey} = #3{p_partkey} = #4{ps_partkey}) type=delta // { arity: 7 }
                   implementation
-                    %1[#1, #0]UKK » %0:l1[#0, #1]KKf
-                  ArrangeBy keys=[[#0{s_suppkey}, #1{ps_partkey}]] // { arity: 3 }
+                    %0:l1 » %2[#0, #1]UKKA » %1[#0]UKA
+                    %1 » %0:l1[#1]Kf » %2[#0, #1]UKKA
+                    %2 » %1[#0]UKA » %0:l1[#0, #1]KKf
+                  ArrangeBy keys=[[#0{s_suppkey}, #1{ps_partkey}], [#1{ps_partkey}]] // { arity: 3 }
                     Project (#0, #1, #3) // { arity: 3 }
                       Filter (#0{s_suppkey} = #2{ps_suppkey}) // { arity: 4 }
                         Get l1 // { arity: 4 }
-                  ArrangeBy keys=[[#1{ps_suppkey}, #0{ps_partkey}]] // { arity: 3 }
-                    Project (#0, #1, #3) // { arity: 3 }
-                      Map ((0.5 * #2)) // { arity: 4 }
-                        Reduce group_by=[#0{ps_partkey}, #1{ps_suppkey}] aggregates=[sum(#2{l_quantity})] // { arity: 3 }
-                          Project (#0, #1, #6) // { arity: 3 }
-                            Filter (#12{l_shipdate} >= 1995-01-01) AND (date_to_timestamp(#12{l_shipdate}) < 1996-01-01 00:00:00) // { arity: 18 }
-                              Join on=(#0{ps_partkey} = #3{l_partkey} AND #1{ps_suppkey} = #4{l_suppkey}) type=differential // { arity: 18 }
-                                implementation
-                                  %0[#0, #1]UKKA » %1:lineitem[#1, #2]KKAiif
-                                ArrangeBy keys=[[#0{ps_partkey}, #1{ps_suppkey}]] // { arity: 2 }
-                                  Distinct project=[#0{ps_partkey}, #1{ps_suppkey}] // { arity: 2 }
-                                    Project (#1, #2) // { arity: 2 }
-                                      Get l1 // { arity: 4 }
-                                ArrangeBy keys=[[#1{l_partkey}, #2{l_suppkey}]] // { arity: 16 }
-                                  ReadIndex on=lineitem fk_lineitem_partsuppkey=[differential join] // { arity: 16 }
+                  ArrangeBy keys=[[#0{p_partkey}]] // { arity: 1 }
+                    Distinct project=[#0{p_partkey}] // { arity: 1 }
+                      Project (#0) // { arity: 1 }
+                        Filter (#0{p_partkey}) IS NOT NULL AND like["forest%"](varchar_to_text(#1{p_name})) // { arity: 9 }
+                          ReadIndex on=part pk_part_partkey=[*** full scan ***] // { arity: 9 }
+                  ArrangeBy keys=[[#0{ps_partkey}, #1{ps_suppkey}]] // { arity: 3 }
+                    Reduce group_by=[#0{ps_partkey}, #1{ps_suppkey}] aggregates=[sum(#2{l_quantity})] // { arity: 3 }
+                      Project (#0, #1, #6) // { arity: 3 }
+                        Filter (#12{l_shipdate} >= 1995-01-01) AND (date_to_timestamp(#12{l_shipdate}) < 1996-01-01 00:00:00) // { arity: 18 }
+                          Join on=(#0{ps_partkey} = #3{l_partkey} AND #1{ps_suppkey} = #4{l_suppkey}) type=differential // { arity: 18 }
+                            implementation
+                              %0[#0, #1]UKKA » %1:lineitem[#1, #2]KKAiif
+                            ArrangeBy keys=[[#0{ps_partkey}, #1{ps_suppkey}]] // { arity: 2 }
+                              Distinct project=[#0{ps_partkey}, #1{ps_suppkey}] // { arity: 2 }
+                                Project (#1, #2) // { arity: 2 }
+                                  Get l1 // { arity: 4 }
+                            ArrangeBy keys=[[#1{l_partkey}, #2{l_suppkey}]] // { arity: 16 }
+                              ReadIndex on=lineitem fk_lineitem_partsuppkey=[differential join] // { arity: 16 }
   With
     cte l1 =
-      Project (#0..=#3) // { arity: 4 }
-        Join on=(#1{ps_partkey} = #4{p_partkey}) type=delta // { arity: 5 }
-          implementation
-            %0 » %1:partsupp[×] » %2[#0]UKA
-            %1:partsupp » %2[#0]UKA » %0[×]
-            %2 » %1:partsupp[#0]KA » %0[×]
-          ArrangeBy keys=[[]] // { arity: 1 }
-            Distinct project=[#0{s_suppkey}] // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l0 // { arity: 3 }
-          ArrangeBy keys=[[], [#0{ps_partkey}]] // { arity: 3 }
-            Project (#0..=#2) // { arity: 3 }
-              ReadIndex on=partsupp pk_partsupp_partkey_suppkey=[*** full scan ***] // { arity: 5 }
-          ArrangeBy keys=[[#0{p_partkey}]] // { arity: 1 }
-            Distinct project=[#0{p_partkey}] // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Filter (#0{p_partkey}) IS NOT NULL AND like["forest%"](varchar_to_text(#1{p_name})) // { arity: 9 }
-                  ReadIndex on=part pk_part_partkey=[*** full scan ***] // { arity: 9 }
+      CrossJoin type=differential // { arity: 4 }
+        implementation
+          %0[×] » %1:partsupp[×]
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Distinct project=[#0{s_suppkey}] // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Get l0 // { arity: 6 }
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            ReadIndex on=partsupp pk_partsupp_partkey_suppkey=[*** full scan ***] // { arity: 5 }
     cte l0 =
-      Project (#0..=#2) // { arity: 3 }
-        Filter (#8{n_name} = "CANADA") AND (#3{s_nationkey}) IS NOT NULL // { arity: 11 }
-          Join on=(#3{s_nationkey} = #7{n_nationkey}) type=differential // { arity: 11 }
-            implementation
-              %1:nation[#0]KAef » %0:supplier[#3]KAef
-            ArrangeBy keys=[[#3{s_nationkey}]] // { arity: 7 }
-              ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
-            ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 4 }
-              ReadIndex on=nation pk_nation_nationkey=[differential join] // { arity: 4 }
+      CrossJoin type=differential // { arity: 6 }
+        implementation
+          %0:supplier[×] » %1:nation[×]
+        ArrangeBy keys=[[]] // { arity: 4 }
+          Project (#0..=#3) // { arity: 4 }
+            ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            ReadIndex on=nation pk_nation_nationkey=[*** full scan ***] // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey (differential join)
+  - materialize.public.pk_nation_nationkey (*** full scan ***)
   - materialize.public.pk_part_partkey (*** full scan ***)
-  - materialize.public.fk_supplier_nationkey (differential join)
+  - materialize.public.pk_supplier_suppkey (*** full scan ***)
   - materialize.public.pk_partsupp_partkey_suppkey (*** full scan ***)
   - materialize.public.fk_lineitem_partsuppkey (differential join)
 
@@ -1649,76 +1655,72 @@ materialize.public.q21:
   Return // { arity: 2 }
     Reduce group_by=[#0{s_name}] aggregates=[count(*)] // { arity: 2 }
       Project (#1) // { arity: 1 }
-        Join on=(#0{s_suppkey} = #4{s_suppkey} AND #2{l_orderkey} = #3{l_orderkey}) type=differential // { arity: 5 }
+        Join on=(#0{s_suppkey} = #4{l_suppkey} = #6{l_suppkey} AND #2{l_orderkey} = #3{l_orderkey} = #5{l_orderkey}) type=delta // { arity: 7 }
           implementation
-            %0:l2[#2, #0]KK » %1[#0, #1]KK
-          ArrangeBy keys=[[#2{l_orderkey}, #0{s_suppkey}]] // { arity: 3 }
-            Get l2 // { arity: 3 }
-          ArrangeBy keys=[[#0{l_orderkey}, #1{s_suppkey}]] // { arity: 2 }
-            Union // { arity: 2 }
-              Negate // { arity: 2 }
-                Distinct project=[#0{l_orderkey}, #1{s_suppkey}] // { arity: 2 }
-                  Project (#0, #1) // { arity: 2 }
-                    Filter (#1{s_suppkey} != #4{l_suppkey}) AND (#14{l_receiptdate} > #13{l_commitdate}) // { arity: 18 }
-                      Join on=(#0{l_orderkey} = #2{l_orderkey}) type=differential // { arity: 18 }
-                        implementation
-                          %1:l1[#0]KAf » %0:l3[#0]Kf
-                        ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 2 }
-                          Get l3 // { arity: 2 }
-                        Get l1 // { arity: 16 }
-              Get l3 // { arity: 2 }
-  With
-    cte l3 =
-      Distinct project=[#1{l_orderkey}, #0{s_suppkey}] // { arity: 2 }
-        Project (#0, #2) // { arity: 2 }
-          Get l2 // { arity: 3 }
-    cte l2 =
-      Project (#0..=#2) // { arity: 3 }
-        Join on=(#0{s_suppkey} = #4{s_suppkey} AND #2{l_orderkey} = #3{l_orderkey}) type=differential // { arity: 5 }
-          implementation
-            %1[#1, #0]UKK » %0:l0[#0, #2]KK
+            %0:l0 » %1[#0, #1]UKKA » %2[#0, #1]KK
+            %1 » %0:l0[#0, #2]KKef » %2[#0, #1]KK
+            %2 » %1[#0, #1]UKKA » %0:l0[#0, #2]KKef
           ArrangeBy keys=[[#0{s_suppkey}, #2{l_orderkey}]] // { arity: 3 }
-            Get l0 // { arity: 3 }
-          ArrangeBy keys=[[#1{s_suppkey}, #0{l_orderkey}]] // { arity: 2 }
-            Distinct project=[#0{l_orderkey}, #1{s_suppkey}] // { arity: 2 }
+            Project (#0, #1, #3) // { arity: 3 }
+              Filter (#8{o_orderstatus} = "F") AND (#10{n_name} = "SAUDI ARABIA") AND (#0{s_suppkey} = #4{l_suppkey}) AND (#2{s_nationkey} = #9{n_nationkey}) AND (#3{l_orderkey} = #7{o_orderkey}) AND (#6{l_receiptdate} > #5{l_commitdate}) // { arity: 11 }
+                Get l0 // { arity: 11 }
+          ArrangeBy keys=[[#0{l_orderkey}, #1{l_suppkey}]] // { arity: 2 }
+            Distinct project=[#0{l_orderkey}, #1{l_suppkey}] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Filter (#1{s_suppkey} != #4{l_suppkey}) // { arity: 18 }
+                Filter (#1{l_suppkey} != #4{l_suppkey}) // { arity: 18 }
                   Join on=(#0{l_orderkey} = #2{l_orderkey}) type=differential // { arity: 18 }
                     implementation
-                      %1:l1[#0]KA » %0[#0]K
-                    ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 2 }
-                      Distinct project=[#1{l_orderkey}, #0{s_suppkey}] // { arity: 2 }
-                        Project (#0, #2) // { arity: 2 }
-                          Get l0 // { arity: 3 }
-                    Get l1 // { arity: 16 }
-    cte l1 =
+                      %1:l3[#0]KA » %0:l2[#0]K
+                    Get l2 // { arity: 2 }
+                    Get l3 // { arity: 16 }
+          ArrangeBy keys=[[#0{l_orderkey}, #1{l_suppkey}]] // { arity: 2 }
+            Union // { arity: 2 }
+              Negate // { arity: 2 }
+                Distinct project=[#0{l_orderkey}, #1{l_suppkey}] // { arity: 2 }
+                  Project (#0, #1) // { arity: 2 }
+                    Filter (#1{l_suppkey} != #4{l_suppkey}) AND (#14{l_receiptdate} > #13{l_commitdate}) // { arity: 18 }
+                      Join on=(#0{l_orderkey} = #2{l_orderkey}) type=differential // { arity: 18 }
+                        implementation
+                          %1:l3[#0]KAf » %0:l2[#0]Kf
+                        Get l2 // { arity: 2 }
+                        Get l3 // { arity: 16 }
+              Get l1 // { arity: 2 }
+  With
+    cte l3 =
       ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
         ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
+    cte l2 =
+      ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 2 }
+        Get l1 // { arity: 2 }
+    cte l1 =
+      Distinct project=[#0{l_orderkey}, #1{l_suppkey}] // { arity: 2 }
+        Project (#3, #4) // { arity: 2 }
+          Get l0 // { arity: 11 }
     cte l0 =
-      Project (#0, #1, #7) // { arity: 3 }
-        Filter (#25{o_orderstatus} = "F") AND (#33{n_name} = "SAUDI ARABIA") AND (#0{s_suppkey}) IS NOT NULL AND (#3{s_nationkey}) IS NOT NULL AND (#7{l_orderkey}) IS NOT NULL AND (#19{l_receiptdate} > #18{l_commitdate}) // { arity: 36 }
-          Join on=(#0{s_suppkey} = #9{l_suppkey} AND #3{s_nationkey} = #32{n_nationkey} AND #7{l_orderkey} = #23{o_orderkey}) type=delta // { arity: 36 }
-            implementation
-              %0:supplier » %3:nation[#0]KAef » %1:lineitem[#2]KAf » %2:orders[#0]KAef
-              %1:lineitem » %2:orders[#0]KAef » %0:supplier[#0]KA » %3:nation[#0]KAef
-              %2:orders » %1:lineitem[#0]KAf » %0:supplier[#0]KA » %3:nation[#0]KAef
-              %3:nation » %0:supplier[#3]KA » %1:lineitem[#2]KAf » %2:orders[#0]KAef
-            ArrangeBy keys=[[#0{s_suppkey}], [#3{s_nationkey}]] // { arity: 7 }
-              ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] fk_supplier_nationkey=[delta join 1st input (full scan)] // { arity: 7 }
-            ArrangeBy keys=[[#0{l_orderkey}], [#2{l_suppkey}]] // { arity: 16 }
-              ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
-            ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 9 }
-              ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 9 }
-            ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 4 }
-              ReadIndex on=nation pk_nation_nationkey=[delta join lookup] // { arity: 4 }
+      CrossJoin type=delta // { arity: 11 }
+        implementation
+          %0:supplier » %1:lineitem[×] » %2:orders[×] » %3:nation[×]
+          %1:lineitem » %0:supplier[×] » %2:orders[×] » %3:nation[×]
+          %2:orders » %0:supplier[×] » %1:lineitem[×] » %3:nation[×]
+          %3:nation » %0:supplier[×] » %1:lineitem[×] » %2:orders[×]
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Project (#0, #1, #3) // { arity: 3 }
+            ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
+        ArrangeBy keys=[[]] // { arity: 4 }
+          Project (#0, #2, #11, #12) // { arity: 4 }
+            ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 16 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#0, #2) // { arity: 2 }
+            ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#0, #1) // { arity: 2 }
+            ReadIndex on=nation pk_nation_nationkey=[*** full scan ***] // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.pk_nation_nationkey (delta join lookup)
-  - materialize.public.pk_supplier_suppkey (delta join 1st input (full scan))
-  - materialize.public.fk_supplier_nationkey (delta join 1st input (full scan))
-  - materialize.public.pk_orders_orderkey (delta join lookup)
-  - materialize.public.fk_lineitem_orderkey (differential join, delta join lookup)
-  - materialize.public.fk_lineitem_suppkey (delta join lookup)
+  - materialize.public.pk_nation_nationkey (*** full scan ***)
+  - materialize.public.pk_supplier_suppkey (*** full scan ***)
+  - materialize.public.pk_orders_orderkey (*** full scan ***)
+  - materialize.public.fk_lineitem_orderkey (*** full scan ***, differential join)
 
 EOF
 
@@ -1779,49 +1781,44 @@ materialize.public.q22:
   Return // { arity: 3 }
     Reduce group_by=[substr(char_to_text(#0{c_phone}), 1, 2)] aggregates=[count(*), sum(#1{c_acctbal})] // { arity: 3 }
       Project (#1, #2) // { arity: 2 }
-        Join on=(#0{c_custkey} = #3{c_custkey}) type=differential // { arity: 4 }
-          implementation
-            %0:l1[#0]K » %1[#0]K
-          ArrangeBy keys=[[#0{c_custkey}]] // { arity: 3 }
-            Get l1 // { arity: 3 }
-          ArrangeBy keys=[[#0{c_custkey}]] // { arity: 1 }
-            Union // { arity: 1 }
-              Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Filter (#0{c_custkey}) IS NOT NULL // { arity: 2 }
-                    Join on=(#0{c_custkey} = #1{o_custkey}) type=differential // { arity: 2 }
-                      implementation
-                        %0:l2[#0]UKA » %1[#0]UKA
-                      ArrangeBy keys=[[#0{c_custkey}]] // { arity: 1 }
-                        Get l2 // { arity: 1 }
-                      ArrangeBy keys=[[#0{o_custkey}]] // { arity: 1 }
-                        Distinct project=[#0{o_custkey}] // { arity: 1 }
-                          Project (#1) // { arity: 1 }
-                            ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
-              Get l2 // { arity: 1 }
-  With
-    cte l2 =
-      Distinct project=[#0{c_custkey}] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l1 // { arity: 3 }
-    cte l1 =
-      Project (#0..=#2) // { arity: 3 }
-        Filter (#2{c_acctbal} > (#3 / bigint_to_numeric(case when (#4 = 0) then null else #4 end))) // { arity: 5 }
-          CrossJoin type=differential // { arity: 5 }
+        Filter (#2{c_acctbal} > (#3 / bigint_to_numeric(case when (#4 = 0) then null else #4 end))) // { arity: 6 }
+          Join on=(#0{c_custkey} = #5{c_custkey}) type=delta // { arity: 6 }
             implementation
-              %1[×]UA » %0:l0[×]ef
-            ArrangeBy keys=[[]] // { arity: 3 }
+              %0:l1 » %1[×]UA » %2[#0]K
+              %1 » %0:l1[×]ef » %2[#0]K
+              %2 » %1[×]UA » %0:l1[#0]KAef
+            ArrangeBy keys=[[], [#0{c_custkey}]] // { arity: 3 }
               Project (#0, #4, #5) // { arity: 3 }
                 Filter ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
-                  Get l0 // { arity: 9 }
+                  Get l1 // { arity: 9 }
             ArrangeBy keys=[[]] // { arity: 2 }
               Reduce aggregates=[sum(#0{c_acctbal}), count(*)] // { arity: 2 }
                 Project (#5) // { arity: 1 }
                   Filter (#5{c_acctbal} > 0) AND ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
-                    Get l0 // { arity: 9 }
-    cte l0 =
+                    Get l1 // { arity: 9 }
+            ArrangeBy keys=[[#0{c_custkey}]] // { arity: 1 }
+              Union // { arity: 1 }
+                Negate // { arity: 1 }
+                  Project (#0) // { arity: 1 }
+                    Filter (#0{c_custkey}) IS NOT NULL // { arity: 2 }
+                      Join on=(#0{c_custkey} = #1{o_custkey}) type=differential // { arity: 2 }
+                        implementation
+                          %0:l0[#0]UKA » %1[#0]UKA
+                        ArrangeBy keys=[[#0{c_custkey}]] // { arity: 1 }
+                          Get l0 // { arity: 1 }
+                        ArrangeBy keys=[[#0{o_custkey}]] // { arity: 1 }
+                          Distinct project=[#0{o_custkey}] // { arity: 1 }
+                            Project (#1) // { arity: 1 }
+                              ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
+                Get l0 // { arity: 1 }
+  With
+    cte l1 =
       Map (substr(char_to_text(#4{c_phone}), 1, 2)) // { arity: 9 }
         ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
+    cte l0 =
+      Distinct project=[#0{c_custkey}] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (*** full scan ***)

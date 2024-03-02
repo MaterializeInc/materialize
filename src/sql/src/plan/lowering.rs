@@ -501,9 +501,20 @@ impl HirRelationExpr {
                         .map(predicates)
                         .applied_to(id_gen, get_outer, col_map, cte_map, config)?;
                     let old_arity = input.arity();
-                    input
+                    let mut result = input
                         .filter((old_arity - pred_len..old_arity).map(MirScalarExpr::Column))
-                        .project((0..old_arity - pred_len).collect())
+                        .project((0..old_arity - pred_len).collect());
+
+                    // Tidy up the result
+                    use mz_expr::MapFilterProject;
+                    let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(&mut result);
+                    mfp.optimize();
+                    let (map, filter, project) = mfp.as_map_filter_project();
+                    result = result.map(map).filter(filter);
+                    if !project.iter().cloned().eq(0..result.arity()) {
+                        result = result.project(project)
+                    }
+                    result
                 }
                 Join {
                     left,
