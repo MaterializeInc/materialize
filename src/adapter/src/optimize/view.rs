@@ -13,7 +13,7 @@ use mz_expr::OptimizedMirRelationExpr;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 
-use crate::optimize::{optimize_mir_local, Optimize, OptimizerConfig, OptimizerError};
+use crate::optimize::{optimize_mir_local, trace_plan, Optimize, OptimizerConfig, OptimizerError};
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -35,6 +35,9 @@ impl Optimize<HirRelationExpr> for Optimizer {
     type To = OptimizedMirRelationExpr;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
+        // Trace the pipeline input under `optimize/raw`.
+        trace_plan!(at: "raw", &expr);
+
         // HIR ⇒ MIR lowering and decorrelation
         let expr = expr.lower(&self.config)?;
 

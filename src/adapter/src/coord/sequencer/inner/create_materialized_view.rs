@@ -16,6 +16,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::Datum;
+use mz_repr::Row;
+use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan;
@@ -33,6 +36,8 @@ use crate::coord::{
     ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
 };
 use crate::error::AdapterError;
+use crate::explain::explain_dataflow;
+use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OverrideFrom};
@@ -137,7 +142,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_materialized_view_validate(ctx.session(), plan, resolved_ids, explain_ctx,),
+            self.create_materialized_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -191,6 +196,82 @@ impl Coordinator {
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
+    }
+
+    #[instrument]
+    pub(super) fn explain_materialized_view(
+        &mut self,
+        ctx: &ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::Explainee::MaterializedView(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
+        };
+        let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
+            unreachable!() // Asserted in `plan_explain_plan`.
+        };
+
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+            tracing::error!(
+                "cannot find dataflow metainformation for materialized view {id} in catalog"
+            );
+            coord_bail!(
+                "cannot find dataflow metainformation for materialized view {id} in catalog"
+            );
+        };
+
+        let explain = match stage {
+            ExplainStage::RawPlan => explain_plan(
+                view.raw_expr.clone(),
+                format,
+                &config,
+                &self.catalog().for_session(ctx.session()),
+            )?,
+            ExplainStage::LocalPlan => explain_plan(
+                view.optimized_expr.as_inner().clone(),
+                format,
+                &config,
+                &self.catalog().for_session(ctx.session()),
+            )?,
+            ExplainStage::GlobalPlan => {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            ExplainStage::PhysicalPlan => {
+                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            _ => {
+                coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
+            }
+        };
+
+        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+
+        Ok(Self::send_immediate_rows(rows))
     }
 
     #[instrument]
@@ -338,22 +419,22 @@ impl Coordinator {
             move || {
                 span.in_scope(|| {
                     let mut pipeline = || -> Result<(
-                    optimize::materialized_view::LocalMirPlan,
-                    optimize::materialized_view::GlobalMirPlan,
-                    optimize::materialized_view::GlobalLirPlan,
-                ), AdapterError> {
-                    let _dispatch_guard = explain_ctx.dispatch_guard();
+                        optimize::materialized_view::LocalMirPlan,
+                        optimize::materialized_view::GlobalMirPlan,
+                        optimize::materialized_view::GlobalLirPlan,
+                    ), AdapterError> {
+                        let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                    let raw_expr = plan.materialized_view.expr.clone();
+                        let raw_expr = plan.materialized_view.expr.clone();
 
-                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-                    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                    let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                        let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                    Ok((local_mir_plan, global_mir_plan, global_lir_plan))
-                };
+                        Ok((local_mir_plan, global_mir_plan, global_lir_plan))
+                    };
 
                     let stage = match pipeline() {
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {

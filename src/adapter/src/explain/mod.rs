@@ -74,3 +74,31 @@ where
 
     Ok(Explainable::new(&mut plan).explain(&format, &context)?)
 }
+
+/// Convenience method to explain a single plan.
+///
+/// In the long term, this method and [`explain_dataflow`] should be unified. In
+/// order to do that, however, we first need to generalize the role
+/// [`DataflowMetainfo`] as a carrier of metainformation for the optimization
+/// pass in general, and not for a specific strucutre representing an
+/// intermediate result.
+pub(crate) fn explain_plan<T>(
+    mut plan: T,
+    format: ExplainFormat,
+    config: &ExplainConfig,
+    humanizer: &dyn ExprHumanizer,
+) -> Result<String, AdapterError>
+where
+    for<'a> Explainable<'a, T>: Explain<'a, Context = ExplainContext<'a>>,
+{
+    let context = ExplainContext {
+        config,
+        humanizer,
+        used_indexes: Default::default(),
+        finishing: Default::default(),
+        duration: Default::default(),
+        optimizer_notices: Default::default(),
+    };
+
+    Ok(Explainable::new(&mut plan).explain(&format, &context)?)
+}
