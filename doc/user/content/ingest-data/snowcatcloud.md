@@ -14,7 +14,7 @@ into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 Ensure that you have:
 
-- [ [SnowcatCloud account](https://app.snowcatcloud.com/register)
+- [SnowcatCloud account](https://app.snowcatcloud.com/register)
 - A Snowplow or Analytics.js compatible pipeline set up and running.
 
 ## Step 1. (Optional) Create a cluster
