@@ -24,8 +24,6 @@ production cluster.
 
 ## Before you begin
 
-* Make sure you have `psql` or another client installed locally.
-
 * Make sure you have a [Materialize account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) and already have a password to connect with.
 
 ## Step 1. Invite a new user
@@ -41,11 +39,8 @@ example.
 
 ## Step 2. Create a new role
 
-1. In the Materialize UI, go to the **Connect** screen and copy the `psql` command or external tool information.
-
-1. Open a new terminal window, run the `psql` command or use the external tool connection information, and enter your app password.
-
-1. Now that you're logged in, you can create a new role:
+1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+   client connected to Materialize, create a new role:
 
     ```sql
     CREATE ROLE dev_role;
@@ -89,8 +84,8 @@ example.
 Your `dev_role` has the default system-level permissions and needs object-level privileges. RBAC allows you to apply granular privileges to objects in the SQL hierarchy. Let's create some example objects in the system and determine what
 privileges the role needs.
 
-1. In your `psql` terminal, create a new example cluster to avoid impacting
-   other environments:
+1. In the SQL client connected to Materialize, create a new example cluster to
+avoid impacting other environments:
 
    ```sql
    CREATE CLUSTER dev_cluster (SIZE = '3xsmall');

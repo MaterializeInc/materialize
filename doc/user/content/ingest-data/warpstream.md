@@ -13,28 +13,38 @@ menu:
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
 with the Postgres ones. We should include spill to disk in the guidance then."
 
-This guide goes through the necessary steps to connect Materialize to [WarpStream](https://www.warpstream.com/), an Apache Kafka® protocol compatible data streaming platform.
+This guide goes through the necessary steps to connect Materialize to
+[WarpStream](https://www.warpstream.com/), an Apache Kafka® protocol compatible
+data streaming platform.
 
-WarpStream runs on commodity object stores (e.g., Amazon S3, Google Cloud Storage, Azure Blob Storage) and offers benefits such as no inter-AZ bandwidth costs and no local disks management. This guide highlights its integration with Materialize using [Fly.io](https://fly.io/).
+WarpStream runs on commodity object stores (e.g., Amazon S3, Google Cloud
+Storage, Azure Blob Storage) and offers benefits such as no inter-AZ bandwidth
+costs and no local disks management. This guide highlights its integration with
+Materialize using [Fly.io](https://fly.io/).
 
 #### Before you begin
 
 Ensure you have the following:
 
--   WarpStream account: [Register here](https://console.warpstream.com/signup)
--   Fly.io account: Used for deploying a WarpStream cluster with TLS termination and SASL authentication.
+-   [A WarpStream account](https://console.warpstream.com/signup)
+-   A Fly.io account: used for deploying a WarpStream cluster with TLS termination
+    and SASL authentication.
 
 1. #### Set up WarpStream
 
     If you already have a WarpStream cluster, you can skip this step.
 
-    a. Begin by registering for a WarpStream account or logging in to your existing account.
+    a. Begin by registering for a WarpStream account or logging in to your
+    existing account.
 
-    b. Follow [this guide](https://github.com/warpstreamlabs/warpstream-fly-io-template) to deploy your WarpStream cluster on Fly.io.
+    b. Follow [this guide](https://github.com/warpstreamlabs/warpstream-fly-io-template)
+    to deploy your WarpStream cluster on Fly.io.
 
-    c. Post deployment, [create credentials](https://docs.warpstream.com/warpstream/how-to/configure-the-warpstream-agent-for-production/configure-authentication-for-the-warpstream-agent#sasl-authentication) for connecting to your WarpStream cluster.
+    c. Post deployment, [create credentials](https://docs.warpstream.com/warpstream/how-to/configure-the-warpstream-agent-for-production/configure-authentication-for-the-warpstream-agent#sasl-authentication)
+    for connecting to your WarpStream cluster.
 
-    d. Use the provided credentials to connect to the WarpStream cluster on Fly.io. Test this connection using [the WarpStream CLI](https://docs.warpstream.com/warpstream/install-the-warpstream-agent):
+    d. Use the provided credentials to connect to the WarpStream cluster on
+    Fly.io. Test this connection using [the WarpStream CLI](https://docs.warpstream.com/warpstream/install-the-warpstream-agent):
 
     ```bash
     warpstream kcmd -type diagnose-connection \
@@ -43,7 +53,8 @@ Ensure you have the following:
                     -password ccp_XXXXXXXXXX
     ```
 
-    Change the `bootstrap-host` to the name of your WarpStream cluster on Fly.io.
+    Change the `bootstrap-host` to the name of your WarpStream cluster on
+    Fly.io.
 
     e. Create the `materialize_click_streams` topic:
 
@@ -70,7 +81,9 @@ Ensure you have the following:
 
 2. #### Integrate with Materialize
 
-    To integrate WarpStream with Materialize, you need to set up a connection to the WarpStream broker and create a source in Materialize to consume the data.
+    To integrate WarpStream with Materialize, you need to set up a connection to
+    the WarpStream broker and create a source in Materialize to consume the
+    data.
 
     Head over to the Materialize console and follow the steps below:
 
@@ -92,7 +105,9 @@ Ensure you have the following:
     );
     ```
 
-    c. Create a source in Materialize to consume messages:
+    c. Create a source in Materialize to consume messages. By default, the
+    source will be created in the active cluster; to use a different cluster,
+    use the `IN CLUSTER` clause.
 
     ```sql
     CREATE SOURCE warpstream_click_stream_source
@@ -137,4 +152,6 @@ Ensure you have the following:
 
 ---
 
-By following the steps outlined above, you will have successfully set up a connection between WarpStream and Materialize. You can now use Materialize to query the data ingested from WarpStream.
+By following the steps outlined above, you will have successfully set up a
+connection between WarpStream and Materialize. You can now use Materialize to
+query the data ingested from WarpStream.

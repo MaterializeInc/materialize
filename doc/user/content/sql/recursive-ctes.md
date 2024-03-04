@@ -75,7 +75,10 @@ However, introducing recursive CTEs complicates the situation as follows:
 
 ## Examples
 
-Let's consider a very simple schema consisting of `users` that belong to a hierarchy of geographical `areas` and exchange `transfers` between each other.
+Let's consider a very simple schema consisting of `users` that belong to a
+hierarchy of geographical `areas` and exchange `transfers` between each other.
+Use the [SQL Shell](https://console.materialize.com/) to run the sequence of
+commands below.
 
 
 ### Example schema
@@ -134,12 +137,16 @@ WITH MUTUALLY RECURSIVE
 SELECT src_id, dst_id FROM connected;
 ```
 
-You can insert [the example data](#example-data) and observe how the materialized view contents change over time from the `psql` with the `\watch` command:
+To see results change over time, you can [`SUBSCRIBE`](/sql/subscribe/) to the
+materialized view and then use a different SQL Shell session to insert
+some sample data into the base tables used in the view:
 
 ```sql
-SELECT * FROM connected;
-\watch 1
+SUBSCRIBE(SELECT * FROM connected) WITH (SNAPSHOT = FALSE);
 ```
+
+You'll see results change as new data is inserted. When you’re done, cancel out
+of the `SUBSCRIBE` using **Stop streaming**.
 
 {{< note >}}
 Depending on your base data, the number of records in the `connected` result might get close to the square of the number of `users`.
@@ -171,12 +178,14 @@ CREATE MATERIALIZED VIEW strongly_connected_components AS
   GROUP BY u.id;
 ```
 
-Again, you can insert [the example data](#example-data) and observe how the materialized view contents change over time from the `psql` with the `\watch` command:
+Again, you can insert some sample data into the base tables and observe how the
+materialized view contents change over time using `SUBSCRIBE`:
 
 ```sql
-SELECT * FROM strongly_connected_components;
-\watch 1
+SUBSCRIBE(SELECT * FROM strongly_connected_components) WITH (SNAPSHOT = FALSE);
 ```
+
+When you’re done, cancel out of the `SUBSCRIBE` using **Stop streaming**.
 
 {{< note >}}
 The `strongly_connected_components` definition given above is not recursive, but relies on the recursive CTEs from the `connected` definition.
