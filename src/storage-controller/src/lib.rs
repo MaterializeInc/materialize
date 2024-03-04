@@ -2127,7 +2127,8 @@ where
     async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn,
-        ids: BTreeSet<GlobalId>,
+        init_ids: BTreeSet<GlobalId>,
+        mut drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
         mz_ore::soft_assert_or_log!(
             self.provisional_shard_mappings.is_empty(),
@@ -2144,7 +2145,7 @@ where
         let storage_metadata: BTreeMap<_, _> = metadata.into_iter().collect();
 
         // Determine which collections we do not yet have metadata for.
-        let new_collections: BTreeSet<GlobalId> = ids
+        let new_collections: BTreeSet<GlobalId> = init_ids
             .iter()
             .filter(|id| !storage_metadata.contains_key(id))
             .cloned()
@@ -2156,7 +2157,10 @@ where
             new_collections
         );
 
-        self.provisionally_synchronize_state(txn, new_collections, BTreeSet::new())
+        // Ensure we don't double-drop IDs.
+        drop_ids.retain(|id| storage_metadata.contains_key(id));
+
+        self.provisionally_synchronize_state(txn, new_collections, drop_ids)
             .await?;
 
         // Add all previous metadata to the set of provisional metadata. We

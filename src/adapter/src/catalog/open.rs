@@ -74,9 +74,7 @@ use crate::AdapterError;
 #[derive(Debug)]
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on STORAGE nodes
-    pub previous_sink_ids: Vec<GlobalId>,
-    pub previous_materialized_view_ids: Vec<GlobalId>,
-    pub previous_source_ids: Vec<GlobalId>,
+    pub previous_storage_collection_ids: BTreeSet<GlobalId>,
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
     pub all_create_ops: Vec<(
@@ -98,9 +96,7 @@ pub struct BuiltinMigrationMetadata {
 impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
-            previous_sink_ids: Vec::new(),
-            previous_materialized_view_ids: Vec::new(),
-            previous_source_ids: Vec::new(),
+            previous_storage_collection_ids: BTreeSet::new(),
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
             introspection_source_index_updates: BTreeMap::new(),
@@ -1233,15 +1229,19 @@ impl Catalog {
 
             ancestor_ids.insert(id, new_id);
 
+            if entry.item().is_storage_collection() {
+                let prev = migration_metadata
+                    .previous_storage_collection_ids
+                    .insert(id);
+                mz_ore::soft_assert_or_log!(
+                    !prev,
+                    "generate_builtin_migration_metadata contained two references to {}",
+                    id
+                );
+            }
+
             // Push drop commands.
             match entry.item() {
-                CatalogItem::Table(_) | CatalogItem::Source(_) => {
-                    migration_metadata.previous_source_ids.push(id)
-                }
-                CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
-                CatalogItem::MaterializedView(_) => {
-                    migration_metadata.previous_materialized_view_ids.push(id)
-                }
                 CatalogItem::Log(log) => {
                     migrated_log_ids.insert(id, log.variant.clone());
                 }
@@ -1263,6 +1263,16 @@ impl Catalog {
                                 ));
                         }
                     }
+                }
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::MaterializedView(_) => {
+                    // Storage objects don't have any external objects to drop.
+                }
+                CatalogItem::Sink(_) => {
+                    // Sinks don't have any external objects to drop--however,
+                    // this would change if we add a collections for sinks
+                    // #17672.
                 }
                 CatalogItem::View(_) => {
                     // Views don't have any external objects to drop.
@@ -1303,9 +1313,6 @@ impl Catalog {
         }
 
         // Reverse drop commands.
-        migration_metadata.previous_sink_ids.reverse();
-        migration_metadata.previous_materialized_view_ids.reverse();
-        migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();
         migration_metadata.user_drop_ops.reverse();
 

@@ -169,6 +169,7 @@ impl Catalog {
     async fn initialize_storage_controller_state(
         &mut self,
         storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
@@ -180,7 +181,11 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         storage_controller
-            .initialize_state(&mut txn, collections)
+            .initialize_state(
+                &mut txn,
+                collections,
+                builtin_migration_metadata.previous_storage_collection_ids,
+            )
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
@@ -193,6 +198,7 @@ impl Catalog {
         &mut self,
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
         // Whether to use the new persist-txn tables implementation or the
         // legacy one.
         persist_txn_tables: PersistTxnTablesImpl,
@@ -211,8 +217,11 @@ impl Catalog {
                 .await
         };
 
-        self.initialize_storage_controller_state(&mut *controller.storage)
-            .await?;
+        self.initialize_storage_controller_state(
+            &mut *controller.storage,
+            builtin_migration_metadata,
+        )
+        .await?;
 
         Ok(controller)
     }
