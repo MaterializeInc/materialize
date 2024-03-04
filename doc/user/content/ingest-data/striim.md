@@ -2,7 +2,7 @@
 title: "Striim"
 description: "How to connect Striim to Materialize as a source."
 aliases:
-  - /integrations/striiim/
+  - /integrations/striim/
 menu:
   main:
     parent: "kafka"
