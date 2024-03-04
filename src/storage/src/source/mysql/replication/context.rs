@@ -21,7 +21,8 @@ use mz_repr::Row;
 use mz_storage_types::sources::mysql::GtidPartition;
 use mz_timely_util::builder_async::AsyncOutputHandle;
 
-use super::super::{DefiniteError, MySqlTableName, RewindRequest};
+use crate::metrics::source::mysql::MySqlSourceMetrics;
+use crate::source::mysql::{DefiniteError, MySqlTableName, RewindRequest};
 use crate::source::RawSourceCreationConfig;
 
 /// A container to hold various context information for the replication process, used when
@@ -31,6 +32,7 @@ pub(super) struct ReplContext<'a> {
     pub(super) connection_config: &'a Config,
     pub(super) stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
     pub(super) table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+    pub(super) metrics: &'a MySqlSourceMetrics,
     pub(super) data_output: &'a mut AsyncOutputHandle<
         GtidPartition,
         Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
@@ -52,6 +54,7 @@ impl<'a> ReplContext<'a> {
         connection_config: &'a Config,
         stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
         table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+        metrics: &'a MySqlSourceMetrics,
         data_output: &'a mut AsyncOutputHandle<
             GtidPartition,
             Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
@@ -66,6 +69,7 @@ impl<'a> ReplContext<'a> {
             connection_config,
             stream,
             table_info,
+            metrics,
             data_output,
             data_cap_set,
             upper_cap_set,

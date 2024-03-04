@@ -17,6 +17,7 @@ use uuid::Uuid;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 
 use super::super::DefiniteError;
+use crate::metrics::source::mysql::{GtidMetricGauge, MySqlSourceMetrics};
 
 /// Holds the active and future GTID partitions that represent the complete
 /// UUID range of all possible GTID source-ids from a MySQL server.
@@ -38,20 +39,26 @@ use super::super::DefiniteError;
 /// capabilities externally will be preserved even in the case of an error in
 /// the operator, which is why we just manage a single frontier and capability set.
 pub(super) struct GtidReplicationPartitions {
-    active: BTreeMap<Uuid, GtidPartition>,
+    active: BTreeMap<Uuid, (GtidPartition, GtidMetricGauge)>,
     future: Vec<GtidPartition>,
 }
 
-impl From<Antichain<GtidPartition>> for GtidReplicationPartitions {
-    fn from(frontier: Antichain<GtidPartition>) -> Self {
+impl GtidReplicationPartitions {
+    pub(super) fn from_frontier(
+        frontier: Antichain<GtidPartition>,
+        metrics: &MySqlSourceMetrics,
+    ) -> Self {
         let mut active = BTreeMap::new();
         let mut future = Vec::new();
         for part in frontier.iter() {
-            if part.timestamp() == &GtidState::Absent {
-                future.push(part.clone());
-            } else {
-                let source_id = part.interval().singleton().unwrap().clone();
-                active.insert(source_id, part.clone());
+            match part.timestamp() {
+                GtidState::Absent => future.push(part.clone()),
+                GtidState::Active(tx_id) => {
+                    let source_id = part.interval().singleton().unwrap().clone();
+                    let gauge = metrics.get_gtid_gauge(source_id.to_string());
+                    gauge.set(tx_id.get());
+                    active.insert(source_id, (part.clone(), gauge));
+                }
             }
         }
         Self { active, future }
@@ -65,7 +72,7 @@ impl GtidReplicationPartitions {
         Antichain::from_iter(
             self.active
                 .values()
-                .cloned()
+                .map(|(part, _)| part.clone())
                 .chain(self.future.iter().cloned()),
         )
     }
@@ -80,11 +87,15 @@ impl GtidReplicationPartitions {
     /// of all the active and future GTID partition timestamps.
     /// This call should usually be followed up by downgrading capabilities
     /// using the frontier returned by `self.frontier()`
-    pub(super) fn update(&mut self, new_part: GtidPartition) -> Result<(), DefiniteError> {
+    pub(super) fn update(
+        &mut self,
+        new_part: GtidPartition,
+        metrics: &MySqlSourceMetrics,
+    ) -> Result<(), DefiniteError> {
         let source_id = new_part.interval().singleton().unwrap();
         // Check if we have an active partition for the GTID UUID
         match self.active.get_mut(source_id) {
-            Some(active_part) => {
+            Some((active_part, gauge)) => {
                 // Since we start replication at a specific upper, we
                 // should only see GTID transaction-ids
                 // in a monotonic order for each source, starting at that upper.
@@ -98,6 +109,10 @@ impl GtidReplicationPartitions {
 
                 // replace this active partition with the new one
                 *active_part = new_part;
+                // update the gauge for this GTID UUID
+                if let GtidState::Active(tx_id) = active_part.timestamp() {
+                    gauge.set(tx_id.get());
+                }
             }
             // We've received a GTID for a UUID we don't yet know about
             None => {
@@ -122,8 +137,13 @@ impl GtidReplicationPartitions {
                 self.future
                     .extend(before_range.into_iter().chain(after_range.into_iter()));
 
+                // Get a metrics object for this new GTID UUID
+                let gauge = metrics.get_gtid_gauge(source_id.to_string());
+                if let GtidState::Active(tx_id) = new_part.timestamp() {
+                    gauge.set(tx_id.get());
+                }
                 // Store the new part in our active partitions
-                self.active.insert(source_id.clone(), new_part);
+                self.active.insert(source_id.clone(), (new_part, gauge));
             }
         };
 

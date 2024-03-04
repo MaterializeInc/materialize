@@ -82,7 +82,7 @@ pub(super) async fn handle_query_event(
                     .await?;
                 if let Some((err_table, err)) = verify_schemas(&mut *conn, &[(&table, table_desc)])
                     .await?
-                    .drain(..)
+                    .into_iter()
                     .next()
                 {
                     assert_eq!(err_table, &table, "Unexpected table verification error");
@@ -228,6 +228,20 @@ pub(super) async fn handle_rows_event(
     let mut rows_iter = event.rows(table_map_event);
     let mut rewind_count = 0;
     while let Some(Ok((before_row, after_row))) = rows_iter.next() {
+        // Update metrics for updates/inserts/deletes
+        match (&before_row, &after_row) {
+            (None, None) => {}
+            (Some(_), Some(_)) => {
+                ctx.metrics.updates.inc();
+            }
+            (None, Some(_)) => {
+                ctx.metrics.inserts.inc();
+            }
+            (Some(_), None) => {
+                ctx.metrics.deletes.inc();
+            }
+        }
+
         let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
