@@ -1990,6 +1990,7 @@ async fn test_max_connections_limits() {
         encoding_key,
         decoding_key,
         users,
+        None,
         SYSTEM_TIME.clone(),
         500,
         None,
