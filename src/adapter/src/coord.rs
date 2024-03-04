@@ -142,7 +142,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::ActiveComputeSink;
-use crate::catalog::{BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog};
+use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
@@ -1391,7 +1391,6 @@ impl Coordinator {
     #[instrument(name = "coord::bootstrap")]
     pub(crate) async fn bootstrap(
         &mut self,
-        builtin_migration_metadata: BuiltinMigrationMetadata,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         info!("coordinator init: beginning bootstrap");
@@ -1439,23 +1438,6 @@ impl Coordinator {
         self.controller
             .create_replicas(replicas_to_start, enable_worker_core_affinity)
             .await?;
-
-        let storage_metadata = self.catalog.state().storage_metadata();
-
-        debug!("coordinator init: migrating builtin objects");
-        // Migrate builtin objects.
-        self.controller.storage.drop_sources_unvalidated(
-            storage_metadata,
-            builtin_migration_metadata.previous_materialized_view_ids,
-        );
-
-        self.controller.storage.drop_sources_unvalidated(
-            storage_metadata,
-            builtin_migration_metadata.previous_source_ids,
-        );
-        self.controller
-            .storage
-            .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
         debug!("coordinator init: initializing storage collections");
         self.bootstrap_storage_collections().await;
@@ -3029,6 +3011,7 @@ pub fn serve(
                         catalog.initialize_controller(
                             controller_config,
                             controller_envd_epoch,
+                            builtin_migration_metadata,
                             controller_persist_txn_tables,
                         )
                     })
@@ -3075,7 +3058,7 @@ pub fn serve(
                 };
                 let bootstrap = handle.block_on(async {
                     coord
-                        .bootstrap(builtin_migration_metadata, builtin_table_updates)
+                        .bootstrap(builtin_table_updates)
                         .await?;
                     coord
                         .controller

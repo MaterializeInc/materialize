@@ -2153,7 +2153,8 @@ where
     async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn<T>,
-        ids: BTreeSet<GlobalId>,
+        init_ids: BTreeSet<GlobalId>,
+        drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         let metadata = txn.get_collection_metadata();
         let processed_metadata: Result<Vec<_>, _> = metadata
@@ -2164,7 +2165,7 @@ where
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
         // Determine which collections we do not yet have metadata for.
-        let new_collections: BTreeSet<GlobalId> = ids
+        let new_collections: BTreeSet<GlobalId> = init_ids
             .iter()
             .filter(|id| !existing_metadata.contains(id))
             .cloned()
@@ -2176,8 +2177,7 @@ where
             new_collections
         );
 
-        self.prepare_state(txn, new_collections, BTreeSet::new())
-            .await?;
+        self.prepare_state(txn, new_collections, drop_ids).await?;
 
         // All shards that belong to collections dropped in the last epoch are
         // eligible for finalization. This intentionally includes any built-in
