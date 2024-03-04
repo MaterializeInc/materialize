@@ -33,6 +33,8 @@ use crate::protocol;
 /// Configures a [`Server`].
 #[derive(Debug)]
 pub struct Config {
+    /// The label for the mz_connection_status metric.
+    pub label: &'static str,
     /// A client for the adapter with which the server will communicate.
     pub adapter_client: mz_adapter::Client,
     /// The TLS configuration for the server.
@@ -84,7 +86,7 @@ impl Server {
             tls: config.tls,
             adapter_client: config.adapter_client,
             frontegg: config.frontegg,
-            metrics: Metrics::new(config.metrics, config.internal),
+            metrics: Metrics::new(config.metrics, config.label),
             internal: config.internal,
             active_connection_count: config.active_connection_count,
         }
