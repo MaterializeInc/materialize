@@ -4002,7 +4002,7 @@ async fn test_startup_cluster_notice_with_http_options() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_startup_cluster_notice1() {
+async fn test_startup_cluster_notice() {
     let server = test_util::TestHarness::default().start().await;
 
     let notices = Arc::new(Mutex::new(Vec::new()));
@@ -4050,7 +4050,7 @@ async fn test_startup_cluster_notice1() {
             message: "default cluster \"quickstart\" does not exist",
             detail: None,
             hint: Some(
-                "Set a default cluster for the current role with ALTER ROLE <role> SET cluster TO <cluster>.",
+                "Set a default cluster for the current role with `ALTER ROLE <role> SET cluster TO <cluster>;`.",
             ),
             position: None,
             where_: None,
@@ -4095,7 +4095,7 @@ async fn test_startup_cluster_notice1() {
             message: "role default cluster \"non_existant\" does not exist",
             detail: None,
             hint: Some(
-                "Change the default cluster for the current role with with ALTER ROLE <role> SET cluster TO <cluster>.",
+                "Change the default cluster for the current role with `ALTER ROLE <role> SET cluster TO <cluster>;`.",
             ),
             position: None,
             where_: None,
