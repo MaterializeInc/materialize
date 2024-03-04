@@ -60,7 +60,9 @@
         {% set schema_object_count = run_query(schema_empty) %}
         {% if execute %}
             {% if schema_object_count and schema_object_count.columns[0] and schema_object_count.rows[0][0] > 0 %}
-                {% if ignore_existing_objects %}
+                {% if check_schema_ci_tag(deploy_schema) %}
+                    {{ log("Schema " ~ deploy_schema ~ " was already created for this pull request", info=True) }}
+                {% elif ignore_existing_objects %}
                     {{ log("[Warning] Deployment schema " ~ deploy_schema ~ " is not empty", info=True) }}
                     {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
                 {% else %}
@@ -84,6 +86,7 @@
         CREATE SCHEMA {{ deploy_schema }};
         {% endset %}
         {{ run_query(create_schema) }}
+        {{ set_schema_ci_tag() }}
     {% endif %}
 {% endfor %}
 
@@ -129,7 +132,9 @@
         {% set cluster_object_count = run_query(cluster_empty) %}
         {% if execute %}
             {% if cluster_object_count and cluster_object_count.columns[0] and cluster_object_count.rows[0][0] > 0 %}
-                {% if ignore_existing_objects %}
+                {% if check_cluster_ci_tag(deploy_cluster) %}
+                    {{ log("Cluster " ~ deploy_cluster ~ " was already created for this pull request", info=True) }}
+                {% elif ignore_existing_objects %}
                     {{ log("[Warning] Deployment cluster " ~ deploy_cluster ~ " is not empty", info=True) }}
                     {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
                 {% else %}
@@ -175,6 +180,7 @@
                 );
             {% endset %}
             {{ run_query(create_cluster) }}
+            {{ set_cluster_ci_tag() }}
         {% endif %}
     {% endif %}
 {% endfor %}
