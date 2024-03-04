@@ -24,7 +24,7 @@ Ensure you have the following:
 
 ## Integration steps
 
-### Database Source Configuration
+### Database source configuration
 
 1. **MySQL CDC Setup:**
     - Activate binary logging with `row` format in MySQL.
