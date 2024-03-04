@@ -125,7 +125,7 @@ Here's how you can leverage JSON formatting with Materialize:
 
     This statement creates a source named `users` that reads from the Kafka topic `users` and expects the data to be in JSON format.
 
-3. **Data Transformation in Materialize:**
+3. **Data transformation in Materialize:**
 
     ```sql
     SELECT
