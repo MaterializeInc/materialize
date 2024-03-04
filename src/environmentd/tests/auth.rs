@@ -1712,6 +1712,7 @@ async fn test_auth_admin_superuser_revoked() {
     );
 }
 
+#[ignore] // TODO: Reenable when #25705 is fixed
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_deduplication() {
