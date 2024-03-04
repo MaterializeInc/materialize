@@ -56,7 +56,7 @@ ALTER CLUSTER IF EXISTS bar RENAME TO foo
 statement ok
 CREATE CLUSTER bar REPLICAS ()
 
-statement error stash error: uniqueness violation
+statement error uniqueness violation
 ALTER CLUSTER foo RENAME TO bar
 
 statement ok
@@ -509,7 +509,7 @@ ALTER CLUSTER REPLICA IF EXISTS quickstart.bar_foo RENAME TO foo_bar
 statement ok
 CREATE CLUSTER REPLICA quickstart.bar_foo SIZE '1'
 
-statement error stash error: uniqueness violation
+statement error uniqueness violation
 ALTER CLUSTER REPLICA quickstart.bar_foo RENAME TO foo_bar
 
 statement ok

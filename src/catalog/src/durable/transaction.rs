@@ -12,8 +12,8 @@ use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
-use mz_ore::soft_assert_or_log;
-use mz_proto::{ProtoType, RustType};
+use mz_ore::{soft_assert_no_log, soft_assert_or_log};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
@@ -25,9 +25,9 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::CatalogKind;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_stash::TableTransaction;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -48,9 +48,9 @@ use crate::durable::objects::{
     TimestampKey, TimestampValue,
 };
 use crate::durable::{
-    CatalogError, Comment, DefaultPrivilege, DurableCatalogState, Snapshot, SystemConfiguration,
-    TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
-    SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
+    SystemConfiguration, TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
@@ -1580,4 +1580,582 @@ impl TransactionBatch {
             && audit_log_updates.is_empty()
             && storage_usage_updates.is_empty()
     }
+}
+
+/// TableTransaction emulates some features of a typical SQL transaction over
+/// table for a Collection.
+///
+/// It supports:
+/// - uniqueness constraints
+/// - transactional reads and writes (including read-your-writes before commit)
+///
+/// `K` is the primary key type. Multiple entries with the same key are disallowed.
+/// `V` is the an arbitrary value type.
+#[derive(Debug, PartialEq, Eq)]
+struct TableTransaction<K, V> {
+    initial: BTreeMap<K, V>,
+    // The desired state of keys after commit. `None` means the value will be
+    // deleted.
+    pending: BTreeMap<K, Option<V>>,
+    uniqueness_violation: fn(a: &V, b: &V) -> bool,
+}
+
+impl<K, V> TableTransaction<K, V>
+where
+    K: Ord + Eq + Clone,
+    V: Ord + Clone,
+{
+    /// Create a new TableTransaction with initial data. `uniqueness_violation` is a function
+    /// whether there is a uniqueness violation among two values.
+    ///
+    /// Internally the catalog serializes data as protobuf. All fields in a proto message are
+    /// optional, which makes using them in Rust cumbersome. Generic parameters `KP` and `VP` are
+    /// protobuf types which deserialize to `K` and `V` that a [`TableTransaction`] is generic
+    /// over.
+    fn new<KP, VP>(
+        initial: BTreeMap<KP, VP>,
+        uniqueness_violation: fn(a: &V, b: &V) -> bool,
+    ) -> Result<Self, TryFromProtoError>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
+        let initial = initial
+            .into_iter()
+            .map(RustType::from_proto)
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
+            initial,
+            pending: BTreeMap::new(),
+            uniqueness_violation,
+        })
+    }
+
+    /// Consumes and returns the pending changes and their diffs. `Diff` is
+    /// guaranteed to be 1 or -1.
+    fn pending<KP, VP>(self) -> Vec<(KP, VP, Diff)>
+    where
+        K: RustType<KP>,
+        V: RustType<VP>,
+    {
+        soft_assert_no_log!(self.verify().is_ok());
+        // Pending describes the desired final state for some keys. K,V pairs should be
+        // retracted if they already exist and were deleted or are being updated.
+        self.pending
+            .into_iter()
+            .map(|(k, v)| match self.initial.get(&k) {
+                Some(initial_v) => {
+                    let mut diffs = vec![(k.clone(), initial_v.clone(), -1)];
+                    if let Some(v) = v {
+                        diffs.push((k, v, 1));
+                    }
+                    diffs
+                }
+                None => {
+                    if let Some(v) = v {
+                        vec![(k, v, 1)]
+                    } else {
+                        vec![]
+                    }
+                }
+            })
+            .flatten()
+            .map(|(key, val, diff)| (key.into_proto(), val.into_proto(), diff))
+            .collect()
+    }
+
+    fn verify(&self) -> Result<(), DurableCatalogError> {
+        // Compare each value to each other value and ensure they are unique.
+        let items = self.items();
+        for (i, vi) in items.values().enumerate() {
+            for (j, vj) in items.values().enumerate() {
+                if i != j && (self.uniqueness_violation)(vi, vj) {
+                    return Err(DurableCatalogError::UniquenessViolation);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Iterates over the items viewable in the current transaction in arbitrary
+    /// order and applies `f` on all key, value pairs.
+    fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
+        let mut seen = BTreeSet::new();
+        for (k, v) in self.pending.iter() {
+            seen.insert(k);
+            // Deleted items don't exist so shouldn't be visited, but still suppress
+            // visiting the key later.
+            if let Some(v) = v {
+                f(k, v);
+            }
+        }
+        for (k, v) in self.initial.iter() {
+            // Add on initial items that don't have updates.
+            if !seen.contains(k) {
+                f(k, v);
+            }
+        }
+    }
+
+    /// Returns the current value of `k`.
+    fn get(&self, k: &K) -> Option<&V> {
+        if let Some(v) = self.pending.get(k) {
+            v.as_ref()
+        } else if let Some(v) = self.initial.get(k) {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the items viewable in the current transaction.
+    fn items(&self) -> BTreeMap<K, V> {
+        let mut items = BTreeMap::new();
+        self.for_values(|k, v| {
+            items.insert(k.clone(), v.clone());
+        });
+        items
+    }
+
+    /// Iterates over the items viewable in the current transaction, and provides a
+    /// map where additional pending items can be inserted, which will be appended
+    /// to current pending items. Does not verify uniqueness.
+    fn for_values_mut<F: FnMut(&mut BTreeMap<K, Option<V>>, &K, &V)>(&mut self, mut f: F) {
+        let mut pending = BTreeMap::new();
+        self.for_values(|k, v| f(&mut pending, k, v));
+        self.pending.extend(pending);
+    }
+
+    /// Inserts a new k,v pair.
+    ///
+    /// Returns an error if the uniqueness check failed or the key already exists.
+    fn insert(&mut self, k: K, v: V) -> Result<(), DurableCatalogError> {
+        let mut violation = None;
+        self.for_values(|for_k, for_v| {
+            if &k == for_k {
+                violation = Some(DurableCatalogError::DuplicateKey);
+            }
+            if (self.uniqueness_violation)(for_v, &v) {
+                violation = Some(DurableCatalogError::UniquenessViolation);
+            }
+        });
+        if let Some(violation) = violation {
+            return Err(violation.into());
+        }
+        self.pending.insert(k, Some(v));
+        soft_assert_no_log!(self.verify().is_ok());
+        Ok(())
+    }
+
+    /// Updates k, v pairs. `f` is a function that can return `Some(V)` if the
+    /// value should be updated, otherwise `None`. Returns the number of changed
+    /// entries.
+    ///
+    /// Returns an error if the uniqueness check failed.
+    fn update<F: Fn(&K, &V) -> Option<V>>(&mut self, f: F) -> Result<Diff, DurableCatalogError> {
+        let mut changed = 0;
+        // Keep a copy of pending in case of uniqueness violation.
+        let pending = self.pending.clone();
+        self.for_values_mut(|p, k, v| {
+            if let Some(next) = f(k, v) {
+                changed += 1;
+                p.insert(k.clone(), Some(next));
+            }
+        });
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            self.pending = pending;
+            Err(err)
+        } else {
+            Ok(changed)
+        }
+    }
+
+    /// Set the value for a key. Returns the previous entry if the key existed,
+    /// otherwise None.
+    ///
+    /// Returns an error if the uniqueness check failed.
+    ///
+    /// DO NOT call this function in a loop, use [`Self::set_many`] instead.
+    fn set(&mut self, k: K, v: Option<V>) -> Result<Option<V>, DurableCatalogError> {
+        // Save the pending value for the key so we can restore it in case of
+        // uniqueness violation.
+        let restore = self.pending.get(&k).cloned();
+
+        let prev = match self.pending.entry(k.clone()) {
+            // key hasn't been set in this txn yet.
+            Entry::Vacant(e) => {
+                let initial = self.initial.get(&k);
+                if initial != v.as_ref() {
+                    // Provided value and initial value are different. Set key.
+                    e.insert(v);
+                }
+                // Return the initial txn's value of k.
+                initial.cloned()
+            }
+            // key has been set in this txn. Set it and return the previous
+            // pending value.
+            Entry::Occupied(mut e) => e.insert(v),
+        };
+
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            // Revert self.pending to the state it was in before calling this
+            // function.
+            match restore {
+                Some(v) => {
+                    self.pending.insert(k, v);
+                }
+                None => {
+                    self.pending.remove(&k);
+                }
+            }
+            Err(err)
+        } else {
+            Ok(prev)
+        }
+    }
+
+    /// Set the values for many keys. Returns the previous entry for each key if the key existed,
+    /// otherwise None.
+    ///
+    /// Returns an error if any uniqueness check failed.
+    fn set_many(
+        &mut self,
+        kvs: BTreeMap<K, Option<V>>,
+    ) -> Result<BTreeMap<K, Option<V>>, DurableCatalogError> {
+        let mut prevs = BTreeMap::new();
+        let mut restores = BTreeMap::new();
+
+        for (k, v) in kvs {
+            // Save the pending value for the key so we can restore it in case of
+            // uniqueness violation.
+            let restore = self.pending.get(&k).cloned();
+            restores.insert(k.clone(), restore);
+
+            let prev = match self.pending.entry(k.clone()) {
+                // key hasn't been set in this txn yet.
+                Entry::Vacant(e) => {
+                    let initial = self.initial.get(&k);
+                    if initial != v.as_ref() {
+                        // Provided value and initial value are different. Set key.
+                        e.insert(v);
+                    }
+                    // Return the initial txn's value of k.
+                    initial.cloned()
+                }
+                // key has been set in this txn. Set it and return the previous
+                // pending value.
+                Entry::Occupied(mut e) => e.insert(v),
+            };
+            prevs.insert(k, prev);
+        }
+
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            for (k, restore) in restores {
+                // Revert self.pending to the state it was in before calling this
+                // function.
+                match restore {
+                    Some(v) => {
+                        self.pending.insert(k, v);
+                    }
+                    None => {
+                        self.pending.remove(&k);
+                    }
+                }
+            }
+            Err(err)
+        } else {
+            Ok(prevs)
+        }
+    }
+
+    /// Deletes items for which `f` returns true. Returns the keys and values of
+    /// the deleted entries.
+    fn delete<F: Fn(&K, &V) -> bool>(&mut self, f: F) -> Vec<(K, V)> {
+        let mut deleted = Vec::new();
+        self.for_values_mut(|p, k, v| {
+            if f(k, v) {
+                deleted.push((k.clone(), v.clone()));
+                p.insert(k.clone(), None);
+            }
+        });
+        soft_assert_no_log!(self.verify().is_ok());
+        deleted
+    }
+
+    /// Deletes all items.
+    fn clear(&mut self) {
+        self.for_values_mut(|p, k, _v| {
+            p.insert(k.clone(), None);
+        });
+        soft_assert_no_log!(self.verify().is_ok());
+    }
+}
+
+#[mz_ore::test]
+fn test_table_transaction_simple() {
+    fn uniqueness_violation(a: &String, b: &String) -> bool {
+        a == b
+    }
+    let mut table = TableTransaction::new(
+        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
+        uniqueness_violation,
+    )
+    .unwrap();
+
+    table
+        .insert(2i64.to_le_bytes().to_vec(), "b".to_string())
+        .unwrap();
+    table
+        .insert(3i64.to_le_bytes().to_vec(), "c".to_string())
+        .unwrap();
+}
+
+#[mz_ore::test]
+fn test_table_transaction() {
+    fn uniqueness_violation(a: &String, b: &String) -> bool {
+        a == b
+    }
+    let mut table: BTreeMap<Vec<u8>, String> = BTreeMap::new();
+
+    fn commit(table: &mut BTreeMap<Vec<u8>, String>, mut pending: Vec<(Vec<u8>, String, i64)>) {
+        // Sort by diff so that we process retractions first.
+        pending.sort_by(|a, b| a.2.cmp(&b.2));
+        for (k, v, diff) in pending {
+            if diff == -1 {
+                let prev = table.remove(&k);
+                assert_eq!(prev, Some(v));
+            } else if diff == 1 {
+                let prev = table.insert(k, v);
+                assert_eq!(prev, None);
+            } else {
+                panic!("unexpected diff: {diff}");
+            }
+        }
+    }
+
+    table.insert(1i64.to_le_bytes().to_vec(), "v1".to_string());
+    table.insert(2i64.to_le_bytes().to_vec(), "v2".to_string());
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    assert_eq!(table_txn.items(), table);
+    assert_eq!(table_txn.delete(|_k, _v| false).len(), 0);
+    assert_eq!(table_txn.delete(|_k, v| v == "v2").len(), 1);
+    assert_eq!(
+        table_txn.items(),
+        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string())])
+    );
+    assert_eq!(
+        table_txn.update(|_k, _v| Some("v3".to_string())).unwrap(),
+        1
+    );
+
+    // Uniqueness violation.
+    table_txn
+        .insert(3i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap_err();
+
+    table_txn
+        .insert(3i64.to_le_bytes().to_vec(), "v4".to_string())
+        .unwrap();
+    assert_eq!(
+        table_txn.items(),
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v3".to_string()),
+            (3i64.to_le_bytes().to_vec(), "v4".to_string()),
+        ])
+    );
+    let err = table_txn
+        .update(|_k, _v| Some("v1".to_string()))
+        .unwrap_err();
+    assert!(
+        matches!(err, DurableCatalogError::UniquenessViolation),
+        "unexpected err: {err:?}"
+    );
+    let pending = table_txn.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v1".to_string(), -1),
+            (1i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
+            (2i64.to_le_bytes().to_vec(), "v2".to_string(), -1),
+            (3i64.to_le_bytes().to_vec(), "v4".to_string(), 1),
+        ]
+    );
+    commit(&mut table, pending);
+    assert_eq!(
+        table,
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v3".to_string()),
+            (3i64.to_le_bytes().to_vec(), "v4".to_string())
+        ])
+    );
+
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    // Deleting then creating an item that has a uniqueness violation should work.
+    assert_eq!(table_txn.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
+    table_txn
+        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap();
+    // Uniqueness violation in value.
+    table_txn
+        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap_err();
+    // Key already exists, expect error.
+    table_txn
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .unwrap_err();
+    assert_eq!(table_txn.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
+    // Both the inserts work now because the key and uniqueness violation are gone.
+    table_txn
+        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap();
+    table_txn
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .unwrap();
+    let pending = table_txn.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v3".to_string(), -1),
+            (1i64.to_le_bytes().to_vec(), "v5".to_string(), 1),
+            (5i64.to_le_bytes().to_vec(), "v3".to_string(), 1),
+        ]
+    );
+    commit(&mut table, pending);
+    assert_eq!(
+        table,
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v5".to_string()),
+            (3i64.to_le_bytes().to_vec(), "v4".to_string()),
+            (5i64.to_le_bytes().to_vec(), "v3".to_string()),
+        ])
+    );
+
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    assert_eq!(table_txn.delete(|_k, _v| true).len(), 3);
+    table_txn
+        .insert(1i64.to_le_bytes().to_vec(), "v1".to_string())
+        .unwrap();
+
+    commit(&mut table, table_txn.pending());
+    assert_eq!(
+        table,
+        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
+    );
+
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    assert_eq!(table_txn.delete(|_k, _v| true).len(), 1);
+    table_txn
+        .insert(1i64.to_le_bytes().to_vec(), "v2".to_string())
+        .unwrap();
+    commit(&mut table, table_txn.pending());
+    assert_eq!(
+        table,
+        BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v2".to_string()),])
+    );
+
+    // Verify we don't try to delete v3 or v4 during commit.
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    assert_eq!(table_txn.delete(|_k, _v| true).len(), 1);
+    table_txn
+        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .unwrap();
+    table_txn
+        .insert(1i64.to_le_bytes().to_vec(), "v4".to_string())
+        .unwrap_err();
+    assert_eq!(table_txn.delete(|_k, _v| true).len(), 1);
+    table_txn
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .unwrap();
+    commit(&mut table, table_txn.pending());
+    assert_eq!(
+        table.clone().into_iter().collect::<Vec<_>>(),
+        vec![(1i64.to_le_bytes().to_vec(), "v5".to_string())]
+    );
+
+    // Test `set`.
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    // Uniqueness violation.
+    table_txn
+        .set(2i64.to_le_bytes().to_vec(), Some("v5".to_string()))
+        .unwrap_err();
+    table_txn
+        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()))
+        .unwrap();
+    table_txn.set(2i64.to_le_bytes().to_vec(), None).unwrap();
+    table_txn.set(1i64.to_le_bytes().to_vec(), None).unwrap();
+    let pending = table_txn.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v5".to_string(), -1),
+            (3i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+        ]
+    );
+    commit(&mut table, pending);
+    assert_eq!(
+        table,
+        BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
+    );
+
+    // Duplicate `set`.
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    table_txn
+        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()))
+        .unwrap();
+    let pending = table_txn.pending::<Vec<u8>, String>();
+    assert!(pending.is_empty());
+
+    // Test `set_many`.
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    // Uniqueness violation.
+    table_txn
+        .set_many(BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+            (42i64.to_le_bytes().to_vec(), Some("v1".to_string())),
+        ]))
+        .unwrap_err();
+    table_txn
+        .set_many(BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+            (3i64.to_le_bytes().to_vec(), Some("v1".to_string())),
+        ]))
+        .unwrap();
+    table_txn
+        .set_many(BTreeMap::from([
+            (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
+            (3i64.to_le_bytes().to_vec(), None),
+        ]))
+        .unwrap();
+    let pending = table_txn.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+            (3i64.to_le_bytes().to_vec(), "v6".to_string(), -1),
+            (42i64.to_le_bytes().to_vec(), "v7".to_string(), 1),
+        ]
+    );
+    commit(&mut table, pending);
+    assert_eq!(
+        table,
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v6".to_string()),
+            (42i64.to_le_bytes().to_vec(), "v7".to_string())
+        ])
+    );
+
+    // Duplicate `set_many`.
+    let mut table_txn = TableTransaction::new(table.clone(), uniqueness_violation).unwrap();
+    table_txn
+        .set_many(BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+            (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
+        ]))
+        .unwrap();
+    let pending = table_txn.pending::<Vec<u8>, String>();
+    assert!(pending.is_empty());
 }
