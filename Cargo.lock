@@ -4936,6 +4936,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-ore-proc"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.107",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-persist"
 version = "0.0.0"
 dependencies = [
