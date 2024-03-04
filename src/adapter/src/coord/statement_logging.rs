@@ -19,6 +19,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{statement_kind_label_value, StatementKind};
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;

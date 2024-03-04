@@ -54,6 +54,7 @@ use mz_sql::plan::{
     Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
     UpdatePrivilege, VariableValue,
 };
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
     self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, SCHEMA_ALIAS,
@@ -1131,7 +1132,7 @@ impl Coordinator {
 
         // Make sure this stays in sync with the beginning of `rbac::check_plan`.
         let session_catalog = self.catalog().for_session(session);
-        if rbac::is_rbac_enabled_for_session(session_catalog.system_vars(), session.vars())
+        if rbac::is_rbac_enabled_for_session(session_catalog.system_vars(), session)
             && !session.is_superuser()
         {
             // Obtain all roles that the current session is a member of.

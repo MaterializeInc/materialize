@@ -19,6 +19,7 @@ use mz_ore::{halt, soft_assert_no_log};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -416,7 +417,7 @@ impl ShouldHalt for InstanceMissing {
 /// Returns the viewable session and system variables.
 pub(crate) fn viewable_variables<'a>(
     catalog: &'a CatalogState,
-    session: &'a Session,
+    session: &'a dyn SessionMetadata,
 ) -> impl Iterator<Item = &'a dyn Var> {
     session
         .vars()

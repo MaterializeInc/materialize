@@ -14,5 +14,6 @@
 //! should be revisited with more intention in the future.
 
 pub mod hint;
+pub mod metadata;
 pub mod user;
 pub mod vars;

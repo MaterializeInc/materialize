@@ -15,6 +15,7 @@ use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{Params, StatementDesc};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement, StatementKind};
 

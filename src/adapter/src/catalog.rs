@@ -19,6 +19,7 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_sql::session::metadata::SessionMetadata;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
@@ -371,32 +372,8 @@ impl ConnCatalog<'_> {
         &self,
         include_temp_schema: bool,
     ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
-        let mut v = Vec::with_capacity(self.search_path.len() + 3);
-        // Temp schema is only included for relations and data types, not for functions and operators
-        let temp_schema = (
-            ResolvedDatabaseSpecifier::Ambient,
-            SchemaSpecifier::Temporary,
-        );
-        if include_temp_schema && !self.search_path.contains(&temp_schema) {
-            v.push(temp_schema);
-        }
-        let default_schemas = [
-            (
-                ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(self.state.get_mz_catalog_schema_id().clone()),
-            ),
-            (
-                ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id().clone()),
-            ),
-        ];
-        for schema in default_schemas.into_iter() {
-            if !self.search_path.contains(&schema) {
-                v.push(schema);
-            }
-        }
-        v.extend_from_slice(&self.search_path);
-        v
+        self.state
+            .effective_search_path(&self.search_path, include_temp_schema)
     }
 }
 
@@ -5311,7 +5288,7 @@ mod tests {
             allow_windows: false,
         };
         let arena = RowArena::new();
-        let mut session = Session::dummy();
+        let mut session = Session::<Timestamp>::dummy();
         session
             .start_transaction(to_datetime(0), None, None)
             .expect("must succeed");

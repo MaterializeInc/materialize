@@ -36,6 +36,7 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogSchema};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
