@@ -27,7 +27,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
-          run: sqllogictest
+          run: slow-tests
 
   - id: sqllogictest-1-replica
     label: ":bulb: SQL logic tests 1 replica %N"
@@ -39,7 +39,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
-          run: sqllogictest
+          run: slow-tests
           args: [--replicas=1]
     skip: "Too expensive, didn't find anything interesting yet"
 
