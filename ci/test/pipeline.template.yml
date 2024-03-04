@@ -584,6 +584,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: chbench
+          run: no-load
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
