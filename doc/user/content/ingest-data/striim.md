@@ -51,7 +51,7 @@ Alternatively, follow the [Oracle CDC guide](https://www.striim.com/docs/en/orac
     - Configure the Schema Registry authentication credentials if necessary.
     - Leave the 'Schema Registry Subject Name' and 'Schema Registry Subject Name Mapping' fields empty.
 
-### Start the Striim App
+### Start the Striim app
 
 Once the Striim app is configured, start the app to begin streaming data from the database to Kafka.
 
