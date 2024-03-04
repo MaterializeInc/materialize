@@ -44,19 +44,19 @@ impl Metrics {
                 name: "requests_total",
                 help: "Total number of http requests received since process start.",
                 subsystem: component,
-                var_labels: ["path", "status"],
+                var_labels: ["source", "path", "status"],
             )),
             requests_active: registry.register(metric!(
                 name: "requests_active",
                 help: "Number of currently active/open http requests.",
                 subsystem: component,
-                var_labels: ["path"],
+                var_labels: ["source", "path"],
             )),
             request_duration: registry.register(metric!(
                 name: "request_duration_seconds",
                 help: "How long it takes for a request to complete in seconds.",
                 subsystem: component,
-                var_labels: ["path"],
+                var_labels: ["source", "path"],
                 buckets: histogram_seconds_buckets(0.000_128, 8.0)
             )),
         }
@@ -66,11 +66,12 @@ impl Metrics {
 #[derive(Clone)]
 pub struct PrometheusLayer {
     metrics: Metrics,
+    source: &'static str,
 }
 
 impl PrometheusLayer {
-    pub fn new(metrics: Metrics) -> Self {
-        PrometheusLayer { metrics }
+    pub fn new(source: &'static str, metrics: Metrics) -> Self {
+        PrometheusLayer { source, metrics }
     }
 }
 
@@ -79,6 +80,7 @@ impl<S> Layer<S> for PrometheusLayer {
 
     fn layer(&self, service: S) -> Self::Service {
         PrometheusService {
+            source: self.source,
             metrics: self.metrics.clone(),
             service,
         }
@@ -87,6 +89,7 @@ impl<S> Layer<S> for PrometheusLayer {
 
 #[derive(Clone)]
 pub struct PrometheusService<S> {
+    source: &'static str,
     metrics: Metrics,
     service: S,
 }
@@ -117,12 +120,14 @@ where
             .map(|path| path.as_str().to_string())
             .unwrap_or_else(|| "unknown".to_string());
         let fut = self.service.call(req);
-        PrometheusFuture::new(fut, path, self.metrics.clone())
+        PrometheusFuture::new(self.source, fut, path, self.metrics.clone())
     }
 }
 
 #[pin_project(PinnedDrop)]
 pub struct PrometheusFuture<F> {
+    /// The server source label.
+    source: &'static str,
     /// The axum router path this request matched.
     path: String,
     /// Instant at which we started the requst.
@@ -135,8 +140,9 @@ pub struct PrometheusFuture<F> {
 }
 
 impl<F> PrometheusFuture<F> {
-    pub fn new(fut: F, path: String, metrics: Metrics) -> Self {
+    pub fn new(source: &'static str, fut: F, path: String, metrics: Metrics) -> Self {
         PrometheusFuture {
+            source,
             path,
             timer: None,
             metrics,
@@ -161,13 +167,13 @@ where
             let duration_metric = this
                 .metrics
                 .request_duration
-                .with_label_values(&[this.path]);
+                .with_label_values(&[this.source, this.path]);
             *this.timer = Some(duration_metric.start_timer());
 
             // Increment our counter of currently active requests.
             this.metrics
                 .requests_active
-                .with_label_values(&[this.path])
+                .with_label_values(&[this.source, this.path])
                 .inc();
         }
 
@@ -181,7 +187,7 @@ where
                 // Record the completion of this request.
                 this.metrics
                     .requests
-                    .with_label_values(&[this.path, status.as_str()])
+                    .with_label_values(&[this.source, this.path, status.as_str()])
                     .inc();
 
                 // Record the duration of this request.
@@ -192,7 +198,7 @@ where
                 // We've completed this request, so decrement the count.
                 this.metrics
                     .requests_active
-                    .with_label_values(&[this.path])
+                    .with_label_values(&[this.source, this.path])
                     .dec();
 
                 Poll::Ready(Ok(resp))
@@ -211,7 +217,7 @@ impl<F> PinnedDrop for PrometheusFuture<F> {
             // Make sure to decrement the in-progress count if we weren't polled to completion.
             this.metrics
                 .requests_active
-                .with_label_values(&[this.path])
+                .with_label_values(&[this.source, this.path])
                 .dec();
 
             // Our request didn't complete, so don't record the timing.
@@ -238,7 +244,8 @@ mod test {
         let mut cx = std::task::Context::from_waker(waker);
 
         let request_future = futures::future::pending::<Result<(StatusCode, String), Infallible>>();
-        let mut future = PrometheusFuture::new(request_future, "/future/test".to_string(), metrics);
+        let mut future =
+            PrometheusFuture::new("test", request_future, "/future/test".to_string(), metrics);
 
         // Poll the Future once to get metrics registered.
         assert!(Pin::new(&mut future).poll(&mut cx).is_pending());

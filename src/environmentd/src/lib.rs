@@ -650,6 +650,7 @@ impl Listeners {
         let http_metrics = http::Metrics::register_into(&config.metrics_registry, "mz_http");
         task::spawn(|| "http_server", {
             let http_server = HttpServer::new(HttpConfig {
+                source: "external",
                 tls: http_tls,
                 frontegg: config.frontegg.clone(),
                 adapter_client: adapter_client.clone(),
@@ -664,6 +665,7 @@ impl Listeners {
         // Launch HTTP server exposed to balancers
         task::spawn(|| "balancer_http_server", {
             let balancer_http_server = HttpServer::new(HttpConfig {
+                source: "balancer",
                 // TODO(Alex): implement self-signed TLS for all internal connections
                 tls: None,
                 frontegg: config.frontegg.clone(),
