@@ -393,6 +393,13 @@ user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
 
+[[publisher.insta]]
+version = "1.33.0"
+when = "2023-09-28"
+user-id = 39
+user-login = "mitsuhiko"
+user-name = "Armin Ronacher"
+
 [[publisher.itoa]]
 version = "1.0.6"
 when = "2023-03-03"

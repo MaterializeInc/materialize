@@ -4012,7 +4012,7 @@ async fn test_startup_cluster_notice1() {
         .notice_callback(move |notice| notices_.lock().expect("not poisoned").push(notice))
         .await
         .expect("success");
-    let notices = notices.lock().expect("not poisoned");
+    let notices = { notices.lock().expect("not poisoned").clone() };
     assert!(notices.is_empty());
     drop(client);
 

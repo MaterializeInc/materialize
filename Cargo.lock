@@ -10086,6 +10086,7 @@ dependencies = [
  "hashbrown 0.14.0",
  "hyper",
  "indexmap 1.9.1",
+ "insta",
  "itertools",
  "k8s-openapi",
  "kube",
