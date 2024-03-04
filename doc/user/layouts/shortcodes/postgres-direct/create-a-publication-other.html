@@ -1,6 +1,10 @@
-Once logical replication is enabled, the next step is to create a publication with the tables that you want to replicate to Materialize. You'll also need a user for Materialize with sufficient privileges to manage replication.
+Once logical replication is enabled, the next step is to create a publication
+with the tables that you want to replicate to Materialize. You'll also need a
+user for Materialize with sufficient privileges to manage replication.
 
-1. For each table that you want to replicate to Materialize, set the [replica identity](https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY) to `FULL`:
+1. For each table that you want to replicate to Materialize, set the
+   [replica identity](https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY)
+   to `FULL`:
 
     ```sql
     ALTER TABLE <table1> REPLICA IDENTITY FULL;
@@ -10,9 +14,14 @@ Once logical replication is enabled, the next step is to create a publication wi
     ALTER TABLE <table2> REPLICA IDENTITY FULL;
     ```
 
-    `REPLICA IDENTITY FULL` ensures that the replication stream includes the previous data of changed rows, in the case of `UPDATE` and `DELETE` operations. This setting enables Materialize to ingest PostgreSQL data with minimal in-memory state. However, you should expect increased disk usage in your PostgreSQL database.
+    `REPLICA IDENTITY FULL` ensures that the replication stream includes the
+    previous data of changed rows, in the case of `UPDATE` and `DELETE`
+    operations. This setting enables Materialize to ingest PostgreSQL data with
+    minimal in-memory state. However, you should expect increased disk usage in
+    your PostgreSQL database.
 
-1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
+1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html)
+   with the tables you want to replicate:
 
     _For specific tables:_
 
@@ -26,9 +35,13 @@ Once logical replication is enabled, the next step is to create a publication wi
     CREATE PUBLICATION mz_source FOR ALL TABLES;
     ```
 
-    The `mz_source` publication will contain the set of change events generated from the specified tables, and will later be used to ingest the replication stream.
+    The `mz_source` publication will contain the set of change events generated
+    from the specified tables, and will later be used to ingest the replication
+    stream.
 
-    Be sure to include only the tables you need. If the publication includes additional tables, Materialize will waste resources on ingesting and then immediately discarding the data.
+    Be sure to include only the tables you need. If the publication includes
+    additional tables, Materialize will waste resources on ingesting and then
+    immediately discarding the data.
 
 1. Create a user for Materialize, if you don't already have one:
 
@@ -60,9 +73,12 @@ Once logical replication is enabled, the next step is to create a publication wi
     GRANT SELECT ON <table2> TO materialize;
     ```
 
-    Once connected to your database, Materialize will take an initial snapshot of the tables in your publication. `SELECT` privileges are required for this initial snapshot.
+    Once connected to your database, Materialize will take an initial snapshot
+    of the tables in your publication. `SELECT` privileges are required for
+    this initial snapshot.
 
-    If you expect to add tables to your publication, you can grant `SELECT` on all tables in the schema instead of naming the specific tables:
+    If you expect to add tables to your publication, you can grant `SELECT` on
+    all tables in the schema instead of naming the specific tables:
 
     ```sql
     GRANT SELECT ON ALL TABLES IN SCHEMA <schema> TO materialize;
