@@ -59,7 +59,7 @@ You can monitor the app's progress and performance through Striim's web console.
 
 The Striim app will stream data from the database to Kafka in Avro format, ready for Materialize to consume.
 
-### Materialize Configuration
+### Materialize configuration
 
 1. In Materialize, create [Kafka and Confluent Schema Registry connections](/sql/create-connection/):
 
