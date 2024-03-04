@@ -83,7 +83,7 @@ use mz_sql::session::vars::{
 };
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_stash::{DebugStashFactory, StashFactory};
+use mz_stash::StashFactory;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -523,51 +523,30 @@ impl Catalog {
         F: FnOnce(Catalog) -> Fut,
         Fut: Future<Output = T>,
     {
-        let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog = match Self::open_debug_catalog(
-            &debug_stash_factory,
-            persist_client,
-            environmentd_id,
-            now,
-            None,
-        )
-        .await
-        {
-            Ok(catalog) => catalog,
-            Err(err) => {
-                debug_stash_factory.drop().await;
-                panic!("unable to open debug stash: {err}");
-            }
-        };
-        let res = f(catalog).await;
-        debug_stash_factory.drop().await;
-        res
+        let catalog =
+            match Self::open_debug_catalog(persist_client, environmentd_id, now, None).await {
+                Ok(catalog) => catalog,
+                Err(err) => {
+                    panic!("unable to open debug stash: {err}");
+                }
+            };
+        f(catalog).await
     }
 
     /// Opens a debug catalog.
     ///
     /// See [`Catalog::with_debug`].
     pub async fn open_debug_catalog(
-        debug_stash_factory: &DebugStashFactory,
         persist_client: PersistClient,
         organization_id: Uuid,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
-            mz_catalog::durable::shadow_catalog_state(
-                StashConfig {
-                    stash_factory: debug_stash_factory.stash_factory().clone(),
-                    stash_url: debug_stash_factory.url().to_string(),
-                    schema: Some(debug_stash_factory.schema().to_string()),
-                    tls: debug_stash_factory.tls().clone(),
-                },
-                persist_client,
-                organization_id,
-            )
-            .await,
+            mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
+                .await,
         );
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None, None)
@@ -630,30 +609,6 @@ impl Catalog {
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
             mz_catalog::durable::test_persist_backed_catalog_state(
-                persist_client,
-                environment_id.organization_id(),
-            )
-            .await,
-        );
-        let storage = openable_storage
-            .open_read_only(&test_bootstrap_args())
-            .await?;
-        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
-    }
-
-    /// Opens a read only debug persist backed catalog defined by `stash_config`, `persist_client`
-    /// and `organization_id`.
-    ///
-    /// See [`Catalog::with_debug`].
-    pub async fn open_debug_read_only_shadow_catalog_config(
-        stash_config: StashConfig,
-        persist_client: PersistClient,
-        now: NowFn,
-        environment_id: EnvironmentId,
-    ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(
-            mz_catalog::durable::shadow_catalog_state(
-                stash_config,
                 persist_client,
                 environment_id.organization_id(),
             )
@@ -4374,12 +4329,10 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_catalog_revision() {
-        let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         {
             let mut catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
@@ -4406,7 +4359,6 @@ mod tests {
         }
         {
             let catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client,
                 organization_id,
                 NOW_ZERO.clone(),
@@ -4418,7 +4370,6 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
         }
-        debug_stash_factory.drop().await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -4611,13 +4562,11 @@ mod tests {
         assert!(mz_sql_parser::parser::parse_statements(&create_sql).is_ok());
         assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
 
-        let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         let id = GlobalId::User(1);
         {
             let mut catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client.clone(),
                 organization_id.clone(),
                 SYSTEM_TIME.clone(),
@@ -4653,7 +4602,6 @@ mod tests {
         }
         {
             let catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client,
                 organization_id,
                 SYSTEM_TIME.clone(),
@@ -4669,7 +4617,6 @@ mod tests {
             }
             catalog.expire().await;
         }
-        debug_stash_factory.drop().await;
     }
 
     #[mz_ore::test]
@@ -5558,12 +5505,10 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_builtin_migrations() {
-        let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         let id = {
             let catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
@@ -5589,7 +5534,6 @@ mod tests {
         }
         {
             let catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client,
                 organization_id,
                 NOW_ZERO.clone(),
@@ -5608,7 +5552,6 @@ mod tests {
 
             catalog.expire().await;
         }
-        debug_stash_factory.drop().await;
     }
 
     #[mz_ore::test(tokio::test)]

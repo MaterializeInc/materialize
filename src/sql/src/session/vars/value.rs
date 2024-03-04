@@ -1157,7 +1157,6 @@ impl Value for PersistTxnTablesImpl {
 pub enum CatalogKind {
     Stash = 0,
     Persist = 1,
-    Shadow = 2,
     /// Escape hatch to use the stash directly without trying to rollover from persist.
     EmergencyStash = 3,
 }
@@ -1167,7 +1166,6 @@ impl CatalogKind {
         match self {
             CatalogKind::Stash => "stash",
             CatalogKind::Persist => "persist",
-            CatalogKind::Shadow => "shadow",
             CatalogKind::EmergencyStash => "emergency-stash",
         }
     }
@@ -1176,7 +1174,6 @@ impl CatalogKind {
         vec![
             CatalogKind::Stash.as_str(),
             CatalogKind::Persist.as_str(),
-            CatalogKind::Shadow.as_str(),
             CatalogKind::EmergencyStash.as_str(),
         ]
     }

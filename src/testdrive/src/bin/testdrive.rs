@@ -149,8 +149,7 @@ struct Args {
     #[clap(
         long,
         value_name = "POSTGRES_URL",
-        required_if_eq("validate-catalog-store", "stash"),
-        required_if_eq("validate-catalog-store", "shadow")
+        required_if_eq("validate-catalog-store", "stash")
     )]
     postgres_stash: Option<String>,
     /// Validate the catalog state of the specified catalog kind.
@@ -162,16 +161,14 @@ struct Args {
     #[clap(
         long,
         value_name = "PERSIST_CONSENSUS_URL",
-        required_if_eq("validate-catalog-store", "persist"),
-        required_if_eq("validate-catalog-store", "shadow")
+        required_if_eq("validate-catalog-store", "persist")
     )]
     persist_consensus_url: Option<String>,
     /// Handle to the persist blob storage.
     #[clap(
         long,
         value_name = "PERSIST_BLOB_URL",
-        required_if_eq("validate-catalog-store", "persist"),
-        required_if_eq("validate-catalog-store", "shadow")
+        required_if_eq("validate-catalog-store", "persist")
     )]
     persist_blob_url: Option<String>,
 
@@ -349,17 +346,6 @@ async fn main() {
                     .persist_blob_url
                     .clone()
                     .expect("required for persist catalog"),
-            },
-            CatalogKind::Shadow => CatalogConfig::Shadow {
-                url: args.postgres_stash.expect("required for shadow catalog"),
-                persist_consensus_url: args
-                    .persist_consensus_url
-                    .clone()
-                    .expect("required for shadow catalog"),
-                persist_blob_url: args
-                    .persist_blob_url
-                    .clone()
-                    .expect("required for shadow catalog"),
             },
             CatalogKind::EmergencyStash => panic!("emergency stash cannot be used with testdrive"),
         }),

@@ -5696,6 +5696,7 @@ dependencies = [
  "junit-report",
  "md-5",
  "mz-build-info",
+ "mz-catalog",
  "mz-cloud-resources",
  "mz-controller",
  "mz-dyncfgs",
