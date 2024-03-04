@@ -272,7 +272,9 @@ Issue a SQL query to get started. Need help?
         if catalog.resolve_cluster(Some(&cluster_active)).is_err() {
             let cluster_notice = 'notice: {
                 // If the user provided a cluster via a connection configuration parameter, do not
-                // notify them if that cluster does not exist.
+                // notify them if that cluster does not exist. We omit the notice here because even
+                // if they were to update the role or system default, it would not make a
+                // difference since the connection parameter takes precedence over the defaults.
                 if cluster_var.inspect_session_value().is_some() {
                     break 'notice None;
                 }
@@ -288,7 +290,7 @@ Issue a SQL query to get started. Need help?
                     }
                 };
 
-                let alter_role = "with ALTER ROLE <role> SET cluster TO <cluster>";
+                let alter_role = "with `ALTER ROLE <role> SET cluster TO <cluster>;`";
                 match role_cluster {
                     // If there is no default, suggest a Role default.
                     None => Some(AdapterNotice::DefaultClusterDoesNotExist {
@@ -303,7 +305,7 @@ Issue a SQL query to get started. Need help?
                         name: cluster_active,
                         kind: Some("role"),
                         suggested_action: format!(
-                            "Change the default cluster for the current role with {alter_role}."
+                            "Change the default cluster for the current role {alter_role}."
                         ),
                     }),
                 }
