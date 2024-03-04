@@ -22,7 +22,7 @@ Ensure you have the following:
 - An operational Kafka cluster.
 - Confluent Schema Registry set up for Avro schema management.
 
-## Integration Steps
+## Integration steps
 
 ### Database Source Configuration
 
