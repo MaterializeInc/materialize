@@ -114,7 +114,7 @@ Here's how you can leverage JSON formatting with Materialize:
 1. **Striim configuration:**
    - Set up Striim to transmit events to Kafka in JSON format instead of Avro. This method simplifies the configuration compared to Avro, especially when dealing with complex schema evolution.
 
-2. **Materialize JSON Source Creation:**
+2. **Materialize JSON source creation:**
 
     ```sql
     CREATE SOURCE users
