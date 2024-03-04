@@ -428,7 +428,7 @@ mod test {
 
     use super::*;
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn dropping_counters() {
         let reg = MetricsRegistry::new();
         let vec: IntCounterVec = reg.register(metric!(
@@ -474,7 +474,7 @@ mod test {
         assert_eq!(metrics.len(), 0);
     }
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn dropping_gauges() {
         let reg = MetricsRegistry::new();
         let vec: IntGaugeVec = reg.register(metric!(

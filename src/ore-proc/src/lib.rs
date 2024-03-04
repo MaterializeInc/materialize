@@ -22,6 +22,7 @@ use proc_macro::TokenStream;
 
 mod instrument;
 mod static_list;
+mod test;
 
 /// A macro that collects all of the static objects of a specific type in the annotated module into
 /// a single list.
@@ -75,3 +76,10 @@ pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     instrument::instrument_impl(attr, item)
 }
 
+/// Materialize wrapper around the `test` macro.
+///
+/// The wrapper automatically initializes our logging infrastructure.
+#[proc_macro_attribute]
+pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
+    test::test_impl(attr, item)
+}

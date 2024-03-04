@@ -251,7 +251,7 @@ pub fn swap_remove_multiple<T>(v: &mut Vec<T>, mut indexes: Vec<usize>) -> Vec<T
 mod test {
     use super::*;
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn miri_test_repurpose() {
         let v: Vec<usize> = vec![0, 1, 2];
 
@@ -293,14 +293,14 @@ mod test {
         assert_eq!(other[0].s, "hmm2");
     }
 
-    #[mz_test_macro::test]
+    #[crate::test]
     #[should_panic(expected = "same size")]
     fn miri_test_wrong_size() {
         let v: Vec<usize> = vec![0, 1, 2];
         let _: Vec<()> = repurpose_allocation(v);
     }
 
-    #[mz_test_macro::test]
+    #[crate::test]
     #[should_panic(expected = "same alignment")]
     fn miri_test_wrong_align() {
         #[repr(align(8))]

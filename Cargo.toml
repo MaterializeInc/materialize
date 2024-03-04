@@ -90,7 +90,6 @@ members = [
     "src/storage-controller",
     "src/storage-operators",
     "src/storage-types",
-    "src/test-macro",
     "src/testdrive",
     "src/timely-util",
     "src/timestamp-oracle",

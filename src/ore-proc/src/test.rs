@@ -24,7 +24,7 @@ use syn::{parse_macro_input, parse_quote, AttributeArgs, ItemFn, Meta, NestedMet
 /// Copyright (C) 2019-2022 Daniel Mueller <deso@posteo.net>
 /// SPDX-License-Identifier: (Apache-2.0 OR MIT)
 
-/// Implementation for the `#[test]` macro.
+/// Implementation for the `test` macro.
 pub fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as AttributeArgs);
     let input = parse_macro_input!(item as ItemFn);
