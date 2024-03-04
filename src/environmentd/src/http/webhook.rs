@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mz_adapter::{AppendWebhookError, AppendWebhookResponse, WebhookAppenderCache};
+use mz_ore::cast::CastFrom;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::Jsonb;
@@ -130,6 +131,11 @@ async fn append_webhook(
         }
     }
     .await?;
+
+    // These must happen before validation as we do not know if validation or
+    // packing will succeed and appending will begin
+    tx.increment_messages_received(1);
+    tx.increment_bytes_received(u64::cast_from(body.len()));
 
     // If this source requires validation, then validate!
     if let Some(validator) = validator {

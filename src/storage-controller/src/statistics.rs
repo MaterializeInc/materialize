@@ -21,7 +21,7 @@ use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::TimestampManipulation;
 use mz_repr::{GlobalId, Row};
-use mz_storage_client::statistics::PackableStats;
+use mz_storage_client::statistics::{PackableStats, SourceStatisticsUpdate, WebhookStatistics};
 use timely::progress::ChangeBatch;
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
@@ -109,6 +109,56 @@ where
                         collection_mgmt
                             .append_to_collection(statistics_collection_id, correction)
                             .await;
+                    }
+                }
+            }
+        }
+
+        tracing::info!("shutting down statistics sender task");
+    });
+
+    Box::new(shutdown_tx)
+}
+
+/// Spawns a task that continually drains webhook statistics into `shared_stats.
+pub(super) fn spawn_webhook_statistics_scraper(
+    shared_stats: Arc<Mutex<BTreeMap<GlobalId, Option<SourceStatisticsUpdate>>>>,
+    webhook_stats: Arc<Mutex<BTreeMap<GlobalId, Arc<WebhookStatistics>>>>,
+    initial_interval: Duration,
+    mut interval_updated: Receiver<Duration>,
+) -> Box<dyn Any + Send + Sync> {
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+
+    mz_ore::task::spawn(|| "webhook_statistics_scraper", async move {
+        let mut interval = tokio::time::interval(initial_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _msg = &mut shutdown_rx => {
+                    break;
+                }
+
+               _ = interval_updated.changed() => {
+                    let new_interval = *interval_updated.borrow_and_update();
+                    if new_interval != interval.period() {
+                        interval = tokio::time::interval(new_interval);
+                        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        // Note that the next interval will tick immediately. This is fine.
+                    }
+                },
+
+                _ = interval.tick() => {
+                    let mut shared_stats = shared_stats.lock().expect("poisoned");
+                    let webhook_stats = webhook_stats.lock().expect("poisoned");
+                    for (id, ws) in webhook_stats.iter() {
+                        // Don't override it if its been removed.
+                        shared_stats
+                            .entry(*id)
+                            .and_modify(|current| match current {
+                                Some(ref mut current) => current.incorporate(ws.drain_into_update(*id)),
+                                None => *current = Some(ws.drain_into_update(*id)),
+                            });
                     }
                 }
             }

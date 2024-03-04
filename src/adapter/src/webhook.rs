@@ -14,11 +14,13 @@ use std::sync::Arc;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaders, WebhookValidation, WebhookValidationSecret};
 use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_client::statistics::WebhookStatistics;
 use mz_storage_types::controller::StorageError;
 use tokio::sync::Semaphore;
 
@@ -247,6 +249,8 @@ pub struct AppendWebhookResponse {
 pub struct WebhookAppender {
     tx: MonotonicAppender,
     guard: WebhookAppenderGuard,
+    // Shared statistics related to this webhook.
+    stats: Arc<WebhookStatistics>,
 }
 
 impl WebhookAppender {
@@ -260,12 +264,40 @@ impl WebhookAppender {
         if self.is_closed() {
             return Err(AppendWebhookError::ChannelClosed);
         }
+
+        let count = u64::cast_from(updates.len());
+        self.stats
+            .updates_staged
+            .fetch_add(count, Ordering::Relaxed);
         self.tx.append(updates).await?;
+        self.stats
+            .updates_committed
+            .fetch_add(count, Ordering::Relaxed);
         Ok(())
     }
 
-    pub(crate) fn new(tx: MonotonicAppender, guard: WebhookAppenderGuard) -> Self {
-        WebhookAppender { tx, guard }
+    /// Increment the `messages_received` user-facing statistics. This
+    /// should be incremented even if the request is invalid.
+    pub fn increment_messages_received(&self, msgs: u64) {
+        self.stats
+            .messages_received
+            .fetch_add(msgs, Ordering::Relaxed);
+    }
+
+    /// Increment the `bytes_received` user-facing statistics. This
+    /// should be incremented even if the request is invalid.
+    pub fn increment_bytes_received(&self, bytes: u64) {
+        self.stats
+            .bytes_received
+            .fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn new(
+        tx: MonotonicAppender,
+        guard: WebhookAppenderGuard,
+        stats: Arc<WebhookStatistics>,
+    ) -> Self {
+        WebhookAppender { tx, guard, stats }
     }
 }
 
