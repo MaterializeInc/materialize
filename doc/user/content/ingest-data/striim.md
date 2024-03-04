@@ -9,7 +9,7 @@ menu:
     name: "Striim"
 ---
 
-This guide walks through the steps to ingest data from Striim into Materialize using a [Kafka Source](/sql/create-source/kafka/).
+This guide walks through the steps to ingest data from Striim into Materialize using a [Kafka source](/sql/create-source/kafka/).
 
 Striim is a real-time data integration platform that offers a variety of connectors for databases, messaging systems, and other data sources. This guide focuses on streaming data from MySQL to Kafka but can be adapted to other databases as well.
 
