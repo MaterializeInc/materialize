@@ -41,7 +41,7 @@ Alternatively, follow the [Oracle CDC guide](https://www.striim.com/docs/en/orac
     - Create a [Kafka Writer](https://www.striim.com/docs/en/kafka-writer.html) within Striim to direct data to the Kafka cluster.
     - For the 'Input Stream' select the data source created in the previous step.
     - Specify the Kafka broker details and topic name.
-    - Under the 'Advanced settings', in the 'Kafka Config' field, add the `value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer` configuration to encode records in the Avro format.
+    - Under the 'Advanced settings', in the 'Kafka Config' field, add the `value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer` configuration to encode records using the Confluent wire protocol.
     - Add a 'MESSAGE KEY' field to specify the primary key of the table. This will configure the KafkaWriter to emit the table’s primary key in the Kafka message key.
 
 2. **Schema Registry Configuration:**
