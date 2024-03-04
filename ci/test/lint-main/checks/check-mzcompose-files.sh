@@ -17,7 +17,7 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
-check() {
+check_all_files_referenced_in_ci() {
     RETURN=0
     COMPOSITIONS=$(find . -name mzcompose.py \
         -not -wholename "./misc/python/materialize/cli/mzcompose.py" `# Only glue code, no workflows` \
@@ -34,6 +34,43 @@ check() {
     return $RETURN
 }
 
-try check
+check_default_workflow_references_others() {
+    RETURN=0
+    mapfile -t MZCOMPOSE_TEST_FILES < <(find ./test -name "mzcompose.py")
+
+    for file in "${MZCOMPOSE_TEST_FILES[@]}"; do
+      MATCHES_COUNT=$(grep "def workflow_" "$file" -c)
+
+      if (( MATCHES_COUNT > 1 )); then
+        # mzcompose file contains more than one workflow
+
+        LOOP_DETECTED=$(grep "c.workflow(name" "$file" -c)
+
+        if (( LOOP_DETECTED < 1 )); then
+          echo "$file contains more than one workflow but does not seem to loop over the workflows"
+          RETURN=1
+        fi
+
+      fi
+    done
+
+    if (( RETURN > 0 )); then
+      echo "Use this pattern in the default workflow:"
+      echo "for name in c.workflows:"
+      echo "  if name == \"default\":"
+      echo "    continue"
+      echo ""
+      echo "  with c.test_case(name):"
+      echo "    c.workflow(name)"
+    fi
+
+    return $RETURN
+}
+
+# ensure that each mzcompose file is referenced
+try check_all_files_referenced_in_ci
+
+# ensure that each mzcompose file with more than one workflow loops over workflows in the default workflow
+try check_default_workflow_references_others
 
 try_status_report
