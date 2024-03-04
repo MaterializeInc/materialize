@@ -52,7 +52,7 @@ class Materialized(Service):
         additional_system_parameter_defaults: dict[str, str] | None = None,
         soft_assertions: bool = True,
         sanity_restart: bool = True,
-        catalog_store: str | None = "persist",
+        catalog_store: str | None = "shadow",
         platform: str | None = None,
         healthcheck: list[str] | None = None,
     ) -> None:

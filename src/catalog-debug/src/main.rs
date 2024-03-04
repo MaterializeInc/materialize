@@ -218,6 +218,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .await?,
             )
         }
+        CatalogKind::Shadow => panic!("cannot use shadow catalog with catalog-debug tool"),
         CatalogKind::EmergencyStash => {
             panic!("cannot use emergency stash variant with catalog-debug tool, use stash instead")
         }

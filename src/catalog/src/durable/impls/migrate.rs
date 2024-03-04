@@ -53,6 +53,7 @@ impl TryFrom<CatalogKind> for TargetImplementation {
                 Direction::MigrateToPersist,
             )),
             CatalogKind::EmergencyStash => Ok(TargetImplementation::EmergencyStash),
+            CatalogKind::Shadow => Err(catalog_kind),
         }
     }
 }
@@ -420,7 +421,19 @@ mod tests {
                 TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
             );
 
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
+
             catalog.set_catalog_kind(CatalogKind::Stash);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
             assert_eq!(
                 catalog.target,
                 TargetImplementation::MigrationDirection(Direction::RollbackToStash)
@@ -448,7 +461,19 @@ mod tests {
                 TargetImplementation::MigrationDirection(Direction::RollbackToStash)
             );
 
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
+
             catalog.set_catalog_kind(CatalogKind::Persist);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
             assert_eq!(
                 catalog.target,
                 TargetImplementation::MigrationDirection(Direction::MigrateToPersist)

@@ -13,10 +13,11 @@ use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
-    stash_backed_catalog_state, test_bootstrap_args, test_persist_backed_catalog_state,
-    test_persist_backed_catalog_state_with_version, test_stash_backed_catalog_state,
-    test_stash_config, CatalogError, Database, DurableCatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, Schema, CATALOG_VERSION,
+    shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
+    test_persist_backed_catalog_state, test_persist_backed_catalog_state_with_version,
+    test_stash_backed_catalog_state, test_stash_config, CatalogError, Database,
+    DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState, Schema,
+    CATALOG_VERSION,
 };
 use mz_ore::cast::usize_to_u64;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
@@ -442,6 +443,36 @@ async fn test_persist_open_read_only() {
     .await;
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_read_only_open() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = test_stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state3 =
+        shadow_catalog_state(stash_config.clone(), persist_client, organization_id).await;
+    test_open_read_only(
+        shadow_openable_state1,
+        shadow_openable_state2,
+        shadow_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
+}
+
 async fn test_open_read_only(
     openable_state1: impl OpenableDurableCatalogState,
     openable_state2: impl OpenableDurableCatalogState,
@@ -553,6 +584,36 @@ async fn test_persist_open() {
     .await;
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_open() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = test_stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state3 =
+        shadow_catalog_state(stash_config.clone(), persist_client, organization_id).await;
+    test_open(
+        shadow_openable_state1,
+        shadow_openable_state2,
+        shadow_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
+}
+
 async fn test_open(
     openable_state1: impl OpenableDurableCatalogState,
     openable_state2: impl OpenableDurableCatalogState,
@@ -653,6 +714,36 @@ async fn test_persist_unopened_fencing() {
     .await;
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_unopened_fencing() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = test_stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .boxed();
+    let shadow_openable_state3 =
+        shadow_catalog_state(stash_config.clone(), persist_client, organization_id).await;
+    test_unopened_fencing(
+        shadow_openable_state1,
+        shadow_openable_state2,
+        shadow_openable_state3,
+    )
+    .await;
+    debug_factory.drop().await;
+}
+
 async fn test_unopened_fencing(
     openable_state1: impl OpenableDurableCatalogState,
     openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
@@ -743,6 +834,30 @@ async fn test_persist_tombstone() {
     let persist_openable_state2 =
         test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed();
     test_tombstone(persist_openable_state1, persist_openable_state2).await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[should_panic]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_shadow_tombstone() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let (debug_factory, stash_config) = test_stash_config().await;
+
+    let shadow_openable_state1 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .await;
+    let shadow_openable_state2 = shadow_catalog_state(
+        stash_config.clone(),
+        persist_client.clone(),
+        organization_id,
+    )
+    .boxed();
+    test_tombstone(shadow_openable_state1, shadow_openable_state2).await;
+    debug_factory.drop().await;
 }
 
 async fn test_tombstone(

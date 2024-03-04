@@ -72,8 +72,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
     scenario = Scenario(args.scenario)
     complexity = Complexity(args.complexity)
-    catalog_store = "persist"
-    sanity_restart = False
+
+    if scenario in (Scenario.Kill, Scenario.BackupRestore, Scenario.TogglePersistTxn):
+        catalog_store = "persist"
+        sanity_restart = False
+    else:
+        catalog_store = "shadow"
+        sanity_restart = True
 
     with c.override(
         Materialized(
