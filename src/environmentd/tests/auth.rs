@@ -14,6 +14,7 @@ use std::fs::{self, File};
 use std::future::IntoFuture;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpStream};
+use std::num::NonZeroUsize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,7 +29,8 @@ use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_environmentd::test_util::{self, make_header, make_pg_tls, Ca};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
-    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig, Claims,
+    Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, Claims,
+    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 use mz_frontegg_mock::{FronteggMockServer, UserApiToken, UserConfig};
 use mz_ore::assert_contains;
@@ -43,6 +45,7 @@ use postgres::config::SslMode;
 use postgres::error::SqlState;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::time::sleep;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::Message;
 use uuid::Uuid;
@@ -461,6 +464,8 @@ async fn test_auth_expiry() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -496,8 +501,8 @@ async fn test_auth_expiry() {
     );
 
     // Wait for a couple refreshes to happen.
-    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
-    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
+    frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
+    frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
     assert_eq!(
         pg_client
             .query_one("SELECT current_user", &[])
@@ -507,11 +512,9 @@ async fn test_auth_expiry() {
         frontegg_user
     );
 
-    // Disable giving out more refresh tokens.
-    frontegg_server
-        .enable_refresh
-        .store(false, Ordering::Relaxed);
-    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
+    // Disable responding to requests.
+    frontegg_server.enable_auth.store(false, Ordering::Relaxed);
+    frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
     // Sleep until the expiry future should resolve.
     tokio::time::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1)).await;
     assert!(pg_client
@@ -633,6 +636,8 @@ async fn test_auth_base_require_tls_frontegg() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -1401,6 +1406,8 @@ async fn test_auth_admin_non_superuser() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -1524,6 +1531,8 @@ async fn test_auth_admin_superuser() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -1647,6 +1656,8 @@ async fn test_auth_admin_superuser_revoked() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -1685,7 +1696,7 @@ async fn test_auth_admin_superuser_revoked() {
         .role_updates_tx
         .send((frontegg_user.to_string(), vec![admin_role.to_string()]))
         .unwrap();
-    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
+    frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
 
     assert_eq!(
         pg_client
@@ -1700,7 +1711,7 @@ async fn test_auth_admin_superuser_revoked() {
         .role_updates_tx
         .send((frontegg_user.to_string(), Vec::new()))
         .unwrap();
-    frontegg_server.wait_for_refresh(EXPIRES_IN_SECS);
+    frontegg_server.wait_for_auth(EXPIRES_IN_SECS);
 
     assert_eq!(
         pg_client
@@ -1712,7 +1723,6 @@ async fn test_auth_admin_superuser_revoked() {
     );
 }
 
-#[ignore] // TODO: Reenable when #25705 is fixed
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_deduplication() {
@@ -1753,7 +1763,7 @@ async fn test_auth_deduplication() {
         users,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
-        None,
+        Some(Duration::from_secs(1)),
     )
     .unwrap();
 
@@ -1764,6 +1774,8 @@ async fn test_auth_deduplication() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -1823,8 +1835,8 @@ async fn test_auth_deduplication() {
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 1);
 
     // Wait for a refresh to occur.
-    frontegg_server.wait_for_refresh(10);
-    assert_eq!(*frontegg_server.refreshes.lock().unwrap(), 1);
+    frontegg_server.wait_for_auth(10);
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 2);
 
     // Both clients should still be queryable.
     let frontegg_user_client_1_post_refresh = pg_client_1
@@ -1840,6 +1852,36 @@ async fn test_auth_deduplication() {
         .unwrap()
         .get::<_, String>(0);
     assert_eq!(frontegg_user_client_2_post_refresh, frontegg_user);
+
+    // Our metrics should reflect we attached to a pending session.
+    let metrics = server.metrics_registry.gather();
+    let mut metrics: Vec<_> = metrics
+        .into_iter()
+        .filter(|family| family.get_name() == "mz_auth_session_request_count")
+        .collect();
+    assert_eq!(metrics.len(), 1);
+    let metric = metrics.pop().unwrap();
+
+    let metrics = metric.get_metric();
+    assert_eq!(metrics.len(), 2);
+
+    let metric = &metrics[0];
+    assert_eq!(metric.get_counter().get_value(), 1.0);
+    let labels = metric.get_label();
+    assert_eq!(labels.len(), 1);
+    assert_eq!(
+        (labels[0].get_name(), labels[0].get_value()),
+        ("existing_session", "new")
+    );
+
+    let metric = &metrics[1];
+    assert_eq!(metric.get_counter().get_value(), 1.0);
+    let labels = metric.get_label();
+    assert_eq!(labels.len(), 1);
+    assert_eq!(
+        (labels[0].get_name(), labels[0].get_value()),
+        ("existing_session", "pending")
+    );
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -1893,6 +1935,8 @@ async fn test_refresh_task_metrics() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -1901,6 +1945,10 @@ async fn test_refresh_task_metrics() {
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
     let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
         .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth)
         .with_metrics_registry(metrics_registry)
@@ -1940,35 +1988,22 @@ async fn test_refresh_task_metrics() {
 
     drop(pg_client);
 
-    // The refresh task asynchronously notices the client has been dropped, so it might take a
-    // moment, hence the retry.
-    let result = mz_ore::retry::Retry::default()
-        .max_duration(Duration::from_secs(5))
-        .retry(|_| {
-            // After dropping the client we should not have any refresh tasks running.
-            let metrics = server.metrics_registry.gather();
-            let mut metrics: Vec<_> = metrics
-                .into_iter()
-                .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
-                .collect();
+    // The refresh task won't shut down until the auth has expired, so we need to wait for that to
+    // occur.
+    sleep(Duration::from_secs(EXPIRES_IN_SECS)).await;
 
-            // If we're retrying, and the metric hasn't changed, then our set will be empty.
-            if metrics.len() != 1 {
-                return Err(-1.0);
-            }
+    // Client is dropped, auth has expired, we should not have any refresh tasks running.
+    let metrics = server.metrics_registry.gather();
+    let mut metrics: Vec<_> = metrics
+        .into_iter()
+        .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
+        .collect();
 
-            let metric = metrics.pop().unwrap();
-            let metric = &metric.get_metric()[0];
+    let metric = metrics.pop().unwrap();
+    let metric = &metric.get_metric()[0];
 
-            let guage_value = metric.get_gauge().get_value();
-            if guage_value == 0.0 {
-                Ok(())
-            } else {
-                Err(guage_value)
-            }
-        });
-
-    assert_eq!(result, Ok(()));
+    let guage_value = metric.get_gauge().get_value();
+    assert_eq!(guage_value, 0.0);
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -2044,6 +2079,8 @@ async fn test_superuser_can_alter_cluster() {
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,
@@ -2098,4 +2135,344 @@ async fn test_superuser_can_alter_cluster() {
         .unwrap()
         .get::<_, String>(0);
     assert_eq!(new_default_cluster, "foo_bar");
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_refresh_dropped_session() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+
+    let users = BTreeMap::from([(
+        frontegg_user.to_string(),
+        UserConfig {
+            email: frontegg_user.to_string(),
+            password,
+            tenant_id,
+            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            roles: Vec::new(),
+        },
+    )]);
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            // Make the refresh window very large so it's easy to test.
+            refresh_drop_factor: 1.0,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+    let frontegg_user = "user@_.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 0);
+
+    // Connect once.
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        frontegg_user
+    );
+    drop(pg_client);
+
+    // We should have a single authentication request.
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 1);
+
+    // Wait for the token to expire.
+    sleep(Duration::from_secs(EXPIRES_IN_SECS + 5)).await;
+
+    // Check that our metrics indicate we're refreshing because of a recent drop.
+    let metrics = server.metrics_registry.gather();
+    let mut metrics: Vec<_> = metrics
+        .into_iter()
+        .filter(|family| family.get_name() == "mz_auth_session_refresh_count")
+        .collect();
+    assert_eq!(metrics.len(), 1);
+    let metric = metrics.pop().unwrap();
+    let metric = &metric.get_metric()[0];
+    assert_eq!(metric.get_counter().get_value(), 1.0);
+
+    let labels = metric.get_label();
+    assert_eq!(
+        (labels[0].get_name(), labels[0].get_value()),
+        ("receiver_count", "0")
+    );
+    assert_eq!(
+        (labels[1].get_name(), labels[1].get_value()),
+        ("recent_drop", "true")
+    );
+
+    // We should have automatically refreshed the token, even though there are not any active
+    // handles!
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 2);
+
+    // Start a second session.
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        frontegg_user
+    );
+
+    // We should not have issued another auth request, because we should have attached to the
+    // pre-emptively refreshed session.
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 2);
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_refresh_dropped_session_lru() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let mut users: BTreeMap<String, UserConfig> = BTreeMap::new();
+
+    let mut make_user = |email: &str| -> (Uuid, Uuid) {
+        let password = Uuid::new_v4().to_string();
+        let client_id = Uuid::new_v4();
+        let secret = Uuid::new_v4();
+
+        let user = UserConfig {
+            email: email.to_string(),
+            password,
+            tenant_id,
+            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            roles: Vec::new(),
+        };
+        users.insert(email.to_string(), user);
+
+        (client_id, secret)
+    };
+
+    let user_a = "user_a@_.com";
+    let (client_id_a, secret_a) = make_user(user_a);
+    let password_a = &format!("mzp_{client_id_a}{secret_a}");
+
+    let user_b = "user_b@_.com";
+    let (client_id_b, secret_b) = make_user(user_b);
+    let password_b = &format!("mzp_{client_id_b}{secret_b}");
+
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+            // Make the refresh LRU cache very small, and the window size very large so it's easy
+            // to test.
+            refresh_drop_lru_size: NonZeroUsize::new(1).expect("known non-zero"),
+            refresh_drop_factor: 1.0,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 0);
+
+    // Connect with user_a.
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(user_a)
+        .password(password_a)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        user_a
+    );
+    drop(pg_client);
+
+    // Connect with user_b.
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(user_b)
+        .password(password_b)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        user_b
+    );
+    drop(pg_client);
+
+    // We should have a single authentication request.
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 2);
+
+    // Wait for the token to expire.
+    sleep(Duration::from_secs(EXPIRES_IN_SECS + 5)).await;
+
+    // We should have refreshed one auth session, but not both.
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 3);
+
+    // We should be able to reconnect with user_b without incurring another auth request, its
+    // session should have been refreshed.
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(user_b)
+        .password(password_b)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        user_b
+    );
+    // Re-connecting as `user_b` should not result in another auth request.
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 3);
+    drop(pg_client);
+
+    let pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(user_a)
+        .password(password_a)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        user_a
+    );
+    // Re-connecting with user_a should cause another auth request because we won't have an active
+    // session, since its drop time was pushed out of the LRU.
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 4);
+    drop(pg_client);
 }
