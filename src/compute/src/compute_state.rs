@@ -199,15 +199,21 @@ impl ComputeState {
         if ENABLE_COLUMNATION_LGALLOC.get(config) {
             if let Some(path) = &self.context.scratch_directory {
                 let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
-                info!(?path, eager_return, "enabling lgalloc");
+                let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
+                let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
+                info!(
+                    ?path,
+                    eager_return, backgrund_interval=?interval, clear_bytes, "enabling lgalloc"
+                );
+                let background_worker_config = lgalloc::BackgroundWorkerConfig {
+                    interval,
+                    clear_bytes,
+                };
                 lgalloc::lgalloc_set_config(
                     lgalloc::LgAlloc::new()
                         .enable()
                         .with_path(path.clone())
-                        .with_background_config(lgalloc::BackgroundWorkerConfig {
-                            interval: Duration::from_secs(1),
-                            batch: 32,
-                        })
+                        .with_background_config(background_worker_config)
                         .eager_return(eager_return),
                 );
             } else {

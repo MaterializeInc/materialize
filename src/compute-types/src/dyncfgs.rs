@@ -9,6 +9,8 @@
 
 //! Dyncfgs used by the compute layer.
 
+use std::time::Duration;
+
 use mz_dyncfg::{Config, ConfigSet};
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
@@ -68,6 +70,20 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
     compute dataflows in cc clusters (Materialize).",
 );
 
+/// The interval at which the background thread wakes.
+pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
+    "lgalloc_background_interval",
+    Duration::from_secs(1),
+    "Scheduling interval for lgalloc's background worker.",
+);
+
+/// The bytes to reclaim (slow path) per size class, for each background thread activation.
+pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
+    "lgalloc_slow_clear_bytes",
+    32 << 20,
+    "Clear byte size per size class for every invocation",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -78,4 +94,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CHUNKED_STACK)
         .add(&ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
+        .add(&LGALLOC_BACKGROUND_INTERVAL)
+        .add(&LGALLOC_SLOW_CLEAR_BYTES)
 }
