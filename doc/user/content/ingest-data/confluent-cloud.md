@@ -73,17 +73,20 @@ of the following steps:
 
 4. #### Create a source in Materialize
 
-    a. Open the [Confluent Cloud dashboard](https://confluent.cloud/) and select your cluster
+    a. Open the [Confluent Cloud dashboard](https://confluent.cloud/) and select your cluster.
 
-    b. Click on **Overview** and select **Cluster settings**
+    b. Click on **Overview** and select **Cluster settings**.
 
-    c. Copy the URL under **Bootstrap server**. This will be your `<broker-url>` going forward
+    c. Copy the URL under **Bootstrap server**. This will be your `<broker-url>` going forward.
 
-    d. From the _psql_ terminal, run the following command. Replace
-    `<confluent_cloud>` with whatever you want to name your source. The broker
-    URL is what you copied in step c of this subsection. The `<topic-name>` is
-    the name of the topic you created in Step 4. The `<your-api-key>` and
-    `<your-api-secret>` are from the _Create an API Key_ step.
+    d. Connect to Materialize using the [SQL Shell](https://console.materialize.com/),
+       or your preferred SQL client.
+
+    e. Run the following command. Replace `<confluent_cloud>` with whatever you
+    want to name your source. The broker URL is what you copied in step c of
+    this subsection. The `<topic-name>` is the name of the topic you created in
+    Step 4. The `<your-api-key>` and `<your-api-secret>` are from the _Create
+    an API Key_ step.
 
     ```sql
       CREATE SECRET confluent_username AS '<your-api-key>';
@@ -103,7 +106,7 @@ of the following steps:
     By default, the source will be created in the active cluster; to use a different
     cluster, use the `IN CLUSTER` clause.
 
-    e. If the command executes without an error and outputs _CREATE SOURCE_, it
+    f. If the command executes without an error and outputs _CREATE SOURCE_, it
     means that you have successfully connected Materialize to your Confluent
     Cloud Kafka cluster.
 

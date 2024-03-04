@@ -20,9 +20,9 @@ https://<MZ host address>/api/sql
 
 The API:
 
-- Requires username/password authentication, just as connecting via `psql`.
-  Materialize provides you the username and password upon setting up your
-  account.
+- Requires username/password authentication, just as connecting via a SQL
+  client (e.g. `psql`). Materialize provides you the username and password upon
+  setting up your account.
 - Requires that you provide the entirety of your request. The API does not
   provide session-like semantics, so there is no way to e.g. interactively use
   transactions.
@@ -60,7 +60,7 @@ The HTTP API provides two modes with slightly different transactional semantics 
 https://<MZ host address>/api/sql
 ```
 
-Accessing the endpoint requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme). Reuse the same credentials as with `psql`:
+Accessing the endpoint requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme). Reuse the same credentials as with a SQL client (e.g. `psql`):
 
 * **User ID:** Your email to access Materialize.
 * **Password:** Your app password.

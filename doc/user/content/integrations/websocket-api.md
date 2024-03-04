@@ -22,9 +22,9 @@ wss://<MZ host address>/api/experimental/sql
 
 The API:
 
-- Requires username/password authentication, just as connecting via `psql`.
-  Materialize provides you the username and password upon setting up your
-  account.
+- Requires username/password authentication, just as connecting via a SQL
+  client (e.g. `psql`). Materialize provides you the username and password upon
+  setting up your account.
 - Maintains an interactive session.
 - Does not support some statements:
     - `CLOSE`

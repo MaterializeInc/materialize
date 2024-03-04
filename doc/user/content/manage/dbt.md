@@ -382,26 +382,24 @@ SELECT NULL AS col_with_constraints,
 
     This command generates **executable SQL code** from any model files under the specified directory and runs it in the target environment. You can find the compiled statements under `/target/run` and `target/compiled` in the dbt project folder.
 
-1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that all objects have been created:
-
-    ```bash
-    psql "postgres://<user>:<password>@<host>:6875/materialize"
-    ```
+1. Using the [SQL Shell](https://console.materialize.com/), or your preferred
+   SQL client connected to Materialize, double-check that all objects have been
+   created:
 
     ```sql
-    materialize=> SHOW SOURCES [FROM database.schema];
+    SHOW SOURCES [FROM database.schema];
            name
     -------------------
      postgres_table_a
      postgres_table_b
      kafka_topic_a
 
-     materialize=> SHOW VIEWS;
+    SHOW VIEWS;
            name
     -------------------
      view_a
 
-     materialize=> SHOW MATERIALIZED VIEWS;
+     SHOW MATERIALIZED VIEWS;
            name
     -------------------
      materialized_view_a
@@ -458,20 +456,18 @@ Using dbt in a streaming context means that you're able to run data quality and 
 
     This guarantees that your tests keep running in the background as views that are automatically updated as soon as an assertion fails.
 
-1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that the schema storing the tests has been created, as well as the test materialized views:
-
-    ```bash
-    psql "postgres://<user>:<password>@<host>:6875/materialize"
-    ```
+1. Using the [SQL Shell](https://console.materialize.com/), or your preferred
+   SQL client connected to Materialize, that the schema storing the tests has been
+   created, as well as the test materialized views:
 
     ```sql
-    materialize=> SHOW SCHEMAS;
+    SHOW SCHEMAS;
            name
     -------------------
      public
      public_etl_failure
 
-     materialize=> SHOW MATERIALIZED VIEWS FROM public_etl_failure;;
+    SHOW MATERIALIZED VIEWS FROM public_etl_failure;;
            name
     -------------------
      not_null_col_a
