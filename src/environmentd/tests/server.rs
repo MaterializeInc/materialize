@@ -3680,7 +3680,7 @@ fn copy_from() {
         .connect(postgres::NoTls)
         .unwrap();
     system_client
-        .batch_execute("ALTER SYSTEM SET max_copy_from_size = 50")
+        .batch_execute("ALTER SYSTEM SET max_copy_from_size = '50B'")
         .unwrap();
     drop(system_client);
 
