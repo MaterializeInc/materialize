@@ -15,7 +15,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 from materialize.version_list import (
-    get_previous_published_version,
+    get_minor_mz_versions_listed_in_docs,
 )
 
 mz_options: dict[MzVersion, str] = {}
@@ -418,10 +418,7 @@ def workflow_test_version_skips(c: Composition) -> None:
 
     # If the current version is `v0.X.0-dev`, two_minor_releases_before will be `v0.X-2.Y`.
     # where Y is the most recent patch version of the minor version.
-    two_minor_releases_before = get_previous_published_version(
-        get_previous_published_version(current_version, previous_minor=True),
-        previous_minor=True,
-    )
+    two_minor_releases_before = get_minor_mz_versions_listed_in_docs()[-2]
 
     print(
         f"Testing that a migration from two minor releases before (={two_minor_releases_before})"
