@@ -1,5 +1,5 @@
 ---
-title: "Striiim"
+title: "Striim"
 description: "How to connect Striiim to Materialize as a source."
 aliases:
   - /integrations/striiim/
