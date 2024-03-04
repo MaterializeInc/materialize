@@ -65,7 +65,6 @@ use mz_mysql_util::{
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
@@ -77,8 +76,8 @@ use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 use super::{
-    return_definite_error, validate_mysql_repl_settings, DefiniteError, ReplicationError,
-    RewindRequest, TransientError,
+    return_definite_error, validate_mysql_repl_settings, DefiniteError, MySqlTableName,
+    ReplicationError, RewindRequest, TransientError,
 };
 
 mod context;
@@ -102,7 +101,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
-    table_info: BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
+    table_info: BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
     rewind_stream: &Stream<G, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
