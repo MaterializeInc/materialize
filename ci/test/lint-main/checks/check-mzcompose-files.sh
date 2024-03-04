@@ -36,7 +36,11 @@ check_all_files_referenced_in_ci() {
 
 check_default_workflow_references_others() {
     RETURN=0
-    mapfile -t MZCOMPOSE_TEST_FILES < <(find ./test -name "mzcompose.py")
+    mapfile -t MZCOMPOSE_TEST_FILES < <(find ./test -name "mzcompose.py" \
+        -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
+        -not -wholename "./test/ssh-connection/mzcompose.py" `# Handled differently` \
+        -not -wholename "./test/scalability/mzcompose.py" `# Other workflows are for manual usage` \
+    )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do
       MATCHES_COUNT=$(grep "def workflow_" "$file" -c)
