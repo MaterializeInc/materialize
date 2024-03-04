@@ -1646,12 +1646,7 @@ impl Catalog {
                 } => {
                     state.check_unstable_dependencies(&item)?;
 
-                    if matches!(
-                        item.typ(),
-                        SqlCatalogItemType::MaterializedView
-                            | SqlCatalogItemType::Source
-                            | SqlCatalogItemType::Table
-                    ) {
+                    if item.is_storage_collection() {
                         storage_collections_to_prepare.insert(id);
                     }
 
@@ -2050,12 +2045,7 @@ impl Catalog {
                                 tx.remove_item(id)?;
                             }
 
-                            if matches!(
-                                entry.item.typ(),
-                                SqlCatalogItemType::MaterializedView
-                                    | SqlCatalogItemType::Source
-                                    | SqlCatalogItemType::Table
-                            ) {
+                            if entry.item.is_storage_collection() {
                                 storage_collections_to_drop.insert(id);
                             }
 
