@@ -612,7 +612,8 @@ pub trait StorageController: Debug {
     async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn,
-        ids: BTreeSet<GlobalId>,
+        init_ids: BTreeSet<GlobalId>,
+        drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError>;
 
     /// Update the implementor of [`StorageTxn`] with the appropriate metadata

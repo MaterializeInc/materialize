@@ -2134,7 +2134,8 @@ where
     async fn initialize_state(
         &mut self,
         txn: &mut dyn StorageTxn,
-        ids: BTreeSet<GlobalId>,
+        init_ids: BTreeSet<GlobalId>,
+        mut drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError> {
         let metadata = txn.get_collection_metadata();
         let processed_metadata: Result<Vec<_>, _> = metadata
@@ -2145,7 +2146,7 @@ where
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
 
         // Determine which collections we do not yet have metadata for.
-        let new_collections: BTreeSet<GlobalId> = ids
+        let new_collections: BTreeSet<GlobalId> = init_ids
             .iter()
             .filter(|id| !existing_metadata.contains(id))
             .cloned()
@@ -2156,6 +2157,9 @@ where
             "initializing collections should only be missing metadata for new system objects, but got {:?}",
             new_collections
         );
+
+        // Ensure we don't double-drop IDs.
+        drop_ids.retain(|id| existing_metadata.contains(id));
 
         self.prepare_state(txn, new_collections, BTreeSet::new())
             .await?;
