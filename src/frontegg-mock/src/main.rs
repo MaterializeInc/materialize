@@ -47,6 +47,10 @@ struct Args {
     /// JSON of the form: `[{"email": "...", "password": "...", "tenant_id": "...", initial_api_tokens: [{"client_id": "...", "secret": "..."}], "roles": ["role1", "role2"]}]`
     #[clap(long)]
     users: String,
+    /// Permissions assigned for specific roles.
+    /// JSON of the form: `{"rolename": ["permission1", "permission2"]}`
+    #[clap(long)]
+    role_permissions: Option<String>,
 }
 
 #[tokio::main]
@@ -91,12 +95,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .into_iter()
         .map(|user| (user.email.clone(), user))
         .collect();
+    let role_permissions = match &args.role_permissions {
+        Some(s) => serde_json::from_str(s).with_context(|| "decoding --role-permissions")?,
+        None => None,
+    };
     let server = FronteggMockServer::start(
         Some(&addr),
         args.issuer,
         encoding_key,
         decoding_key,
         users,
+        role_permissions,
         SYSTEM_TIME.clone(),
         500,
         None,
