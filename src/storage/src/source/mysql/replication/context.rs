@@ -18,11 +18,10 @@ use tracing::trace;
 
 use mz_mysql_util::{Config, MySqlTableDesc};
 use mz_repr::Row;
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::mysql::GtidPartition;
 use mz_timely_util::builder_async::AsyncOutputHandle;
 
-use super::super::{DefiniteError, RewindRequest};
+use super::super::{DefiniteError, MySqlTableName, RewindRequest};
 use crate::source::RawSourceCreationConfig;
 
 /// A container to hold various context information for the replication process, used when
@@ -31,7 +30,7 @@ pub(super) struct ReplContext<'a> {
     pub(super) config: &'a RawSourceCreationConfig,
     pub(super) connection_config: &'a Config,
     pub(super) stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
-    pub(super) table_info: &'a BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
+    pub(super) table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
     pub(super) data_output: &'a mut AsyncOutputHandle<
         GtidPartition,
         Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
@@ -40,12 +39,11 @@ pub(super) struct ReplContext<'a> {
     pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
     pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
     // Owned values:
-    pub(super) rewinds:
-        BTreeMap<UnresolvedItemName, ([Capability<GtidPartition>; 2], RewindRequest)>,
+    pub(super) rewinds: BTreeMap<MySqlTableName, ([Capability<GtidPartition>; 2], RewindRequest)>,
     // Binlog Table Id -> Table Name (its key in the `table_info` map)
-    pub(super) table_id_map: BTreeMap<u64, UnresolvedItemName>,
+    pub(super) table_id_map: BTreeMap<u64, MySqlTableName>,
     pub(super) skipped_table_ids: BTreeSet<u64>,
-    pub(super) errored_tables: BTreeSet<UnresolvedItemName>,
+    pub(super) errored_tables: BTreeSet<MySqlTableName>,
 }
 
 impl<'a> ReplContext<'a> {
@@ -53,7 +51,7 @@ impl<'a> ReplContext<'a> {
         config: &'a RawSourceCreationConfig,
         connection_config: &'a Config,
         stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
-        table_info: &'a BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
+        table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
         data_output: &'a mut AsyncOutputHandle<
             GtidPartition,
             Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
@@ -61,7 +59,7 @@ impl<'a> ReplContext<'a> {
         >,
         data_cap_set: &'a mut CapabilitySet<GtidPartition>,
         upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        rewinds: BTreeMap<UnresolvedItemName, ([Capability<GtidPartition>; 2], RewindRequest)>,
+        rewinds: BTreeMap<MySqlTableName, ([Capability<GtidPartition>; 2], RewindRequest)>,
     ) -> Self {
         Self {
             config,

@@ -11,10 +11,8 @@ use std::collections::BTreeMap;
 
 use mysql_async::prelude::Queryable;
 use mz_mysql_util::{schema_info, MySqlError, MySqlTableDesc, SchemaRequest};
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
 
-use super::{table_name, DefiniteError};
+use super::{DefiniteError, MySqlTableName};
 
 /// Given a list of tables and their expected schemas, retrieve the current schema for each table
 /// and verify they are compatible with the expected schema.
@@ -22,8 +20,8 @@ use super::{table_name, DefiniteError};
 /// Returns a vec of tables that have incompatible schema changes.
 pub(super) async fn verify_schemas<'a, Q>(
     conn: &mut Q,
-    expected: &[(&'a UnresolvedItemName, &MySqlTableDesc)],
-) -> Result<Vec<(&'a UnresolvedItemName, DefiniteError)>, MySqlError>
+    expected: &[(&'a MySqlTableName, &MySqlTableDesc)],
+) -> Result<Vec<(&'a MySqlTableName, DefiniteError)>, MySqlError>
 where
     Q: Queryable,
 {
@@ -33,15 +31,15 @@ where
         &SchemaRequest::Tables(
             expected
                 .iter()
-                .map(|(f, _)| (f.0[0].as_str(), f.0[1].as_str()))
+                .map(|(f, _)| (f.0.as_str(), f.1.as_str()))
                 .collect(),
         ),
     )
     .await?
-    .drain(..)
+    .into_iter()
     .map(|schema| {
         (
-            table_name(&schema.schema_name, &schema.name).unwrap(),
+            MySqlTableName::new(&schema.schema_name, &schema.name),
             schema,
         )
     })
@@ -62,13 +60,13 @@ where
 /// Ensures that the specified table is still compatible with the current upstream schema
 /// and that it has not been dropped.
 fn verify_schema(
-    table: &UnresolvedItemName,
+    table: &MySqlTableName,
     expected_desc: &MySqlTableDesc,
-    upstream_info: &BTreeMap<UnresolvedItemName, MySqlTableDesc>,
+    upstream_info: &BTreeMap<MySqlTableName, MySqlTableDesc>,
 ) -> Result<(), DefiniteError> {
     let current_desc = upstream_info
         .get(table)
-        .ok_or_else(|| DefiniteError::TableDropped(table.to_ast_string()))?;
+        .ok_or_else(|| DefiniteError::TableDropped(table.to_string()))?;
 
     match expected_desc.determine_compatibility(current_desc) {
         Ok(()) => Ok(()),
