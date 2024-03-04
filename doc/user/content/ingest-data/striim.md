@@ -17,7 +17,7 @@ Striim is a real-time data integration platform that offers a variety of connect
 
 Ensure you have the following:
 
-- An active [Striim account](https://go2.striim.com/free-trial) and operational service.
+- An active [Striim account](https://go2.striim.com/free-trial) and [Striim Cloud service](https://www.striim.com/docs/en/create-a-striim-cloud-service.html).
 - Configured MySQL, Oracle, or SQL Server with streamable tables.
 - An operational Kafka cluster.
 - Confluent Schema Registry set up for Avro schema management.
@@ -33,7 +33,9 @@ Ensure you have the following:
 2. **Striim MySQLReader App Creation:**
     - Deploy an app within Striim, entering MySQL specifics and selecting target tables for streaming.
 
-Alternatively, follow the [Oracle CDC guide](https://www.striim.com/docs/en/oracle-database-cdc.html) or [SQL Server CDC guide](https://www.striim.com/docs/en/sql-server-cdc.html) for database-specific integration steps.
+3. **Oracle and SQL Server Setup:**
+    - For Oracle, follow the [Oracle CDC guide](https://www.striim.com/docs/en/oracle-database-cdc.html). Note that Oracle versions >= 19c do not support CDDL; use the guide for alternative configuration strategies.
+    - For SQL Server, implement the [SQL Server CDC guide](https://www.striim.com/docs/en/sql-server-cdc.html) for integration steps specific to SQL Server environments.
 
 ### Kafka target configuration
 
@@ -47,7 +49,7 @@ Alternatively, follow the [Oracle CDC guide](https://www.striim.com/docs/en/orac
 2. **Schema Registry configuration:**
     - From the 'Formatter' dropdown menu, select 'AvroFormatter' to encode records in the Avro format.
     - Define the Schema Registry URL.
-    - Set the format to 'Table' or 'Native'. When using 'Table; as the format in the KafkaWriter configuration, it will strip out the unnecessary WAEvent metadata.
+    - Set the format to 'Table'.
     - Configure the Schema Registry authentication credentials if necessary.
     - Leave the 'Schema Registry Subject Name' and 'Schema Registry Subject Name Mapping' fields empty.
 
@@ -141,19 +143,9 @@ Here's how you can leverage JSON formatting with Materialize:
 
     {{< json-parser >}}
 
-## Database specifics
-
-### Oracle
-
-- Oracle versions >= 19c do not support CDDL. Utilize the [Oracle CDC guide](https://www.striim.com/docs/en/oracle-database-cdc.html) for alternative configuration strategies.
-
-### SQL Server
-
-- Implement the [SQL Server CDC guide](https://www.striim.com/docs/en/sql-server-cdc.html) for integration steps specific to SQL Server environments.
-
 ## Known issues
 
-- `BigInt` columns are not supported in Striim's Avro handling. This issue is being addressed by Striim's development team.
+- [`BigInt` columns are not supported in Striim's Avro handling](https://community.striim.com/product-q-a-6/suitable-avro-type-not-found-for-field-error-when-using-mysql-striim-kafka-125).
 
 ## Related pages
 
