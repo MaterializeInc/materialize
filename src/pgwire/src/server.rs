@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
     decode_startup, Conn, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION,

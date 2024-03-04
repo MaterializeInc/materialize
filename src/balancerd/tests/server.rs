@@ -20,7 +20,8 @@ use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca};
 use mz_frontegg_auth::{
-    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
+    Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
+    DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 use mz_frontegg_mock::{FronteggMockServer, UserApiToken, UserConfig};
 use mz_ore::cast::CastFrom;
@@ -91,6 +92,8 @@ async fn test_balancer() {
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
         },
         mz_frontegg_auth::Client::default(),
         &metrics_registry,

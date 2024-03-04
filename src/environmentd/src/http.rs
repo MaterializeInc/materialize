@@ -37,10 +37,7 @@ use http::{Method, Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_adapter::session::{Session, SessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
-use mz_frontegg_auth::{
-    Authentication as FronteggAuthentication, Error as FronteggError,
-    ExchangePasswordForTokenResponse,
-};
+use mz_frontegg_auth::{Authenticator as FronteggAuthentication, Error as FronteggError};
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
@@ -856,37 +853,25 @@ async fn auth(
         // is the client+secret pair. Bearer auth is an existing JWT that must
         // be validated. In either case, if a username was specified in the
         // client cert, it must match that of the JWT.
-        (Some(frontegg), creds) => {
-            let claims = match creds {
-                Credentials::Password { username, password } => {
-                    let ExchangePasswordForTokenResponse { claims, .. } = frontegg
-                        .exchange_password_for_token(&password, username)
-                        .await?;
-                    claims
-                }
-                Credentials::Token { token } => {
-                    let claims = frontegg.validate_access_token(&token, None)?;
-                    claims
-                }
-                Credentials::DefaultUser | Credentials::User(_) => {
-                    return Err(AuthError::MissingHttpAuthentication)
-                }
-            };
-            // Set up an external metadata channel that never updates.
-            //
-            // NOTE(benesch): Arguably we should handle HTTP requests the same
-            // way we handle pgwire sessions: refresh for as long as we have
-            // valid credentials, updating external metadata along the way, and
-            // terminating the request if the refresh fails and the token
-            // expires. We don't do that presently, because most HTTP requests
-            // are very short lived, but they can in fact block for an
-            // arbitrarily long time.
-            let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
-                user_id: claims.user_id,
-                admin: claims.is_admin,
-            });
-            (claims.email, Some(external_metadata_rx))
-        }
+        (Some(frontegg), creds) => match creds {
+            Credentials::Password { username, password } => {
+                let auth_session = frontegg.authenticate(&username, &password).await?;
+                let user = auth_session.user().into();
+                let external_metadata_rx = Some(auth_session.external_metadata_rx());
+                (user, external_metadata_rx)
+            }
+            Credentials::Token { token } => {
+                let claims = frontegg.validate_access_token(&token, None)?;
+                let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
+                    user_id: claims.user_id,
+                    admin: claims.is_admin,
+                });
+                (claims.email, Some(external_metadata_rx))
+            }
+            Credentials::DefaultUser | Credentials::User(_) => {
+                return Err(AuthError::MissingHttpAuthentication)
+            }
+        },
     };
 
     if mz_adapter::catalog::is_reserved_role_name(name.as_str()) {

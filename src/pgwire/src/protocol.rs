@@ -26,9 +26,7 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
     RowsFuture,
 };
-use mz_frontegg_auth::{
-    Authentication as FronteggAuthentication, ExchangePasswordForTokenResponse,
-};
+use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::netio::AsyncReady;
@@ -153,7 +151,7 @@ where
         return conn.send(err).await;
     }
 
-    let (mut session, is_expired) = if let Some(frontegg) = frontegg {
+    let (mut session, expired) = if let Some(frontegg) = frontegg {
         conn.send(BackendMessage::AuthenticationCleartextPassword)
             .await?;
         conn.flush().await?;
@@ -169,28 +167,23 @@ where
             }
         };
 
-        let auth_response = frontegg.exchange_password_for_token(&password, user).await;
+        let auth_response = frontegg.authenticate(&user, &password).await;
         match auth_response {
-            Ok(result) => {
-                let ExchangePasswordForTokenResponse {
-                    claims,
-                    refresh_updates,
-                    valid_until_fut,
-                } = result;
-
-                // Create a session based on the validated claims.
+            Ok(mut auth_session) => {
+                // Create a session based on the auth session.
                 //
-                // In particular, it's important that the username come from the claims, as
-                // Frontegg may return an email address with different casing than the user
-                // supplied via the pgwire username field. We want to use the Frontegg casing as
+                // In particular, it's important that the username come from the
+                // auth session, as Frontegg may return an email address with
+                // different casing than the user supplied via the pgwire
+                // username field. We want to use the Frontegg casing as
                 // canonical.
                 let session = adapter_client.new_session(SessionConfig {
                     conn_id: conn.conn_id().clone(),
-                    user: claims.email.clone(),
-                    external_metadata_rx: Some(refresh_updates),
+                    user: auth_session.user().into(),
+                    external_metadata_rx: Some(auth_session.external_metadata_rx()),
                 });
-
-                (session, valid_until_fut.left_future())
+                let expired = async move { auth_session.expired().await };
+                (session, expired.left_future())
             }
             Err(err) => {
                 warn!(?err, "pgwire connection failed authentication");
@@ -208,9 +201,9 @@ where
             user,
             external_metadata_rx: None,
         });
-        // No frontegg check, so is_expired never resolves.
-        let is_expired = pending().right_future();
-        (session, is_expired)
+        // No frontegg check, so auth session lasts indefinitely.
+        let auth_session = pending().right_future();
+        (session, auth_session)
     };
 
     for (name, value) in params {
@@ -306,7 +299,7 @@ where
             }
             r
         },
-        _ = is_expired => {
+        _ = expired => {
             conn
                 .send(ErrorResponse::fatal(SqlState::INVALID_AUTHORIZATION_SPECIFICATION, "authentication expired"))
                 .await?;
