@@ -245,11 +245,12 @@ fn test_timestamp_selection() {
                     let timeline_ctx = TimelineContext::TimestampDependent;
                     let isolation_level = IsolationLevel::from(isolation);
                     let when = parse_query_when(&det.when);
-                    let linearized_timeline =
-                        Frontiers::get_linearized_timeline(&isolation_level, &when, &timeline_ctx);
+                    let timeline = Frontiers::get_timeline(&timeline_ctx);
+                    let needs_linearized_timeline =
+                        Frontiers::needs_linearized_read_ts(&isolation_level, &when);
 
-                    let oracle_read_ts = if let Some(timeline) = linearized_timeline {
-                        match timeline {
+                    let oracle_read_ts = match timeline {
+                        Some(timeline) if needs_linearized_timeline => match timeline {
                             Timeline::EpochMilliseconds => Some(f.oracle),
                             timeline => {
                                 unreachable!(
@@ -257,9 +258,8 @@ fn test_timestamp_selection() {
                                     timeline
                                 )
                             }
-                        }
-                    } else {
-                        None
+                        },
+                        Some(_) | None => None,
                     };
 
                     let ts = block_on(f.determine_timestamp_for(

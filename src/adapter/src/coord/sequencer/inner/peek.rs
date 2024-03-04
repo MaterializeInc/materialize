@@ -404,8 +404,9 @@ impl Coordinator {
         }: PeekStageLinearizeTimestamp,
     ) {
         let isolation_level = ctx.session.vars().transaction_isolation().clone();
-        let linearized_timeline =
-            Coordinator::get_linearized_timeline(&isolation_level, &plan.when, &timeline_context);
+        let timeline = Coordinator::get_timeline(&timeline_context);
+        let needs_linearized_read_ts =
+            Coordinator::needs_linearized_read_ts(&isolation_level, &plan.when);
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
@@ -420,8 +421,8 @@ impl Coordinator {
             explain_ctx,
         };
 
-        match linearized_timeline {
-            Some(timeline) => {
+        match timeline {
+            Some(timeline) if needs_linearized_read_ts => {
                 let oracle = self.get_timestamp_oracle(&timeline);
 
                 // We ship the timestamp oracle off to an async task, so that we
@@ -441,7 +442,7 @@ impl Coordinator {
                     });
                 });
             }
-            None => {
+            Some(_) | None => {
                 let stage = build_stage(None);
                 let stage = PeekStage::RealTimeRecency(stage);
                 // Ignore errors if the coordinator has shut down.
