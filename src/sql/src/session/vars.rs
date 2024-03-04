@@ -1166,6 +1166,7 @@ impl SystemVars {
             &ENABLE_LGALLOC_EAGER_RECLAMATION,
             &ENABLE_STATEMENT_LIFECYCLE_LOGGING,
             &ENABLE_DEPENDENCY_READ_HOLD_ASSERTS,
+            &COMPUTE_HYDRATION_CONCURRENCY,
             &TIMESTAMP_ORACLE_IMPL,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT,
@@ -2079,6 +2080,10 @@ impl SystemVars {
         *self.expect_value(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
     }
 
+    pub fn compute_hydration_concurrency(&self) -> usize {
+        *self.expect_value(&COMPUTE_HYDRATION_CONCURRENCY)
+    }
+
     /// Returns the `user_storage_managed_collections_batch_duration` configuration parameter.
     pub fn user_storage_managed_collections_batch_duration(&self) -> Duration {
         *self.expect_value(&USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION)
@@ -2095,6 +2100,7 @@ impl SystemVars {
             || name == ENABLE_COLUMNATION_LGALLOC.name()
             || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
             || name == ENABLE_LGALLOC_EAGER_RECLAMATION.name()
+            || name == COMPUTE_HYDRATION_CONCURRENCY.name()
             || self.is_persist_config_var(name)
             || is_tracing_var(name)
     }

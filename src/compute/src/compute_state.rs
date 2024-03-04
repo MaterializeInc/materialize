@@ -119,6 +119,9 @@ pub struct ComputeState {
     ///
     /// Copies of this sender are passed to the hydration logging operators.
     pub hydration_tx: mpsc::Sender<HydrationEvent>,
+
+    /// The number of dataflows that can hydrate concurrently.
+    hydration_concurrency: u64,
 }
 
 impl ComputeState {
@@ -153,6 +156,7 @@ impl ComputeState {
             context,
             hydration_rx,
             hydration_tx,
+            hydration_concurrency: u64::MAX,
         }
     }
 
@@ -237,6 +241,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             enable_chunked_stack,
             enable_operator_hydration_status_logging,
             enable_lgalloc_eager_reclamation,
+            hydration_concurrency,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -299,6 +304,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
         if let Some(v) = enable_operator_hydration_status_logging {
             self.compute_state.enable_operator_hydration_status_logging = v;
+        }
+        if let Some(v) = hydration_concurrency {
+            self.compute_state.hydration_concurrency = v;
         }
 
         persist.apply(self.compute_state.persist_clients.cfg());

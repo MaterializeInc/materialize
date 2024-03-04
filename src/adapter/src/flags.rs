@@ -42,6 +42,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         enable_operator_hydration_status_logging: Some(
             config.enable_compute_operator_hydration_status_logging(),
         ),
+        hydration_concurrency: Some(u64::cast_from(config.compute_hydration_concurrency())),
         enable_lgalloc_eager_reclamation: Some(config.enable_lgalloc_eager_reclamation()),
         persist: persist_config(config),
         tracing: tracing_config(config),

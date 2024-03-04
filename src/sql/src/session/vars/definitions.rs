@@ -1497,6 +1497,13 @@ pub static ENABLE_DEPENDENCY_READ_HOLD_ASSERTS: VarDefinition = VarDefinition::n
     true,
 );
 
+pub static COMPUTE_HYDRATION_CONCURRENCY: VarDefinition = VarDefinition::new(
+    "compute_hydration_concurrency",
+    value!(usize; usize::MAX),
+    "Controls how many compute dataflows can hydrate concurrently.",
+    true,
+);
+
 /// Configuration for gRPC client connections.
 pub mod grpc_client {
     use super::*;
