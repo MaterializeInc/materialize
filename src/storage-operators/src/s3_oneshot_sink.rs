@@ -16,8 +16,10 @@ use aws_types::sdk_config::SdkConfig;
 use bytesize::ByteSize;
 use differential_dataflow::Collection;
 use http::Uri;
-use mz_aws_util::s3_uploader::{S3MultiPartUploader, S3MultiPartUploaderConfig};
-use mz_ore::cast::CastFrom;
+use mz_aws_util::s3_uploader::{
+    CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
+};
+use mz_ore::task::JoinHandleExt;
 use mz_pgcopy::{encode_copy_format, CopyFormatParams};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
@@ -40,7 +42,7 @@ pub fn copy_to<G, F>(
     aws_connection: AwsConnection,
     connection_id: GlobalId,
     active_worker: usize,
-    one_time_callback: F,
+    onetime_callback: F,
 ) where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
@@ -58,7 +60,7 @@ pub fn copy_to<G, F>(
             // Returning 0 count for non-active workers.
             // If nothing is returned, then a `CopyToResponse::Dropped` message
             // will be sent instead upon drop, making the accumulated response a `Dropped` as well.
-            one_time_callback(Ok(0));
+            onetime_callback(Ok(0));
             return;
         }
 
@@ -67,7 +69,7 @@ pub fn copy_to<G, F>(
                 AsyncEvent::Data(_ts, data) => {
                     if let Some(((error, _), ts, _)) = data.first() {
                         if !up_to.less_equal(ts) {
-                            one_time_callback(Err(error.to_string()));
+                            onetime_callback(Err(error.to_string()));
                             return;
                         }
                     }
@@ -87,7 +89,7 @@ pub fn copy_to<G, F>(
         {
             Ok(sdk_config) => sdk_config,
             Err(e) => {
-                one_time_callback(Err(e.to_string()));
+                onetime_callback(Err(e.to_string()));
                 return;
             }
         };
@@ -101,7 +103,7 @@ pub fn copy_to<G, F>(
                     for ((row, ()), ts, diff) in data {
                         if !up_to.less_equal(&ts) {
                             if diff < 0 {
-                                one_time_callback(Err(format!(
+                                onetime_callback(Err(format!(
                                     "Invalid data in source errors, saw retractions ({}) for row that does not exist", diff * -1,
                                 )));
                                 return;
@@ -111,7 +113,7 @@ pub fn copy_to<G, F>(
                                 match uploader.append_row(&row).await {
                                     Ok(()) => {}
                                     Err(e) => {
-                                        one_time_callback(Err(e.to_string()));
+                                        onetime_callback(Err(e.to_string()));
                                         return;
                                     }
                                 }
@@ -124,11 +126,11 @@ pub fn copy_to<G, F>(
                         match uploader.flush().await {
                             Ok(()) => {
                                 // We are done, send the final count.
-                                one_time_callback(Ok(row_count));
+                                onetime_callback(Ok(row_count));
                                 return;
                             }
                             Err(e) => {
-                                one_time_callback(Err(e.to_string()));
+                                onetime_callback(Err(e.to_string()));
                                 return;
                             }
                         }
@@ -157,7 +159,9 @@ struct CopyToS3Uploader {
     /// when the size exceeds this amount.
     max_file_size: u64,
     /// The aws sdk config.
-    sdk_config: SdkConfig,
+    /// This is an option so that we can get an owned value later to move to a
+    /// spawned tokio task.
+    sdk_config: Option<SdkConfig>,
     /// Multi-part uploader for the current file.
     /// Keeping the uploader in an `Option` to later take owned value.
     current_file_uploader: Option<S3MultiPartUploader>,
@@ -176,7 +180,7 @@ impl CopyToS3Uploader {
         let (bucket, path_prefix) = Self::extract_s3_bucket_path(&connection_details.prefix);
         CopyToS3Uploader {
             desc: connection_details.desc,
-            sdk_config,
+            sdk_config: Some(sdk_config),
             format: connection_details.format,
             file_name_prefix,
             bucket,
@@ -188,38 +192,51 @@ impl CopyToS3Uploader {
         }
     }
 
-    /// Creates the uploader for the next file which starts the multi part upload.
-    async fn start_new_file(&mut self) -> Result<(), anyhow::Error> {
+    /// Creates the uploader for the next file and starts the multi part upload.
+    async fn start_new_file_upload(&mut self) -> Result<(), anyhow::Error> {
         self.flush().await?;
         assert!(self.current_file_uploader.is_none());
 
         self.file_index += 1;
-        // TODO: remove hard-coded file extension .csv
-        let file_path = format!(
-            "{}/{}-{:04}.csv",
-            self.path_prefix, self.file_name_prefix, self.file_index
-        );
+        let file_path = self.current_file_path();
 
         let bucket = self.bucket.clone();
-        info!(
-            "starting upload at bucket: {}, file {}",
-            &bucket, &file_path
-        );
-        let uploader = S3MultiPartUploader::try_new(
-            &self.sdk_config,
-            bucket,
-            file_path,
-            S3MultiPartUploaderConfig {
-                part_size_limit: ByteSize::mib(10).as_u64(),
-                file_size_limit: self.max_file_size,
-            },
-        )
-        .await?;
-        self.current_file_uploader = Some(uploader);
+        info!("starting upload: bucket {}, file {}", &bucket, &file_path);
+        let sdk_config = self
+            .sdk_config
+            .take()
+            .expect("sdk_config should always be present");
+        let max_file_size = self.max_file_size;
+        // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
+        let handle = mz_ore::task::spawn(|| "s3_uploader::try_new", async move {
+            let uploader = S3MultiPartUploader::try_new(
+                &sdk_config,
+                bucket,
+                file_path,
+                S3MultiPartUploaderConfig {
+                    part_size_limit: ByteSize::mib(10).as_u64(),
+                    file_size_limit: max_file_size,
+                },
+            )
+            .await;
+            (uploader, sdk_config)
+        });
+        let (uploader, sdk_config) = handle.wait_and_assert_finished().await;
+        self.sdk_config = Some(sdk_config);
+        self.current_file_uploader = Some(uploader?);
         Ok(())
     }
 
+    fn current_file_path(&self) -> String {
+        // TODO: remove hard-coded file extension .csv
+        format!(
+            "{}/{}-{:04}.csv",
+            self.path_prefix, self.file_name_prefix, self.file_index
+        )
+    }
+
     fn extract_s3_bucket_path(prefix: &str) -> (String, String) {
+        // This url is already validated to be a valid s3 url in sequencer.
         let uri = Uri::from_str(prefix).expect("valid s3 url");
         let bucket = uri.host().expect("s3 bucket");
         let path = uri.path().trim_start_matches('/').trim_end_matches('/');
@@ -229,8 +246,39 @@ impl CopyToS3Uploader {
     /// Finishes any remaining in-progress upload.
     async fn flush(&mut self) -> Result<(), anyhow::Error> {
         if let Some(uploader) = self.current_file_uploader.take() {
-            uploader.finish().await?;
+            let current_file = self.current_file_path();
+            // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
+            let handle =
+                mz_ore::task::spawn(|| "s3_uploader::finish", async { uploader.finish().await });
+            let CompletedUpload {
+                part_count,
+                total_bytes_uploaded,
+            } = handle.wait_and_assert_finished().await?;
+            info!(
+                "finished upload: bucket {}, file {}, bytes_uploaded {}, parts_uploaded {}",
+                &self.bucket, current_file, total_bytes_uploaded, part_count
+            );
         }
+        Ok(())
+    }
+
+    async fn upload_buffer(&mut self) -> Result<(), S3MultiPartUploadError> {
+        assert!(!self.buf.is_empty());
+        assert!(self.current_file_uploader.is_some());
+
+        let mut uploader = self.current_file_uploader.take().unwrap();
+        // TODO: Make buf a Bytes so it can be cheaply cloned.
+        let buf = std::mem::take(&mut self.buf);
+        // Moving the aws s3 calls onto tokio tasks instead of using timely runtime.
+        let handle = mz_ore::task::spawn(|| "s3_uploader::buffer_chunk", async move {
+            let result = uploader.buffer_chunk(&buf).await;
+            (uploader, buf, result)
+        });
+        let (uploader, buf, result) = handle.wait_and_assert_finished().await;
+        self.current_file_uploader = Some(uploader);
+        self.buf = buf;
+
+        let _ = result?;
         Ok(())
     }
 
@@ -239,35 +287,26 @@ impl CopyToS3Uploader {
     /// exceed the max file size of the ongoing upload, then a new `S3MultiPartUploader` for a new file will
     /// be created and the row data will be appended there.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
-        // encode the row and write to temp buffer.
         self.buf.clear();
+        // encode the row and write to temp buffer.
         encode_copy_format(self.format.clone(), row, self.desc.typ(), &mut self.buf)
             .map_err(|_| anyhow!("error encoding row"))?;
-        let buffer_length = u64::cast_from(self.buf.len());
 
         if self.current_file_uploader.is_none() {
-            self.start_new_file().await?;
+            self.start_new_file_upload().await?;
         }
-        // Ideally it would be nice to get a `&mut uploader` returned from the `start_new_file`,
-        // but that runs into borrow checker issues when trying to add the `&self.buf` to the
-        // `uploader.add_chunk`.
-        let Some(uploader) = self.current_file_uploader.as_mut() else {
-            unreachable!("uploader initialized above");
-        };
-        if buffer_length <= uploader.remaining_bytes_limit() || uploader.added_bytes() == 0 {
-            // Add to ongoing upload of the current file if still within limit.
-            // Or in the unlikely even the size of a single row is more than the max_file_size
-            // upload it anyway.
-            uploader.buffer_chunk(&self.buf).await?;
-        } else {
-            // Start a multi part upload of next file.
-            self.start_new_file().await?;
-            // Upload data for the new part.
-            let Some(uploader) = self.current_file_uploader.as_mut() else {
-                unreachable!("uploader initialized above");
-            };
-            uploader.buffer_chunk(&self.buf).await?;
-        }
+
+        match self.upload_buffer().await {
+            Ok(_) => Ok(()),
+            Err(S3MultiPartUploadError::UploadExceedsMaxFileLimit(_)) => {
+                // Start a multi part upload of next file.
+                self.start_new_file_upload().await?;
+                // Upload data for the new part.
+                self.upload_buffer().await?;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }?;
 
         Ok(())
     }
@@ -322,7 +361,7 @@ mod tests {
         };
         let typ: RelationType = RelationType::new(vec![ColumnType {
             scalar_type: mz_repr::ScalarType::String,
-            nullable: false,
+            nullable: true,
         }]);
         let column_names = vec![ColumnName::from("col1")];
         let desc = RelationDesc::new(typ, column_names.into_iter());
@@ -338,11 +377,14 @@ mod tests {
             "part".to_string(),
         );
         let mut row = Row::default();
-        // Even though this will exceed max_file_size, it should be uploaded in a single file.
+        // Even though this will exceed max_file_size, it should be successfully uploaded in a single file.
         row.packer().push(Datum::from("1234567"));
         uploader.append_row(&row).await?;
 
         // Since the max_file_size is 6B, this row will be uploaded to a new file.
+        row.packer().push(Datum::Null);
+        uploader.append_row(&row).await?;
+
         row.packer().push(Datum::from("5678"));
         uploader.append_row(&row).await?;
 
@@ -372,7 +414,7 @@ mod tests {
             .unwrap();
 
         let body = second_file.body.collect().await.unwrap().into_bytes();
-        let expected_body: &[u8] = b"5678\n";
+        let expected_body: &[u8] = b"\n5678\n";
         assert_eq!(body, *expected_body);
 
         Ok(())
