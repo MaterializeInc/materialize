@@ -1,6 +1,6 @@
 ---
 title: "Striim"
-description: "How to connect Striiim to Materialize as a source."
+description: "How to connect Striim to Materialize as a source."
 aliases:
   - /integrations/striiim/
 menu:
