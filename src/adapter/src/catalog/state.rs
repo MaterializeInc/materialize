@@ -50,6 +50,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
+use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
@@ -237,7 +238,7 @@ impl CatalogState {
 
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         let oid = self.oid_counter;
-        if oid == u32::max_value() {
+        if oid == u32::MAX {
             return Err(Error::new(ErrorKind::OidExhaustion));
         }
         self.oid_counter += 1;
@@ -1610,6 +1611,18 @@ impl CatalogState {
 
     pub fn get_mz_unsafe_schema_id(&self) -> &SchemaId {
         &self.ambient_schemas_by_name[MZ_UNSAFE_SCHEMA]
+    }
+
+    // TODO(jkosh44) This can be removed once OIDs are persisted
+    pub fn get_system_schema_oid(name: &str) -> Option<u32> {
+        match name {
+            MZ_CATALOG_SCHEMA => Some(oid::SCHEMA_MZ_CATALOG_OID),
+            PG_CATALOG_SCHEMA => Some(oid::SCHEMA_PG_CATALOG_OID),
+            INFORMATION_SCHEMA => Some(oid::SCHEMA_INFORMATION_SCHEMA_OID),
+            MZ_INTERNAL_SCHEMA => Some(oid::SCHEMA_MZ_INTERNAL_OID),
+            MZ_UNSAFE_SCHEMA => Some(oid::SCHEMA_MZ_UNSAFE_OID),
+            _ => None,
+        }
     }
 
     pub fn is_system_schema(&self, schema: &str) -> bool {

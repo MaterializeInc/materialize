@@ -9,6 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# dashboard-clean - Clean the dashboard model json to be fit for public consumption
+# mzexplore - Extract definitions and plans from a Materialize instance using pgwire.
 
 exec "$(dirname "$0")"/pyactivate -m materialize.cli.mzexplore "$@"

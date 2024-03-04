@@ -313,7 +313,7 @@ impl Listeners {
             }
         };
 
-        let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0)));
+        let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0, 0)));
 
         let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
         let (promote_leader_tx, promote_leader_rx) = oneshot::channel();

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::NameReference;
@@ -22,6 +23,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
     BuiltinTable {
         name: "mz_optimizer_notices",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_OPTIMIZER_NOTICES_OID,
         desc: RelationDesc::empty()
             .with_column("id", String.nullable(false))
             .with_column("notice_type", String.nullable(false))
@@ -62,6 +64,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
 pub static MZ_NOTICES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_notices",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_NOTICES_OID,
     column_defs: None,
     sql: "SELECT
     n.id,
@@ -87,6 +90,7 @@ FROM
 pub static MZ_NOTICES_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_notices_redacted",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_NOTICES_REDACTED_OID,
     column_defs: None,
     sql: "SELECT
     id,
@@ -106,6 +110,7 @@ FROM
 pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_notices_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_NOTICES_IND_OID,
     sql: "IN CLUSTER mz_introspection ON mz_internal.mz_notices(id)",
     is_retained_metrics_object: false,
 };

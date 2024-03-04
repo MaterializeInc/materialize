@@ -878,12 +878,59 @@ impl Var for SystemVar {
 #[derive(Debug, Copy, Clone)]
 pub struct ConnectionCounter {
     pub current: u64,
+    // Callers must ensure this is always <= limit.
+    pub superuser_reserved: u64,
     pub limit: u64,
 }
 
 impl ConnectionCounter {
-    pub fn new(limit: u64) -> Self {
-        ConnectionCounter { current: 0, limit }
+    pub fn new(limit: u64, superuser_reserved: u64) -> Self {
+        ConnectionCounter {
+            current: 0,
+            limit,
+            superuser_reserved,
+        }
+    }
+
+    fn assert(&self) {
+        self.non_reserved_remaining();
+        self.reserved_remaining();
+        self.non_reserved_limit();
+    }
+
+    /// Whether a non-reserved connection is available.
+    pub fn non_reserved_available(&self) -> bool {
+        self.non_reserved_remaining() > 0
+    }
+
+    /// Whether a reserved connection is available.
+    pub fn reserved_available(&self) -> bool {
+        self.reserved_remaining() > 0
+    }
+
+    /// The number of non-reserved connections available.
+    pub fn non_reserved_remaining(&self) -> u64 {
+        // Saturate because there can be more connections than non-reserved slots.
+        self.non_reserved_limit().saturating_sub(self.current)
+    }
+
+    /// The number of reserved connections available.
+    pub fn reserved_remaining(&self) -> u64 {
+        // Panic because there should never be more connections than the total limit.
+        self.limit.checked_sub(self.current).expect("underflow")
+    }
+
+    /// The total limit for non-reserved connections.
+    pub fn non_reserved_limit(&self) -> u64 {
+        // Panic because superuser_reserved should always be <= limit.
+        self.limit
+            .checked_sub(self.superuser_reserved)
+            .expect("underflow")
+    }
+
+    /// The total limit for reserved connections.
+    pub fn reserved_limit(&self) -> u64 {
+        self.limit
     }
 }
 
@@ -903,6 +950,7 @@ impl Drop for DropConnection {
         let mut connections = self.active_connection_count.lock().expect("lock poisoned");
         assert_ne!(connections.current, 0);
         connections.current -= 1;
+        connections.assert();
     }
 }
 
@@ -914,13 +962,21 @@ impl DropConnection {
         Ok(if user.limit_max_connections() {
             {
                 let mut connections = active_connection_count.lock().expect("lock poisoned");
-                if connections.current >= connections.limit {
+                if user.is_external_admin() {
+                    if !connections.reserved_available() {
+                        return Err(ConnectionError::TooManyConnections {
+                            current: connections.current,
+                            limit: connections.reserved_limit(),
+                        });
+                    }
+                } else if !connections.non_reserved_available() {
                     return Err(ConnectionError::TooManyConnections {
                         current: connections.current,
-                        limit: connections.limit,
+                        limit: connections.non_reserved_limit(),
                     });
                 }
                 connections.current += 1;
+                connections.assert();
             }
             Some(DropConnection {
                 active_connection_count,
@@ -955,7 +1011,7 @@ pub struct SystemVars {
 
 impl Default for SystemVars {
     fn default() -> Self {
-        Self::new(Arc::new(Mutex::new(ConnectionCounter::new(0))))
+        Self::new(Arc::new(Mutex::new(ConnectionCounter::new(0, 0))))
     }
 }
 
@@ -1063,6 +1119,7 @@ impl SystemVars {
             &KAFKA_DEFAULT_METADATA_FETCH_INTERVAL,
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
+            &SUPERUSER_RESERVED_CONNECTIONS,
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
@@ -1372,11 +1429,16 @@ impl SystemVars {
 
     /// Propagate a change to the parameter named `name` to our state.
     fn propagate_var_change(&mut self, name: &str) {
-        if name == MAX_CONNECTIONS.name {
-            self.active_connection_count
-                .lock()
-                .expect("lock poisoned")
-                .limit = u64::cast_from(*self.expect_value::<u32>(&MAX_CONNECTIONS));
+        if name == MAX_CONNECTIONS.name || name == SUPERUSER_RESERVED_CONNECTIONS.name {
+            let limit = *self.expect_value::<u32>(&MAX_CONNECTIONS);
+            let superuser_reserved = *self.expect_value::<u32>(&SUPERUSER_RESERVED_CONNECTIONS);
+            // If superuser_reserved > max_connections, prefer max_connections.
+            let superuser_reserved = std::cmp::min(limit, superuser_reserved);
+            let mut connections = self.active_connection_count.lock().expect("lock poisoned");
+            connections.assert();
+            connections.limit = u64::cast_from(limit);
+            connections.superuser_reserved = u64::cast_from(superuser_reserved);
+            connections.assert();
         }
     }
 
@@ -1386,6 +1448,7 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
+        self.propagate_var_change(SUPERUSER_RESERVED_CONNECTIONS.name.as_str());
     }
 
     /// Returns the system default for the [`CLUSTER`] session variable. To know the active cluster
@@ -1783,6 +1846,11 @@ impl SystemVars {
     /// Returns the `max_connections` configuration parameter.
     pub fn max_connections(&self) -> u32 {
         *self.expect_value(&MAX_CONNECTIONS)
+    }
+
+    /// Returns the `superuser_reserved_connections` configuration parameter.
+    pub fn superuser_reserved_connections(&self) -> u32 {
+        *self.expect_value(&SUPERUSER_RESERVED_CONNECTIONS)
     }
 
     pub fn keep_n_source_status_history_entries(&self) -> usize {
