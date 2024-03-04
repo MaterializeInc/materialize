@@ -3934,3 +3934,180 @@ async fn test_webhook_source_batch_interval() {
     // But the third will now be stuck behind the batch interval so it will take longer!
     assert!(third_duration > Duration::from_secs(7));
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_startup_cluster_notice_with_http_options() {
+    let server = test_util::TestHarness::default().start().await;
+
+    let http_client = reqwest::Client::new();
+
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr(),
+    ))
+    .unwrap();
+
+    let query = serde_json::json!({
+        "query": "SHOW cluster"
+    });
+
+    // Specify a non-existant cluster should not show a notice.
+    let options = serde_json::json!({
+        "cluster": "i_do_not_exist"
+    });
+    let options = options.to_string();
+    let mut non_existant_cluster_url = http_url.clone();
+    non_existant_cluster_url
+        .query_pairs_mut()
+        .append_pair("options", &options);
+    let result: serde_json::Value = http_client
+        .post(non_existant_cluster_url)
+        .json(&query)
+        .send()
+        .await
+        .expect("failed to send SQL")
+        .json()
+        .await
+        .expect("invalid JSON");
+    let result = result
+        .get("results")
+        .expect("success")
+        .as_array()
+        .expect("results should be an array")
+        .get(0)
+        .expect("should have 1 element");
+
+    let query_result = result.get("rows").expect("rows should exist");
+    insta::assert_json_snapshot!(query_result, @r###"
+    [
+      [
+        "i_do_not_exist"
+      ]
+    ]
+    "###);
+
+    // We have a single notice because we ran a query, not because we connected.
+    let notices = result.get("notices").expect("notices should exist");
+    insta::assert_json_snapshot!(notices, @r###"
+    [
+      {
+        "message": "cluster \"i_do_not_exist\" does not exist",
+        "severity": "notice",
+        "hint": "Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS."
+      }
+    ]
+    "###);
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_startup_cluster_notice1() {
+    let server = test_util::TestHarness::default().start().await;
+
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let notices_ = Arc::clone(&notices);
+    let client = server
+        .connect()
+        .notice_callback(move |notice| notices_.lock().expect("not poisoned").push(notice))
+        .await
+        .expect("success");
+    let notices = notices.lock().expect("not poisoned");
+    assert!(notices.is_empty());
+    drop(client);
+
+    let sys_client = server
+        .connect()
+        .internal()
+        .user(&SYSTEM_USER.name)
+        .await
+        .unwrap();
+    sys_client
+        .execute("DROP CLUSTER quickstart", &[])
+        .await
+        .expect("able to drop cluster");
+
+    // Reconnecting without a system cluster should get us a notice.
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let notices_ = Arc::clone(&notices);
+    let client = server
+        .connect()
+        .notice_callback(move |notice| notices_.lock().expect("not poisoned").push(notice))
+        .await
+        .expect("success");
+    // Give the server a moment to flush all notices.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let notices = { notices.lock().expect("not poisoned").clone() };
+    insta::assert_debug_snapshot!(notices, @r###"
+    [
+        DbError {
+            severity: "NOTICE",
+            parsed_severity: None,
+            code: SqlState(
+                E01000,
+            ),
+            message: "default cluster \"quickstart\" does not exist",
+            detail: None,
+            hint: Some(
+                "Set a default cluster for the current role with ALTER ROLE <role> SET cluster TO <cluster>.",
+            ),
+            position: None,
+            where_: None,
+            schema: None,
+            table: None,
+            column: None,
+            datatype: None,
+            constraint: None,
+            file: None,
+            line: None,
+            routine: None,
+        },
+    ]
+    "###);
+
+    client
+        .execute("ALTER ROLE materialize SET CLUSTER to non_existant", &[])
+        .await
+        .expect("able to set cluster");
+    drop(client);
+
+    // If we have a role default cluster, but it doesn't exist, we should still get a notice.
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let notices_ = Arc::clone(&notices);
+    let _client = server
+        .connect()
+        .notice_callback(move |notice| notices_.lock().expect("not poisoned").push(notice))
+        .await
+        .expect("success");
+    // Give the server a moment to flush all notices.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let notices = { notices.lock().expect("not poisoned").clone() };
+    insta::assert_debug_snapshot!(notices, @r###"
+    [
+        DbError {
+            severity: "NOTICE",
+            parsed_severity: None,
+            code: SqlState(
+                E01000,
+            ),
+            message: "role default cluster \"non_existant\" does not exist",
+            detail: None,
+            hint: Some(
+                "Change the default cluster for the current role with with ALTER ROLE <role> SET cluster TO <cluster>.",
+            ),
+            position: None,
+            where_: None,
+            schema: None,
+            table: None,
+            column: None,
+            datatype: None,
+            constraint: None,
+            file: None,
+            line: None,
+            routine: None,
+        },
+    ]
+    "###);
+}

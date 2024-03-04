@@ -2827,6 +2827,7 @@ dependencies = [
  "console",
  "lazy_static",
  "linked-hash-map",
+ "serde",
  "similar",
  "yaml-rust",
 ]
@@ -4286,6 +4287,7 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "include_dir",
+ "insta",
  "itertools",
  "jsonwebtoken",
  "libc",

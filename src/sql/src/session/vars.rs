@@ -302,6 +302,14 @@ impl SessionVar {
             .unwrap_or(self.definition.value.value())
     }
 
+    /// Returns the [`Value`] that is currently stored as the `session_value`.
+    ///
+    /// Note: This should __only__ be used for inspection, if you want to determine the current
+    /// value of this [`SessionVar`] you should use [`SessionVar::value`].
+    pub fn inspect_session_value(&self) -> Option<&dyn Value> {
+        self.session_value.as_deref()
+    }
+
     fn validate_constraints(&self, val: &dyn Value) -> Result<(), VarError> {
         if let Some(constraint) = &self.definition.constraint {
             constraint.check_constraint(self, self.value_dyn(), val)
@@ -476,6 +484,14 @@ impl SessionVars {
                 .transpose()?
                 .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
         }
+    }
+
+    /// Returns a [`SessionVar`] for inspection.
+    ///
+    /// Note: If you're trying to determine the value of the variable with `name` you should
+    /// instead use the named accessor, or [`SessionVars::get`].
+    pub fn inspect(&self, name: &str) -> Option<&SessionVar> {
+        self.vars.get(UncasedStr::new(name))
     }
 
     /// Sets the configuration parameter named `name` to the value represented

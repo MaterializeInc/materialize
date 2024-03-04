@@ -35,6 +35,7 @@ use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
+use mz_sql::session::vars::{OwnedVarInput, Var, CLUSTER};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::StatementKind;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
@@ -222,7 +223,14 @@ impl Client {
             session.add_notice(AdapterNotice::UnknownSessionDatabase(db));
         }
 
+        let cluster_active = session.vars().cluster().to_string();
         if session.vars().welcome_message() {
+            let cluster_info = if catalog.resolve_cluster(Some(&cluster_active)).is_err() {
+                format!("{cluster_active} (does not exist)")
+            } else {
+                cluster_active.to_string()
+            };
+
             // Emit a welcome message, optimized for readability by humans using
             // interactive tools. If you change the message, make sure that it
             // formats nicely in both `psql` and the console's SQL shell.
@@ -243,7 +251,7 @@ Issue a SQL query to get started. Need help?
                 self.environment_id.organization_id(),
                 self.environment_id.region(),
                 session.vars().user().name,
-                session.vars().cluster(),
+                cluster_info,
                 session.vars().database(),
                 match session.vars().search_path() {
                     [schema] => format!("Schema: {}", schema),
@@ -253,6 +261,57 @@ Issue a SQL query to get started. Need help?
                     ),
                 },
             )));
+        }
+
+        // Users stub their toe on their default cluster not existing, so we provide a notice to
+        // help guide them on what do to.
+        let cluster_var = session
+            .vars()
+            .inspect(CLUSTER.name())
+            .expect("cluster should exist");
+        if catalog.resolve_cluster(Some(&cluster_active)).is_err() {
+            let cluster_notice = 'notice: {
+                // If the user provided a cluster via a connection configuration parameter, do not
+                // notify them if that cluster does not exist.
+                if cluster_var.inspect_session_value().is_some() {
+                    break 'notice None;
+                }
+
+                let role_default = catalog.get_role(catalog.active_role_id());
+                let role_cluster = match role_default.vars().get(CLUSTER.name()) {
+                    Some(OwnedVarInput::Flat(name)) => Some(name),
+                    None => None,
+                    // This is unexpected!
+                    Some(v @ OwnedVarInput::SqlSet(_)) => {
+                        tracing::warn!(?v, "SqlSet found for cluster Role Default");
+                        break 'notice None;
+                    }
+                };
+
+                let alter_role = "with ALTER ROLE <role> SET cluster TO <cluster>";
+                match role_cluster {
+                    // If there is no default, suggest a Role default.
+                    None => Some(AdapterNotice::DefaultClusterDoesNotExist {
+                        name: cluster_active,
+                        kind: None,
+                        suggested_action: format!(
+                            "Set a default cluster for the current role {alter_role}."
+                        ),
+                    }),
+                    // If the default does not exist, suggest to change it.
+                    Some(_) => Some(AdapterNotice::DefaultClusterDoesNotExist {
+                        name: cluster_active,
+                        kind: Some("role"),
+                        suggested_action: format!(
+                            "Change the default cluster for the current role with {alter_role}."
+                        ),
+                    }),
+                }
+            };
+
+            if let Some(notice) = cluster_notice {
+                session.add_notice(notice);
+            }
         }
 
         Ok(client)
