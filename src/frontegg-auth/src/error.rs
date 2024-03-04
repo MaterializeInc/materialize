@@ -26,6 +26,8 @@ pub enum Error {
     TokenExpired,
     #[error("unauthorized organization")]
     UnauthorizedTenant,
+    #[error("the app password was not valid")]
+    InvalidAppPassword,
     #[error("email in access token did not match the expected email")]
     WrongEmail,
     #[error("request timeout")]
