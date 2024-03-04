@@ -62,7 +62,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     psql_config_path = os.path.join(home_dir, ".psqlrc-mz")
 
     if args.cleanup:
-        workflow_disable_region(c)
+        disable_region(c)
         if os.path.exists(psql_config_path):
             os.remove(psql_config_path)
 
@@ -233,12 +233,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     finally:
         # Clean up
         if args.cleanup:
-            workflow_disable_region(c)
+            disable_region(c)
 
     assert not test_failed
 
 
-def workflow_disable_region(c: Composition) -> None:
+def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
     c.run("mz", "region", "disable")

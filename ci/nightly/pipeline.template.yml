@@ -288,6 +288,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: limits
+            run: main
       timeout_in_minutes: 120
 
     - id: limits-instance-size

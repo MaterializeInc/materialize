@@ -41,7 +41,16 @@ SERVICES = [
 ]
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_no_load(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run CH-benCHmark without any load on Materialize"""
 
     # Parse arguments.
@@ -105,6 +114,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
 
+# invoked by ci/load
 def workflow_load_test(c: Composition) -> None:
     """Run CH-benCHmark with a selected amount of load against Materialize."""
     c.workflow(
