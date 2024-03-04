@@ -95,35 +95,30 @@ this means that the index was correctly used. If that's not the case, consider:
 * Does the index's indexed expression (key) match up with how you're querying
   the data?
 
-#### Resource-intensive queries
-##### Data-intensive queries
-Queries with aggregations, ordering, or offsets can be data-intensive, because
-they need to read in the full underlying dataset in order to compute the
-result. Some examples are operations like `COUNT()`, `MAX()` and `ORDER BY`.
-If the underlying data is not indexed, then the query execution needs to read
-it in from storage. Ingesting all that data can take time, causing your query
-to run slowly.
+#### Efficient data exploration
 
-##### Computation-intensive queries
-Other queries, like those with `JOIN`s can be computation-intensive.
-Performing those computations on the fly can also take time. During the execution
-of the query, Materialize will temporarily use memory to store the joined
-data and CPU to execute the join. You can read more about the impacts of CPU
-and memory usage in the [cluster CPU](#cluster-cpu) and
-[unhealthy cluster](#unhealthy-cluster) sections.
+If you're looking to explore your unindexed data, there are two ways to do so
+efficiently:
+* Simple `LIMIT` queries of the format
+    ```sql
+    SELECT <columns list or *>
+    FROM <your source, materialized view or table>
+    LIMIT <25 or less>
+    ```
+    Note: this only applies to basic queries from a single source,
+materialized view or table, with no ordering, filters or offsets.\
+To verify that the query will return quickly, you can run `EXPLAIN PLAN`
+for the query, and it should start with `Explained Query (fast path)`.
 
-##### Address
-* If you're looking to explore your data, simple `SELECT ... LIMIT <25 or less>`
-queries on objects will return more quickly. This only applies to queries from a 
-single source, table, or materialized view, with no ordering or offsets.
-* Create a materialized view or index for resource-intesive queries that you
-plan to issue often and want fast query times. You can consider either adding an
-index on the underlying dataset(s) or a materialized view and/or index directly
-for the query.  For more information on which makes most sense for your use case,
-see the [indexing and query optimization](#indexing-and-query-optimization) section
-above.
-* For computation-intensive queries, use a large enough cluster to fit the full
-underlying dataset being queried.
+* Filter results on a timestamp column that correlates with the
+insertion or update time of each row.\
+For example, you would add a clause to your query like
+    ```sql
+    WHERE mz_now() <= event_ts + INTERVAL '1hr'
+    ```
+    Read more about this strategy in the
+[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
+docs.
 
 ### Other things to consider
 
