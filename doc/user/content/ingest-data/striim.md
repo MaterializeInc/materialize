@@ -6,7 +6,7 @@ aliases:
 menu:
   main:
     parent: "kafka"
-    name: "Striiim"
+    name: "Striim"
 ---
 
 This guide walks through the steps to ingest data from Striim into Materialize using a [Kafka Source](/sql/create-source/kafka/).
