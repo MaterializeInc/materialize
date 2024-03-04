@@ -1532,7 +1532,7 @@ where
     ) -> Option<ComputeControllerResponse<T>> {
         match response {
             ComputeResponse::FrontierUpper { id, upper } => {
-                self.handle_frontier_upper(id, upper.clone(), replica_id)
+                self.handle_frontier_upper(id, upper, replica_id)
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
@@ -1558,12 +1558,6 @@ where
         new_frontier: Antichain<T>,
         replica_id: ReplicaId,
     ) -> Option<ComputeControllerResponse<T>> {
-        let old_upper = self
-            .compute
-            .collection(id)
-            .ok()
-            .map(|state| state.write_frontier.clone());
-
         // According to the compute protocol, replicas are not allowed to send `FrontierUpper`s
         // that regress frontiers they have reported previously. We still perform a check here,
         // rather than risking the controller becoming confused trying to handle regressions.
@@ -1590,21 +1584,19 @@ where
             }
         }
 
+        let old_global_frontier = coll.write_frontier.clone();
+
         self.compute
             .update_hydration_status(id, replica_id, &new_frontier);
         self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
 
-        let new_upper = self
-            .compute
-            .collection(id)
-            .ok()
-            .map(|state| state.write_frontier.clone());
-
-        if let (Some(old), Some(new)) = (old_upper, new_upper) {
-            (old != new).then_some(ComputeControllerResponse::FrontierUpper {
-                id,
-                upper: new_frontier,
-            })
+        if let Ok(coll) = self.compute.collection(id) {
+            (coll.write_frontier != old_global_frontier).then_some(
+                ComputeControllerResponse::FrontierUpper {
+                    id,
+                    upper: coll.write_frontier.clone(),
+                },
+            )
         } else {
             None
         }

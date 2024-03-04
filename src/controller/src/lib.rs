@@ -171,7 +171,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// A map associating a global ID to a vector of all the watch sets
     /// that that ID is part of which have not yet been fulfilled for that object.
     ///
-    /// See [`self.install_watch_se)`] for a description of watch sets.
+    /// See [`self.install_watch_set`] for a description of watch sets.
     // When a watch set is fulfilled for a given object (that is, when
     // the object's frontier advances to at least the watch set's
     // timestamp), the corresponding entry will be removed from the
@@ -184,7 +184,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     /// they were installed, and thus that must be returned to the
     /// client on the next call to [`self.process`].
     ///
-    /// See [`self.install_watch_se)`] for a description of watch sets.
+    /// See [`self.install_watch_set`] for a description of watch sets.
     immediate_watch_sets: Vec<Box<dyn Any>>,
 }
 
@@ -334,8 +334,6 @@ where
 
     /// Process a pending response from the storage controller. If necessary,
     /// return a higher-level response to our client.
-    ///
-    /// Precondition: The last readiness status generated must be `Readiness::Storage`.
     async fn process_storage_response(
         &mut self,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
@@ -349,8 +347,6 @@ where
 
     /// Process a pending response from the compute controller. If necessary,
     /// return a higher-level response to our client.
-    ///
-    /// Precondition: The last readiness status generated must be `Readiness::Compute`.
     async fn process_compute_response(
         &mut self,
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
