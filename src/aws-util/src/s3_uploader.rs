@@ -104,7 +104,7 @@ impl S3MultiPartUploaderConfig {
 
     /// As per S3 limits, the part size cannot be less than 5MiB and cannot exceed 5GiB.
     /// As per S3 limits, the object size cannot exceed 5TiB.
-    pub fn validate(&self) -> Result<(), anyhow::Error> {
+    fn validate(&self) -> Result<(), anyhow::Error> {
         let S3MultiPartUploaderConfig {
             part_size_limit,
             file_size_limit,
@@ -127,6 +127,8 @@ impl S3MultiPartUploaderConfig {
             )));
         }
         let max_parts_count: u64 = AWS_S3_MAX_PART_COUNT.try_into().expect("i32 to u64");
+        // Using `div_ceil` because we want the fraction to be rounded up i.e. 4.5 should be rounded
+        // to 5 instead of 4 to accurately get the required number of parts.
         let estimated_parts_count = file_size_limit.div_ceil(*part_size_limit);
         if estimated_parts_count > max_parts_count {
             return Err(anyhow!(format!(
@@ -507,24 +509,13 @@ mod tests {
         Ok(())
     }
 
-    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/18898
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
-    async fn test_invalid_configs() {
-        let sdk_config = defaults().load().await;
-        let (bucket, path) = match s3_bucket_path_for_test() {
-            Some(tuple) => tuple,
-            None => {
-                return;
-            }
-        };
+    #[mz_ore::test]
+    fn test_invalid_configs() {
         let config = S3MultiPartUploaderConfig {
             part_size_limit: ByteSize::mib(5).as_u64() - 1,
             file_size_limit: ByteSize::gib(5).as_u64(),
         };
-        let error = S3MultiPartUploader::try_new(&sdk_config, bucket.clone(), path.clone(), config)
-            .await
-            .unwrap_err();
+        let error = config.validate().unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -533,12 +524,11 @@ mod tests {
 
         let config = S3MultiPartUploaderConfig {
             part_size_limit: ByteSize::mib(5).as_u64(),
-            // Subtracting 1 so that the overall multiplier is a fraction between 10000 and 10001.
+            // Subtracting 1 so that the overall multiplier is a fraction between 10000 and 10001
+            // to test rounding.
             file_size_limit: (ByteSize::mib(5).as_u64() * 10001) - 1,
         };
-        let error = S3MultiPartUploader::try_new(&sdk_config, bucket, path, config)
-            .await
-            .unwrap_err();
+        let error = config.validate().unwrap_err();
         assert_eq!(
             error.to_string(), "total number of possible parts (file_size_limit / part_size_limit): 10001, cannot exceed 10000",
         );

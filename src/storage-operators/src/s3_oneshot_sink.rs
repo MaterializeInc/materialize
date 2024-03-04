@@ -377,7 +377,7 @@ mod tests {
             "part".to_string(),
         );
         let mut row = Row::default();
-        // Even though this will exceed max_file_size, it should be uploaded in a single file.
+        // Even though this will exceed max_file_size, it should be successfully uploaded in a single file.
         row.packer().push(Datum::from("1234567"));
         uploader.append_row(&row).await?;
 
