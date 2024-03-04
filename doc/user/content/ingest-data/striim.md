@@ -151,7 +151,7 @@ Here's how you can leverage JSON formatting with Materialize:
 
 - Implement the [SQL Server CDC guide](https://www.striim.com/docs/en/sql-server-cdc.html) for integration steps specific to SQL Server environments.
 
-## Known Issues
+## Known issues
 
 - `BigInt` columns are not supported in Striim's Avro handling. This issue is being addressed by Striim's development team.
 
