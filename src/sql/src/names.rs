@@ -38,7 +38,7 @@ use crate::ast::{
     RawDataType, RawItemName, Statement, UnresolvedItemName, UnresolvedObjectName,
 };
 use crate::catalog::{
-    CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
+    CatalogError, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails, SessionCatalog,
 };
 use crate::normalize;
 use crate::plan::PlanError;
@@ -1244,6 +1244,7 @@ impl<'a> NameResolver<'a> {
                                 );
                             }
                         };
+                        self.ids.insert(array_item.id());
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
                             qualifiers: array_item.name().qualifiers.clone(),
@@ -1286,6 +1287,17 @@ impl<'a> NameResolver<'a> {
                     }
                 };
                 self.ids.insert(item.id());
+                // If this is a named array type, then make sure to include the element reference
+                // in the resolved IDs. This helps ensure that named array types are resolved the
+                // same as an array type with the same element type. For example, `int4[]` and
+                // `_int4` should have the same set of resolved IDs.
+                if let Some(CatalogTypeDetails {
+                    typ: CatalogType::Array { element_reference },
+                    ..
+                }) = item.type_details()
+                {
+                    self.ids.insert(*element_reference);
+                }
                 Ok(ResolvedDataType::Named {
                     id: item.id(),
                     qualifiers: item.name().qualifiers.clone(),

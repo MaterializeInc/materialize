@@ -39,3 +39,10 @@ contains:type "bigint_map[]" does not exist
 
 > SELECT array_fill(1, ARRAY[2], ARRAY[3]);
 [3:4]={1,1}
+
+# Test that table creation involving array typescorrectly describe their resolved_ids on restart.
+# This is asserted by testdrive during its catalog verification step after each DDL.
+
+> CREATE TABLE t1 (a int4[]);
+
+> CREATE TABLE t2 (a _int4);
