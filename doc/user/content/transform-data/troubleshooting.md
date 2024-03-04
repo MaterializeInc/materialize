@@ -80,7 +80,9 @@ ways:
 Like in any other database, index design affects query performance. If the
 dependencies of your query don't have [indexes](/sql/create-index/) defined,
 you should consider creating one (or many). Check out the [optimization guide](/transform-data/optimization)
-for guidance on how to optimize query performance.
+for guidance on how to optimize query performance. For information on when
+to use a materialized view versus an index, check out the
+[materialized view](/sql/create-materialized-view/#details) docs.
 
 If the dependencies of your query are indexed, you should confirm that the query
 is actually using the index! This information is available in the query plan,
@@ -114,10 +116,10 @@ and memory usage in the [cluster CPU](#cluster-cpu) and
 * If you're looking to explore your data, simple `SELECT ... LIMIT <25 or less>`
 queries on objects will return more quickly. This only applies to queries from a 
 single source, table, or materialized view, with no ordering or offsets.
-* Create a materialized view and/or index for resource-intesive queries that you
-plan to issue often  and want fast query times. You can consider either adding an
+* Create a materialized view or index for resource-intesive queries that you
+plan to issue often and want fast query times. You can consider either adding an
 index on the underlying dataset(s) or a materialized view and/or index directly
-for the query. For more information on which makes most sense for your use case,
+for the query.  For more information on which makes most sense for your use case,
 see the [indexing and query optimization](#indexing-and-query-optimization) section
 above.
 * For computation-intensive queries, use a large enough cluster to fit the full
