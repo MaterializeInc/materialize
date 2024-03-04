@@ -219,6 +219,7 @@ The level of support for these tools will improve as we extend the coverage of `
 | Stitch   | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Meltano  | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
 | Airbyte  | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
+| Striim   | {{< supportLevel beta >}}        | See the [Striim integration page](/integrations/striim/) for more details.         |             |
 
 ### Business Intelligence (BI)
 

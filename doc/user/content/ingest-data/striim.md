@@ -3,10 +3,6 @@ title: "Striim"
 description: "How to connect Striim to Materialize as a source."
 aliases:
   - /integrations/striim/
-menu:
-  main:
-    parent: "kafka"
-    name: "Striim"
 ---
 
 This guide walks through the steps to ingest data from Striim into Materialize using a [Kafka source](/sql/create-source/kafka/).
