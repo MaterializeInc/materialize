@@ -92,7 +92,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     if args.cleanup:
-        workflow_disable_region(c)
+        disable_region(c)
 
     test_failed = True
     try:
@@ -117,12 +117,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     finally:
         # Clean up
         if args.cleanup:
-            workflow_disable_region(c)
+            disable_region(c)
 
     assert not test_failed
 
 
-def workflow_disable_region(c: Composition) -> None:
+def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
     c.run("mz", "region", "disable")
