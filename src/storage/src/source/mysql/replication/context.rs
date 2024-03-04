@@ -18,7 +18,7 @@ use tracing::trace;
 
 use mz_mysql_util::{Config, MySqlTableDesc};
 use mz_repr::Row;
-use mz_storage_types::sources::mysql::GtidPartition;
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 use mz_timely_util::builder_async::AsyncOutputHandle;
 
 use crate::metrics::source::mysql::MySqlSourceMetrics;
@@ -89,6 +89,16 @@ impl<'a> ReplContext<'a> {
 
         self.data_cap_set.downgrade(&*new_upper);
         self.upper_cap_set.downgrade(&*new_upper);
+
+        self.metrics.gtid_txids.set(
+            new_upper
+                .iter()
+                .filter_map(|part| match part.timestamp() {
+                    GtidState::Absent => None,
+                    GtidState::Active(tx_id) => Some(tx_id.get()),
+                })
+                .sum(),
+        );
 
         self.rewinds.retain(|_, (_, req)| {
             // We need to retain the rewind requests whose snapshot_upper

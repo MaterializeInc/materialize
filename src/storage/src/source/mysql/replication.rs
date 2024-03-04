@@ -283,8 +283,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             // Store all partitions from the resume_upper so we can create a frontier that comprises
             // timestamps for partitions representing the full range of UUIDs to advance our main
             // capabilities.
-            let mut repl_partitions =
-                partitions::GtidReplicationPartitions::from_frontier(resume_upper, &metrics);
+            let mut repl_partitions: partitions::GtidReplicationPartitions = resume_upper.into();
 
             let mut repl_context = context::ReplContext::new(
                 &config,
@@ -321,7 +320,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 _ => unreachable!(),
                             }
 
-                            if let Err(err) = repl_partitions.update(new_gtid, &metrics) {
+                            if let Err(err) = repl_partitions.update(new_gtid) {
                                 return Ok(return_definite_error(
                                     err,
                                     &output_indexes,
@@ -361,7 +360,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         // This is still useful to allow data committed at previous timestamps to become available
                         // without waiting for the next break in data at which point we should receive a Heartbeat
                         // Event.
-                        if let Err(err) = repl_partitions.update(new_gtid.clone(), &metrics) {
+                        if let Err(err) = repl_partitions.update(new_gtid.clone()) {
                             return Ok(return_definite_error(
                                 err,
                                 &output_indexes,

@@ -28,7 +28,7 @@ pub(crate) struct MySqlSourceMetricDefs {
     pub(crate) update_rows: IntCounterVec,
     pub(crate) delete_rows: IntCounterVec,
     pub(crate) tables: UIntGaugeVec,
-    pub(crate) gtid: UIntGaugeVec,
+    pub(crate) gtid_txids: UIntGaugeVec,
 
     pub(crate) snapshot_defs: MySqlSnapshotMetricDefs,
 }
@@ -66,10 +66,10 @@ impl MySqlSourceMetricDefs {
                 help: "The number of upstream tables for this source",
                 var_labels: ["source_id"],
             )),
-            gtid: registry.register(metric!(
-                name: "mz_mysql_per_source_gtid",
-                help: "Transaction-id of the latest committed GTID for the specific GTID Source-ID UUID for this source",
-                var_labels: ["source_id", "gtid_source_uuid"],
+            gtid_txids: registry.register(metric!(
+                name: "mz_mysql_sum_gtid_txns",
+                help: "The sum of all transaction-ids committed for each GTID Source-ID UUID seen for this source",
+                var_labels: ["source_id"],
             )),
             snapshot_defs: MySqlSnapshotMetricDefs::register_with(registry),
         }
@@ -78,28 +78,21 @@ impl MySqlSourceMetricDefs {
 
 /// Metrics for MySql sources.
 pub(crate) struct MySqlSourceMetrics {
-    source_id: GlobalId,
-
     pub(crate) inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) ignored: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) total: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) tables: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-
-    gtid_def: UIntGaugeVec,
-
+    pub(crate) gtid_txids: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub(crate) snapshot_metrics: MySqlSnapshotMetrics,
 }
-
-pub(crate) type GtidMetricGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
 
 impl MySqlSourceMetrics {
     /// Create a `MySqlSourceMetrics` from the `MySqlSourceMetricDefs`.
     pub(crate) fn new(defs: &MySqlSourceMetricDefs, source_id: GlobalId) -> Self {
         let labels = &[source_id.to_string()];
         Self {
-            source_id,
             inserts: defs.insert_rows.get_delete_on_drop_counter(labels.to_vec()),
             updates: defs.update_rows.get_delete_on_drop_counter(labels.to_vec()),
             deletes: defs.delete_rows.get_delete_on_drop_counter(labels.to_vec()),
@@ -110,20 +103,13 @@ impl MySqlSourceMetrics {
                 .total_messages
                 .get_delete_on_drop_counter(labels.to_vec()),
             tables: defs.tables.get_delete_on_drop_gauge(labels.to_vec()),
-            gtid_def: defs.gtid.clone(),
+            gtid_txids: defs.gtid_txids.get_delete_on_drop_gauge(labels.to_vec()),
             snapshot_metrics: MySqlSnapshotMetrics {
                 source_id,
                 gauges: Default::default(),
                 defs: defs.snapshot_defs.clone(),
             },
         }
-    }
-
-    pub(crate) fn get_gtid_gauge(&self, gtid_source_uuid: String) -> GtidMetricGauge {
-        self.gtid_def.get_delete_on_drop_gauge(vec![
-            self.source_id.to_string(),
-            gtid_source_uuid.to_string(),
-        ])
     }
 }
 
