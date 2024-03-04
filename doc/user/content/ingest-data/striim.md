@@ -103,7 +103,7 @@ The Striim app will stream data from the database to Kafka in Avro format, ready
     ```
 
 
-### Alternative Approaches
+### Alternative approaches
 
 #### JSON Formatting
 
