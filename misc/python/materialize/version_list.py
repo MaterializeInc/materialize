@@ -285,7 +285,7 @@ def get_published_minor_mz_versions(
 
 def get_minor_mz_versions_listed_in_docs() -> list[MzVersion]:
     """
-    Get the latest patch version for every minor version.
+    Get the latest patch version for every minor version in ascending order.
     Use this version if it is important whether a tag was introduced before or after creating this branch.
 
     See also: #get_published_minor_mz_versions()
