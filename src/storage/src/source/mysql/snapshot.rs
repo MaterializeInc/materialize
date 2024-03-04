@@ -407,6 +407,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
                     let mut results = tx.exec_stream(query, ()).await?;
+                    let mut count = 0;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
                         let packed_row = pack_mysql_row(&mut final_row, row, &table_desc)?;
@@ -416,7 +417,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 ((output_index, Ok(packed_row)), GtidPartition::minimum(), 1),
                             )
                             .await;
-
+                        count += 1;
                         snapshot_staged += 1;
                         // TODO(guswynn): does this 1000 need to be configurable?
                         if snapshot_staged % 1000 == 0 {
@@ -431,6 +432,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 .await;
                         }
                     }
+                    trace!(%id, "timely-{worker_id} snapshotted {count} records from \
+                                 table '{table}'");
                 }
                 if snapshot_staged < snapshot_total {
                     error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow

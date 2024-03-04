@@ -40,9 +40,6 @@ pub(super) struct ReplContext<'a> {
     pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
     // Owned values:
     pub(super) rewinds: BTreeMap<MySqlTableName, ([Capability<GtidPartition>; 2], RewindRequest)>,
-    // Binlog Table Id -> Table Name (its key in the `table_info` map)
-    pub(super) table_id_map: BTreeMap<u64, MySqlTableName>,
-    pub(super) skipped_table_ids: BTreeSet<u64>,
     pub(super) errored_tables: BTreeSet<MySqlTableName>,
 }
 
@@ -70,18 +67,16 @@ impl<'a> ReplContext<'a> {
             data_cap_set,
             upper_cap_set,
             rewinds,
-            table_id_map: BTreeMap::new(),
-            skipped_table_ids: BTreeSet::new(),
             errored_tables: BTreeSet::new(),
         }
     }
 
     /// Advances the frontier of the data and upper capability sets to `new_upper`,
     /// and drops any existing rewind requests that are no longer applicable.
-    pub(super) fn advance(&mut self, new_upper: Antichain<GtidPartition>) {
+    pub(super) fn advance(&mut self, reason: &str, new_upper: Antichain<GtidPartition>) {
         let (id, worker_id) = (self.config.id, self.config.worker_id);
 
-        trace!(%id, "timely-{worker_id} advancing frontier to {new_upper:?}");
+        trace!(%id, "timely-{worker_id} [{reason}] advancing frontier to {new_upper:?}");
 
         self.data_cap_set.downgrade(&*new_upper);
         self.upper_cap_set.downgrade(&*new_upper);

@@ -119,12 +119,13 @@ pub(super) async fn handle_query_event(
                 {
                     trace!(%id, "timely-{worker_id} DDL change \
                            dropped table: {dropped_table:?}: {err:?}");
-                    let (output_index, _) = &ctx.table_info[&dropped_table];
-                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    ctx.data_output
-                        .give(&gtid_cap, ((*output_index, Err(err)), new_gtid.clone(), 1))
-                        .await;
-                    ctx.errored_tables.insert(dropped_table.clone());
+                    if let Some((output_index, _)) = ctx.table_info.get(dropped_table) {
+                        let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
+                        ctx.data_output
+                            .give(&gtid_cap, ((*output_index, Err(err)), new_gtid.clone(), 1))
+                            .await;
+                        ctx.errored_tables.insert(dropped_table.clone());
+                    }
                 }
             }
 
@@ -143,22 +144,23 @@ pub(super) async fn handle_query_event(
             if ctx.table_info.contains_key(&table) {
                 trace!(%id, "timely-{worker_id} TRUNCATE detected \
                        for {table:?}");
-                let (output_index, _) = &ctx.table_info[&table];
-                let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                ctx.data_output
-                    .give(
-                        &gtid_cap,
-                        (
+                if let Some((output_index, _)) = ctx.table_info.get(&table) {
+                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
+                    ctx.data_output
+                        .give(
+                            &gtid_cap,
                             (
-                                *output_index,
-                                Err(DefiniteError::TableTruncated(table.to_string())),
+                                (
+                                    *output_index,
+                                    Err(DefiniteError::TableTruncated(table.to_string())),
+                                ),
+                                new_gtid.clone(),
+                                1,
                             ),
-                            new_gtid.clone(),
-                            1,
-                        ),
-                    )
-                    .await;
-                ctx.errored_tables.insert(table);
+                        )
+                        .await;
+                    ctx.errored_tables.insert(table);
+                }
             }
         }
     };
@@ -185,40 +187,24 @@ pub(super) async fn handle_rows_event(
         .get_ref()
         .get_tme(binlog_table_id)
         .ok_or_else(|| TransientError::Generic(anyhow::anyhow!("Table map event not found")))?;
-    let table = match (
-        ctx.table_id_map.get(&binlog_table_id),
-        ctx.skipped_table_ids.get(&binlog_table_id),
-    ) {
-        (Some(table), None) => table,
-        (None, Some(_)) => {
-            // We've seen this table ID before and it was skipped
-            return Ok(());
-        }
-        (None, None) => {
-            let table = MySqlTableName::new(
-                &*table_map_event.database_name(),
-                &*table_map_event.table_name(),
-            );
-            if ctx.table_info.contains_key(&table) {
-                ctx.table_id_map.insert(binlog_table_id, table);
-                &ctx.table_id_map[&binlog_table_id]
-            } else {
-                ctx.skipped_table_ids.insert(binlog_table_id);
-                trace!(%id,
-                    "timely-{worker_id} skipping table {table:?} \
-                     with id {binlog_table_id}"
-                );
-                // We don't know about this table, so skip this event
-                return Ok(());
-            }
-        }
-        _ => unreachable!(),
-    };
-    if ctx.errored_tables.contains(table) {
+    let table = MySqlTableName::new(
+        &*table_map_event.database_name(),
+        &*table_map_event.table_name(),
+    );
+
+    if ctx.errored_tables.contains(&table) {
         return Ok(());
     }
 
-    let (output_index, table_desc) = &ctx.table_info[table];
+    let (output_index, table_desc) = match &ctx.table_info.get(&table) {
+        Some((output_index, table_desc)) => (output_index, table_desc),
+        None => {
+            // We don't know about this table, so skip this event
+            return Ok(());
+        }
+    };
+
+    trace!(%id, "timely-{worker_id} handling RowsEvent for {table:?}");
 
     // Iterate over the rows in this RowsEvent. Each row is a pair of 'before_row', 'after_row',
     // to accomodate for updates and deletes (which include a before_row),
@@ -227,6 +213,8 @@ pub(super) async fn handle_rows_event(
     let mut container = Vec::new();
     let mut rows_iter = event.rows(table_map_event);
     let mut rewind_count = 0;
+    let mut additions = 0;
+    let mut retractions = 0;
     while let Some(Ok((before_row, after_row))) = rows_iter.next() {
         let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
         for (binlog_row, diff) in updates.into_iter().flatten() {
@@ -235,13 +223,18 @@ pub(super) async fn handle_rows_event(
             let data = (*output_index, Ok(packed_row));
 
             // Rewind this update if it was already present in the snapshot
-            if let Some(([data_cap, _upper_cap], rewind_req)) = ctx.rewinds.get(table) {
+            if let Some(([data_cap, _upper_cap], rewind_req)) = ctx.rewinds.get(&table) {
                 if !rewind_req.snapshot_upper.less_equal(new_gtid) {
                     rewind_count += 1;
                     ctx.data_output
                         .give(data_cap, (data.clone(), GtidPartition::minimum(), -diff))
                         .await;
                 }
+            }
+            if diff > 0 {
+                additions += 1;
+            } else {
+                retractions += 1;
             }
             container.push((data, new_gtid.clone(), diff));
         }
@@ -250,7 +243,8 @@ pub(super) async fn handle_rows_event(
     // Flush this data
     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
     trace!(%id, "timely-{worker_id} sending container for {new_gtid:?} \
-                 with {} updates and {} rewinds", container.len(), rewind_count);
+                 with {} updates ({} additions, {} retractions) and {} \
+                 rewinds", container.len(), additions, retractions, rewind_count);
     ctx.data_output
         .give_container(&gtid_cap, &mut container)
         .await;
