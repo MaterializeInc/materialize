@@ -19,6 +19,7 @@ use http::Uri;
 use mz_aws_util::s3_uploader::{
     CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
 };
+use mz_ore::task::JoinHandleExt;
 use mz_pgcopy::{encode_copy_format, CopyFormatParams};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
@@ -220,7 +221,7 @@ impl CopyToS3Uploader {
             .await;
             (uploader, sdk_config)
         });
-        let (uploader, sdk_config) = handle.await.unwrap();
+        let (uploader, sdk_config) = handle.wait_and_assert_finished().await;
         self.sdk_config = Some(sdk_config);
         self.current_file_uploader = Some(uploader?);
         Ok(())
@@ -252,7 +253,7 @@ impl CopyToS3Uploader {
             let CompletedUpload {
                 part_count,
                 total_bytes_uploaded,
-            } = handle.await.unwrap()?;
+            } = handle.wait_and_assert_finished().await?;
             info!(
                 "finished upload: bucket {}, file {}, bytes_uploaded {}, parts_uploaded {}",
                 &self.bucket, current_file, total_bytes_uploaded, part_count
@@ -273,7 +274,7 @@ impl CopyToS3Uploader {
             let result = uploader.buffer_chunk(&buf).await;
             (uploader, buf, result)
         });
-        let (uploader, buf, result) = handle.await.unwrap();
+        let (uploader, buf, result) = handle.wait_and_assert_finished().await;
         self.current_file_uploader = Some(uploader);
         self.buf = buf;
 
