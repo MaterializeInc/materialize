@@ -1499,7 +1499,7 @@ pub static ENABLE_DEPENDENCY_READ_HOLD_ASSERTS: VarDefinition = VarDefinition::n
 
 pub static COMPUTE_HYDRATION_CONCURRENCY: VarDefinition = VarDefinition::new(
     "compute_hydration_concurrency",
-    value!(usize; usize::MAX),
+    value!(usize; 4),
     "Controls how many compute dataflows can hydrate concurrently.",
     true,
 );

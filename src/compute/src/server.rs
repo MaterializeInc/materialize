@@ -485,6 +485,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
+                compute_state.process_sequential_hydration();
             }
 
             self.metrics

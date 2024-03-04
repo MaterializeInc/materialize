@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -122,6 +122,10 @@ pub struct ComputeState {
 
     /// The number of dataflows that can hydrate concurrently.
     hydration_concurrency: u64,
+    /// Queue of dataflow indexes to be hydrated.
+    hydration_queue: VecDeque<usize>,
+    /// Collections in the process of hydrating.
+    hydrating: BTreeSet<Vec<GlobalId>>,
 }
 
 impl ComputeState {
@@ -157,6 +161,8 @@ impl ComputeState {
             hydration_rx,
             hydration_tx,
             hydration_concurrency: u64::MAX,
+            hydration_queue: Default::default(),
+            hydrating: Default::default(),
         }
     }
 
@@ -318,6 +324,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // The latter is used to extract dependency information, which is in terms of collections ids.
         let dataflow_index = self.timely_worker.next_dataflow_index();
         let as_of = dataflow.as_of.clone().unwrap();
+        let transient = dataflow.is_transient();
 
         if dataflow.is_transient() {
             tracing::debug!(
@@ -346,6 +353,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             collection.reported_frontier = ReportedFrontier::NotReported {
                 lower: as_of.clone(),
             };
+            collection.as_of = as_of.clone();
+            collection.dataflow_index = Some(dataflow_index);
 
             let existing = self.compute_state.collections.insert(object_id, collection);
             if existing.is_some() {
@@ -370,6 +379,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
 
         crate::render::build_compute_dataflow(self.timely_worker, self.compute_state, dataflow);
+
+        // If this is a long-lived dataflow, suspend it until we have capacity to start its
+        // hydration. See `process_sequential_hydration`.
+        if !transient {
+            self.timely_worker.suspend_dataflow(dataflow_index);
+            self.compute_state.hydration_queue.push_back(dataflow_index);
+        }
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
@@ -712,6 +728,40 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = self.response_tx.send(response);
+    }
+
+    pub fn process_sequential_hydration(&mut self) {
+        self.compute_state.hydrating.retain(|exports| {
+            let hydrated = exports
+                .iter()
+                .flat_map(|id| self.compute_state.collections.get(id))
+                .all(|c| c.is_hydrated());
+            if hydrated {
+                info!("collections hydrated (or removed): {exports:?}");
+            }
+            !hydrated
+        });
+
+        let target = usize::cast_from(self.compute_state.hydration_concurrency);
+        while self.compute_state.hydrating.len() < target {
+            let Some(dataflow_index) = self.compute_state.hydration_queue.pop_front() else {
+                break;
+            };
+
+            let exports: Vec<_> = self
+                .compute_state
+                .collections
+                .iter()
+                .filter(|(_, c)| c.dataflow_index == Some(dataflow_index))
+                .map(|(idx, _)| *idx)
+                .collect();
+
+            if !exports.is_empty() {
+                info!("hydrating collections: {exports:?}");
+                self.timely_worker.unsuspend_dataflow(dataflow_index);
+                self.compute_state.hydrating.insert(exports);
+            }
+        }
     }
 }
 
@@ -1320,6 +1370,9 @@ pub struct CollectionState {
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
+
+    as_of: Antichain<Timestamp>,
+    dataflow_index: Option<usize>,
 }
 
 impl CollectionState {
@@ -1328,11 +1381,20 @@ impl CollectionState {
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
+            as_of: Antichain::from_elem(Timestamp::MIN),
+            dataflow_index: None,
         }
     }
 
     fn is_subscribe(&self) -> bool {
         self.sink_token.is_some() && self.sink_write_frontier.is_none()
+    }
+
+    fn is_hydrated(&self) -> bool {
+        match &self.reported_frontier {
+            ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
+            ReportedFrontier::NotReported { .. } => false,
+        }
     }
 }
 
