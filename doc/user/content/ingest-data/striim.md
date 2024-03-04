@@ -37,7 +37,7 @@ Alternatively, follow the [Oracle CDC guide](https://www.striim.com/docs/en/orac
 
 ### Kafka target configuration
 
-1. **Kafka Cluster Verification:**
+1. **Kafka cluster verification:**
     - Create a [Kafka Writer](https://www.striim.com/docs/en/kafka-writer.html) within Striim to direct data to the Kafka cluster.
     - For the 'Input Stream' select the data source created in the previous step.
     - Specify the Kafka broker details and topic name.
