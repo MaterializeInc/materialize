@@ -153,7 +153,7 @@ Here's how you can leverage JSON formatting with Materialize:
 
 ## Known Issues
 
-- `BitInt` columns are not supported in Striim's Avro handling. This issue is being addressed by Striim's development team.
+- `BigInt` columns are not supported in Striim's Avro handling. This issue is being addressed by Striim's development team.
 
 ## Related pages
 
