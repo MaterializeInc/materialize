@@ -379,12 +379,14 @@ pub struct ComputeParameters {
     pub linear_join_yielding: Option<YieldSpec>,
     /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
     pub enable_mz_join_core: Option<bool>,
-    /// Whether to activate jemalloc heap profiling.
-    pub enable_jemalloc_profiling: Option<bool>,
     /// Enable lgalloc for columnation.
     pub enable_columnation_lgalloc: Option<bool>,
+    /// Enable the chunked stack implementation.
+    pub enable_chunked_stack: Option<bool>,
     /// Enable operator hydration status logging.
     pub enable_operator_hydration_status_logging: Option<bool>,
+    /// Enable lgalloc's eager memory return/reclamation feature.
+    pub enable_lgalloc_eager_reclamation: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
     /// Tracing configuration.
@@ -401,9 +403,10 @@ impl ComputeParameters {
             dataflow_max_inflight_bytes,
             linear_join_yielding,
             enable_mz_join_core,
-            enable_jemalloc_profiling,
             enable_columnation_lgalloc,
+            enable_chunked_stack,
             enable_operator_hydration_status_logging,
+            enable_lgalloc_eager_reclamation,
             persist,
             tracing,
             grpc_client,
@@ -421,15 +424,18 @@ impl ComputeParameters {
         if enable_mz_join_core.is_some() {
             self.enable_mz_join_core = enable_mz_join_core;
         }
-        if enable_jemalloc_profiling.is_some() {
-            self.enable_jemalloc_profiling = enable_jemalloc_profiling;
-        }
         if enable_columnation_lgalloc.is_some() {
             self.enable_columnation_lgalloc = enable_columnation_lgalloc;
+        }
+        if enable_chunked_stack.is_some() {
+            self.enable_chunked_stack = enable_chunked_stack;
         }
         if enable_operator_hydration_status_logging.is_some() {
             self.enable_operator_hydration_status_logging =
                 enable_operator_hydration_status_logging;
+        }
+        if enable_lgalloc_eager_reclamation.is_some() {
+            self.enable_lgalloc_eager_reclamation = enable_lgalloc_eager_reclamation;
         }
 
         self.persist.update(persist);
@@ -454,11 +460,12 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             }),
             linear_join_yielding: self.linear_join_yielding.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
-            enable_jemalloc_profiling: self.enable_jemalloc_profiling.into_proto(),
             enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
+            enable_chunked_stack: self.enable_chunked_stack.into_proto(),
             enable_operator_hydration_status_logging: self
                 .enable_operator_hydration_status_logging
                 .into_proto(),
+            enable_lgalloc_eager_reclamation: self.enable_lgalloc_eager_reclamation.into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
@@ -474,11 +481,12 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                 .transpose()?,
             linear_join_yielding: proto.linear_join_yielding.into_rust()?,
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
-            enable_jemalloc_profiling: proto.enable_jemalloc_profiling.into_rust()?,
             enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
+            enable_chunked_stack: proto.enable_chunked_stack.into_rust()?,
             enable_operator_hydration_status_logging: proto
                 .enable_operator_hydration_status_logging
                 .into_rust()?,
+            enable_lgalloc_eager_reclamation: proto.enable_lgalloc_eager_reclamation.into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,

@@ -53,6 +53,7 @@ pub struct StatementBeganExecutionRecord {
     pub execution_timestamp: Option<EpochMillis>,
     pub transaction_id: TransactionId,
     pub transient_index_id: Option<GlobalId>,
+    pub mz_version: String,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -106,7 +107,7 @@ pub struct StatementEndedExecutionRecord {
 #[derive(Clone, Debug)]
 pub struct StatementPreparedRecord {
     pub id: Uuid,
-    pub sql_hash: [u8; 16],
+    pub sql_hash: [u8; 32],
     pub name: String,
     pub session_id: Uuid,
     pub prepared_at: EpochMillis,

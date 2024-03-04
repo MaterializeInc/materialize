@@ -28,6 +28,7 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::error::ErrorExt;
+use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
@@ -47,10 +48,10 @@ use mz_storage_types::controller::StorageError;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
-use tracing::{event, info_span, instrument, warn, Instrument, Level};
+use tracing::{event, info_span, warn, Instrument, Level};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{CatalogState, Op, TransactionResult};
+use crate::catalog::{Op, TransactionResult};
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
@@ -60,34 +61,22 @@ use crate::telemetry::SegmentClientExt;
 use crate::util::ResultExt;
 use crate::{catalog, flags, AdapterError, TimestampProvider};
 
-/// State provided to a catalog transaction closure.
-pub struct CatalogTxn<'a, T> {
-    pub(crate) dataflow_client: &'a mz_controller::Controller<T>,
-
-    // TODO: This field is currently unused. Consider removing it.
-    #[allow(dead_code)]
-    pub(crate) catalog: &'a CatalogState,
-}
-
 impl Coordinator {
-    /// Same as [`Self::catalog_transact_with`] without a closure passed in.
-    #[instrument(name = "coord::catalog_transact", skip_all)]
+    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
+    #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
         &mut self,
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let (result, table_updates) = self
-            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
-            .await?;
-        table_updates.await;
-
-        Ok(result)
+        self.catalog_transact_conn(session.map(|session| session.conn_id()), ops)
+            .await
     }
 
-    /// Same as [`Self::catalog_transact_with`] but runs builtin table updates concurrently with
-    /// any side effects (e.g. creating collections).
-    #[instrument(name = "coord::catalog_transact_with_side_effects", skip_all)]
+    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
+    /// builtin table updates concurrently with any side effects (e.g. creating
+    /// collections).
+    #[instrument(name = "coord::catalog_transact_with_side_effects")]
     pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
         &'c mut self,
         session: Option<&Session>,
@@ -98,8 +87,8 @@ impl Coordinator {
         F: FnOnce(&'c mut Coordinator) -> Fut,
         Fut: Future<Output = ()>,
     {
-        let (result, table_updates) = self
-            .catalog_transact_with(session.map(|session| session.conn_id()), ops, |_| Ok(()))
+        let table_updates = self
+            .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
             .await?;
         let side_effects_fut = side_effect(self);
 
@@ -114,30 +103,29 @@ impl Coordinator {
         )
         .await;
 
-        Ok(result)
+        Ok(())
     }
 
-    /// Same as [`Self::catalog_transact_with`] without a closure passed in.
-    #[instrument(name = "coord::catalog_transact_conn", skip_all)]
+    /// Same as [`Self::catalog_transact_inner`] but awaits the table updates.
+    #[instrument(name = "coord::catalog_transact_inner")]
     pub(crate) async fn catalog_transact_conn(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let (result, table_updates) = self.catalog_transact_with(conn_id, ops, |_| Ok(())).await?;
+        let table_updates = self.catalog_transact_inner(conn_id, ops).await?;
         table_updates.await;
-        Ok(result)
+        Ok(())
     }
 
-    /// Executes a Catalog transaction with handling if the provided `Session` is in a SQL
-    /// transaction that is executing DDL.
-    #[instrument(name = "coord::catalog_transact_with_ddl_transaction", skip_all)]
+    /// Executes a Catalog transaction with handling if the provided [`Session`]
+    /// is in a SQL transaction that is executing DDL.
+    #[instrument(name = "coord::catalog_transact_with_ddl_transaction")]
     pub(crate) async fn catalog_transact_with_ddl_transaction(
         &mut self,
         session: &mut Session,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let conn_id = session.conn_id().clone();
         let Some(Transaction {
             ops:
                 TransactionOps::DDL {
@@ -157,25 +145,17 @@ impl Coordinator {
         }
 
         // Combine the existing ops with the new ops so we can replay them.
-        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len());
+        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len() + 1);
         all_ops.extend(txn_ops.iter().cloned());
         all_ops.extend(ops.clone());
+        all_ops.push(Op::TransactionDryRun);
 
         // Run our Catalog transaction, but abort before committing.
-        let result = self
-            .catalog_transact_with(Some(&conn_id), all_ops.clone(), |state| {
-                // Return an error so we don't commit the Catalog Transaction, but include our
-                // updated state.
-                Err::<(), _>(AdapterError::DDLTransactionDryRun {
-                    new_ops: all_ops,
-                    new_state: state.catalog.clone(),
-                })
-            })
-            .await;
+        let result = self.catalog_transact(Some(session), all_ops).await;
 
         match result {
             // We purposefully fail with this error to prevent committing the transaction.
-            Err(AdapterError::DDLTransactionDryRun { new_ops, new_state }) => {
+            Err(AdapterError::TransactionDryRun { new_ops, new_state }) => {
                 // Adds these ops to our transaction, bailing if the Catalog has changed since we
                 // ran the transaction.
                 session.transaction_mut().add_ops(TransactionOps::DDL {
@@ -185,31 +165,20 @@ impl Coordinator {
                 })?;
                 Ok(())
             }
-            Ok((_result, _table_updates)) => unreachable!("unexpected success!"),
+            Ok(_) => unreachable!("unexpected success!"),
             Err(e) => Err(e),
         }
     }
 
-    /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
-    /// made from the prospective [`CatalogState`] (i.e., the `Catalog` with `ops`
-    /// applied but before the transaction is committed). The closure can return
-    /// an error to abort the transaction, or otherwise return a value that is
-    /// returned by this function. This allows callers to error while building
-    /// [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called after this
-    /// function successfully returns on any built `DataflowDesc`.
-    ///
-    /// [`CatalogState`]: crate::catalog::CatalogState
-    /// [`DataflowDesc`]: mz_compute_types::dataflows::DataflowDesc
-    #[instrument(name = "coord::catalog_transact_with", skip_all)]
-    pub(crate) async fn catalog_transact_with<'a, F, R>(
+    /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
+    /// called after this function successfully returns on any built
+    /// [`DataflowDesc`].
+    #[instrument(name = "coord::catalog_transact_inner")]
+    pub(crate) async fn catalog_transact_inner<'a>(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
-        f: F,
-    ) -> Result<(R, BuiltinTableAppendNotify), AdapterError>
-    where
-        F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, AdapterError>,
-    {
+    ) -> Result<BuiltinTableAppendNotify, AdapterError> {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
@@ -233,7 +202,6 @@ impl Coordinator {
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
-        let mut update_jemalloc_profiling_config = false;
         let mut update_default_arrangement_merge_options = false;
         let mut update_http_config = false;
         let mut log_indexes_to_drop = Vec::new();
@@ -339,8 +307,6 @@ impl Coordinator {
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
-                    update_jemalloc_profiling_config |=
-                        name == vars::ENABLE_JEMALLOC_PROFILING.name();
                     update_default_arrangement_merge_options |=
                         name == vars::DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT.name();
                     update_default_arrangement_merge_options |=
@@ -358,7 +324,6 @@ impl Coordinator {
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
-                    update_jemalloc_profiling_config = true;
                     update_default_arrangement_merge_options = true;
                     update_http_config = true;
                 }
@@ -508,7 +473,6 @@ impl Coordinator {
 
         let Coordinator {
             catalog,
-            controller,
             active_conns,
             ..
         } = self;
@@ -517,15 +481,7 @@ impl Coordinator {
         let TransactionResult {
             builtin_table_updates,
             audit_events,
-            result,
-        } = catalog
-            .transact(oracle_write_ts, conn, ops, |catalog| {
-                f(CatalogTxn {
-                    dataflow_client: controller,
-                    catalog,
-                })
-            })
-            .await?;
+        } = catalog.transact(oracle_write_ts, conn, ops).await?;
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
         // parallel.
@@ -653,9 +609,6 @@ impl Coordinator {
             if update_cluster_scheduling_config {
                 self.update_cluster_scheduling_config();
             }
-            if update_jemalloc_profiling_config {
-                self.update_jemalloc_profiling_config().await;
-            }
             if update_default_arrangement_merge_options {
                 self.update_default_arrangement_merge_options();
             }
@@ -698,7 +651,7 @@ impl Coordinator {
             "coordinator inconsistency detected"
         );
 
-        Ok((result, builtin_update_notify))
+        Ok(builtin_update_notify)
     }
 
     async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
@@ -821,7 +774,7 @@ impl Coordinator {
     }
 
     /// Cancels all active compute sinks for the identified connection.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn cancel_compute_sinks_for_conn(&mut self, conn_id: &ConnectionId) {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
@@ -829,7 +782,7 @@ impl Coordinator {
 
     /// Retires all active compute sinks for the identified connection with the
     /// specified reason.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn retire_compute_sinks_for_conn(
         &mut self,
         conn_id: &ConnectionId,
@@ -1016,14 +969,6 @@ impl Coordinator {
             .collect::<Vec<_>>();
         self.update_storage_base_read_policies(storage_policies);
         self.update_compute_base_read_policies(compute_policies);
-    }
-
-    async fn update_jemalloc_profiling_config(&mut self) {
-        if self.catalog().system_config().enable_jemalloc_profiling() {
-            mz_prof::activate_jemalloc_profiling().await
-        } else {
-            mz_prof::deactivate_jemalloc_profiling().await
-        }
     }
 
     fn update_default_arrangement_merge_options(&mut self) {
@@ -1320,7 +1265,8 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateRotatedKeys { .. }
-                | Op::Comment { .. } => {}
+                | Op::Comment { .. }
+                | Op::TransactionDryRun => {}
             }
         }
 

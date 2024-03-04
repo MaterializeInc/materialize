@@ -76,7 +76,7 @@ $ kafka-verify-data format=json sink=materialize.public.simple_view_upsert key=t
 
 # Due to limitations in $ kafka-verify, the entire expected JSON output needs to be provided on a single line
 $ kafka-verify-data format=json sink=materialize.public.types_sink key=false
-{"before":null,"after":{"c1":true,"c2":false,"c3":null,"c4":123456789,"c5":1234.5678,"c6":"1234.5678","c7":"1321009871123","c8":"1320966671123","c9":"2011-11-11","c10":"11:11:11.123456","c11":"1 year","c12":"324373a5-7718-46b1-a7ea-4a7c9981fc4e","c13":[209,130,208,181,208,186,209,129,209,130],"c14":{"a":2}}}
+{"before":null,"after":{"c1":true,"c2":false,"c3":null,"c4":123456789,"c5":1234.5678,"c6":"1234.5678","c7":"1321009871123.450","c8":"1320966671123.450","c9":"2011-11-11","c10":"11:11:11.123456","c11":"1 year","c12":"324373a5-7718-46b1-a7ea-4a7c9981fc4e","c13":[209,130,208,181,208,186,209,129,209,130],"c14":{"a":2}}}
 
 # Special characters
 

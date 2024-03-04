@@ -21,7 +21,7 @@ use mz_persist::location::{
     SeqNo, VersionedData,
 };
 use mz_repr::TimestampManipulation;
-use mz_timestamp_oracle::{ShareableTimestampOracle, WriteTimestamp};
+use mz_timestamp_oracle::{TimestampOracle, WriteTimestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -330,7 +330,7 @@ pub struct MaelstromOracleKey {
     expected: u64,
 }
 
-// TODO: Make this implement ShareableTimestampOracle.
+// TODO: Make this implement TimestampOracle.
 impl MaelstromOracle {
     pub async fn new(handle: Handle) -> Result<Self, ExternalError> {
         let read_ts = MaelstromOracleKey::new(handle.clone(), "tso_read", 0).await?;
@@ -455,7 +455,7 @@ pub struct MemTimestampOracle<T> {
 }
 
 #[async_trait]
-impl<T: TimestampManipulation> ShareableTimestampOracle<T> for MemTimestampOracle<T> {
+impl<T: TimestampManipulation> TimestampOracle<T> for MemTimestampOracle<T> {
     async fn write_ts(&self) -> WriteTimestamp<T> {
         let (read_ts, write_ts) = &mut *self.read_write_ts.lock().expect("lock poisoned");
         let new_write_ts = TimestampManipulation::step_forward(std::cmp::max(read_ts, write_ts));

@@ -38,12 +38,16 @@ use crate::{ExecuteContext, ExecuteResponse};
 
 /// Handles responding to clients.
 #[derive(Debug)]
-pub struct ClientTransmitter<T: Transmittable> {
+pub struct ClientTransmitter<T>
+where
+    T: Transmittable,
+    <T as Transmittable>::Allowed: 'static,
+{
     tx: Option<oneshot::Sender<Response<T>>>,
     internal_cmd_tx: UnboundedSender<Message>,
     /// Expresses an optional soft-assert on the set of values allowed to be
     /// sent from `self`.
-    allowed: Option<Vec<T::Allowed>>,
+    allowed: Option<&'static [T::Allowed]>,
 }
 
 impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
@@ -65,7 +69,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
     /// # Panics
     /// - If in `soft_assert`, `result.is_ok()`, `self.allowed.is_some()`, and
     ///   the result value is not in the set of allowed values.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub fn send(mut self, result: Result<T, AdapterError>, session: Session) {
         // Guarantee that the value sent is of an allowed type.
         soft_assert_no_log!(
@@ -110,7 +114,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
     /// Sets `self` so that the next call to [`Self::send`] will soft-assert
     /// that, if `Ok`, the value is one of `allowed`, as determined by
     /// [`Transmittable::to_allowed`].
-    pub fn set_allowed(&mut self, allowed: Vec<T::Allowed>) {
+    pub fn set_allowed(&mut self, allowed: &'static [T::Allowed]) {
         self.allowed = Some(allowed);
     }
 }

@@ -2609,7 +2609,7 @@ statement ok
 INSERT INTO t3 VALUES (11, 12, 13, 14, 15, 16, 17, 18, 11, 12, list[82, 83])
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][3] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[f1, f2, f3, f4, f5][3] from m3
 ----
 Explained Query (fast path):
   Project (#2)
@@ -2629,7 +2629,7 @@ SELECT LIST[f1, f2, f3, f4, f5][3] from m3
 # Reducing multidimensional ListIndex when all indexes are literals
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
 ----
 Explained Query (fast path):
   Project (#2)
@@ -2647,7 +2647,7 @@ SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
 13
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
 ----
 Explained Query (fast path):
   Project (#5)
@@ -2667,7 +2667,7 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
 # Reducing multidimensional ListIndex when some of the indexes are not literals, and therefore can't be removed
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
 ----
 Explained Query (fast path):
   Project (#12)
@@ -2686,7 +2686,7 @@ SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2705,7 +2705,7 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2724,7 +2724,7 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2743,7 +2743,7 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2762,7 +2762,7 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2781,7 +2781,7 @@ SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
 NULL
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2802,7 +2802,7 @@ NULL
 # Reducing ListIndex when a literal index is out of bounds
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][6] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[f1, f2, f3, f4, f5][6] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2815,7 +2815,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][0] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[f1, f2, f3, f4, f5][0] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2828,7 +2828,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[f1, f2, f3, f4, f5][-1] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[f1, f2, f3, f4, f5][-1] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2850,7 +2850,7 @@ NULL
 # Also, one of the indexes is `1+1`, which must be evaluated to make it a literal, and then the reduction can take place.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][-1][2] from m3;
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][-1][2] from m3;
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2866,7 +2866,7 @@ EOF
 # but has a NULL instead of a ListCreate.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [NULL, [f7, f8]]] [1+1][1][2] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [NULL, [f7, f8]]] [1+1][1][2] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2882,7 +2882,7 @@ EOF
 # but has a column reference instead of a ListCreate.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
+EXPLAIN WITH(arity, join implementations) SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
 ----
 Explained Query (fast path):
   Project (#11)
@@ -2904,7 +2904,7 @@ SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
 # already took place.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT row_number() over () from (select f1 from m3 limit 1)
+EXPLAIN WITH(arity, join implementations) SELECT row_number() over () from (select f1 from m3 limit 1)
 ----
 Explained Query:
   Project (#2) // { arity: 1 }

@@ -34,9 +34,15 @@ use crate::source::RawSourceCreationConfig;
 /// The aggregate is required to be a 64 bit unsigned integer, whose units are
 /// implementation-defined.
 #[derive(Clone, Debug)]
-pub struct ProgressStatisticsUpdate {
-    pub offset_known: u64,
-    pub offset_committed: u64,
+pub enum ProgressStatisticsUpdate {
+    SteadyState {
+        offset_known: u64,
+        offset_committed: u64,
+    },
+    Snapshot {
+        records_known: u64,
+        records_staged: u64,
+    },
 }
 
 /// Describes a source that can render itself in a timely scope.

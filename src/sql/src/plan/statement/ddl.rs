@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::iter;
 use std::time::Duration;
@@ -33,6 +33,7 @@ use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
+use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
@@ -45,23 +46,24 @@ use mz_sql_parser::ast::{
     AlterSecretStatement, AlterSetClusterStatement, AlterSinkStatement, AlterSourceAction,
     AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement, AvroSchema,
-    AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ClusterOptionName, ColumnOption,
-    CommentObjectType, CommentStatement, CreateClusterReplicaStatement, CreateClusterStatement,
-    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
-    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
-    DropOwnedStatement, Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName,
-    KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
-    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
+    AvroSchemaOption, AvroSchemaOptionName, ClusterFeature, ClusterFeatureName, ClusterOption,
+    ClusterOptionName, ColumnOption, CommentObjectType, CommentStatement,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
+    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
+    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
+    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
     RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
     TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName,
@@ -428,8 +430,11 @@ generate_extracted_config!(MySqlConfigOption, (Details, String));
 
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
-    stmt: CreateWebhookSourceStatement<Aug>,
+    mut stmt: CreateWebhookSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
+    // we plan to normalize when we canonicalize the create statement.
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 
@@ -439,7 +444,8 @@ pub fn plan_create_webhook_source(
         body_format,
         include_headers,
         validate_using,
-        in_cluster,
+        // We resolved `in_cluster` above, so we want to ignore it here.
+        in_cluster: _,
     } = stmt;
 
     let validate_using = validate_using
@@ -545,10 +551,6 @@ pub fn plan_create_webhook_source(
 
     let typ = RelationType::new(column_ty);
     let desc = RelationDesc::new(typ, column_names);
-
-    // Webhook sources must currently specify the cluster on which they run, so
-    // we don't need to wait to normalize the statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut Some(in_cluster))?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
@@ -3276,9 +3278,20 @@ generate_extracted_config!(
     (Size, String)
 );
 
+generate_extracted_config!(
+    ClusterFeature,
+    (ReoptimizeImportedViews, Option<bool>, Default(None)),
+    (EnableEagerDeltaJoins, Option<bool>, Default(None)),
+    (EnableNewOuterJoinLowering, Option<bool>, Default(None))
+);
+
 pub fn plan_create_cluster(
     scx: &StatementContext,
-    CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
+    CreateClusterStatement {
+        name,
+        options,
+        features,
+    }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let ClusterOptionExtracted {
         availability_zones,
@@ -3294,6 +3307,12 @@ pub fn plan_create_cluster(
     }: ClusterOptionExtracted = options.try_into()?;
 
     let managed = managed.unwrap_or_else(|| replicas.is_none());
+
+    if !scx.catalog.active_role_id().is_system() {
+        if !features.is_empty() {
+            sql_bail!("FEATURES not supported for non-system users");
+        }
+    }
 
     if managed {
         if replicas.is_some() {
@@ -3335,6 +3354,20 @@ pub fn plan_create_cluster(
             disk = true;
         }
 
+        // Plan OptimizerFeatureOverrides.
+        let ClusterFeatureExtracted {
+            reoptimize_imported_views,
+            enable_eager_delta_joins,
+            enable_new_outer_join_lowering,
+            seen: _,
+        } = ClusterFeatureExtracted::try_from(features)?;
+        let optimizer_feature_overrides = OptimizerFeatureOverrides {
+            reoptimize_imported_views,
+            enable_eager_delta_joins,
+            enable_new_outer_join_lowering,
+            ..Default::default()
+        };
+
         Ok(Plan::CreateCluster(CreateClusterPlan {
             name: normalize::ident(name),
             variant: CreateClusterVariant::Managed(CreateClusterManagedPlan {
@@ -3343,6 +3376,7 @@ pub fn plan_create_cluster(
                 availability_zones,
                 compute,
                 disk,
+                optimizer_feature_overrides,
             }),
         }))
     } else {
@@ -3370,6 +3404,10 @@ pub fn plan_create_cluster(
         if disk_in.is_some() {
             sql_bail!("DISK not supported for unmanaged clusters");
         }
+        if !features.is_empty() {
+            sql_bail!("FEATURES not supported for unmanaged clusters");
+        }
+
         let mut replicas = vec![];
         for ReplicaDefinition { name, options } in replica_defs {
             replicas.push((normalize::ident(name), plan_replica_config(scx, options)?));
@@ -3464,7 +3502,7 @@ fn plan_replica_config(
                 disk = true;
             }
 
-            Ok(ReplicaConfig::Managed {
+            Ok(ReplicaConfig::Orchestrated {
                 size,
                 availability_zone,
                 compute,
@@ -3484,7 +3522,7 @@ fn plan_replica_config(
             compute_addresses,
             workers,
         ) => {
-            scx.require_feature_flag(&vars::ENABLE_UNMANAGED_CLUSTER_REPLICAS)?;
+            scx.require_feature_flag(&vars::ENABLE_UNORCHESTRATED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce
@@ -3520,10 +3558,10 @@ fn plan_replica_config(
             }
 
             if disk_in.is_some() {
-                sql_bail!("DISK can't be specified for unmanaged clusters");
+                sql_bail!("DISK can't be specified for unorchestrated clusters");
             }
 
-            Ok(ReplicaConfig::Unmanaged {
+            Ok(ReplicaConfig::Unorchestrated {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -3535,7 +3573,7 @@ fn plan_replica_config(
         _ => {
             // We don't bother trying to produce a more helpful error message
             // here because no user is likely to hit this path.
-            sql_bail!("invalid mixture of managed and unmanaged replica options");
+            sql_bail!("invalid mixture of orchestrated and unorchestrated replica options");
         }
     }
 }
@@ -3594,7 +3632,7 @@ pub fn plan_create_cluster_replica(
 
     let config = plan_replica_config(scx, options)?;
 
-    if let ReplicaConfig::Managed { internal: true, .. } = &config {
+    if let ReplicaConfig::Orchestrated { internal: true, .. } = &config {
         if MANAGED_REPLICA_PATTERN.is_match(name.as_str()) {
             return Err(PlanError::MangedReplicaName(name.into_string()));
         }
@@ -5099,6 +5137,26 @@ pub fn plan_alter_connection(
             id: entry.id(),
             action: crate::plan::AlterConnectionAction::RotateKeys,
         }));
+    }
+
+    // Check that the `ALTER CONNECTION` does not occur on an UPSERT source.
+    // This is a stopgap while we implement #25417.
+    let mut deps = VecDeque::from_iter(entry.used_by().iter().cloned());
+    while let Some(dep) = deps.pop_front() {
+        let dep = scx.catalog.get_item(&dep);
+        match dep.item_type() {
+            CatalogItemType::Connection => deps.extend(dep.used_by().iter().cloned()),
+            CatalogItemType::Source => {
+                if let Some(desc) = dep.source_desc()? {
+                    if matches!(desc.envelope(), SourceEnvelope::Upsert(_)) {
+                        sql_bail!(
+                            "cannot currently alter connections depended on by upsert sources"
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     let options = AlterConnectionOptionExtracted::try_from(with_options)?;

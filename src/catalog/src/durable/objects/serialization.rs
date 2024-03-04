@@ -20,7 +20,7 @@ use mz_audit_log::{
 use mz_compute_client::controller::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
 use mz_ore::cast::CastFrom;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
@@ -64,6 +64,19 @@ impl TryFrom<StateUpdateKindRaw> for proto::StateUpdateKind {
     }
 }
 
+impl ProtoMapEntry<String, String> for proto::OptimizerFeatureOverride {
+    fn from_rust<'a>(entry: (&'a String, &'a String)) -> Self {
+        proto::OptimizerFeatureOverride {
+            name: entry.0.into_proto(),
+            value: entry.1.into_proto(),
+        }
+    }
+
+    fn into_rust(self) -> Result<(String, String), TryFromProtoError> {
+        Ok((self.name.into_rust()?, self.value.into_rust()?))
+    }
+}
+
 impl RustType<proto::ClusterConfig> for ClusterConfig {
     fn into_proto(&self) -> proto::ClusterConfig {
         proto::ClusterConfig {
@@ -88,6 +101,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 idle_arrangement_merge_effort,
                 replication_factor,
                 disk,
+                optimizer_feature_overrides,
             }) => proto::cluster_config::Variant::Managed(proto::cluster_config::ManagedCluster {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
@@ -96,6 +110,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                     .map(|effort| proto::ReplicaMergeEffort { effort }),
                 replication_factor: *replication_factor,
                 disk: *disk,
+                optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
             }),
             ClusterVariant::Unmanaged => proto::cluster_config::Variant::Unmanaged(proto::Empty {}),
         }
@@ -116,6 +131,7 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                         .map(|e| e.effort),
                     replication_factor: managed.replication_factor,
                     disk: managed.disk,
+                    optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
                 }))
             }
         }

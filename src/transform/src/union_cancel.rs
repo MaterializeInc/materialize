@@ -29,10 +29,9 @@ use crate::{TransformCtx, TransformError};
 pub struct UnionBranchCancellation;
 
 impl crate::Transform for UnionBranchCancellation {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "union_branch_cancellation")
     )]
     fn transform(

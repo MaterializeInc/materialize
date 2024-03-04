@@ -99,6 +99,7 @@ use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
@@ -130,12 +131,12 @@ use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
-use tracing::{debug, info, info_span, instrument, span, warn, Instrument, Level, Span};
+use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
@@ -145,7 +146,6 @@ use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
-use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -163,8 +163,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
-use mz_catalog::durable::{DurableCatalogState, OpenableDurableCatalogState};
-use mz_expr::refresh_schedule::RefreshSchedule;
+use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -172,8 +171,8 @@ use mz_timestamp_oracle::postgres_oracle::{
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
-pub(crate) mod catalog_oracle;
 pub(crate) mod id_bundle;
+pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
@@ -413,10 +412,18 @@ impl PeekStage {
 
 #[derive(Debug)]
 pub struct CopyToContext {
+    /// The `RelationDesc` of the data to be copied.
     pub desc: RelationDesc,
+    /// The destination uri of the external service where the data will be copied.
     pub uri: Uri,
+    /// Connection information required to connect to the external service to copy the data.
     pub connection: StorageConnection<ReferencedConnection>,
+    /// The ID of the CONNECTION object to be used for copying the data.
+    pub connection_id: GlobalId,
+    /// Format params to format the data.
     pub format_params: CopyFormatParams<'static>,
+    /// Approximate max file size of each uploaded file.
+    pub max_file_size: u64,
 }
 
 #[derive(Debug)]
@@ -427,10 +434,10 @@ pub struct PeekStageValidate {
     /// sequencing a COPY TO statement.
     ///
     /// Will result in creating and using [`optimize::copy_to::Optimizer`] in
-    /// the `opimizer` field of all subsequent stages.
+    /// the `optimizer` field of all subsequent stages.
     copy_to_ctx: Option<CopyToContext>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -443,7 +450,7 @@ pub struct PeekStageLinearizeTimestamp {
     timeline_context: TimelineContext,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -457,7 +464,7 @@ pub struct PeekStageRealTimeRecency {
     oracle_read_ts: Option<Timestamp>,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -472,7 +479,7 @@ pub struct PeekStageTimestampReadHold {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -486,7 +493,7 @@ pub struct PeekStageOptimize {
     determination: TimestampDetermination<mz_repr::Timestamp>,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -531,7 +538,7 @@ pub struct CreateIndexOptimize {
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -558,6 +565,7 @@ pub struct CreateIndexExplain {
 pub enum CreateViewStage {
     Optimize(CreateViewOptimize),
     Finish(CreateViewFinish),
+    Explain(CreateViewExplain),
 }
 
 #[derive(Debug)]
@@ -565,6 +573,9 @@ pub struct CreateViewOptimize {
     validity: PlanValidity,
     plan: plan::CreateViewPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPLAIN for this statement.
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -574,6 +585,14 @@ pub struct CreateViewFinish {
     plan: plan::CreateViewPlan,
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
+}
+
+#[derive(Debug)]
+pub struct CreateViewExplain {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateViewPlan,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]
@@ -623,7 +642,7 @@ pub struct CreateMaterializedViewOptimize {
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPALIN for this statement.
+    /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
 }
 
@@ -730,15 +749,14 @@ impl PlanValidity {
                 }
             }
         }
-        // It is sufficient to check that all the source_ids still exist because we assume:
+        // It is sufficient to check that all the dependency_ids still exist because we assume:
         // - Ids do not mutate.
         // - Ids are not reused.
         // - If an id was dropped, this will detect it and error.
         for id in &self.dependency_ids {
             if catalog.try_get_entry(id).is_none() {
                 return Err(AdapterError::ChangedPlan(format!(
-                    "dependency {} was removed",
-                    id
+                    "dependency was removed: {id}",
                 )));
             }
         }
@@ -783,7 +801,6 @@ pub(crate) enum StageResult<T> {
 }
 
 /// Common functionality for [Coordinator::sequence_staged].
-#[async_trait::async_trait(?Send)]
 pub(crate) trait Staged: Send {
     fn validity(&mut self) -> &mut PlanValidity;
 
@@ -990,7 +1007,7 @@ impl PendingRead {
     ///
     /// If it is necessary to finalize an execute, return the state necessary to do so
     /// (execution context and result)
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
         match self {
             PendingRead::Read {
@@ -1166,7 +1183,7 @@ impl ExecuteContext {
     }
 
     /// Retire the execution, by sending a message to the coordinator.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub fn retire(self, result: Result<ExecuteResponse, AdapterError>) {
         let Self {
             tx,
@@ -1349,7 +1366,7 @@ impl Coordinator {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
-    #[instrument(name = "coord::bootstrap", skip_all)]
+    #[instrument(name = "coord::bootstrap")]
     pub(crate) async fn bootstrap(
         &mut self,
         builtin_migration_metadata: BuiltinMigrationMetadata,
@@ -1659,11 +1676,7 @@ impl Coordinator {
                         .clone();
 
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(
-                        &df_desc,
-                        mview.cluster_id,
-                        &mview.refresh_schedule,
-                    );
+                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
                     df_desc.set_as_of(as_of);
 
                     // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
@@ -1871,7 +1884,7 @@ impl Coordinator {
     /// demand, is more efficient as it reduces the number of writes to durable storage. It also
     /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
     /// storage collections, without needing to worry about dependency order.
-    #[instrument(skip_all)]
+    #[instrument]
     async fn bootstrap_storage_collections(&mut self) {
         // Reset the txns and table shards to a known set of invariants.
         //
@@ -1974,7 +1987,7 @@ impl Coordinator {
     ///
     /// This method does not perform timestamp selection for the dataflows, nor does it create them
     /// in the compute controller. Both of these steps happen later during bootstrapping.
-    #[instrument(skip_all)]
+    #[instrument]
     fn bootstrap_dataflow_plans(
         &mut self,
         ordered_catalog_entries: &[CatalogEntry],
@@ -2191,11 +2204,16 @@ impl Coordinator {
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
         // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
         // might still be installed on replicas, but ideally not much farther as that would just
-        // increase the wait time until the index becomes readable. We advance the `as_of` to the
-        // meet of the `upper`s of all dependencies, as we know that no replica can have produced
-        // output for that time, so we can assume that no replica `as_of` has been adanced beyond
-        // this time either.
+        // increase the wait time until the index becomes readable, and would also prevent warmup.
+        // We advance the `as_of` to `least_valid_write` - 1. (`least_valid_write` is the meet of
+        // the `upper`s of all dependencies.) This works because we know that no replica could have
+        // produced output at `least_valid_write`, so their write frontiers can't be later. Also,
+        // subtracting 1 is still ok, because we can assume that the compaction window is at least
+        // 1.
+        let warmup_frontier = self.greatest_available_read(&id_bundle);
+
         let write_frontier = self.least_valid_write(&id_bundle);
+
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
         if write_frontier.is_empty() {
             tracing::info!(
@@ -2203,15 +2221,21 @@ impl Coordinator {
                 %cluster_id,
                 min_as_of = ?min_as_of.elements(),
                 write_frontier = ?write_frontier.elements(),
-                "selecting index `as_of` as {:?}",
+                "selecting index `as_of` as {:?} (`write_frontier` is empty)",
                 min_as_of.elements(),
             );
 
             return min_as_of;
         }
 
-        let time = write_frontier.clone().into_option().expect("checked above");
-        let max_compaction_frontier = Antichain::from_elem(compaction_window.lag_from(time));
+        // The compaction frontier might be earlier than the warmup frontier.
+        let write_frontier_time = write_frontier.clone().into_option().expect("checked above");
+        let max_compaction_frontier =
+            Antichain::from_elem(compaction_window.lag_from(write_frontier_time));
+        soft_assert_or_log!(
+            !max_compaction_frontier.is_empty(),
+            "`max_compaction_frontier` unexpectedly empty",
+        );
 
         // We must not select an `as_of` that is beyond any times that have not yet been written to
         // downstream materialized views. If we would, we might skip times in the output of these
@@ -2230,7 +2254,12 @@ impl Coordinator {
         }
 
         let as_of = if PartialOrder::less_equal(&min_as_of, &max_as_of) {
-            min_as_of.join(&max_compaction_frontier).meet(&max_as_of)
+            // Take the earlier of `warmup_frontier` and `compaction_frontier`,
+            // and finally bound from below and above by `min_as_of` and `max_as_of`.
+            warmup_frontier
+                .meet(&max_compaction_frontier)
+                .join(&min_as_of)
+                .meet(&max_as_of)
         } else {
             // This should not happen. If we get here that means we _will_ skip times in some of
             // the dependent materialized views, which is a correctness bug. However, skipping
@@ -2259,6 +2288,7 @@ impl Coordinator {
             as_of = ?as_of.elements(),
             min_as_of = ?min_as_of.elements(),
             max_as_of = ?max_as_of.elements(),
+            warmup_frontier = ?warmup_frontier.elements(),
             write_frontier = ?write_frontier.elements(),
             ?compaction_window,
             max_compaction_frontier = ?max_compaction_frontier.elements(),
@@ -2273,51 +2303,45 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
-        refresh_schedule: &Option<RefreshSchedule>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
         let min_as_of = self.least_valid_read(&id_bundle);
 
-        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
-        // to advance the `as_of` as far as possible. If a storage collection for the MV already
-        // exists, we can advance to that collection's upper. This is the most we can advance the
-        // `as_of` without skipping times in the MV output.
         let sink_id = dataflow
             .sink_exports
             .keys()
             .exactly_one()
             .expect("MV dataflow must export a sink");
-        let write_frontier = self.storage_write_frontier(*sink_id);
+
+        // For compute reconciliation to recognize that an existing dataflow can be reused, we want
+        // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
+        // might still be installed on replicas, but we don't want to advance it so far that it
+        // would prevent dataflow warmup. Similarly to `bootstrap_index_as_of`, we can use
+        // `greatest_available_read`, but for MVs there is an additional constraint: we should
+        // also make sure that we don't advance the `as_of` past the MV's storage collection's
+        // `upper`, because then we'd skip times in the MV output.
+        let warmup_frontier = self.greatest_available_read(&id_bundle);
+        let max_as_of = self.storage_write_frontier(*sink_id);
+        let candidate_as_of = warmup_frontier.meet(max_as_of);
 
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        let mut as_of = if write_frontier.is_empty() {
+        // (See https://github.com/MaterializeInc/materialize/pull/25353)
+        let as_of = if candidate_as_of.is_empty() {
             min_as_of.clone()
         } else {
-            min_as_of.join(write_frontier)
+            min_as_of.join(&candidate_as_of)
         };
-
-        // If we have a RefreshSchedule, then round up the `as_of` to the next refresh.
-        // Note that in many cases the `as_of` would already be at this refresh, because the `write_frontier` will be
-        // usually there. However, it can happen that we restart after the MV was created in the catalog but before
-        // its upper was initialized in persist.
-        if let Some(refresh_schedule) = &refresh_schedule {
-            if let Some(rounded_up_ts) =
-                refresh_schedule.round_up_timestamp(*as_of.as_option().expect("as_of is non-empty"))
-            {
-                as_of = Antichain::from_elem(rounded_up_ts);
-            } else {
-                // We are past the last refresh. Let's not move the as_of.
-            }
-        }
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
             %cluster_id,
             as_of = ?as_of.elements(),
             min_as_of = ?min_as_of.elements(),
-            write_frontier = ?write_frontier.elements(),
+            warmup_frontier = ?warmup_frontier.elements(),
+            max_as_of = ?max_as_of.elements(),
+            candidate_as_of = ?candidate_as_of.elements(),
             "bootstrapping materialized view `as_of`",
         );
 
@@ -2604,7 +2628,7 @@ impl Coordinator {
         &self.active_conns
     }
 
-    #[instrument(level = "debug", skip(self, ctx_extra))]
+    #[instrument(level = "debug")]
     pub(crate) fn retire_execution(
         &mut self,
         reason: StatementEndedExecutionReason,
@@ -2616,7 +2640,7 @@ impl Coordinator {
     }
 
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
         let compute = self
             .instance_snapshot(instance)
@@ -2730,7 +2754,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         controller_persist_txn_tables,
-        mut storage,
+        storage,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -2790,14 +2814,14 @@ pub fn serve(
         let pg_timestamp_oracle_config = timestamp_oracle_url
             .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
         let mut initial_timestamps =
-            get_initial_oracle_timestamps(&mut storage, &pg_timestamp_oracle_config).await?;
+            get_initial_oracle_timestamps(&pg_timestamp_oracle_config).await?;
 
         // A candidate for the boot_ts. Catalog::open will further advance this,
         // based on the "now" timestamp, if/when needed.
         let previous_ts = initial_timestamps
             .get(&Timeline::EpochMilliseconds)
-            .expect("missing EpochMillisseconds timestamp")
-            .clone();
+            .cloned()
+            .unwrap_or_else(mz_repr::Timestamp::minimum);
 
         // Choose a time at which to boot. This is used, for example, to prune
         // old storage usage data. Crucially, it is _not_ linearizable, we do
@@ -2808,14 +2832,9 @@ pub fn serve(
         // This time is usually the current system time, but with protection
         // against backwards time jumps, even across restarts.
         let boot_ts_not_linearizable = {
-            // SUBTLE: This method will block if/when `max(now, previous_ts)` is
-            // larger than some upper bound, depending on how far that maximum
-            // is beyond the upper bound. This gives some measure of protection
-            // about the chosen boot_ts advancing beyond what was previously
-            // known, which could in turn make us delete storage usage records
-            // that we are not meant to delete.
-            let boot_ts = catalog_oracle::monotonic_now(now.clone(), previous_ts);
-            info!(%previous_ts, %boot_ts, "determining boot_ts");
+            let now_ts: Timestamp = now().into();
+            let boot_ts = std::cmp::max(now_ts, previous_ts);
+            info!(%previous_ts, %now_ts, %boot_ts, "determining boot_ts");
 
             boot_ts
         };
@@ -2902,15 +2921,11 @@ pub fn serve(
 
                 let mut timestamp_oracles = BTreeMap::new();
                 for (timeline, initial_timestamp) in initial_timestamps {
-                    let persistence =
-                        CatalogTimestampPersistence::new(timeline.clone(), Arc::clone(&catalog));
-
                     handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                         &timeline,
                         initial_timestamp,
                         coord_now.clone(),
                         timestamp_oracle_impl,
-                        persistence,
                         pg_timestamp_oracle_config.clone(),
                         &mut timestamp_oracles,
                     ));
@@ -3018,41 +3033,24 @@ pub fn serve(
     .boxed()
 }
 
-// While we have two implementations of TimestampOracle (catalog-backed and
-// postgres/crdb-backed), we determine the highest timestamp for each timeline
-// on bootstrap, to initialize the currently-configured oracle. This mostly
-// works, but there can be linearizability violations, because there is no
-// central moment where do distributed coordination for both oracle types.
-// Working around this seems prohibitively hard, maybe even impossible so we
-// have to live with this window of potential violations during the upgrade
+// Determines and returns the highest timestamp for each timeline, for all known
+// timestamp oracle implementations.
+//
+// Initially, we did this so that we can switch between implementations of
+// timestamp oracle, but now we also do this to determine a monotonic boot
+// timestamp, a timestamp that does not regress across reboots.
+//
+// This mostly works, but there can be linearizability violations, because there
+// is no central moment where we do distributed coordination for all oracle
+// types. Working around this seems prohibitively hard, maybe even impossible so
+// we have to live with this window of potential violations during the upgrade
 // window (which is the only point where we should switch oracle
 // implementations).
-//
-// NOTE: We can remove all this code, including the pre-existing code below that
-// initializes oracles on bootstrap, once we have fully migrated to the new
-// postgres/crdb-backed oracle.
 async fn get_initial_oracle_timestamps(
-    storage: &mut Box<dyn DurableCatalogState>,
     pg_timestamp_oracle_config: &Option<PostgresTimestampOracleConfig>,
 ) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
-    let catalog_oracle_timestamps: BTreeMap<_, _> = storage
-        .get_timestamps()
-        .await?
-        .into_iter()
-        .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
-        .collect();
-    let debug_msg = || {
-        catalog_oracle_timestamps
-            .iter()
-            .map(|(timeline, ts)| format!("{:?} -> {}", timeline, ts))
-            .join(", ")
-    };
-    info!(
-        "current timestamps from the catalog-backed timestamp oracle: {}",
-        debug_msg()
-    );
+    let mut initial_timestamps = BTreeMap::new();
 
-    let mut initial_timestamps = catalog_oracle_timestamps;
     if let Some(pg_timestamp_oracle_config) = pg_timestamp_oracle_config {
         let postgres_oracle_timestamps =
             PostgresTimestampOracle::<NowFn>::get_all_timelines(pg_timestamp_oracle_config.clone())
@@ -3092,7 +3090,7 @@ async fn get_initial_oracle_timestamps(
     Ok(initial_timestamps)
 }
 
-#[instrument(skip_all)]
+#[instrument]
 pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,

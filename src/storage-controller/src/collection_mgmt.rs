@@ -11,6 +11,7 @@
 //! collections.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
@@ -25,6 +26,7 @@ use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_types::parameters::STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT;
 use timely::progress::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
@@ -34,8 +36,8 @@ use crate::{persist_handles, StorageError};
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
 const CHANNEL_CAPACITY: usize = 4096;
-// Default rate at which we append data and advance the uppers of managed collections.
-const DEFAULT_TICK: Duration = Duration::from_secs(1);
+// Default rate at which we advance the uppers of managed collections.
+const DEFAULT_TICK_MS: u64 = 1_000;
 
 type WriteChannel = mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>;
 type WriteTask = AbortOnDropHandle<()>;
@@ -48,6 +50,9 @@ where
 {
     collections: Arc<Mutex<BTreeMap<GlobalId, (WriteChannel, WriteTask, ShutdownSender)>>>,
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+    /// Amount of time we'll wait before sending a batch of inserts to Persist, for user
+    /// collections.
+    user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
 }
 
@@ -68,11 +73,23 @@ where
         write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
         now: NowFn,
     ) -> CollectionManager<T> {
+        let batch_duration_ms: u64 = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT
+            .as_millis()
+            .try_into()
+            .expect("known to fit");
         CollectionManager {
             collections: Arc::new(Mutex::new(BTreeMap::new())),
             write_handle,
+            user_batch_duration_ms: Arc::new(AtomicU64::new(batch_duration_ms)),
             now,
         }
+    }
+
+    /// Updates the duration we'll wait to batch events for user owned collections.
+    pub fn update_user_batch_duration(&self, duration: Duration) {
+        tracing::info!(?duration, "updating user batch duration");
+        let millis: u64 = duration.as_millis().try_into().unwrap_or(u64::MAX);
+        self.user_batch_duration_ms.store(millis, Ordering::Relaxed);
     }
 
     /// Registers the collection as one that `CollectionManager` will:
@@ -93,7 +110,12 @@ where
         }
 
         // Spawns a new task so we can write to this collection.
-        let writer_and_handle = write_task(id, self.write_handle.clone(), self.now.clone());
+        let writer_and_handle = write_task(
+            id,
+            self.write_handle.clone(),
+            Arc::clone(&self.user_batch_duration_ms),
+            self.now.clone(),
+        );
         let prev = guard.insert(id, writer_and_handle);
 
         // Double check the previous task was actually finished.
@@ -109,7 +131,7 @@ where
     ///
     /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
     /// it has stopped referencing the provided `id`.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) fn unregister_collection(&self, id: GlobalId) -> BoxFuture<'static, ()> {
         let prev = self
             .collections
@@ -176,6 +198,7 @@ where
 fn write_task<T>(
     id: GlobalId,
     write_handle: persist_handles::PersistMonotonicWriteWorker<T>,
+    user_batch_duration_ms: Arc<AtomicU64>,
     now: NowFn,
 ) -> (WriteChannel, WriteTask, ShutdownSender)
 where
@@ -187,7 +210,7 @@ where
     let handle = mz_ore::task::spawn(
         || format!("CollectionManager-write_task-{id}"),
         async move {
-            let mut interval = tokio::time::interval(DEFAULT_TICK);
+            let mut interval = tokio::time::interval(Duration::from_millis(DEFAULT_TICK_MS));
 
             'run: loop {
                 tokio::select! {
@@ -232,7 +255,20 @@ where
                         if let Some(batch) = cmd {
                             // To rate limit appends to persist we add artifical latency, and will
                             // finish no sooner than this instant.
-                            let min_time_to_complete = Instant::now() + DEFAULT_TICK;
+                            let batch_duration_ms = match id {
+                                GlobalId::User(_) => Duration::from_millis(user_batch_duration_ms.load(Ordering::Relaxed)),
+                                // For non-user collections, always just use the default.
+                                _ => STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+                            };
+                            let use_batch_now = Instant::now();
+                            let min_time_to_complete = use_batch_now + batch_duration_ms;
+
+                            tracing::debug!(
+                                ?use_batch_now,
+                                ?batch_duration_ms,
+                                ?min_time_to_complete,
+                                "batch duration",
+                            );
 
                             // Reset the interval which is used to periodically bump the uppers
                             // because the uppers will get bumped with the following update. This

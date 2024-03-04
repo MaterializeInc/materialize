@@ -188,7 +188,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 stats_output
                     .give(
                         &stats_cap[0],
-                        ProgressStatisticsUpdate {
+                        ProgressStatisticsUpdate::SteadyState {
                             offset_known: 0,
                             offset_committed: 0,
                         },
@@ -588,7 +588,7 @@ async fn raw_stream<'a>(
                     stats_output
                         .give(
                             stats_cap,
-                            ProgressStatisticsUpdate {
+                            ProgressStatisticsUpdate::SteadyState {
                                 // Similar to the kafka source, we don't subtract 1 from the upper as we want to report the
                                 // _number of bytes_ we have processed/in upstream.
                                 offset_known: upstream_stat.offset,

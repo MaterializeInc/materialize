@@ -18,7 +18,7 @@ statement ok
 CREATE TABLE y (a int not null)
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT b FROM (SELECT b, not(b) as neg FROM x) WHERE NOT(neg)
+EXPLAIN WITH(arity, join implementations) SELECT b FROM (SELECT b, not(b) as neg FROM x) WHERE NOT(neg)
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -31,7 +31,7 @@ Source materialize.public.x
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT b FROM (SELECT b, b = false as neg FROM x) WHERE NOT(neg)
+EXPLAIN WITH(arity, join implementations) SELECT b FROM (SELECT b, b = false as neg FROM x) WHERE NOT(neg)
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -46,7 +46,7 @@ EOF
 # Inline binary expressions.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
   SELECT a FROM (SELECT a, a = 3 AS cond, u != 2 as cond2 FROM x) WHERE NOT(cond) AND NOT(cond2)
 ----
 Explained Query:
@@ -64,7 +64,7 @@ EOF
 # https://github.com/MaterializeInc/materialize/pull/22098, so now we inline in this test.
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
   SELECT a FROM (SELECT a, (a + 1) = (u + 3) AS cond FROM x) WHERE NOT(cond)
 ----
 Explained Query:
@@ -81,7 +81,7 @@ EOF
 # https://github.com/MaterializeInc/materialize/pull/22098
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
   SELECT * FROM
     (SELECT a, b, b+1 as c FROM
       (SELECT a, a+1 as b FROM y))
@@ -120,7 +120,7 @@ Filter (#0 = 3) // { arity: 1 }
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
 ----
 Explained Query:
@@ -148,7 +148,7 @@ CREATE TABLE t2 (f1 integer, f2 integer)
 
 # redundant equivalence is pushed down to all join branches and removed
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND t1.f2 = t2.f2 AND t1.f1 + t2.f2 = t2.f1 + t1.f2;
 ----
 Explained Query:
@@ -172,7 +172,7 @@ EOF
 
 # #7684 avoidable cross joins
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and t2.f1 is null);
 ----
 Explained Query:
@@ -187,7 +187,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select * from t1, t2 where t1.f1 = t2.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) is null);
 ----
 Explained Query:
@@ -202,7 +202,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and (t2.f1 + 1) is null);
 ----
 Explained Query:
@@ -217,7 +217,7 @@ Explained Query:
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 select * from t1, t2 where t2.f1 = t1.f1 + 1 or (t1.f1 is null and ((t2.f1 + 1) is null and t1.f1 is null));
 ----
 Explained Query:
@@ -234,7 +234,7 @@ EOF
 # Join-Dependent Predicate Duplication (JoinInputMapper::consequence_for_input)
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND ((t1.f2 = 3 AND t2.f2 = 4) OR (t1.f2 = 5 AND t2.f2 = 6));
 ----
 Explained Query:
@@ -258,7 +258,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT * FROM t1, t2 WHERE t1.f1 = t2.f1 AND ((t1.f2 = 3 AND t2.f2 = 4) OR t1.f2 = 5);
 ----
 Explained Query:
@@ -282,7 +282,7 @@ Source materialize.public.t2
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT * FROM t1, t2
 WHERE t1.f2 = 27 OR (t1.f2 <= 1995 AND t1.f1 = t2.f1);
 ----
@@ -351,7 +351,7 @@ statement ok
 CREATE TABLE tt2 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT *
+EXPLAIN WITH(arity, join implementations) SELECT *
 FROM tt2 ,
 (
     SELECT AVG(1) AS f1 , COUNT (1) AS f2
@@ -368,7 +368,7 @@ Explained Query (fast path):
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join_impls) SELECT
+EXPLAIN WITH(arity, join implementations) SELECT
         s.name, r.name
 FROM
         mz_schemas s,

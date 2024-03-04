@@ -19,6 +19,7 @@ use itertools::Itertools;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
 use prost::bytes::{BufMut, BytesMut};
+use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_postgres::types::{to_sql_checked, Format, IsNull, ToSql, Type};
@@ -121,7 +122,7 @@ pub async fn handle_write_batch(request: WriteBatchRequest) -> Result<(), OpErro
         unmodified_string: csv_file_params.unmodified_string,
     };
 
-    let (_dbname, client) = config::connect(request.configuration).await?;
+    let (dbname, client) = config::connect(request.configuration).await?;
 
     // Note: This ordering of operations is important! Fivetran expects that we run "replace",
     // "update", and then "delete" ops.
@@ -129,6 +130,7 @@ pub async fn handle_write_batch(request: WriteBatchRequest) -> Result<(), OpErro
     // Note: This isn't part of their documentation but was mentioned in a private conversation.
 
     replace_files(
+        &dbname,
         &request.schema_name,
         &table,
         &file_config,
@@ -139,6 +141,7 @@ pub async fn handle_write_batch(request: WriteBatchRequest) -> Result<(), OpErro
     .context("replace files")?;
 
     update_files(
+        &dbname,
         &request.schema_name,
         &table,
         &file_config,
@@ -149,6 +152,7 @@ pub async fn handle_write_batch(request: WriteBatchRequest) -> Result<(), OpErro
     .context("update files")?;
 
     delete_files(
+        &dbname,
         &request.schema_name,
         &table,
         &file_config,
@@ -219,6 +223,7 @@ async fn load_file(file_config: &FileConfig, path: &str) -> Result<AsyncFileRead
 /// at another, rather than presenting as a single update at a single
 /// timestamp.
 async fn replace_files(
+    database: &str,
     schema: &str,
     table: &Table,
     file_config: &FileConfig,
@@ -231,7 +236,8 @@ async fn replace_files(
     }
 
     // Copy into a temporary table, which we then merge into the destination.
-    let (qualified_temp_table_name, columns) = create_temporary_table(table, client).await?;
+    let (qualified_temp_table_name, columns, guard) =
+        get_scratch_table(database, schema, table, client).await?;
     let row_count = copy_files(
         file_config,
         replace_files,
@@ -277,12 +283,16 @@ async fn replace_files(
     let rows_changed = client.execute(&insert_stmt, &[]).await?;
     tracing::info!(rows_changed, "inserted rows to {qualified_table_name}");
 
+    // Clear out our scratch table.
+    guard.clear().await.context("clearing guard")?;
+
     Ok(())
 }
 
 /// For each record in all `update_files`, `UPDATE` all columns that are not the "unmodified
 /// string" to their new values provided in the record, based on primary key columns.
 async fn update_files(
+    _database: &str,
     schema: &str,
     table: &Table,
     file_config: &FileConfig,
@@ -358,6 +368,7 @@ async fn update_file(
 /// "Soft deletes" rows by setting the [`FIVETRAN_SYSTEM_COLUMN_SYNCED`] to `true`, based on all
 /// primary keys.
 async fn delete_files(
+    database: &str,
     schema: &str,
     table: &Table,
     file_config: &FileConfig,
@@ -373,7 +384,8 @@ async fn delete_files(
     }
 
     // Copy into a temporary table, which we then merge into the destination.
-    let (qualified_temp_table_name, columns) = create_temporary_table(table, client).await?;
+    let (qualified_temp_table_name, columns, guard) =
+        get_scratch_table(database, schema, table, client).await?;
     let row_count = copy_files(
         file_config,
         delete_files,
@@ -423,23 +435,68 @@ async fn delete_files(
         .context("update deletes")?;
     tracing::info!(?total_count, "altered rows in {qualified_table_name}");
 
+    // Clear our scratch table.
+    guard.clear().await.context("clearing guard")?;
+
     Ok(())
 }
 
-/// Creates a `TEMPORARY` table that will get dropped at the end of the SQL session, with the same
-/// format as the provided [`Table`].
-async fn create_temporary_table(
-    table: &Table,
-    client: &tokio_postgres::Client,
-) -> Result<(UnresolvedItemName, Vec<ColumnMetadata>), OpError> {
-    // This temporary table names to be a valid identifier within Materialize, and a table with the
-    // same name must not already exist in the provided schema.
-    let prefix = format!("fivetran_temp_{}_", mz_ore::id_gen::temp_id());
-    let mut temp_table_name = Ident::new_lossy(prefix);
-    temp_table_name.append_lossy(&table.name);
+#[must_use = "Need to clear the scratch table once you're done using it."]
+struct ScratchTableGuard<'a> {
+    client: &'a tokio_postgres::Client,
+    qualified_name: UnresolvedItemName,
+}
 
-    // Note: temporary items are all created in the same schema.
-    let qualified_temp_table_name = UnresolvedItemName::qualified(&[temp_table_name]);
+impl<'a> ScratchTableGuard<'a> {
+    /// Deletes all the rows from the associated scratch table.
+    async fn clear(self) -> Result<(), OpError> {
+        let clear_table_stmt = format!("DELETE FROM {}", self.qualified_name);
+        let rows_cleared = self
+            .client
+            .execute(&clear_table_stmt, &[])
+            .await
+            .map_err(OpErrorKind::TemporaryResource)
+            .context("scratch table guard")?;
+        tracing::info!(?rows_cleared, table_name = %self.qualified_name, "guard cleared table");
+
+        Ok(())
+    }
+}
+
+/// Gets the existing "scratch" table that we can copy data into, or creates one if it doesn't
+/// exist.
+async fn get_scratch_table<'a>(
+    database: &str,
+    schema: &str,
+    table: &Table,
+    client: &'a tokio_postgres::Client,
+) -> Result<
+    (
+        UnresolvedItemName,
+        Vec<ColumnMetadata>,
+        ScratchTableGuard<'a>,
+    ),
+    OpError,
+> {
+    static SCRATCH_TABLE_SCHEMA: &str = "_mz_fivetran_scratch";
+
+    let create_schema_stmt = format!("CREATE SCHEMA IF NOT EXISTS {SCRATCH_TABLE_SCHEMA}");
+    client
+        .execute(&create_schema_stmt, &[])
+        .await
+        .map_err(OpErrorKind::TemporaryResource)
+        .context("creating scratch schema")?;
+
+    // To make sure the table name is unique, and under the Materialize identifier limits, we name
+    // the scratch table with a hash.
+    let mut hasher = Sha256::new();
+    hasher.update(&format!("{database}.{schema}.{}", table.name));
+    let scratch_table_name = format!("{:x}", hasher.finalize());
+
+    let qualified_scratch_table_name = UnresolvedItemName::qualified(&[
+        Ident::new(SCRATCH_TABLE_SCHEMA).context("scratch schema")?,
+        Ident::new(&scratch_table_name).context("scratch table_name")?,
+    ]);
 
     let columns = table
         .columns
@@ -459,18 +516,124 @@ async fn create_temporary_table(
         })
         .collect::<Result<Vec<_>, OpError>>()?;
 
-    // Create the temporary table.
-    let defs = columns
-        .iter()
-        .map(|col| format!("{} {}", col.name, col.ty))
-        .join(",");
-    let create_table_stmt = format!("CREATE TEMPORARY TABLE {qualified_temp_table_name} ({defs})");
-    client
-        .execute(&create_table_stmt, &[])
-        .await
-        .map_err(OpErrorKind::TemporaryResource)?;
+    let create_scratch_table = || async {
+        let defs = columns
+            .iter()
+            .map(|col| format!("{} {}", col.name, col.ty))
+            .join(",");
+        let create_table_stmt = format!("CREATE TABLE {qualified_scratch_table_name} ({defs})");
+        client
+            .execute(&create_table_stmt, &[])
+            .await
+            .map_err(OpErrorKind::TemporaryResource)
+            .context("creating scratch table")?;
 
-    Ok((qualified_temp_table_name, columns))
+        // Leave a COMMENT on the scratch table for debug-ability.
+        let comment = format!(
+            "Fivetran scratch table for {database}.{schema}.{}",
+            table.name
+        );
+        let comment_stmt = format!(
+            "COMMENT ON TABLE {qualified_scratch_table_name} IS {comment}",
+            comment = escape::escape_literal(&comment)
+        );
+        client
+            .execute(&comment_stmt, &[])
+            .await
+            .map_err(OpErrorKind::TemporaryResource)
+            .context("comment scratch table")?;
+
+        Ok::<_, OpError>(())
+    };
+
+    // Check if the scratch table already exists.
+    let existing_scratch_table =
+        super::ddl::describe_table(client, database, SCRATCH_TABLE_SCHEMA, &scratch_table_name)
+            .await
+            .context("describe table")?;
+
+    match existing_scratch_table {
+        None => {
+            tracing::info!(
+                %schema,
+                ?table,
+                %qualified_scratch_table_name,
+                "creating new scratch table",
+            );
+            create_scratch_table().await.context("create new table")?;
+        }
+        Some(scratch) => {
+            // Make sure the scratch table is compatible with the destination table.
+            let table_columns: BTreeMap<_, _> = table
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(pos, col)| (&col.name, (col.r#type, &col.decimal, pos)))
+                .collect();
+            let scratch_columns: BTreeMap<_, _> = scratch
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(pos, col)| (&col.name, (col.r#type, &col.decimal, pos)))
+                .collect();
+
+            if table_columns != scratch_columns {
+                tracing::warn!(
+                    %schema,
+                    ?table,
+                    ?scratch,
+                    %qualified_scratch_table_name,
+                    "recreate scratch table",
+                );
+
+                let drop_table_stmt = format!("DROP TABLE {qualified_scratch_table_name}");
+                client
+                    .execute(&drop_table_stmt, &[])
+                    .await
+                    .map_err(OpErrorKind::TemporaryResource)
+                    .context("dropping scratch table")?;
+
+                create_scratch_table().await.context("recreate table")?;
+            } else {
+                tracing::info!(
+                    %schema,
+                    ?table,
+                    %qualified_scratch_table_name,
+                    "clear and reuse scratch table",
+                );
+
+                let clear_table_stmt = format!("DELETE FROM {qualified_scratch_table_name}");
+                let rows_cleared = client
+                    .execute(&clear_table_stmt, &[])
+                    .await
+                    .map_err(OpErrorKind::TemporaryResource)
+                    .context("clearing scratch table")?;
+                tracing::info!(?rows_cleared, %qualified_scratch_table_name, "cleared table");
+            }
+        }
+    }
+
+    // Verify that our table is empty.
+    let count_stmt = format!("SELECT COUNT(*) FROM {qualified_scratch_table_name}");
+    let rows: i64 = client
+        .query_one(&count_stmt, &[])
+        .await
+        .map(|row| row.get(0))
+        .map_err(OpErrorKind::TemporaryResource)
+        .context("validate scratch table")?;
+    if rows != 0 {
+        return Err(OpErrorKind::InvariantViolated(format!(
+            "scratch table had non-zero number of rows: {rows}"
+        ))
+        .into());
+    }
+
+    let guard = ScratchTableGuard {
+        client,
+        qualified_name: qualified_scratch_table_name.clone(),
+    };
+
+    Ok((qualified_scratch_table_name, columns, guard))
 }
 
 /// Copies a CSV file into a temporary table using the `COPY FROM` protocol.

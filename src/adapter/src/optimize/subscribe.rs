@@ -236,7 +236,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 let mut df_desc = MirDataflowDescription::new(sink_name);
 
                 df_builder.import_view_into_dataflow(&from_id, &expr, &mut df_desc)?;
-                df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
+                df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 let df_meta =
                     df_builder.build_sink_dataflow_into(&mut df_desc, from_id, sink_desc)?;

@@ -35,7 +35,7 @@ SERVICES = [
         ],
         additional_system_parameter_defaults={
             "disk_cluster_replicas_default": "true",
-            "enable_unmanaged_cluster_replicas": "true",
+            "enable_unorchestrated_cluster_replicas": "true",
             "storage_dataflow_delay_sources_past_rehydration": "true",
         },
         environment_extra=materialized_environment_extra,
@@ -97,7 +97,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         postgres_stash="materialized",
-        validate_catalog_store="shadow",
+        validate_catalog_store="persist",
         volumes_extra=["mzdata:/mzdata"],
     )
 
@@ -166,7 +166,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
-                    "enable_unmanaged_cluster_replicas": "true",
+                    "enable_unorchestrated_cluster_replicas": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
@@ -195,7 +195,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
-                    "enable_unmanaged_cluster_replicas": "true",
+                    "enable_unorchestrated_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
@@ -430,7 +430,7 @@ def workflow_autospill(c: Composition) -> None:
                 "disk_cluster_replicas_default": "true",
                 "upsert_rocksdb_auto_spill_to_disk": "true",
                 "upsert_rocksdb_auto_spill_threshold_bytes": "200",
-                "enable_unmanaged_cluster_replicas": "true",
+                "enable_unorchestrated_cluster_replicas": "true",
                 "storage_dataflow_delay_sources_past_rehydration": "true",
             },
         ),

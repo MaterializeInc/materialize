@@ -266,7 +266,3 @@ true
   WHERE m.name = 'mv8'
 r1 true
 r2 true
-
-######## Cleanup ########
-> DROP DATABASE materialized_view_refresh_options CASCADE;
-> DROP CLUSTER refresh_cluster CASCADE;

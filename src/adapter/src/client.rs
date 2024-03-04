@@ -23,6 +23,7 @@ use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
+use mz_ore::instrument;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
@@ -32,14 +33,14 @@ use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
-use mz_sql::session::user::{User, SUPPORT_USER};
+use mz_sql::session::user::SUPPORT_USER;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::StatementKind;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, instrument};
+use tracing::error;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -50,7 +51,9 @@ use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::optimize::{self, Optimize};
-use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
+use crate::session::{
+    EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
+};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
@@ -137,11 +140,11 @@ impl Client {
     /// Creates a new session associated with this client for the given user.
     ///
     /// It is the caller's responsibility to have authenticated the user.
-    pub fn new_session(&self, conn_id: ConnectionId, user: User) -> Session {
+    pub fn new_session(&self, config: SessionConfig) -> Session {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
-        Session::new(self.build_info, conn_id, user)
+        Session::new(self.build_info, config)
     }
 
     /// Upgrades this client to a session client.
@@ -152,7 +155,7 @@ impl Client {
     ///
     /// Returns a new client that is bound to the session and a response
     /// containing various details about the startup.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn startup(&self, session: Session) -> Result<SessionClient, AdapterError> {
         let user = session.user().clone();
         let conn_id = session.conn_id().clone();
@@ -267,7 +270,11 @@ Issue a SQL query to get started. Need help?
     pub async fn introspection_execute_one(&self, sql: &str) -> Result<Vec<Row>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
-        let session = self.new_session(conn_id, SUPPORT_USER.clone());
+        let session = self.new_session(SessionConfig {
+            conn_id,
+            user: SUPPORT_USER.name.clone(),
+            external_metadata_rx: None,
+        });
         let mut session_client = self.startup(session).await?;
 
         // Parse the SQL statement.
@@ -330,7 +337,7 @@ Issue a SQL query to get started. Need help?
         response
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     fn send(&self, cmd: Command) {
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
@@ -457,7 +464,7 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn declare(
         &mut self,
         name: String,
@@ -488,7 +495,7 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
-    #[tracing::instrument(level = "debug", skip(self, cancel_future))]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn execute(
         &mut self,
         portal_name: String,
@@ -537,7 +544,7 @@ impl SessionClient {
     }
 
     /// Ends a transaction.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -558,7 +565,7 @@ impl SessionClient {
     }
 
     /// Fetches the catalog.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub async fn catalog_snapshot(&self) -> Arc<Catalog> {
         let CatalogSnapshot { catalog } = self
             .send_without_session(|tx| Command::CatalogSnapshot { tx })
@@ -702,7 +709,7 @@ impl SessionClient {
         rx.await.expect("sender dropped")
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     async fn send<T, F>(&mut self, f: F) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
@@ -710,7 +717,7 @@ impl SessionClient {
         self.send_with_cancel(f, futures::future::pending()).await
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     async fn send_with_cancel<T, F>(
         &mut self,
         f: F,

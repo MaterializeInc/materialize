@@ -37,7 +37,7 @@ use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
 
 impl Coordinator {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_cluster(
         &mut self,
         session: &Session,
@@ -68,6 +68,7 @@ impl Coordinator {
                     idle_arrangement_merge_effort: plan.compute.idle_arrangement_merge_effort,
                     replication_factor: plan.replication_factor,
                     disk: plan.disk,
+                    optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -95,7 +96,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_managed_cluster(
         &mut self,
         session: &Session,
@@ -105,6 +106,7 @@ impl Coordinator {
             replication_factor,
             size,
             disk,
+            optimizer_feature_overrides: _,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         mut ops: Vec<catalog::Op>,
@@ -228,7 +230,7 @@ impl Coordinator {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_unmanaged_cluster(
         &mut self,
         session: &Session,
@@ -239,7 +241,7 @@ impl Coordinator {
         tracing::debug!("sequence_create_unmanaged_cluster");
 
         self.ensure_valid_azs(replicas.iter().filter_map(|(_, r)| {
-            if let mz_sql::plan::ReplicaConfig::Managed {
+            if let mz_sql::plan::ReplicaConfig::Orchestrated {
                 availability_zone: Some(az),
                 ..
             } = &r
@@ -266,7 +268,7 @@ impl Coordinator {
             // If the AZ was not specified, choose one, round-robin, from the ones with
             // the lowest number of configured replicas for this cluster.
             let (compute, location) = match replica_config {
-                mz_sql::plan::ReplicaConfig::Unmanaged {
+                mz_sql::plan::ReplicaConfig::Unorchestrated {
                     storagectl_addrs,
                     storage_addrs,
                     computectl_addrs,
@@ -283,7 +285,7 @@ impl Coordinator {
                     };
                     (compute, location)
                 }
-                mz_sql::plan::ReplicaConfig::Managed {
+                mz_sql::plan::ReplicaConfig::Orchestrated {
                     availability_zone,
                     billed_as,
                     compute,
@@ -387,7 +389,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_create_cluster_replica(
         &mut self,
         session: &Session,
@@ -399,7 +401,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         // Choose default AZ if necessary
         let (compute, location) = match config {
-            mz_sql::plan::ReplicaConfig::Unmanaged {
+            mz_sql::plan::ReplicaConfig::Unorchestrated {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -416,7 +418,7 @@ impl Coordinator {
                 };
                 (compute, location)
             }
-            mz_sql::plan::ReplicaConfig::Managed {
+            mz_sql::plan::ReplicaConfig::Orchestrated {
                 availability_zone,
                 billed_as,
                 compute,
@@ -575,6 +577,7 @@ impl Coordinator {
                     idle_arrangement_merge_effort: None,
                     replication_factor: 1,
                     disk,
+                    optimizer_feature_overrides: Default::default(),
                 });
             }
         }
@@ -587,6 +590,7 @@ impl Coordinator {
                 idle_arrangement_merge_effort,
                 replication_factor,
                 disk,
+                optimizer_feature_overrides: _,
             }) => {
                 use AlterOptionParameter::*;
                 match &options.size {
@@ -706,6 +710,7 @@ impl Coordinator {
                 logging,
                 idle_arrangement_merge_effort,
                 disk,
+                optimizer_feature_overrides: _,
             },
             ClusterVariantManaged {
                 size: new_size,
@@ -714,6 +719,7 @@ impl Coordinator {
                 logging: new_logging,
                 idle_arrangement_merge_effort: new_idle_arrangement_merge_effort,
                 disk: new_disk,
+                optimizer_feature_overrides: _,
             },
         ) = (&config, &new_config);
 
@@ -848,6 +854,7 @@ impl Coordinator {
             logging: _,
             idle_arrangement_merge_effort: _,
             disk: new_disk,
+            optimizer_feature_overrides: _,
         } = &mut new_config;
 
         // Validate replication factor parameter

@@ -21,6 +21,7 @@ use std::time::Duration;
 use differential_dataflow::capture::{Message, Progress, YieldingIter};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_ore::error::ErrorExt;
+use mz_ore::future::OreFutureExt;
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
@@ -315,7 +316,16 @@ async fn get_decoder(
         }) => {
             let csr_client = match csr_connection {
                 None => None,
-                Some(csr_connection) => Some(csr_connection.connect(storage_configuration).await?),
+                Some(csr_connection) => {
+                    let debug_name = debug_name.to_string();
+                    let storage_configuration = storage_configuration.clone();
+                    let csr_client =
+                        async move { csr_connection.connect(&storage_configuration).await }
+                            .run_in_task(move || format!("connect_csr:{}", debug_name))
+                            .await?;
+
+                    Some(csr_client)
+                }
             };
             let state = avro::AvroDecoderState::new(
                 &schema,

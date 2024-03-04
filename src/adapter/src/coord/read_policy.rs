@@ -27,10 +27,10 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_compute_types::ComputeInstanceId;
+use mz_ore::instrument;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::Antichain;
-use tracing::instrument;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -195,7 +195,7 @@ impl crate::coord::Coordinator {
     /// This should be called only after a collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
-    #[instrument(name = "coord::initialize_read_policies", skip_all)]
+    #[instrument(name = "coord::initialize_read_policies")]
     pub(crate) async fn initialize_read_policies(
         &mut self,
         id_bundle: &CollectionIdBundle,

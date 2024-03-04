@@ -23,6 +23,7 @@ import inspect
 import json
 import os
 import re
+import selectors
 import ssl
 import subprocess
 import sys
@@ -112,6 +113,7 @@ class Composition:
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.files = {}
+        self.sources_and_sinks_ignored_from_validation = set()
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -318,9 +320,9 @@ class Composition:
             *args,
         ]
 
-        ret = None
-        stdout_result = ""
         for retry in range(1, max_tries + 1):
+            stdout_result = ""
+            stderr_result = ""
             file.seek(0)
             try:
                 if capture_and_print:
@@ -329,7 +331,7 @@ class Composition:
                         close_fds=False,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
+                        stderr=subprocess.PIPE,
                         text=True,
                         bufsize=1,
                     )
@@ -337,19 +339,36 @@ class Composition:
                         p.stdin.write(stdin)  # type: ignore
                     if p.stdin is not None:
                         p.stdin.close()
-                    for line in p.stdout:  # type: ignore
-                        print(line, end="")
-                        stdout_result += line
+                    sel = selectors.DefaultSelector()
+                    sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
+                    sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
+                    running = True
+                    while running:
+                        running = False
+                        for key, val in sel.select():
+                            line = key.fileobj.readline()  # type: ignore
+                            if not line:
+                                continue
+                            # Keep running as long as stdout or stderr have any content
+                            running = True
+                            if key.fileobj is p.stdout:
+                                print(line, end="")
+                                stdout_result += line
+                            else:
+                                print(line, end="", file=sys.stderr)
+                                stderr_result += line
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
                     if check and retcode:
                         raise subprocess.CalledProcessError(
-                            retcode, p.args, output=stdout_result
+                            retcode, p.args, output=stdout_result, stderr=stderr_result
                         )
-                    return subprocess.CompletedProcess(p.args, retcode, stdout_result)
+                    return subprocess.CompletedProcess(
+                        p.args, retcode, stdout_result, stderr_result
+                    )
                 else:
-                    ret = subprocess.run(
+                    return subprocess.run(
                         cmd,
                         close_fds=False,
                         check=check,
@@ -360,12 +379,14 @@ class Composition:
                         bufsize=1,
                     )
             except subprocess.CalledProcessError as e:
-                if e.stdout:
+                if e.stdout and not capture_and_print:
                     print(e.stdout)
+                if e.stderr and not capture_and_print:
+                    print(e.stderr, file=sys.stderr)
 
                 if retry < max_tries:
                     print("Retrying ...")
-                    time.sleep(1)
+                    time.sleep(3)
                     continue
                 else:
                     raise CommandFailureCausedUIError(
@@ -374,10 +395,7 @@ class Composition:
                         stdout=e.stdout,
                         stderr=e.stderr,
                     )
-            break
-
-        assert ret is not None
-        return ret
+        assert False, "unreachable"
 
     def port(self, service: str, private_port: int | str) -> int:
         """Get the public port for a service's private port.
@@ -543,7 +561,7 @@ class Composition:
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
             end_time = time.time()
-            error_message = f"{str(type(e))}: {e}"
+            error_message = f"{e.__class__.__module__}.{e.__class__.__name__}: {e}"
             ui.header(f"mzcompose: test case {name} failed: {error_message}")
             errors = self.extract_test_errors(e, error_message)
 
@@ -563,10 +581,6 @@ class Composition:
         ]
 
         if isinstance(e, CommandFailureCausedUIError):
-            if e.stderr is not None:
-                # This is to avoid that captured stderr is missing in the logs.
-                print(e.stderr, file=sys.stderr, flush=True)
-
             try:
                 extracted_errors = try_determine_errors_from_cmd_execution(e)
             except:
@@ -801,7 +815,7 @@ class Composition:
         detach: bool = True,
         wait: bool = True,
         persistent: bool = False,
-        max_tries: int = 2,
+        max_tries: int = 3,  # increased since quay.io returns 502 sometimes
     ) -> None:
         """Build, (re)create, and start the named services.
 
@@ -839,25 +853,34 @@ class Composition:
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""
 
+        exclusion_clause = "true"
+        if len(self.sources_and_sinks_ignored_from_validation) > 0:
+            excluded_items = ", ".join(
+                f"'{name}'" for name in self.sources_and_sinks_ignored_from_validation
+            )
+            exclusion_clause = f"name NOT IN ({excluded_items})"
+
         # starting sources are currently expected if no new data is produced, see #21980
         results = self.sql_query(
-            """
+            f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
                 status IN ('running', 'starting') OR
                 (type = 'progress' AND status = 'created')
             )
+            AND {exclusion_clause}
             """
         )
         for (name, status, error, details) in results:
             return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
 
         results = self.sql_query(
-            """
+            f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_sink_statuses
             WHERE status NOT IN ('running', 'dropped')
+            AND {exclusion_clause}
             """
         )
         for (name, status, error, details) in results:

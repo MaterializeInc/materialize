@@ -41,10 +41,9 @@ impl RelationCSE {
 }
 
 impl crate::Transform for RelationCSE {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "relation_cse")
     )]
     fn transform(

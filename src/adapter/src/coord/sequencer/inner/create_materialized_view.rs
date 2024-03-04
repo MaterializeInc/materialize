@@ -13,8 +13,12 @@ use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
+use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::Datum;
+use mz_repr::Row;
+use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan;
@@ -22,7 +26,7 @@ use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
-use tracing::{instrument, Span};
+use tracing::Span;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -32,6 +36,8 @@ use crate::coord::{
     ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
 };
 use crate::error::AdapterError;
+use crate::explain::explain_dataflow;
+use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OverrideFrom};
@@ -39,7 +45,6 @@ use crate::session::Session;
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
 
-#[async_trait::async_trait(?Send)]
 impl Staged for CreateMaterializedViewStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
@@ -79,7 +84,7 @@ impl Staged for CreateMaterializedViewStage {
 }
 
 impl Coordinator {
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_create_materialized_view(
         &mut self,
         ctx: ExecuteContext,
@@ -98,7 +103,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn explain_create_materialized_view(
         &mut self,
         ctx: ExecuteContext,
@@ -137,13 +142,13 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_materialized_view_validate(ctx.session(), plan, resolved_ids, explain_ctx,),
+            self.create_materialized_view_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn explain_replan_materialized_view(
         &mut self,
         ctx: ExecuteContext,
@@ -193,14 +198,90 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
+    pub(super) fn explain_materialized_view(
+        &mut self,
+        ctx: &ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::Explainee::MaterializedView(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
+        };
+        let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
+            unreachable!() // Asserted in `plan_explain_plan`.
+        };
+
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+            tracing::error!(
+                "cannot find dataflow metainformation for materialized view {id} in catalog"
+            );
+            coord_bail!(
+                "cannot find dataflow metainformation for materialized view {id} in catalog"
+            );
+        };
+
+        let explain = match stage {
+            ExplainStage::RawPlan => explain_plan(
+                view.raw_expr.clone(),
+                format,
+                &config,
+                &self.catalog().for_session(ctx.session()),
+            )?,
+            ExplainStage::LocalPlan => explain_plan(
+                view.optimized_expr.as_inner().clone(),
+                format,
+                &config,
+                &self.catalog().for_session(ctx.session()),
+            )?,
+            ExplainStage::GlobalPlan => {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            ExplainStage::PhysicalPlan => {
+                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                    coord_bail!("cannot find {stage} for materialized view in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            _ => {
+                coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
+            }
+        };
+
+        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+
+        Ok(Self::send_immediate_rows(rows))
+    }
+
+    #[instrument]
     fn create_materialized_view_validate(
         &mut self,
         session: &Session,
         plan: plan::CreateMaterializedViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
-        // sequencing an EXPALIN for this statement.
+        // sequencing an EXPLAIN for this statement.
         explain_ctx: ExplainContext,
     ) -> Result<CreateMaterializedViewStage, AdapterError> {
         let plan::CreateMaterializedViewPlan {
@@ -252,7 +333,7 @@ impl Coordinator {
         // the REFRESH AT expressions have been evaluated, so we can handle something like
         // `mz_now()::text::int8 + 10000`;
         if let Some(refresh_schedule) = refresh_schedule {
-            if !refresh_schedule.ats.is_empty() {
+            if !refresh_schedule.ats.is_empty() && matches!(explain_ctx, ExplainContext::None) {
                 let ids = self
                     .index_oracle(*cluster_id)
                     .sufficient_collections(resolved_ids.0.iter());
@@ -281,7 +362,7 @@ impl Coordinator {
         ))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_materialized_view_optimize(
         &mut self,
         CreateMaterializedViewOptimize {
@@ -316,6 +397,7 @@ impl Coordinator {
         let internal_view_id = self.allocate_transient_id()?;
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
 
         // Build an optimizer for this MATERIALIZED VIEW.
@@ -337,22 +419,22 @@ impl Coordinator {
             move || {
                 span.in_scope(|| {
                     let mut pipeline = || -> Result<(
-                    optimize::materialized_view::LocalMirPlan,
-                    optimize::materialized_view::GlobalMirPlan,
-                    optimize::materialized_view::GlobalLirPlan,
-                ), AdapterError> {
-                    let _dispatch_guard = explain_ctx.dispatch_guard();
+                        optimize::materialized_view::LocalMirPlan,
+                        optimize::materialized_view::GlobalMirPlan,
+                        optimize::materialized_view::GlobalLirPlan,
+                    ), AdapterError> {
+                        let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                    let raw_expr = plan.materialized_view.expr.clone();
+                        let raw_expr = plan.materialized_view.expr.clone();
 
-                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-                    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                    let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                        let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                    Ok((local_mir_plan, global_mir_plan, global_lir_plan))
-                };
+                        Ok((local_mir_plan, global_mir_plan, global_lir_plan))
+                    };
 
                     let stage = match pipeline() {
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {
@@ -414,7 +496,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_materialized_view_finish(
         &mut self,
         session: &Session,
@@ -632,7 +714,7 @@ impl Coordinator {
         Ok((as_of, until))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn create_materialized_view_explain(
         &mut self,
         session: &Session,

@@ -218,7 +218,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .await?,
             )
         }
-        CatalogKind::Shadow => panic!("cannot use shadow catalog with catalog-debug tool"),
         CatalogKind::EmergencyStash => {
             panic!("cannot use emergency stash variant with catalog-debug tool, use stash instead")
         }
@@ -486,7 +485,7 @@ async fn upgrade_check(
             connection_context: ConnectionContext::for_tests(Arc::new(
                 InMemorySecretsController::new(),
             )),
-            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
+            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
         },
         &mut storage,
     )

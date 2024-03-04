@@ -14,10 +14,11 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use anyhow::bail;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::{BoxStream, Stream, StreamExt};
 use mz_ore::error::ErrorExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
@@ -217,7 +218,7 @@ pub struct TlsCertConfig {
 
 impl TlsCertConfig {
     /// Returns the SSL context to use in TlsConfigs.
-    pub fn context(&self) -> Result<SslContext, anyhow::Error> {
+    pub fn load_context(&self) -> Result<SslContext, anyhow::Error> {
         // Mozilla publishes three presets: old, intermediate, and modern. They
         // recommend the intermediate preset for general purpose servers, which
         // is what we use, as it is compatible with nearly every client released
@@ -229,6 +230,61 @@ impl TlsCertConfig {
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
         Ok(builder.build().into_context())
     }
+
+    /// Like [Self::load_context] but attempts to reload the files each time `ticker` yields an item.
+    /// Returns an error based on the files currently on disk. When `ticker` receives, the
+    /// certificates are reloaded from the context. The result of the reloading is returned on the
+    /// oneshot if present, and an Ok result means new connections will use the new certificates. An
+    /// Err result will not change the current certificates.
+    pub fn reloading_context(
+        &self,
+        mut ticker: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
+    ) -> Result<ReloadingSslContext, anyhow::Error> {
+        let context = Arc::new(RwLock::new(self.load_context()?));
+        let updater_context = Arc::clone(&context);
+        let config = self.clone();
+        mz_ore::task::spawn(|| "TlsCertConfig reloading_context", async move {
+            while let Some(chan) = ticker.next().await {
+                let result = match config.load_context() {
+                    Ok(ctx) => {
+                        *updater_context.write().expect("poisoned") = ctx;
+                        Ok(())
+                    }
+                    Err(err) => {
+                        tracing::error!("failed to reload SSL certificate: {err}");
+                        Err(err)
+                    }
+                };
+                if let Some(chan) = chan {
+                    let _ = chan.send(result);
+                }
+            }
+            tracing::warn!("TlsCertConfig reloading_context updater closed");
+        });
+        Ok(ReloadingSslContext { context })
+    }
+}
+
+/// An SslContext whose inner value can be updated.
+#[derive(Clone, Debug)]
+pub struct ReloadingSslContext {
+    /// The current SSL context.
+    context: Arc<RwLock<SslContext>>,
+}
+
+impl ReloadingSslContext {
+    pub fn get(&self) -> RwLockReadGuard<SslContext> {
+        self.context.read().expect("poisoned")
+    }
+}
+
+/// Configures a server's TLS encryption and authentication with reloading.
+#[derive(Clone, Debug)]
+pub struct ReloadingTlsConfig {
+    /// The SSL context used to manage incoming TLS negotiations.
+    pub context: ReloadingSslContext,
+    /// The TLS mode.
+    pub mode: TlsMode,
 }
 
 /// Command line arguments for TLS.

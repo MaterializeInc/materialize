@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 
 # Clean up cluster manually, since testdrive does not automatically clean up
 # clusters.
@@ -162,5 +162,3 @@ data2  <null>  storage
   WHERE s.id LIKE 'u%'
 sink1  <null>  storage
 sink2  <null>  storage
-
-> DROP CLUSTER storage CASCADE

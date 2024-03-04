@@ -28,10 +28,9 @@ use crate::TransformCtx;
 pub struct Map;
 
 impl crate::Transform for Map {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "map_fusion")
     )]
     fn transform(

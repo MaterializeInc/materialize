@@ -9,13 +9,16 @@
 
 import os
 import subprocess
+import sys
 from inspect import Traceback
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
-from materialize.mzcompose.test_result import extract_error_chunks_from_stderr
+from materialize.mzcompose.test_result import (
+    extract_error_chunks_from_output,
+)
 from materialize.ui import CommandFailureCausedUIError
 
 
@@ -154,11 +157,25 @@ class TestdrivePod(K8sPod, TestdriveBase):
                 "--",
                 *command,
                 input=input,
+                # needed to extract errors
                 capture_output=True,
                 suppress_command_error_output=suppress_command_error_output,
             )
         except subprocess.CalledProcessError as e:
-            error_chunks = extract_error_chunks_from_stderr(e.stderr)
+            if e.stdout is not None:
+                print(e.stdout, end="")
+            if e.stderr is not None:
+                print(e.stderr, file=sys.stderr, end="")
+
+            output = e.stderr or e.stdout
+            if output is None and suppress_command_error_output:
+                output = "(not captured)"
+
+            assert (
+                output is not None
+            ), f"Missing stdout and stderr when running '{e.cmd}' without success"
+
+            error_chunks = extract_error_chunks_from_output(output)
             error_text = "\n".join(error_chunks)
             raise CommandFailureCausedUIError(
                 f"Running {' '.join(command)} in testdrive failed with:\n{error_text}",

@@ -30,10 +30,9 @@ pub struct ANF;
 use crate::TransformCtx;
 
 impl crate::Transform for ANF {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "anf")
     )]
     fn transform(

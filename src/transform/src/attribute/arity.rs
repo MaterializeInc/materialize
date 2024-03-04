@@ -36,7 +36,7 @@ impl Attribute for Arity {
             offset += &deps.get_results::<SubtreeSize>()[n - offset];
         }
         let subtree_arity =
-            expr.arity_with_input_arities(offsets.into_iter().rev().map(|o| &self.results[o]));
+            expr.arity_with_input_arities(offsets.into_iter().rev().map(|o| self.results[o]));
         self.results.push(subtree_arity);
     }
 

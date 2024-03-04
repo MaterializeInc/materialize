@@ -751,7 +751,17 @@ where
     pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
         let lir_id = plan.node_id();
 
-        let mut bundle = match plan {
+        let mut bundle = mz_ore::stack::maybe_grow(|| self.render_plan_inner(plan));
+
+        if self.enable_operator_hydration_status_logging {
+            self.log_operator_hydration(&mut bundle, lir_id);
+        }
+
+        bundle
+    }
+
+    fn render_plan_inner(&mut self, plan: Plan) -> CollectionBundle<G> {
+        match plan {
             Plan::Constant { rows, node_id: _ } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
@@ -960,27 +970,35 @@ where
                 let input = self.render_plan(*input);
                 input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
             }
-        };
-
-        if self.enable_operator_hydration_status_logging {
-            self.log_operator_hydration(&mut bundle, lir_id);
         }
-
-        bundle
     }
 
     fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: u64) {
-        match &mut bundle.collection {
-            Some((oks, _)) => {
-                let stream = self.log_operator_hydration_inner(&oks.inner, lir_id);
-                *oks = stream.as_collection();
-            }
-            None => {
+        // A `CollectionBundle` can contain more than one collection, which makes it not obvious to
+        // which we should attach the logging operator.
+        //
+        // We could attach to each collection and track the lower bound of output frontiers.
+        // However, that would be of limited use because we expect all collections to hydrate at
+        // roughly the same time: The `ArrangeBy` operator is not fueled, so as soon as it sees the
+        // frontier of the unarranged collection advance, it will perform all work necessary to
+        // also advance its own frontier. We don't expect significant delays between frontier
+        // advancements of the unarranged and arranged collections, so attaching the logging
+        // operator to any one of them should produce accurate results.
+        //
+        // If the `CollectionBundle` contains both unarranged and arranged representations it is
+        // beneficial to attach the logging operator to one of the arranged representation to avoid
+        // unnecessary cloning of data. The unarranged collection feeds into the arrangements, so
+        // if we attached the logging operator to it, we would introduce a fork in its output
+        // stream, which would necessitate that all output data is cloned. In contrast, we can hope
+        // that the output streams of the arrangements don't yet feed into anything else, so
+        // attaching a (pass-through) logging operator does not introduce a fork.
+
+        match bundle.arranged.values_mut().next() {
+            Some(arrangement) => {
                 use ArrangementFlavor::*;
                 use SpecializedArrangement as A;
                 use SpecializedArrangementImport as AI;
 
-                let arrangement = bundle.arranged.values_mut().next().unwrap();
                 match arrangement {
                     Local(A::RowRow(a), _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
@@ -995,6 +1013,14 @@ where
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
                 }
+            }
+            None => {
+                let (oks, _) = bundle
+                    .collection
+                    .as_mut()
+                    .expect("CollectionBundle invariant");
+                let stream = self.log_operator_hydration_inner(&oks.inner, lir_id);
+                *oks = stream.as_collection();
             }
         }
     }

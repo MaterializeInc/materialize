@@ -15,7 +15,7 @@ CREATE TABLE y (f0 int2, f1 string);
 
 # `ReductionPushdown` pushes the Distinct from after the Join into both join inputs.
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 SELECT DISTINCT *
 FROM x, y
 WHERE x.f1 = y.f1
@@ -45,7 +45,7 @@ EOF
 
 # `ReductionPushdown` pushes the Distinct from after the Join into both join inputs.
 query T multiline
-EXPLAIN WITH(arity, join_impls)
+EXPLAIN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
   c0(f0 int4, f1 string, f2 int2, f3 string) AS (
     (SELECT DISTINCT *

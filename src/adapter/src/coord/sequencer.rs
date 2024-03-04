@@ -74,7 +74,7 @@ impl Coordinator {
     ) -> LocalBoxFuture<'_, ()> {
         async move {
             event!(Level::TRACE, plan = format!("{:?}", plan));
-            let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
+            let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
@@ -324,6 +324,11 @@ impl Coordinator {
                 }
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
+                }
+                Plan::ExplainPushdown(_plan) => {
+                    ctx.retire(Err(AdapterError::Unsupported(
+                        "EXPLAIN FILTER PUSHDOWN queries",
+                    )));
                 }
                 Plan::ExplainSinkSchema(plan) => {
                     let result = self.sequence_explain_schema(plan);
@@ -588,7 +593,7 @@ impl Coordinator {
         .boxed_local()
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_execute_single_statement_transaction(
         &mut self,
         ctx: ExecuteContext,
@@ -660,7 +665,7 @@ impl Coordinator {
     /// Creates a role during connection startup.
     ///
     /// This should not be called from anywhere except connection startup.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_create_role_for_startup(
         &mut self,
         plan: CreateRolePlan,
@@ -757,7 +762,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) fn send_diffs(
         session: &mut Session,
         mut plan: plan::SendDiffsPlan,

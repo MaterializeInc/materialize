@@ -8,7 +8,10 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
 
 > CREATE CLUSTER cluster1 (SIZE '2')
 
@@ -41,9 +44,6 @@ one:two
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
-# NOTE: These queries are slow to succeed because the default metrics scraping
-# interval is 30 seconds. Here we are just ensuring metrics were populated.
-
 # Ensure we produce statistics
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
   FROM mz_sinks s
@@ -54,13 +54,12 @@ sink1 1 1 true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received),
-  SUM(snapshot_records_staged) IS NULL
+  SUM(u.messages_received)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 1 true
+upsert1 true 1
 
 # Shut down the cluster
 > ALTER CLUSTER cluster1 SET (REPLICATION FACTOR = 0)
@@ -75,13 +74,12 @@ sink1 1 1 true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received),
-  SUM(snapshot_records_staged) IS NULL
+  SUM(u.messages_received)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 1 true
+upsert1 true 1
 
 # Ingest some more data, and ensure counters are maintained
 
@@ -100,10 +98,9 @@ sink1 2 2 true true
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received),
-  SUM(snapshot_records_staged) IS NULL
+  SUM(u.messages_received)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 2 true
+upsert1 true 2

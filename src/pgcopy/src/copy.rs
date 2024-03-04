@@ -12,12 +12,20 @@ use std::io;
 
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, RelationType, Row, RowArena};
+use proptest::prelude::any;
+use proptest::prelude::Arbitrary;
+use proptest::strategy::{BoxedStrategy, Strategy, Union};
+use serde::Deserialize;
+use serde::Serialize;
 
 static END_OF_COPY_MARKER: &[u8] = b"\\.";
 
+include!(concat!(env!("OUT_DIR"), "/mz_pgcopy.copy.rs"));
+
 pub fn encode_copy_row_binary(
-    row: Row,
+    row: &Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
@@ -61,16 +69,16 @@ pub fn encode_copy_row_binary(
 }
 
 pub fn encode_copy_row_text(
-    row: Row,
+    CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
+    row: &Row,
     typ: &RelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
-    let delim = b'\t';
-    let null = b"\\N";
+    let null = null.as_bytes();
     let mut buf = BytesMut::new();
     for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
         if idx > 0 {
-            out.push(delim);
+            out.push(delimiter);
         }
         match field {
             None => out.extend(null),
@@ -93,16 +101,72 @@ pub fn encode_copy_row_text(
     Ok(())
 }
 
+pub fn encode_copy_row_csv(
+    CopyCsvFormatParams {
+        delimiter: delim,
+        quote,
+        escape,
+        header: _,
+        null,
+    }: CopyCsvFormatParams,
+    row: &Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+) -> Result<(), io::Error> {
+    let null = null.as_bytes();
+    let is_special = |c: &u8| *c == delim || *c == quote || *c == b'\r' || *c == b'\n';
+    let mut buf = BytesMut::new();
+    for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
+        if idx > 0 {
+            out.push(delim);
+        }
+        match field {
+            None => out.extend(null),
+            Some(field) => {
+                buf.clear();
+                field.encode_text(&mut buf);
+                // A field needs quoting if:
+                //   * It is the only field and the value is exactly the end
+                //     of copy marker.
+                //   * The field contains a special character.
+                //   * The field is exactly the NULL sentinel.
+                if (typ.column_types.len() == 1 && buf == END_OF_COPY_MARKER)
+                    || buf.iter().any(is_special)
+                    || &*buf == null
+                {
+                    // Quote the value by wrapping it in the quote character and
+                    // emitting the escape character before any quote or escape
+                    // characters within.
+                    out.push(quote);
+                    for b in &buf {
+                        if *b == quote || *b == escape {
+                            out.push(escape);
+                        }
+                        out.push(*b);
+                    }
+                    out.push(quote);
+                } else {
+                    // The value does not need quoting and can be emitted
+                    // directly.
+                    out.extend(&buf);
+                }
+            }
+        }
+    }
+    out.push(b'\n');
+    Ok(())
+}
+
 pub struct CopyTextFormatParser<'a> {
     data: &'a [u8],
     position: usize,
-    column_delimiter: &'a str,
+    column_delimiter: u8,
     null_string: &'a str,
     buffer: Vec<u8>,
 }
 
 impl<'a> CopyTextFormatParser<'a> {
-    pub fn new(data: &'a [u8], column_delimiter: &'a str, null_string: &'a str) -> Self {
+    pub fn new(data: &'a [u8], column_delimiter: u8, null_string: &'a str) -> Self {
         Self {
             data,
             position: 0,
@@ -152,11 +216,11 @@ impl<'a> CopyTextFormatParser<'a> {
     }
 
     fn is_column_delimiter(&self) -> bool {
-        self.check_bytes(self.column_delimiter.as_bytes())
+        self.check_bytes(&[self.column_delimiter])
     }
 
     pub fn expect_column_delimiter(&mut self) -> Result<(), io::Error> {
-        if self.consume_bytes(self.column_delimiter.as_bytes()) {
+        if self.consume_bytes(&[self.column_delimiter]) {
             Ok(())
         } else {
             Err(io::Error::new(
@@ -368,12 +432,48 @@ impl<'a> RawIterator<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub enum CopyFormatParams<'a> {
     Text(CopyTextFormatParams<'a>),
     Csv(CopyCsvFormatParams<'a>),
 }
 
+impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
+    fn into_proto(&self) -> ProtoCopyFormatParams {
+        use proto_copy_format_params::Kind;
+        ProtoCopyFormatParams {
+            kind: Some(match self {
+                Self::Text(f) => Kind::Text(f.into_proto()),
+                Self::Csv(f) => Kind::Csv(f.into_proto()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoCopyFormatParams) -> Result<Self, TryFromProtoError> {
+        use proto_copy_format_params::Kind;
+        match proto.kind {
+            Some(Kind::Text(f)) => Ok(Self::Text(f.into_rust()?)),
+            Some(Kind::Csv(f)) => Ok(Self::Csv(f.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoCopyFormatParams::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for CopyFormatParams<'static> {
+    type Parameters = ();
+    type Strategy = Union<BoxedStrategy<Self>>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        Union::new(vec![
+            any::<CopyTextFormatParams>().prop_map(Self::Text).boxed(),
+            any::<CopyCsvFormatParams>().prop_map(Self::Csv).boxed(),
+        ])
+    }
+}
+
+/// Decodes the given bytes into `Row`-s based on the given `CopyFormatParams`.
 pub fn decode_copy_format<'a>(
     data: &[u8],
     column_types: &[mz_pgrepr::Type],
@@ -385,10 +485,63 @@ pub fn decode_copy_format<'a>(
     }
 }
 
-#[derive(Debug, Clone)]
+/// Encodes the given `Row` into bytes based on the given `CopyFormatParams`.
+pub fn encode_copy_format<'a>(
+    params: CopyFormatParams<'a>,
+    row: &Row,
+    typ: &RelationType,
+    out: &mut Vec<u8>,
+) -> Result<(), io::Error> {
+    match params {
+        CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out),
+        CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out),
+        // TODO (mouli): Handle Binary format here as well?
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct CopyTextFormatParams<'a> {
     pub null: Cow<'a, str>,
-    pub delimiter: Cow<'a, str>,
+    pub delimiter: u8,
+}
+
+impl<'a> Default for CopyTextFormatParams<'a> {
+    fn default() -> Self {
+        CopyTextFormatParams {
+            delimiter: b'\t',
+            null: Cow::from("\\N"),
+        }
+    }
+}
+
+impl RustType<ProtoCopyTextFormatParams> for CopyTextFormatParams<'static> {
+    fn into_proto(&self) -> ProtoCopyTextFormatParams {
+        ProtoCopyTextFormatParams {
+            null: self.null.into_proto(),
+            delimiter: self.delimiter.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCopyTextFormatParams) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            null: Cow::Owned(proto.null.into_rust()?),
+            delimiter: proto.delimiter.into_rust()?,
+        })
+    }
+}
+
+impl Arbitrary for CopyTextFormatParams<'static> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (any::<String>(), any::<u8>())
+            .prop_map(|(null, delimiter)| Self {
+                null: Cow::Owned(null),
+                delimiter,
+            })
+            .boxed()
+    }
 }
 
 pub fn decode_copy_format_text(
@@ -398,7 +551,8 @@ pub fn decode_copy_format_text(
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
 
-    let mut parser = CopyTextFormatParser::new(data, &delimiter, &null);
+    // TODO: pass the `CopyTextFormatParams` to the `new` method
+    let mut parser = CopyTextFormatParser::new(data, delimiter, &null);
     while !parser.is_eof() && !parser.is_end_of_copy_marker() {
         let mut row = Vec::new();
         let buf = RowArena::new();
@@ -427,13 +581,70 @@ pub fn decode_copy_format_text(
     Ok(rows)
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct CopyCsvFormatParams<'a> {
     pub delimiter: u8,
     pub quote: u8,
     pub escape: u8,
     pub header: bool,
     pub null: Cow<'a, str>,
+}
+
+impl RustType<ProtoCopyCsvFormatParams> for CopyCsvFormatParams<'static> {
+    fn into_proto(&self) -> ProtoCopyCsvFormatParams {
+        ProtoCopyCsvFormatParams {
+            delimiter: self.delimiter.into(),
+            quote: self.quote.into(),
+            escape: self.escape.into(),
+            header: self.header,
+            null: self.null.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCopyCsvFormatParams) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            delimiter: proto.delimiter.into_rust()?,
+            quote: proto.quote.into_rust()?,
+            escape: proto.escape.into_rust()?,
+            header: proto.header,
+            null: Cow::Owned(proto.null.into_rust()?),
+        })
+    }
+}
+
+impl Arbitrary for CopyCsvFormatParams<'static> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (
+            any::<u8>(),
+            any::<u8>(),
+            any::<u8>(),
+            any::<bool>(),
+            any::<String>(),
+        )
+            .prop_map(|(delimiter, quote, escape, header, null)| Self {
+                delimiter,
+                quote,
+                escape,
+                header,
+                null: Cow::Owned(null),
+            })
+            .boxed()
+    }
+}
+
+impl<'a> Default for CopyCsvFormatParams<'a> {
+    fn default() -> Self {
+        CopyCsvFormatParams {
+            delimiter: b',',
+            quote: b'"',
+            escape: b'"',
+            header: false,
+            null: Cow::from(""),
+        }
+    }
 }
 
 impl<'a> CopyCsvFormatParams<'a> {
@@ -444,13 +655,7 @@ impl<'a> CopyCsvFormatParams<'a> {
         header: Option<bool>,
         null: Option<String>,
     ) -> Result<CopyCsvFormatParams<'a>, String> {
-        let mut params = CopyCsvFormatParams {
-            delimiter: b',',
-            quote: b'"',
-            escape: b'"',
-            header: false,
-            null: Cow::from(""),
-        };
+        let mut params = CopyCsvFormatParams::default();
 
         if let Some(delimiter) = delimiter {
             params.delimiter = delimiter;
@@ -552,12 +757,14 @@ pub fn decode_copy_format_csv(
 
 #[cfg(test)]
 mod tests {
+    use mz_repr::ColumnType;
+
     use super::*;
 
     #[mz_ore::test]
     fn test_copy_format_text_parser() {
         let text = "\t\\nt e\t\\N\t\n\\x60\\xA\\x7D\\x4a\n\\44\\044\\123".as_bytes();
-        let mut parser = CopyTextFormatParser::new(text, "\t", "\\N");
+        let mut parser = CopyTextFormatParser::new(text, b'\t', "\\N");
         assert!(parser.is_column_delimiter());
         parser
             .expect_column_delimiter()
@@ -611,7 +818,7 @@ mod tests {
             vec![Some("30"), None],
             vec![Some("40"), None],
         ];
-        let mut parser = CopyTextFormatParser::new(text, "\t", "");
+        let mut parser = CopyTextFormatParser::new(text, b'\t', "");
         for line in expect {
             for (i, value) in line.iter().enumerate() {
                 if i > 0 {
@@ -701,7 +908,7 @@ mod tests {
         ];
 
         for test in tests {
-            let mut parser = CopyTextFormatParser::new(test.input.as_bytes(), "\t", "\\N");
+            let mut parser = CopyTextFormatParser::new(test.input.as_bytes(), b'\t', "\\N");
             assert_eq!(
                 parser
                     .consume_raw_value()
@@ -756,5 +963,72 @@ mod tests {
             ),
             Err("COPY delimiter and quote must be different".to_string())
         );
+    }
+
+    #[mz_ore::test]
+    fn test_copy_csv_row() -> Result<(), io::Error> {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.push(Datum::from("1,2,\"3\""));
+        packer.push(Datum::Null);
+        packer.push(Datum::from(1000u64));
+        packer.push(Datum::from("qe")); // overridden quote and escape character in test below
+        packer.push(Datum::from(""));
+
+        let typ: RelationType = RelationType::new(vec![
+            ColumnType {
+                scalar_type: mz_repr::ScalarType::String,
+                nullable: false,
+            },
+            ColumnType {
+                scalar_type: mz_repr::ScalarType::String,
+                nullable: true,
+            },
+            ColumnType {
+                scalar_type: mz_repr::ScalarType::UInt64,
+                nullable: false,
+            },
+            ColumnType {
+                scalar_type: mz_repr::ScalarType::String,
+                nullable: false,
+            },
+            ColumnType {
+                scalar_type: mz_repr::ScalarType::String,
+                nullable: false,
+            },
+        ]);
+
+        let mut out = Vec::new();
+
+        struct TestCase<'a> {
+            params: CopyCsvFormatParams<'a>,
+            expected: &'static [u8],
+        }
+
+        let tests = [
+            TestCase {
+                params: CopyCsvFormatParams::default(),
+                expected: b"\"1,2,\"\"3\"\"\",,1000,qe,\"\"\n",
+            },
+            TestCase {
+                params: CopyCsvFormatParams {
+                    null: Cow::from("NULL"),
+                    quote: b'q',
+                    escape: b'e',
+                    ..Default::default()
+                },
+                expected: b"q1,2,\"3\"q,NULL,1000,qeqeeq,\n",
+            },
+        ];
+
+        for TestCase { params, expected } in tests {
+            out.clear();
+            let params = CopyFormatParams::Csv(params);
+            let _ = encode_copy_format(params.clone(), &row, &typ, &mut out);
+            let output = std::str::from_utf8(&out);
+            assert_eq!(output, std::str::from_utf8(expected));
+        }
+
+        Ok(())
     }
 }

@@ -13,7 +13,7 @@
 //! `INSERT`, `SELECT`, `SUBSCRIBE`, and `COPY`.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use itertools::Itertools;
 
@@ -26,7 +26,8 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
+    CteBlock, ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement,
+    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
     IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
@@ -47,8 +48,8 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{
-    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainSinkSchemaPlan,
-    ExplainTimestampPlan,
+    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
+    ExplainSinkSchemaPlan, ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -254,20 +255,24 @@ pub fn describe_explain_plan(
 
     match stage {
         ExplainStage::RawPlan => {
-            relation_desc =
-                relation_desc.with_column("Raw Plan", ScalarType::String.nullable(false));
+            let name = "Raw Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::DecorrelatedPlan => {
-            relation_desc =
-                relation_desc.with_column("Decorrelated Plan", ScalarType::String.nullable(false));
+            let name = "Decorrelated Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
-        ExplainStage::OptimizedPlan => {
-            relation_desc =
-                relation_desc.with_column("Optimized Plan", ScalarType::String.nullable(false));
+        ExplainStage::LocalPlan => {
+            let name = "Locally Optimized Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+        }
+        ExplainStage::GlobalPlan => {
+            let name = "Optimized Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::PhysicalPlan => {
-            relation_desc =
-                relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
+            let name = "Physical Plan";
+            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
         }
         ExplainStage::Trace => {
             relation_desc = relation_desc
@@ -279,6 +284,25 @@ pub fn describe_explain_plan(
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match explainee {
+            Explainee::Select(select, _) => describe_select(scx, *select)?.param_types,
+            _ => vec![],
+        }),
+    )
+}
+
+pub fn describe_explain_pushdown(
+    scx: &StatementContext,
+    statement: ExplainPushdownStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let relation_desc = RelationDesc::empty()
+        .with_column("Source", ScalarType::String.nullable(false))
+        .with_column("Total Bytes", ScalarType::UInt64.nullable(false))
+        .with_column("Selected Bytes", ScalarType::UInt64.nullable(false))
+        .with_column("Total Parts", ScalarType::UInt64.nullable(false))
+        .with_column("Selected Parts", ScalarType::UInt64.nullable(false));
+
+    Ok(
+        StatementDesc::new(Some(relation_desc)).with_params(match statement.explainee {
             Explainee::Select(select, _) => describe_select(scx, *select)?.param_types,
             _ => vec![],
         }),
@@ -305,53 +329,99 @@ pub fn describe_explain_schema(
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
-pub fn plan_explain_plan(
-    scx: &StatementContext,
-    ExplainPlanStatement {
-        stage,
-        config_flags,
-        format,
-        explainee,
-    }: ExplainPlanStatement<Aug>,
-    params: &Params,
-) -> Result<Plan, PlanError> {
-    use crate::plan::ExplaineeStatement;
+generate_extracted_config!(
+    ExplainPlanOption,
+    (Arity, bool, Default(false)),
+    (Cardinality, bool, Default(false)),
+    (ColumnNames, bool, Default(false)),
+    (FilterPushdown, bool, Default(false)),
+    (HumanizedExpressions, bool, Default(false)),
+    (JoinImplementations, bool, Default(false)),
+    (Keys, bool, Default(false)),
+    (LinearChains, bool, Default(false)),
+    (NoFastPath, bool, Default(false)),
+    (NonNegative, bool, Default(false)),
+    (NoNotices, bool, Default(false)),
+    (NodeIdentifiers, bool, Default(false)),
+    (Raw, bool, Default(false)),
+    (RawPlans, bool, Default(false)),
+    (RawSyntax, bool, Default(false)),
+    (Redacted, bool, Default(false)),
+    (SubtreeSize, bool, Default(false)),
+    (Timing, bool, Default(false)),
+    (Types, bool, Default(false)),
+    (ReoptimizeImportedViews, Option<bool>, Default(None)),
+    (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
+    (EnableEagerDeltaJoins, Option<bool>, Default(None))
+);
 
-    let format = match format {
-        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
-        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
-        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
-    };
+impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
+    type Error = PlanError;
 
-    let config = {
-        let config_flags = config_flags
-            .iter()
-            .map(|ident| ident.to_string().to_lowercase())
-            .collect::<BTreeSet<_>>();
+    fn try_from(mut v: ExplainPlanOptionExtracted) -> Result<Self, Self::Error> {
+        use mz_ore::assert::SOFT_ASSERTIONS;
+        use std::sync::atomic::Ordering;
 
-        let mut config = ExplainConfig::try_from(config_flags)?;
-
-        if config.filter_pushdown {
-            scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
-            // If filtering is disabled, explain plans should not include pushdown info.
-            config.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
+        // If `WITH(raw)` is specified, ensure that the config will be as
+        // representative for the original plan as possible.
+        if v.raw {
+            v.raw_plans = true;
+            v.raw_syntax = true;
         }
 
-        config
-    };
+        // Certain config should always be enabled in release builds running on
+        // staging or prod (where SOFT_ASSERTIONS are turned off).
+        let enable_on_prod = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+
+        Ok(ExplainConfig {
+            arity: v.arity || enable_on_prod,
+            cardinality: v.cardinality,
+            column_names: v.column_names,
+            filter_pushdown: v.filter_pushdown || enable_on_prod,
+            humanized_exprs: !v.raw_plans && (v.humanized_expressions || enable_on_prod),
+            join_impls: v.join_implementations,
+            keys: v.keys,
+            linear_chains: !v.raw_plans && v.linear_chains,
+            no_fast_path: v.no_fast_path,
+            no_notices: v.no_notices,
+            node_ids: v.node_identifiers,
+            non_negative: v.non_negative,
+            raw_plans: v.raw_plans,
+            raw_syntax: v.raw_syntax,
+            redacted: v.redacted,
+            subtree_size: v.subtree_size,
+            timing: v.timing,
+            types: v.types,
+            reoptimize_imported_views: v.reoptimize_imported_views,
+            enable_eager_delta_joins: v.enable_eager_delta_joins,
+            enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
+        })
+    }
+}
+
+fn plan_explainee(
+    scx: &StatementContext,
+    explainee: Explainee<Aug>,
+    params: &Params,
+) -> Result<plan::Explainee, PlanError> {
+    use crate::plan::ExplaineeStatement;
 
     let is_replan = matches!(
         explainee,
-        Explainee::ReplanView(_) | Explainee::ReplanMaterializedView(_) | Explainee::ReplanIndex(_),
+        Explainee::ReplanView(_) | Explainee::ReplanMaterializedView(_) | Explainee::ReplanIndex(_)
     );
 
     let explainee = match explainee {
-        Explainee::View(_) | Explainee::ReplanView(_) => {
-            bail_never_supported!(
-                "EXPLAIN ... VIEW <view_name>",
-                "sql/explain-plan",
-                "Use `EXPLAIN ... SELECT * FROM <view_name>` (if the view is not indexed) or `EXPLAIN ... INDEX <idx_name>` (if the view is indexed) instead."
-            );
+        Explainee::View(name) | Explainee::ReplanView(name) => {
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let item_type = item.item_type();
+            if item_type != CatalogItemType::View {
+                sql_bail!("Expected {name} to be a view, not a {item_type}");
+            }
+            match is_replan {
+                true => crate::plan::Explainee::ReplanView(item.id()),
+                false => crate::plan::Explainee::View(item.id()),
+            }
         }
         Explainee::MaterializedView(name) | Explainee::ReplanMaterializedView(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
@@ -376,14 +446,31 @@ pub fn plan_explain_plan(
             }
         }
         Explainee::Select(select, broken) => {
-            let copy_to = None;
-            let (plan, desc) = plan_select_inner(scx, *select, params, copy_to)?;
-
+            let (plan, desc) = plan_select_inner(scx, *select, params, None)?;
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
             }
-
             crate::plan::Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc })
+        }
+        Explainee::CreateView(mut stmt, broken) => {
+            if stmt.if_exists != IfExistsBehavior::Skip {
+                // If we don't force this parameter to Skip planning will
+                // fail for names that already exist in the catalog. This
+                // can happen even in `Replace` mode if the existing item
+                // has dependencies.
+                stmt.if_exists = IfExistsBehavior::Skip;
+            } else {
+                sql_bail!(
+                    "Cannot EXPLAIN a CREATE VIEW that explictly sets IF NOT EXISTS \
+                     (the behavior is implied within the scope of an enclosing EXPLAIN)"
+                );
+            }
+
+            let Plan::CreateView(plan) = ddl::plan_create_view(scx, *stmt, params)? else {
+                sql_bail!("expected CreateViewPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateView { broken, plan })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {
             if stmt.if_exists != IfExistsBehavior::Skip {
@@ -429,6 +516,40 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex { broken, plan })
         }
     };
+
+    Ok(explainee)
+}
+
+pub fn plan_explain_plan(
+    scx: &StatementContext,
+    ExplainPlanStatement {
+        stage,
+        with_options,
+        format,
+        explainee,
+    }: ExplainPlanStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let format = match format {
+        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
+        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+    };
+
+    // Plan ExplainConfig.
+    let config = {
+        let mut with_options = ExplainPlanOptionExtracted::try_from(with_options)?;
+
+        if with_options.filter_pushdown {
+            scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
+            // If filtering is disabled, explain plans should not include pushdown info.
+            with_options.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
+        }
+
+        ExplainConfig::try_from(with_options)?
+    };
+
+    let explainee = plan_explainee(scx, explainee, params)?;
 
     Ok(Plan::ExplainPlan(ExplainPlanPlan {
         stage,
@@ -486,6 +607,16 @@ pub fn plan_explain_schema(
         },
         _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
     }
+}
+
+pub fn plan_explain_pushdown(
+    scx: &StatementContext,
+    statement: ExplainPushdownStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_EXPLAIN_PUSHDOWN)?;
+    let explainee = plan_explainee(scx, statement.explainee, params)?;
+    Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
 }
 
 pub fn plan_explain_timestamp(
@@ -852,12 +983,18 @@ fn plan_copy_to(
 
     let to = plan_expr(ecx, &to_expr)?.type_as(ecx, &ScalarType::String)?;
 
+    if options.max_file_size.as_bytes() < ByteSize::mb(16).as_bytes() {
+        sql_bail!("MAX FILE SIZE cannot be less than 16MB");
+    }
+
     Ok(Plan::CopyTo(CopyToPlan {
         select_plan,
         desc,
         to,
         connection: connection.to_owned(),
+        connection_id: conn_id,
         format_params,
+        max_file_size: options.max_file_size.as_bytes(),
     }))
 }
 
@@ -891,13 +1028,8 @@ fn plan_copy_from(
             only_available_with_csv(options.quote, "quote")?;
             only_available_with_csv(options.escape, "escape")?;
             only_available_with_csv(options.header, "HEADER")?;
-            let delimiter = match options.delimiter {
-                Some(delimiter) if delimiter.len() > 1 => {
-                    sql_bail!("COPY delimiter must be a single one-byte character");
-                }
-                Some(delimiter) => Cow::from(delimiter),
-                None => Cow::from("\t"),
-            };
+            let delimiter =
+                extract_byte_param_value(options.delimiter, "delimiter")?.unwrap_or(b'\t');
             let null = match options.null {
                 Some(null) => Cow::from(null),
                 None => Cow::from("\\N"),
@@ -939,7 +1071,7 @@ generate_extracted_config!(
     (Quote, String),
     (Header, bool),
     (AwsConnection, with_options::Object),
-    (MaxFileSize, ByteSize)
+    (MaxFileSize, ByteSize, Default(ByteSize::mb(256)))
 );
 
 pub fn plan_copy(

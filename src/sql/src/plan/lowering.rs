@@ -144,7 +144,7 @@ impl From<&SystemVars> for Config {
 impl HirRelationExpr {
     /// Rewrite `self` into a `MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
-    #[tracing::instrument(target = "optimizer", level = "trace", name = "hir_to_mir", skip_all)]
+    #[mz_ore::instrument(target = "optimizer", level = "trace", name = "hir_to_mir")]
     pub fn lower<C: Into<Config>>(self, config: C) -> Result<MirRelationExpr, PlanError> {
         let result =
             match self {

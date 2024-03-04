@@ -103,6 +103,3 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > FETCH c
 <TIMESTAMP> 1 1
 > COMMIT
-
-# Cleanup
-> DROP CLUSTER test CASCADE

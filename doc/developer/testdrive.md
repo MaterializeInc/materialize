@@ -877,7 +877,8 @@ $ skip-if
 SELECT true
 ```
 
-`skip-if` followed by a SQL statement will skip the rest of the `.td` file if
+`skip-if` followed by a SQL statement will skip the following statements until
+the next `skip-end` statement (or until the end of the `.td` file) if
 the statement returns one row containing one column with the value `true`. If
 the statement returns `false`, then execution of the script proceeds normally.
 If the query returns anything but a single row with a single column containing a

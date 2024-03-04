@@ -60,7 +60,10 @@ class StatementLogging(Check):
                     """
                     $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET enable_rbac_checks TO false
-                    > SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst WHERE mseh.prepared_statement_id = mpsh.id AND mst.sql_hash = mpsh.sql_hash AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
+                    >[version>=8900] SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst WHERE mseh.prepared_statement_id = mpsh.id AND mst.sql_hash = mpsh.sql_hash AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
+                    "SELECT 'hello' /* Btv was here */" success
+                    "SELECT 'goodbye' /* Btv was here */" success
+                    >[version<8900] SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
                     "SELECT 'hello' /* Btv was here */" success
                     "SELECT 'goodbye' /* Btv was here */" success
                     $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
@@ -75,7 +78,9 @@ class StatementLogging(Check):
                     """
                     $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET enable_rbac_checks TO false
-                    > SELECT count(*) <= 2 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst WHERE mseh.prepared_statement_id = mpsh.id AND mpsh.sql_hash = mst.sql_hash AND sql LIKE '%/* Btv was here */'
+                    >[version>=8900] SELECT count(*) <= 2 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst WHERE mseh.prepared_statement_id = mpsh.id AND mpsh.sql_hash = mst.sql_hash AND sql LIKE '%/* Btv was here */'
+                    true
+                    >[version<8900] SELECT count(*) <= 2 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */'
                     true
                     $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET enable_rbac_checks TO true

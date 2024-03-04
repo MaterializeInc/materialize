@@ -265,9 +265,9 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
 # It's hard to come up with precise bounds because we might de-duplicate some data in arrangements.
-> SELECT records >= 300, size > 0, capacity > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
-true true true
-true true true
+> SELECT records >= 300, size > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
+true true
+true true
 
 # Test that non-arranging dataflows show up in `mz_dataflow_arrangement_sizes`
 
@@ -275,8 +275,8 @@ true true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches, size < 16 * 1024, capacity < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
-0 32 true true true
+> SELECT records, batches, size < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
+0 32 true true
 
 # Tests that arrangement sizes are approximate
 
@@ -286,13 +286,13 @@ true true true
 
 # We have 16 workers, and only want to ensure that the sizes are not egregious.
 
-> SELECT records, batches, size < 16 * 1024, capacity < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-0 32 true true true
+> SELECT records, batches, size < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+0 32 true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, batches, size < 16 * 1024, capacity > 0, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-1 32 true true true
+> SELECT records, batches, size < 16 * 1024, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+1 32 true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
 
@@ -353,24 +353,20 @@ true true true true true
     records < 2 * 2 * 1000,
     size > 0,
     size < 4 * 130 * 1000,
-    capacity > 0,
-    capacity < 4 * 130 * 1000,
-    allocations > 0
+    allocations < 2 * 2 * 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c1%';
-true true true true true true true
+true true true true true
 
 > SELECT
     records > 1000,
     records < 2 * 1000,
     size > 0,
     size < 4 * 100 * 1024,
-    capacity > 0,
-    capacity < 4 * 100 * 1024,
-    allocations > 100
+    allocations < 2 * 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c2%';
-true true true true true true true
+true true true true true
 
 # For coverage, we also include a recursive materialized view to account for dynamic timestamps.
 > CREATE MATERIALIZED VIEW rec AS
@@ -394,12 +390,10 @@ true true true true true true true
     records < 2 * 12 * 1000,
     size > 0,
     size < 4 * 1000 * 1000,
-    capacity > 0,
-    capacity < 4 * 1000 * 1000,
-    allocations > 0
+    allocations < 2 * 12 * 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';
-true true true true true true true
+true true true true true
 
 > DROP TABLE ten CASCADE;
 
@@ -428,24 +422,20 @@ true true true true true true true
     records < 1.1 * 2 * 1000,
     size > 0,
     size < 4 * 200 * 1000,
-    capacity > 0,
-    capacity < 4 * 200 * 1000,
-    allocations > 100
+    allocations < 2 * 2 * 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
-true true true true true true true
+true true true true true
 
 > SELECT
     records >= 2 * 1000,
     records < 2 * 2 * 1000,
     size > 0,
     size < 4 * 172 * 1000,
-    capacity > 0,
-    capacity < 4 * 172 * 1000,
-    allocations > 100
+    allocations < 2 * 2 * 1000
   FROM mz_internal.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
-true true true true true true true
+true true true true true
 
 > DROP SOURCE counter CASCADE;
 

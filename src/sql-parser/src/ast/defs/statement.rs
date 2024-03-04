@@ -86,6 +86,7 @@ pub enum Statement<T: AstInfo> {
     Rollback(RollbackStatement),
     Subscribe(SubscribeStatement<T>),
     ExplainPlan(ExplainPlanStatement<T>),
+    ExplainPushdown(ExplainPushdownStatement<T>),
     ExplainTimestamp(ExplainTimestampStatement<T>),
     ExplainSinkSchema(ExplainSinkSchemaStatement<T>),
     Declare(DeclareStatement<T>),
@@ -155,6 +156,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Rollback(stmt) => f.write_node(stmt),
             Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::ExplainPlan(stmt) => f.write_node(stmt),
+            Statement::ExplainPushdown(stmt) => f.write_node(stmt),
             Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
             Statement::ExplainSinkSchema(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
@@ -227,6 +229,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Rollback => "rollback",
         StatementKind::Subscribe => "subscribe",
         StatementKind::ExplainPlan => "explain_plan",
+        StatementKind::ExplainPushdown => "explain_pushdown",
         StatementKind::ExplainTimestamp => "explain_timestamp",
         StatementKind::ExplainSinkSchema => "explain_sink_schema",
         StatementKind::Declare => "declare",
@@ -703,7 +706,7 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub body_format: Format<T>,
     pub include_headers: CreateWebhookSourceIncludeHeaders,
     pub validate_using: Option<CreateWebhookSourceCheck<T>>,
-    pub in_cluster: T::ClusterName,
+    pub in_cluster: Option<T::ClusterName>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
@@ -714,8 +717,10 @@ impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
         }
         f.write_node(&self.name);
 
-        f.write_str(" IN CLUSTER ");
-        f.write_node(&self.in_cluster);
+        if let Some(cluster_name) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster_name);
+        }
 
         f.write_str(" FROM WEBHOOK ");
 
@@ -1704,7 +1709,7 @@ impl AstDisplay for ClusterOptionName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-/// An option in a `CREATE CLUSTER` ostatement.
+/// An option in a `CREATE CLUSTER` statement.
 pub struct ClusterOption<T: AstInfo> {
     pub name: ClusterOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -1720,6 +1725,31 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     }
 }
 
+// Note: the `AstDisplay` implementation and `Parser::parse_` method for this
+// enum are generated automatically by this crate's `build.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ClusterFeatureName {
+    ReoptimizeImportedViews,
+    EnableNewOuterJoinLowering,
+    EnableEagerDeltaJoins,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClusterFeature<T: AstInfo> {
+    pub name: ClusterFeatureName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ClusterFeature<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// `CREATE CLUSTER ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateClusterStatement<T: AstInfo> {
@@ -1727,6 +1757,8 @@ pub struct CreateClusterStatement<T: AstInfo> {
     pub name: Ident,
     /// The comma-separated options.
     pub options: Vec<ClusterOption<T>>,
+    /// The comma-separated features enabled on the cluster.
+    pub features: Vec<ClusterFeature<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
@@ -1736,6 +1768,11 @@ impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
         if !self.options.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.options));
+            f.write_str(")");
+        }
+        if !self.features.is_empty() {
+            f.write_str(" FEATURES (");
+            f.write_node(&display::comma_separated(&self.features));
             f.write_str(")");
         }
     }
@@ -3008,7 +3045,7 @@ impl_display_t!(SubscribeRelation);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainPlanStatement<T: AstInfo> {
     pub stage: ExplainStage,
-    pub config_flags: Vec<Ident>,
+    pub with_options: Vec<ExplainPlanOption<T>>,
     pub format: ExplainFormat,
     pub explainee: Explainee<T>,
 }
@@ -3017,9 +3054,9 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ");
         f.write_node(&self.stage);
-        if !self.config_flags.is_empty() {
-            f.write_str(" WITH(");
-            f.write_node(&display::comma_separated(&self.config_flags));
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
         f.write_str(" AS ");
@@ -3029,6 +3066,50 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     }
 }
 impl_display_t!(ExplainPlanStatement);
+
+// Note: the `AstDisplay` implementation and `Parser::parse_` method for this
+// enum are generated automatically by this crate's `build.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ExplainPlanOptionName {
+    Arity,
+    Cardinality,
+    ColumnNames,
+    FilterPushdown,
+    HumanizedExpressions,
+    JoinImplementations,
+    Keys,
+    LinearChains,
+    NonNegative,
+    NoFastPath,
+    NoNotices,
+    NodeIdentifiers,
+    RawPlans,
+    RawSyntax,
+    Raw, // Listed after the `Raw~` variants to keep the parser happy!
+    Redacted,
+    SubtreeSize,
+    Timing,
+    Types,
+    ReoptimizeImportedViews,
+    EnableNewOuterJoinLowering,
+    EnableEagerDeltaJoins,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ExplainPlanOption<T: AstInfo> {
+    pub name: ExplainPlanOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainPlanOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExplainSinkSchemaFor {
@@ -3053,6 +3134,19 @@ impl<T: AstInfo> AstDisplay for ExplainSinkSchemaStatement<T> {
     }
 }
 impl_display_t!(ExplainSinkSchemaStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainPushdownStatement<T: AstInfo> {
+    pub explainee: Explainee<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainPushdownStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN FILTER PUSHDOWN FOR ");
+        f.write_node(&self.explainee);
+    }
+}
+impl_display_t!(ExplainPushdownStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {
@@ -3458,8 +3552,10 @@ pub enum ExplainStage {
     RawPlan,
     /// The mz_expr::MirRelationExpr after decorrelation
     DecorrelatedPlan,
-    /// The mz_expr::MirRelationExpr after optimization
-    OptimizedPlan,
+    /// The mz_expr::MirRelationExpr after local optimization
+    LocalPlan,
+    /// The mz_expr::MirRelationExpr after global optimization
+    GlobalPlan,
     /// The mz_compute_types::plan::Plan
     PhysicalPlan,
     /// The complete trace of the plan through the optimizer
@@ -3473,7 +3569,8 @@ impl ExplainStage {
         match self {
             Self::RawPlan => Some(Raw.path()),
             Self::DecorrelatedPlan => Some(Decorrelated.path()),
-            Self::OptimizedPlan => Some(Optimized.path()),
+            Self::LocalPlan => Some(Local.path()),
+            Self::GlobalPlan => Some(Global.path()),
             Self::PhysicalPlan => Some(Physical.path()),
             Self::Trace => None,
         }
@@ -3485,7 +3582,8 @@ impl ExplainStage {
         match self {
             Self::RawPlan => false,
             Self::DecorrelatedPlan => false,
-            Self::OptimizedPlan => true,
+            Self::LocalPlan => false,
+            Self::GlobalPlan => true,
             Self::PhysicalPlan => true,
             Self::Trace => false,
         }
@@ -3497,7 +3595,8 @@ impl AstDisplay for ExplainStage {
         match self {
             Self::RawPlan => f.write_str("RAW PLAN"),
             Self::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
-            Self::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            Self::LocalPlan => f.write_str("LOCALLY OPTIMIZED PLAN"),
+            Self::GlobalPlan => f.write_str("OPTIMIZED PLAN"),
             Self::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
             Self::Trace => f.write_str("OPTIMIZER TRACE"),
         }
@@ -3510,7 +3609,8 @@ impl_display!(ExplainStage);
 pub enum NamedPlan {
     Raw,
     Decorrelated,
-    Optimized,
+    Local,
+    Global,
     Physical,
     FastPath,
 }
@@ -3521,7 +3621,8 @@ impl NamedPlan {
         match value {
             "optimize/raw" => Some(Self::Raw),
             "optimize/hir_to_mir" => Some(Self::Decorrelated),
-            "optimize/global" => Some(Self::Optimized),
+            "optimize/local" => Some(Self::Local),
+            "optimize/global" => Some(Self::Global),
             "optimize/finalize_dataflow" => Some(Self::Physical),
             "optimize/fast_path" => Some(Self::FastPath),
             _ => None,
@@ -3534,7 +3635,8 @@ impl NamedPlan {
         match self {
             Self::Raw => "optimize/raw",
             Self::Decorrelated => "optimize/hir_to_mir",
-            Self::Optimized => "optimize/global",
+            Self::Local => "optimize/local",
+            Self::Global => "optimize/global",
             Self::Physical => "optimize/finalize_dataflow",
             Self::FastPath => "optimize/fast_path",
         }
@@ -3552,8 +3654,16 @@ pub enum Explainee<T: AstInfo> {
     ReplanMaterializedView(T::ItemName),
     ReplanIndex(T::ItemName),
     Select(Box<SelectStatement<T>>, bool),
+    CreateView(Box<CreateViewStatement<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
     CreateIndex(Box<CreateIndexStatement<T>>, bool),
+}
+
+impl<T: AstInfo> Explainee<T> {
+    pub fn is_view(&self) -> bool {
+        use Explainee::*;
+        matches!(self, View(_) | ReplanView(_) | CreateView(_, _))
+    }
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {
@@ -3588,6 +3698,12 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                     f.write_str("BROKEN ");
                 }
                 f.write_node(select);
+            }
+            Self::CreateView(statement, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(statement);
             }
             Self::CreateMaterializedView(statement, broken) => {
                 if *broken {
@@ -4410,3 +4526,7 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
 }
 
 impl_display_t!(CommentObjectType);
+
+// Include the `AstDisplay` implementations for simple options derived by the
+// crate's build.rs script.
+include!(concat!(env!("OUT_DIR"), "/display.simple_options.rs"));

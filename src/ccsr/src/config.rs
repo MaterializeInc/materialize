@@ -118,12 +118,15 @@ impl ClientConfig {
             builder = builder.resolve_to_addrs(&domain, &addrs);
         }
 
+        // TODO(guswynn): make this configurable.
+        let timeout = Duration::from_secs(60);
+
         let inner = builder
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(60))
+            .timeout(timeout)
             .build()
             .unwrap();
 
-        Client::new(inner, self.url, self.auth)
+        Client::new(inner, self.url, self.auth, timeout)
     }
 }

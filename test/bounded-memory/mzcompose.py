@@ -631,7 +631,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.up("redpanda", "materialized", "postgres", "clusterd")
 
             c.sql(
-                "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+                "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
                 port=6877,
                 user="mz_system",
             )

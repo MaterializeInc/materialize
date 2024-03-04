@@ -207,14 +207,6 @@ pub enum CatalogConfig {
         /// Persist catalog metrics.
         metrics: Arc<mz_catalog::durable::Metrics>,
     },
-    /// The catalog contents are stored in both persist and the stash and their contents are
-    /// compared. This is mostly used for testing purposes.
-    Shadow {
-        /// The PostgreSQL URL for the adapter stash.
-        url: String,
-        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
-        persist_clients: Arc<PersistClientCache>,
-    },
 }
 
 impl CatalogConfig {
@@ -222,7 +214,6 @@ impl CatalogConfig {
         match self {
             CatalogConfig::Stash { .. } => CatalogKind::Stash,
             CatalogConfig::Persist { .. } => CatalogKind::Persist,
-            CatalogConfig::Shadow { .. } => CatalogKind::Shadow,
             CatalogConfig::EmergencyStash { .. } => CatalogKind::EmergencyStash,
         }
     }
@@ -294,7 +285,7 @@ impl Listeners {
     /// Starts an `environmentd` server.
     ///
     /// Returns a handle to the server once it is fully booted.
-    #[tracing::instrument(name = "environmentd::serve", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "environmentd::serve", level = "info")]
     pub async fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
         let Listeners {
             sql: (sql_listener, sql_conns),
@@ -309,7 +300,7 @@ impl Listeners {
         let (pgwire_tls, http_tls) = match &config.tls {
             None => (None, None),
             Some(tls_config) => {
-                let context = tls_config.context()?;
+                let context = tls_config.load_context()?;
                 let pgwire_tls = mz_server_core::TlsConfig {
                     context: context.clone(),
                     mode: mz_server_core::TlsMode::Require,
@@ -322,7 +313,7 @@ impl Listeners {
             }
         };
 
-        let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0)));
+        let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0, 0)));
 
         let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
         let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
@@ -822,30 +813,6 @@ async fn catalog_opener(
                     Arc::clone(metrics),
                 )
                 .await?,
-            )
-        }
-        CatalogConfig::Shadow {
-            url,
-            persist_clients,
-        } => {
-            let stash_factory =
-                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
-            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
-            let persist_client = persist_clients
-                .open(controller_config.persist_location.clone())
-                .await?;
-            Box::new(
-                mz_catalog::durable::shadow_catalog_state(
-                    StashConfig {
-                        stash_factory,
-                        stash_url: url.clone(),
-                        schema: None,
-                        tls,
-                    },
-                    persist_client,
-                    environment_id.organization_id(),
-                )
-                .await,
             )
         }
     })

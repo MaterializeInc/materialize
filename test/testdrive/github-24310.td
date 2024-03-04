@@ -44,5 +44,3 @@ DROP CLUSTER REPLICA sources.unbilled;
 
 ! CREATE CLUSTER REPLICA sources.r1 SIZE '1'
 contains:cannot modify managed cluster sources
-
-> DROP SOURCE counter CASCADE;

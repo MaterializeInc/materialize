@@ -22,6 +22,7 @@ from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.grafana import Grafana
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.prometheus import Prometheus
@@ -55,6 +56,7 @@ SERVICES = [
     SshBastionHost(),
     Persistcli(),
     Toxiproxy(),
+    MySql(),
 ]
 
 
@@ -172,7 +174,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up("materialized")
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )

@@ -82,36 +82,37 @@ upload_artifact() {
     cservice="$1"
     artifact="$2"
     # For materialized
-    if mzcompose --mz-quiet exec "$cservice" curl --silent http://127.0.0.1:6878/prof/heap > "$artifact"; then
+    if mzcompose --mz-quiet exec "$cservice" curl --silent http://127.0.0.1:6878/prof/heap > "$artifact" 2> /dev/null; then
         if [ -s "$artifact" ]; then
             buildkite-agent artifact upload --log-level error "$artifact"
             i=0
-            mzcompose --mz-quiet exec "$cservice" ps aux | grep "/usr/local/bin/clusterd" | grep -v grep | sed -e "s/.* --internal-http-listen-addr=\(\/tmp\/[^ ]*\) .*/\1/" | while read -r socket; do
+            while read -r socket; do
                 artifact_socket=$(echo "$artifact" | sed -e "s#prof/#prof/clusterd$i-#")
-                if mzcompose --mz-quiet exec "$cservice" curl --silent --unix-socket "$socket" http:/prof/heap > "$artifact_socket"; then
+                if mzcompose --mz-quiet exec "$cservice" curl --silent --unix-socket "$socket" http:/prof/heap > "$artifact_socket" 2> /dev/null; then
                     if [ -s "$artifact_socket" ]; then
                         buildkite-agent artifact upload --log-level error "$artifact_socket"
                     fi
                 fi
                 ((i++))
-            done
+            done <<< "$(mzcompose --mz-quiet exec "$cservice" ps aux | grep "/usr/local/bin/clusterd" | grep -v grep | sed -e "s/.* --internal-http-listen-addr=\(\/tmp\/[^ ]*\) .*/\1/" 2> /dev/null)"
         else
             # For clusterd
-            if mzcompose --mz-quiet exec "$cservice" curl --silent http://127.0.0.1:6878/heap > "$artifact"; then
+            if mzcompose --mz-quiet exec "$cservice" curl --silent http://127.0.0.1:6878/heap > "$artifact" 2> /dev/null; then
                 if [ -s "$artifact" ]; then
-                    buildkite-agent artifact upload --log-level error "$artifact"
+                    # shellcheck disable=SC2034
+                    artifact_uuid=$(buildkite-agent artifact upload --log-level info "$artifact" | grep "Uploading artifact" | sed -e "s/Uploading artifact \([^ ]*\) .*/\1/")
                 fi
             fi
         fi
     fi
 }
 
-if [ -n "${CI_HEAP_PROFILES:-}" ]; then
+if is_truthy "${CI_HEAP_PROFILES:-}"; then
     rm -rf prof
     mkdir prof
     (while true; do
         sleep 10
-        for cservice in $(mzcompose --mz-quiet ps --services); do
+        for cservice in $(mzcompose --mz-quiet ps --services 2> /dev/null); do
             artifact=$(date "+prof/$cservice-%Y-%m-%d_%H:%M:%S.pb.gz")
             upload_artifact "$cservice" "$artifact" &
         done
@@ -119,7 +120,7 @@ if [ -n "${CI_HEAP_PROFILES:-}" ]; then
     ) &
 fi
 
-ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
+ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}\`"
 
 mzcompose run "${run_args[@]}" |& tee run.log
 RESULT=$?

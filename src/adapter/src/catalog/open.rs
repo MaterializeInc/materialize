@@ -17,7 +17,7 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tracing::{info, instrument, warn, Instrument};
+use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
@@ -25,7 +25,6 @@ use mz_catalog::builtin::{
     BUILTIN_ROLES,
 };
 use mz_catalog::config::StateConfig;
-use mz_catalog::durable::initialize::MZ_UNSAFE_SCHEMA_ID;
 use mz_catalog::durable::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
     SystemObjectUniqueIdentifier,
@@ -44,10 +43,10 @@ use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::instrument;
 use mz_ore::now::to_datetime;
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
-use mz_repr::namespaces::MZ_UNSAFE_SCHEMA;
+use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
@@ -59,7 +58,7 @@ use mz_sql::names::{
     ItemQualifiers, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds,
     SchemaId, SchemaSpecifier,
 };
-use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars, VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -278,32 +277,6 @@ impl Catalog {
                 state.database_by_name.insert(name.clone(), id.clone());
             }
 
-            // TODO(jkosh44) Remove after next release.
-            let contains_unsafe_schema = txn
-                .get_schemas()
-                .filter_map(|schema| match schema.id {
-                    SchemaId::User(_) => None,
-                    SchemaId::System(id) => Some(id),
-                })
-                .any(|id| id == MZ_UNSAFE_SCHEMA_ID);
-            if !contains_unsafe_schema {
-                let schema_privileges = vec![
-                    rbac::default_builtin_object_privilege(mz_sql::catalog::ObjectType::Schema),
-                    MzAclItem {
-                        grantee: MZ_SUPPORT_ROLE_ID,
-                        grantor: MZ_SYSTEM_ROLE_ID,
-                        acl_mode: AclMode::USAGE,
-                    },
-                    rbac::owner_privilege(mz_sql::catalog::ObjectType::Schema, MZ_SYSTEM_ROLE_ID),
-                ];
-                let schema_id = SchemaId::System(MZ_UNSAFE_SCHEMA_ID);
-                txn.insert_system_schema(
-                    schema_id,
-                    MZ_UNSAFE_SCHEMA,
-                    MZ_SYSTEM_ROLE_ID,
-                    schema_privileges.clone(),
-                )?;
-            }
             let schemas = txn.get_schemas();
             for mz_catalog::durable::Schema {
                 id,
@@ -313,7 +286,11 @@ impl Catalog {
                 privileges,
             } in schemas
             {
-                let oid = state.allocate_oid()?;
+                let oid = if let Some(oid) = CatalogState::get_system_schema_oid(&name) {
+                    oid
+                } else {
+                    state.allocate_oid()?
+                };
                 let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                     Some(database_id) => {
                         let db = state
@@ -389,7 +366,11 @@ impl Catalog {
                 vars,
             } in roles
             {
-                let oid = state.allocate_oid()?;
+                let oid = if let Some(role) = BUILTIN_ROLES.iter().find(|role| name == role.name) {
+                    role.oid
+                } else {
+                    state.allocate_oid()?
+                };
                 state.roles_by_name.insert(name.clone(), id);
                 state.roles_by_id.insert(
                     id,
@@ -464,7 +445,6 @@ impl Catalog {
                     };
                     match builtin {
                         Builtin::Log(log) => {
-                            let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::Source,
                                 MZ_SYSTEM_ROLE_ID,
@@ -472,7 +452,7 @@ impl Catalog {
                             acl_items.extend_from_slice(&log.access);
                             state.insert_item(
                                 id,
-                                oid,
+                                log.oid,
                                 name.clone(),
                                 CatalogItem::Log(Log {
                                     variant: log.variant.clone(),
@@ -484,7 +464,6 @@ impl Catalog {
                         }
 
                         Builtin::Table(table) => {
-                            let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::Table,
                                 MZ_SYSTEM_ROLE_ID,
@@ -493,7 +472,7 @@ impl Catalog {
 
                             state.insert_item(
                                 id,
-                                oid,
+                                table.oid,
                                 name.clone(),
                                 CatalogItem::Table(Table {
                                     create_sql: None,
@@ -532,7 +511,6 @@ impl Catalog {
                                     view.name, e
                                 )
                             });
-                            let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::View,
                                 MZ_SYSTEM_ROLE_ID,
@@ -541,7 +519,7 @@ impl Catalog {
 
                             state.insert_item(
                                 id,
-                                oid,
+                                view.oid,
                                 name,
                                 item,
                                 MZ_SYSTEM_ROLE_ID,
@@ -552,7 +530,10 @@ impl Catalog {
                         Builtin::Type(_) => unreachable!("loaded separately"),
 
                         Builtin::Func(func) => {
-                            let oid = state.allocate_oid()?;
+                            // This OID is never used. `func` has a `Vec` of implementations and
+                            // each implementation has it's own OID. Those are the OIDs that are
+                            // actually used by the system.
+                            let oid = 0;
                             state.insert_item(
                                 id,
                                 oid,
@@ -564,7 +545,6 @@ impl Catalog {
                         }
 
                         Builtin::Source(coll) => {
-                            let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::Source,
                                 MZ_SYSTEM_ROLE_ID,
@@ -573,7 +553,7 @@ impl Catalog {
 
                             state.insert_item(
                                 id,
-                                oid,
+                                coll.oid,
                                 name.clone(),
                                 CatalogItem::Source(Source {
                                     create_sql: None,
@@ -716,10 +696,9 @@ impl Catalog {
                             panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                         };
 
-                        let oid = state.allocate_oid()?;
                         state.insert_item(
                             id,
-                            oid,
+                            index.oid,
                             name,
                             item,
                             MZ_SYSTEM_ROLE_ID,
@@ -823,7 +802,7 @@ impl Catalog {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 17KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    #[instrument(name = "catalog::open", skip_all)]
+    #[instrument(name = "catalog::open")]
     pub fn open(
         config: Config<'_>,
         boot_ts_not_linearizable: mz_repr::Timestamp,
@@ -1032,7 +1011,7 @@ impl Catalog {
     ///    (if present).
     ///
     /// # Errors
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     fn load_system_configuration(
         state: &mut CatalogState,
         txn: &mut Transaction<'_>,
@@ -1078,7 +1057,7 @@ impl Catalog {
     /// references are circular. This makes loading built-in types more complicated than other
     /// built-in objects, and requires us to make multiple passes over the types to correctly
     /// resolve all references.
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     fn load_builtin_types(state: &mut CatalogState, txn: &mut Transaction) -> Result<(), Error> {
         let persisted_builtin_ids: BTreeMap<_, _> = txn
             .get_system_items()
@@ -1386,7 +1365,7 @@ impl Catalog {
         Ok(())
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     fn apply_persisted_builtin_migration(
         state: &CatalogState,
         txn: &mut Transaction<'_>,
@@ -1434,7 +1413,7 @@ impl Catalog {
     /// objects, which is necessary for at least one catalog migration.
     ///
     /// TODO(justin): it might be nice if these were two different types.
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     pub fn load_catalog_items<'a>(
         tx: &mut Transaction<'a>,
         state: &CatalogState,
@@ -1939,7 +1918,6 @@ mod builtin_migration_tests {
                     item,
                     owner_id: MZ_SYSTEM_ROLE_ID,
                 }],
-                |_| Ok(()),
             )
             .await
             .expect("failed to transact");

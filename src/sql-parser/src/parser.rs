@@ -50,6 +50,9 @@ pub const MAX_STATEMENT_BATCH_SIZE: usize = 1_000_000;
 /// Keywords that indicate the start of a (sub)query.
 const QUERY_START_KEYWORDS: &[Keyword] = &[WITH, SELECT, SHOW, TABLE, VALUES];
 
+/// Keywords that indicate the start of an `ANY` or `ALL` subquery operation.
+const ANY_ALL_KEYWORDS: &[Keyword] = &[ANY, ALL, SOME];
+
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
     ($parser:expr, $pos:expr, $MSG:expr) => {
@@ -106,7 +109,7 @@ impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
 ///
 /// The outer Result is for errors related to the statement size. The inner Result is for
 /// errors during the parsing.
-#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
+#[mz_ore::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements_with_limit(
     sql: &str,
 ) -> Result<Result<Vec<StatementParseResult>, ParserStatementError>, String> {
@@ -120,7 +123,7 @@ pub fn parse_statements_with_limit(
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
-#[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
+#[mz_ore::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
     debug!("parsing statements: {sql}");
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
@@ -1119,53 +1122,8 @@ impl<'a> Parser<'a> {
         };
 
         if let Some(op) = regular_binary_operator {
-            if let Some(kw) = self.parse_one_of_keywords(&[ANY, SOME, ALL]) {
-                self.expect_token(&Token::LParen)?;
-
-                let expr = match self.parse_parenthesized_fragment()? {
-                    ParenthesizedFragment::Exprs(exprs) => {
-                        if exprs.len() > 1 {
-                            return parser_err!(
-                                self,
-                                self.peek_pos(),
-                                "{kw} requires a single expression or subquery, not an expression list",
-                            );
-                        }
-                        let right = exprs.into_element();
-                        if kw == ALL {
-                            Expr::AllExpr {
-                                left: Box::new(expr),
-                                op,
-                                right: Box::new(right),
-                            }
-                        } else {
-                            Expr::AnyExpr {
-                                left: Box::new(expr),
-                                op,
-                                right: Box::new(right),
-                            }
-                        }
-                    }
-                    ParenthesizedFragment::Query(subquery) => {
-                        if kw == ALL {
-                            Expr::AllSubquery {
-                                left: Box::new(expr),
-                                op,
-                                right: Box::new(subquery),
-                            }
-                        } else {
-                            Expr::AnySubquery {
-                                left: Box::new(expr),
-                                op,
-                                right: Box::new(subquery),
-                            }
-                        }
-                    }
-                };
-
-                self.expect_token(&Token::RParen)?;
-
-                Ok(expr)
+            if let Some(kw) = self.parse_one_of_keywords(ANY_ALL_KEYWORDS) {
+                self.parse_any_all(expr, op, kw)
             } else {
                 Ok(Expr::Op {
                     op,
@@ -1397,6 +1355,62 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parses an `ANY`, `ALL`, or `SOME` operation, starting after the `ANY`,
+    /// `ALL`, or `SOME` keyword.
+    fn parse_any_all(
+        &mut self,
+        left: Expr<Raw>,
+        op: Op,
+        kw: Keyword,
+    ) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+
+        let expr = match self.parse_parenthesized_fragment()? {
+            ParenthesizedFragment::Exprs(exprs) => {
+                if exprs.len() > 1 {
+                    return parser_err!(
+                        self,
+                        self.peek_pos(),
+                        "{kw} requires a single expression or subquery, not an expression list",
+                    );
+                }
+                let right = exprs.into_element();
+                if kw == ALL {
+                    Expr::AllExpr {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    }
+                } else {
+                    Expr::AnyExpr {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    }
+                }
+            }
+            ParenthesizedFragment::Query(subquery) => {
+                if kw == ALL {
+                    Expr::AllSubquery {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(subquery),
+                    }
+                } else {
+                    Expr::AnySubquery {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(subquery),
+                    }
+                }
+            }
+        };
+
+        self.expect_token(&Token::RParen)?;
+
+        Ok(expr)
+    }
+
     /// Parses the parens following the `[ NOT ] IN` operator
     fn parse_in(&mut self, expr: Expr<Raw>, negated: bool) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
@@ -1438,6 +1452,15 @@ impl<'a> Parser<'a> {
         case_insensitive: bool,
         negated: bool,
     ) -> Result<Expr<Raw>, ParserError> {
+        if let Some(kw) = self.parse_one_of_keywords(ANY_ALL_KEYWORDS) {
+            let op = match (case_insensitive, negated) {
+                (false, false) => "~~",
+                (false, true) => "!~~",
+                (true, false) => "~~*",
+                (true, true) => "!~~*",
+            };
+            return self.parse_any_all(expr, Op::bare(op), kw);
+        }
         let pattern = self.parse_subexpr(Precedence::Like)?;
         let escape = if self.parse_keyword(ESCAPE) {
             Some(Box::new(self.parse_subexpr(Precedence::Like)?))
@@ -2604,18 +2627,12 @@ impl<'a> Parser<'a> {
 
         let (col_names, key_constraint) = self.parse_source_columns()?;
 
-        // For webhook sources we require `IN CLUSTER`, so track the position for an error message.
-        let cluster_err = self.expected(self.peek_pos(), "IN CLUSTER", self.peek_token());
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
 
         // Webhook Source, which works differently than all other sources.
         if self.peek_keyword(WEBHOOK) {
-            return self.parse_create_webhook_source(
-                name,
-                if_not_exists,
-                (in_cluster, cluster_err),
-            );
+            return self.parse_create_webhook_source(name, if_not_exists, in_cluster);
         }
 
         let connection = self.parse_create_source_connection()?;
@@ -2782,10 +2799,8 @@ impl<'a> Parser<'a> {
         &mut self,
         name: UnresolvedItemName,
         if_not_exists: bool,
-        in_cluster: (Option<RawClusterName>, Result<(), ParserError>),
+        in_cluster: Option<RawClusterName>,
     ) -> Result<Statement<Raw>, ParserError> {
-        let in_cluster = in_cluster.0.ok_or_else(|| in_cluster.1.unwrap_err())?;
-
         // Consume this keyword because we only peeked it earlier.
         self.expect_keyword(WEBHOOK)?;
 
@@ -3588,9 +3603,20 @@ impl<'a> Parser<'a> {
         if paren {
             let _ = self.consume_token(&Token::RParen);
         }
+
+        let features = if self.parse_keywords(&[FEATURES]) {
+            self.expect_token(&Token::LParen)?;
+            let features = self.parse_comma_separated(Parser::parse_cluster_feature)?;
+            self.expect_token(&Token::RParen)?;
+            features
+        } else {
+            Vec::new()
+        };
+
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
+            features,
         }))
     }
 
@@ -3720,6 +3746,13 @@ impl<'a> Parser<'a> {
         };
         let value = self.parse_optional_option_value()?;
         Ok(ReplicaOption { name, value })
+    }
+
+    fn parse_cluster_feature(&mut self) -> Result<ClusterFeature<Raw>, ParserError> {
+        Ok(ClusterFeature {
+            name: self.parse_cluster_feature_name()?,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -7225,6 +7258,9 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(TIMESTAMP) {
             self.parse_explain_timestamp()
                 .map_parser_err(StatementKind::ExplainTimestamp)
+        } else if self.parse_keywords(&[FILTER, PUSHDOWN]) {
+            self.parse_explain_pushdown()
+                .map_parser_err(StatementKind::ExplainPushdown)
         } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
             self.parse_explain_schema()
                 .map_parser_err(StatementKind::ExplainSinkSchema)
@@ -7234,74 +7270,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse an `EXPLAIN ... PLAN` statement, assuming that the `EXPLAIN` token
-    /// has already been consumed.
-    fn parse_explain_plan(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let stage = match self.parse_one_of_keywords(&[
-            PLAN,
-            RAW,
-            DECORRELATED,
-            OPTIMIZED,
-            PHYSICAL,
-            OPTIMIZER,
-        ]) {
-            Some(PLAN) => {
-                // EXPLAIN PLAN = EXPLAIN OPTIMIZED PLAN
-                Some(ExplainStage::OptimizedPlan)
-            }
-            Some(RAW) => {
-                self.expect_keyword(PLAN)?;
-                Some(ExplainStage::RawPlan)
-            }
-            Some(DECORRELATED) => {
-                self.expect_keyword(PLAN)?;
-                Some(ExplainStage::DecorrelatedPlan)
-            }
-            Some(OPTIMIZED) => {
-                self.expect_keyword(PLAN)?;
-                Some(ExplainStage::OptimizedPlan)
-            }
-            Some(PHYSICAL) => {
-                self.expect_keyword(PLAN)?;
-                Some(ExplainStage::PhysicalPlan)
-            }
-            Some(OPTIMIZER) => {
-                self.expect_keyword(TRACE)?;
-                Some(ExplainStage::Trace)
-            }
-            None => None,
-            _ => unreachable!(),
-        };
-
-        let config_flags = if self.parse_keyword(WITH) {
-            if self.consume_token(&Token::LParen) {
-                let config_flags = self.parse_comma_separated(Self::parse_identifier)?;
-                self.expect_token(&Token::RParen)?;
-                config_flags
-            } else {
-                self.prev_token(); // push back WITH in case it's actually a CTE
-                vec![]
-            }
-        } else {
-            vec![]
-        };
-
-        let format = if self.parse_keyword(AS) {
-            match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
-                Some(TEXT) => ExplainFormat::Text,
-                Some(JSON) => ExplainFormat::Json,
-                Some(DOT) => ExplainFormat::Dot,
-                None => return Err(ParserError::new(self.index, "expected a format")),
-                _ => unreachable!(),
-            }
-        } else {
-            ExplainFormat::Text
-        };
-
-        if stage.is_some() {
-            self.expect_keyword(FOR)?;
-        }
-
+    fn parse_explainee(&mut self) -> Result<Explainee<Raw>, ParserError> {
         let explainee = if self.parse_keyword(VIEW) {
             // Parse: `VIEW name`
             Explainee::View(self.parse_raw_name()?)
@@ -7323,7 +7292,18 @@ impl<'a> Parser<'a> {
         } else {
             let broken = self.parse_keyword(BROKEN);
 
-            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
+            if self.peek_keywords(&[CREATE, VIEW])
+                || self.peek_keywords(&[CREATE, OR, REPLACE, VIEW])
+            {
+                // Parse: `BROKEN? CREATE [OR REPLACE] VIEW ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_view()? {
+                    Statement::CreateView(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+
+                Explainee::CreateView(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
                 || self.peek_keywords(&[CREATE, OR, REPLACE, MATERIALIZED, VIEW])
             {
                 // Parse: `BROKEN? CREATE [OR REPLACE] MATERIALIZED VIEW ...`
@@ -7351,11 +7331,118 @@ impl<'a> Parser<'a> {
                 Explainee::Select(Box::new(query), broken)
             }
         };
+        Ok(explainee)
+    }
+
+    /// Parse an `EXPLAIN ... PLAN` statement, assuming that the `EXPLAIN` token
+    /// has already been consumed.
+    fn parse_explain_plan(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let start = self.peek_pos();
+        let (has_stage, stage) = match self.parse_one_of_keywords(&[
+            RAW,
+            DECORRELATED,
+            LOCALLY,
+            OPTIMIZED,
+            PHYSICAL,
+            OPTIMIZER,
+            PLAN,
+        ]) {
+            Some(RAW) => {
+                self.expect_keyword(PLAN)?;
+                (true, Some(ExplainStage::RawPlan))
+            }
+            Some(DECORRELATED) => {
+                self.expect_keyword(PLAN)?;
+                (true, Some(ExplainStage::DecorrelatedPlan))
+            }
+            Some(LOCALLY) => {
+                self.expect_keywords(&[OPTIMIZED, PLAN])?;
+                (true, Some(ExplainStage::LocalPlan))
+            }
+            Some(OPTIMIZED) => {
+                self.expect_keyword(PLAN)?;
+                (true, Some(ExplainStage::GlobalPlan))
+            }
+            Some(PHYSICAL) => {
+                self.expect_keyword(PLAN)?;
+                (true, Some(ExplainStage::PhysicalPlan))
+            }
+            Some(OPTIMIZER) => {
+                self.expect_keyword(TRACE)?;
+                (true, Some(ExplainStage::Trace))
+            }
+            Some(PLAN) => {
+                // Use the default plan for the explainee.
+                (true, None)
+            }
+            None => {
+                // Use the default plan for the explainee.
+                (false, None)
+            }
+            _ => unreachable!(),
+        };
+
+        let with_options = if self.parse_keyword(WITH) {
+            if self.consume_token(&Token::LParen) {
+                let options = self.parse_comma_separated(Parser::parse_explain_plan_option)?;
+                self.expect_token(&Token::RParen)?;
+                options
+            } else {
+                self.prev_token(); // push back WITH in case it's actually a CTE
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        let format = if self.parse_keyword(AS) {
+            match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
+                Some(TEXT) => ExplainFormat::Text,
+                Some(JSON) => ExplainFormat::Json,
+                Some(DOT) => ExplainFormat::Dot,
+                None => return Err(ParserError::new(self.index, "expected a format")),
+                _ => unreachable!(),
+            }
+        } else {
+            ExplainFormat::Text
+        };
+
+        if has_stage {
+            self.expect_keyword(FOR)?;
+        }
+
+        let explainee = self.parse_explainee()?;
+
+        // Explainees that represent a view only work in association with an
+        // explicitly defined stage.
+        if matches!((explainee.is_view(), &stage), (true, None)) {
+            let msg = format!("EXPLAIN statement for a view needs an explicit stage");
+            return Err(self.error(start, msg));
+        }
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
-            stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
-            config_flags,
+            stage: stage.unwrap_or_else(|| ExplainStage::GlobalPlan),
+            with_options,
             format,
+            explainee,
+        }))
+    }
+
+    fn parse_explain_plan_option(&mut self) -> Result<ExplainPlanOption<Raw>, ParserError> {
+        Ok(ExplainPlanOption {
+            name: self.parse_explain_plan_option_name()?,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
+    /// Parse an `EXPLAIN FILTER PUSHDOWN` statement, assuming that the `EXPLAIN
+    /// PUSHDOWN` tokens have already been consumed.
+    fn parse_explain_pushdown(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(FOR)?;
+
+        let explainee = self.parse_explainee()?;
+
+        Ok(Statement::ExplainPushdown(ExplainPushdownStatement {
             explainee,
         }))
     }
@@ -8270,3 +8357,7 @@ impl ParenthesizedFragment {
         }
     }
 }
+
+// Include the `Parser::parse_~` implementations for simple options derived by
+// the crate's build.rs script.
+include!(concat!(env!("OUT_DIR"), "/parse.simple_options.rs"));

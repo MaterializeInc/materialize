@@ -11,6 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
+import "pgcopy/src/copy.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
@@ -105,4 +106,11 @@ message ProtoKafkaIdStyle {
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
     mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
+}
+
+message ProtoS3UploadInfo {
+    string prefix = 1;
+    uint64 max_file_size = 2;
+    mz_repr.relation_and_scalar.ProtoRelationDesc desc = 3;
+    mz_pgcopy.copy.ProtoCopyFormatParams format = 4;
 }

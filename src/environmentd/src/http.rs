@@ -35,7 +35,7 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Method, Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
-use mz_adapter::session::Session;
+use mz_adapter::session::{Session, SessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, Error as FronteggError,
@@ -47,9 +47,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
 use mz_repr::user::ExternalUserMetadata;
 use mz_server_core::{ConnectionHandler, Server};
-use mz_sql::session::user::{
-    User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER, SYSTEM_USER_NAME,
-};
+use mz_sql::session::user::{HTTP_DEFAULT_USER, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
 use mz_sql::session::vars::{
     ConnectionCounter, DropConnection, Value, Var, VarInput, WELCOME_MESSAGE,
 };
@@ -58,8 +56,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
+use tokio::sync::{oneshot, watch};
 use tokio_openssl::SslStream;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::ServiceBuilder;
@@ -495,16 +493,18 @@ async fn internal_http_auth<B>(mut req: Request<B>, next: Next<B>) -> impl IntoR
         .get("x-materialize-user")
         .map(|h| h.to_str())
         .unwrap_or_else(|| Ok(SYSTEM_USER_NAME));
-    let user = match user_name {
-        Ok(SUPPORT_USER_NAME) => AuthedUser(SUPPORT_USER.clone()),
-        Ok(SYSTEM_USER_NAME) => AuthedUser(SYSTEM_USER.clone()),
+    let user_name = match user_name {
+        Ok(name @ (SUPPORT_USER_NAME | SYSTEM_USER_NAME)) => name.to_string(),
         _ => {
             return Err(AuthError::MismatchedUser(format!(
             "user specified in x-materialize-user must be {SUPPORT_USER_NAME} or {SYSTEM_USER_NAME}"
         )));
         }
     };
-    req.extensions_mut().insert(user);
+    req.extensions_mut().insert(AuthedUser {
+        name: user_name,
+        external_metadata_rx: None,
+    });
     Ok(next.run(req).await)
 }
 
@@ -535,7 +535,10 @@ enum ConnProtocol {
 }
 
 #[derive(Clone, Debug)]
-pub struct AuthedUser(User);
+pub struct AuthedUser {
+    name: String,
+    external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
+}
 
 pub struct AuthedClient {
     pub client: SessionClient,
@@ -553,10 +556,14 @@ impl AuthedClient {
     where
         F: FnOnce(&mut Session),
     {
-        let AuthedUser(user) = user;
-        let drop_connection = DropConnection::new_connection(&user, active_connection_count)?;
         let conn_id = adapter_client.new_conn_id()?;
-        let mut session = adapter_client.new_session(conn_id, user);
+        let mut session = adapter_client.new_session(SessionConfig {
+            conn_id,
+            user: user.name,
+            external_metadata_rx: user.external_metadata_rx,
+        });
+        let drop_connection =
+            DropConnection::new_connection(session.user(), active_connection_count)?;
         session_config(&mut session);
         for (key, val) in options {
             const LOCAL: bool = false;
@@ -837,17 +844,11 @@ async fn auth(
     // that is also present.
 
     // Then, handle Frontegg authentication if required.
-    let user = match (frontegg, creds) {
+    let (name, external_metadata_rx) = match (frontegg, creds) {
         // If no Frontegg authentication, allow the default user.
-        (None, Credentials::DefaultUser) => User {
-            name: HTTP_DEFAULT_USER.name.to_string(),
-            external_metadata: None,
-        },
+        (None, Credentials::DefaultUser) => (HTTP_DEFAULT_USER.name.to_string(), None),
         // If no Frontegg authentication, allow a protocol-specified user.
-        (None, Credentials::User(name)) => User {
-            name,
-            external_metadata: None,
-        },
+        (None, Credentials::User(name)) => (name, None),
         // With frontegg disabled, specifying credentials is an error.
         (None, _) => return Err(AuthError::UnexpectedCredentials),
         // If we require Frontegg auth, fetch credentials from the HTTP auth
@@ -871,20 +872,30 @@ async fn auth(
                     return Err(AuthError::MissingHttpAuthentication)
                 }
             };
-            User {
-                external_metadata: Some(ExternalUserMetadata {
-                    user_id: claims.user_id,
-                    admin: claims.is_admin,
-                }),
-                name: claims.email,
-            }
+            // Set up an external metadata channel that never updates.
+            //
+            // NOTE(benesch): Arguably we should handle HTTP requests the same
+            // way we handle pgwire sessions: refresh for as long as we have
+            // valid credentials, updating external metadata along the way, and
+            // terminating the request if the refresh fails and the token
+            // expires. We don't do that presently, because most HTTP requests
+            // are very short lived, but they can in fact block for an
+            // arbitrarily long time.
+            let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
+                user_id: claims.user_id,
+                admin: claims.is_admin,
+            });
+            (claims.email, Some(external_metadata_rx))
         }
     };
 
-    if mz_adapter::catalog::is_reserved_role_name(user.name.as_str()) {
-        return Err(AuthError::InvalidLogin(user.name));
+    if mz_adapter::catalog::is_reserved_role_name(name.as_str()) {
+        return Err(AuthError::InvalidLogin(name));
     }
-    Ok(AuthedUser(user))
+    Ok(AuthedUser {
+        name,
+        external_metadata_rx,
+    })
 }
 
 /// Configuration for [`base_router`].

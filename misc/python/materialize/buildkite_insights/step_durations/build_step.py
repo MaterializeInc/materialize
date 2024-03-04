@@ -16,6 +16,7 @@ from typing import Any
 
 @dataclass
 class BuildStepOutcome:
+    id: str
     step_key: str
     build_number: int
     created_at: datetime
@@ -55,6 +56,7 @@ def _extract_build_step_data_from_build(
         if job["state"] in ["canceled", "running"]:
             continue
 
+        id = build_data["id"]
         build_number = build_data["number"]
         created_at = datetime.fromisoformat(job["created_at"])
         build_step_key = job["step_key"]
@@ -75,6 +77,7 @@ def _extract_build_step_data_from_build(
         ), "Duration must be available for passed step"
 
         step_data = BuildStepOutcome(
+            id,
             build_step_key,
             build_number,
             created_at,

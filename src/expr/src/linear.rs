@@ -135,7 +135,7 @@ impl Display for MapFilterProject {
         writeln!(f, "  predicates:")?;
         self.predicates
             .iter()
-            .try_for_each(|(before, p)| write!(f, "    <before: {}> {},", before, p))?;
+            .try_for_each(|(before, p)| writeln!(f, "    <before: {}> {},", before, p))?;
         writeln!(f, "  projection: {:?}", self.projection)?;
         writeln!(f, "  input_arity: {}", self.input_arity)?;
         writeln!(f, ")")
@@ -889,23 +889,66 @@ impl MapFilterProject {
     /// );
     /// ```
     pub fn optimize(&mut self) {
-        // Optimization memoizes individual `ScalarExpr` expressions that
-        // are sure to be evaluated, canonicalizes references to the first
-        // occurrence of each, inlines expressions that have a reference
-        // count of one, and then removes any expressions that are not
-        // referenced.
-        self.memoize_expressions();
-        self.predicates.sort();
-        self.predicates.dedup();
-        self.inline_expressions();
-        self.remove_undemanded();
+        // Track sizes and iterate as long as they decrease.
+        let mut prev_size = None;
+        let mut self_size = usize::max_value();
+        // Continue as long as strict improvements occur.
+        while prev_size.map(|p| self_size < p).unwrap_or(true) {
+            // Lock in current size.
+            prev_size = Some(self_size);
 
-        // Re-build `self` from parts to restore evaluation order invariants.
-        let (map, filter, project) = self.as_map_filter_project();
-        *self = Self::new(self.input_arity)
-            .map(map)
-            .filter(filter)
-            .project(project);
+            // We have an annoying pattern of mapping literals that already exist as columns (by filters).
+            // Try to identify this pattern, of a map that introduces an expression equated to a prior column,
+            // and then replace the mapped expression by a column reference.
+            for (index, expr) in self.expressions.iter_mut().enumerate() {
+                // If `expr` matches a filter equating it to a column < index + input_arity, rewrite it
+                for (_, predicate) in self.predicates.iter() {
+                    if let MirScalarExpr::CallBinary {
+                        func: crate::BinaryFunc::Eq,
+                        expr1,
+                        expr2,
+                    } = predicate
+                    {
+                        if let MirScalarExpr::Column(c) = &**expr1 {
+                            if *c < index + self.input_arity && &**expr2 == expr {
+                                *expr = MirScalarExpr::Column(*c);
+                            }
+                        }
+                        if let MirScalarExpr::Column(c) = &**expr2 {
+                            if *c < index + self.input_arity && &**expr1 == expr {
+                                *expr = MirScalarExpr::Column(*c);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Optimization memoizes individual `ScalarExpr` expressions that
+            // are sure to be evaluated, canonicalizes references to the first
+            // occurrence of each, inlines expressions that have a reference
+            // count of one, and then removes any expressions that are not
+            // referenced.
+            self.memoize_expressions();
+            self.predicates.sort();
+            self.predicates.dedup();
+            self.inline_expressions();
+            self.remove_undemanded();
+
+            // Re-build `self` from parts to restore evaluation order invariants.
+            let (map, filter, project) = self.as_map_filter_project();
+            *self = Self::new(self.input_arity)
+                .map(map)
+                .filter(filter)
+                .project(project);
+
+            self_size = self.size();
+        }
+    }
+
+    /// Total expression sizes across all expressions.
+    pub fn size(&self) -> usize {
+        self.expressions.iter().map(|e| e.size()).sum::<usize>()
+            + self.predicates.iter().map(|(_, e)| e.size()).sum::<usize>()
     }
 
     /// Place each certainly evaluated expression in its own column.
@@ -1053,6 +1096,11 @@ impl MapFilterProject {
         self.expressions = new_expressions;
         for proj in self.projection.iter_mut() {
             *proj = remaps[proj];
+        }
+
+        // Restore predicate order invariants.
+        for (pos, pred) in self.predicates.iter_mut() {
+            *pos = pred.support().into_iter().max().map(|x| x + 1).unwrap_or(0);
         }
     }
 
@@ -1317,8 +1365,17 @@ pub fn memoize_expr(
         },
         &mut |e| {
             match e {
-                MirScalarExpr::Column(_) | MirScalarExpr::Literal(_, _) => {
+                MirScalarExpr::Literal(_, _) => {
                     // Literals do not need to be memoized.
+                }
+                MirScalarExpr::Column(col) => {
+                    // Column references do not need to be memoized, but may need to be
+                    // updated if they reference a column reference themselves.
+                    if *col > input_arity {
+                        if let MirScalarExpr::Column(col2) = memoized_parts[*col - input_arity] {
+                            *col = col2;
+                        }
+                    }
                 }
                 _ => {
                     if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {

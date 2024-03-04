@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -29,6 +30,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -72,8 +74,9 @@ use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::oneshot;
+use tokio::sync::watch::{channel, Sender};
 use tokio_stream::StreamMap;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, warn};
 
 use crate::command_wals::ProtoShardId;
 
@@ -196,6 +199,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics: Arc<Mutex<BTreeMap<GlobalId, Option<SinkStatisticsUpdate>>>>,
+    /// A way to update the statistics interval in the statistics tasks.
+    statistics_interval_sender: Sender<Duration>,
 
     /// Clients for all known storage instances.
     clients: BTreeMap<StorageInstanceId, RehydratingStorageClient<T>>,
@@ -258,6 +263,13 @@ where
             client.send(StorageCommand::UpdateConfiguration(config_params.clone()));
         }
         self.config.update(config_params);
+        self.statistics_interval_sender
+            .send_replace(self.config.parameters.statistics_interval);
+        self.collection_manager.update_user_batch_duration(
+            self.config
+                .parameters
+                .user_storage_managed_collections_batch_duration,
+        );
     }
 
     /// Get the current configuration
@@ -345,7 +357,7 @@ where
     //   or only executing some migrations when encountering certain versions.
     // - Migrations must preserve backwards compatibility with all past releases
     //   of Materialize.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     async fn migrate_collections(
         &mut self,
         _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
@@ -360,7 +372,7 @@ where
 
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
     // a method/move individual parts to their own methods.
-    #[instrument(name = "storage::create_collections", skip_all)]
+    #[instrument(name = "storage::create_collections")]
     async fn create_collections(
         &mut self,
         register_ts: Option<Self::Timestamp>,
@@ -736,6 +748,7 @@ where
                                 Arc::clone(&self.source_statistics),
                                 prev,
                                 self.config.parameters.statistics_interval,
+                                self.statistics_interval_sender.subscribe(),
                             );
 
                             // Make sure this is dropped when the controller is
@@ -752,6 +765,7 @@ where
                                 Arc::clone(&self.sink_statistics),
                                 prev,
                                 self.config.parameters.statistics_interval,
+                                self.statistics_interval_sender.subscribe(),
                             );
 
                             // Make sure this is dropped when the controller is
@@ -1165,7 +1179,7 @@ where
         }
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     fn append_table(
         &mut self,
         write_ts: Self::Timestamp,
@@ -1316,7 +1330,7 @@ where
         self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug")]
     fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
         let mut read_capability_changes = BTreeMap::default();
 
@@ -1349,7 +1363,7 @@ where
         }
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", fields(updates))]
     fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<Self::Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
@@ -1408,7 +1422,7 @@ where
         }
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", fields(updates))]
     fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
@@ -1560,7 +1574,7 @@ where
         self.stashed_response = Some(msg);
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug")]
     async fn process(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
         let mut updated_frontiers = None;
         match self.stashed_response.take() {
@@ -2254,6 +2268,9 @@ where
             Arc::clone(&introspection_ids),
         );
 
+        let (statistics_interval_sender, _) =
+            channel(mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT);
+
         Self {
             build_info,
             collections: BTreeMap::default(),
@@ -2275,6 +2292,7 @@ where
             envd_epoch,
             source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
+            statistics_interval_sender,
             clients: BTreeMap::new(),
             replicas: BTreeMap::new(),
             initialized: false,
@@ -2345,10 +2363,10 @@ where
     }
 
     /// Install read capabilities on the given `storage_dependencies`.
-    #[instrument(level = "info", skip(self))]
+    #[instrument(level = "info", fields(from_id, storage_dependencies, read_capability))]
     fn install_read_capabilities(
         &mut self,
-        from_id: GlobalId,
+        _from_id: GlobalId,
         storage_dependencies: &[GlobalId],
         read_capability: Antichain<T>,
     ) -> Result<(), StorageError> {
@@ -2540,7 +2558,7 @@ where
     ///
     /// # Panics
     /// - If `id` is not registered as a managed collection.
-    #[instrument(level = "debug", skip(self, updates))]
+    #[instrument(level = "debug", fields(id))]
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         assert!(self.txns_init_run);
         self.collection_manager
@@ -2748,7 +2766,7 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     async fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
     where
         I: Iterator<Item = GlobalId>,
@@ -2918,7 +2936,7 @@ where
 
     /// Attempts to close all shards marked for finalization.
     #[allow(dead_code)]
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug")]
     async fn finalize_shards(&mut self) {
         let shards = self
             .stash

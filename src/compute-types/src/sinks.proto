@@ -18,6 +18,7 @@ import "repr/src/global_id.proto";
 import "expr/src/refresh_schedule.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/controller.proto";
+import "storage-types/src/sinks.proto";
 import "storage-types/src/connections/aws.proto";
 
 package mz_compute_types.sinks;
@@ -46,6 +47,7 @@ message ProtoPersistSinkConnection {
 }
 
 message ProtoCopyToS3OneshotSinkConnection {
-    string prefix = 1;
+    mz_storage_types.sinks.ProtoS3UploadInfo upload_info = 1;
     mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
+    mz_repr.global_id.ProtoGlobalId connection_id = 3;
 }

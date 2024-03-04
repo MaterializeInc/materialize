@@ -25,6 +25,12 @@ The postgres source is an RDS instance running in AWS that is replicating two ta
 
 In order to continously emit updates, pg_cron jobs that update the tables are set up to run with a 1-second interval.
 
+## MySQL source (`models/mysql-cdc`)
+
+The mysql source is an RDS instance running in AWS that is replicating two tables.
+
+In order to continously emit updates, events that update the tables are set up to run with a 1-second interval.
+
 ## Kafka sources (`models/loadgen`)
 
 A Kafka broker running on the Confluent cloud is used to ingest topics that are being
@@ -43,6 +49,8 @@ export MATERIALIZE_PROD_SANDBOX_PASSWORD=mzp_...
 
 export MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME=...eu-west-1.rds.amazonaws.com
 export MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD=...
+export MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_HOSTNAME=...eu-west-1.rds.amazonaws.com
+export MATERIALIZE_PROD_SANDBOX_RDS_MYSQL_PASSWORD=...
 
 export CONFLUENT_CLOUD_FIELDENG_KAFKA_BROKER=...confluent.cloud:9092
 export CONFLUENT_CLOUD_FIELDENG_CSR_URL=https://...aws.confluent.cloud

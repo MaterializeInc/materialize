@@ -189,7 +189,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q01
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q01;
 ----
 materialize.public.q01_primary_idx:
@@ -257,7 +257,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q02
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q02;
 ----
 materialize.public.q02_primary_idx:
@@ -363,7 +363,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q03
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q03;
 ----
 materialize.public.q03_primary_idx:
@@ -424,7 +424,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q04
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q04;
 ----
 materialize.public.q04_primary_idx:
@@ -491,7 +491,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q05
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q05;
 ----
 materialize.public.q05_primary_idx:
@@ -556,7 +556,7 @@ WHERE
 
 query T multiline
 -- Explain index on Q06
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q06;
 ----
 materialize.public.q06_primary_idx:
@@ -633,7 +633,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q07
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q07;
 ----
 materialize.public.q07_primary_idx:
@@ -727,7 +727,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q08
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q08;
 ----
 materialize.public.q08_primary_idx:
@@ -824,7 +824,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q09
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q09;
 ----
 materialize.public.q09_primary_idx:
@@ -910,7 +910,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q10
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q10;
 ----
 materialize.public.q10_primary_idx:
@@ -982,7 +982,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q11
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q11;
 ----
 materialize.public.q11_primary_idx:
@@ -1063,7 +1063,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q12
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q12;
 ----
 materialize.public.q12_primary_idx:
@@ -1116,7 +1116,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q13
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q13;
 ----
 materialize.public.q13_primary_idx:
@@ -1185,7 +1185,7 @@ WHERE
 
 query T multiline
 -- Explain index on Q14
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q14;
 ----
 materialize.public.q14_primary_idx:
@@ -1264,7 +1264,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q15
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q15;
 ----
 materialize.public.q15_primary_idx:
@@ -1339,7 +1339,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q16
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q16;
 ----
 materialize.public.q16_primary_idx:
@@ -1419,7 +1419,7 @@ WHERE
 
 query T multiline
 -- Explain index on Q17
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q17;
 ----
 materialize.public.q17_primary_idx:
@@ -1519,7 +1519,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q18
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q18;
 ----
 materialize.public.q18_primary_idx:
@@ -1616,7 +1616,7 @@ WHERE
 
 query T multiline
 -- Explain index on Q19
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q19;
 ----
 materialize.public.q19_primary_idx:
@@ -1699,7 +1699,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q20
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q20;
 ----
 materialize.public.q20_primary_idx:
@@ -1827,7 +1827,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q21
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q21;
 ----
 materialize.public.q21_primary_idx:
@@ -1966,7 +1966,7 @@ ORDER BY
 
 query T multiline
 -- Explain index on Q22
-EXPLAIN WITH(humanized_exprs, arity, join_impls)
+EXPLAIN WITH(humanized expressions, arity, join implementations)
 CREATE DEFAULT INDEX ON Q22;
 ----
 materialize.public.q22_primary_idx:

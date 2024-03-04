@@ -156,7 +156,7 @@ steps:
           - Cargo.lock
           - misc/cargo-vet/config.toml
         depends_on: []
-        timeout_in_minutes: 5
+        timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
         coverage: skip
@@ -266,6 +266,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
+          run: fast-tests
     agents:
       queue: linux-aarch64-small
 
@@ -363,7 +364,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          queue: linux-aarch64 # TODO(def-) Switch to small when #24324 is fixed
+          queue: linux-aarch64-small
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption tests
@@ -459,7 +460,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-environmentd-clusterd-storage
-        label: "Checks + restart of environmentd & storage clusterd (%N)"
+        label: "Checks + restart of environmentd & storage clusterd %N"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
@@ -473,11 +474,11 @@ steps:
               args: [--scenario=RestartEnvironmentdClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-no-restart-no-upgrade
-        label: "Checks without restart or upgrade"
+        label: "Checks without restart or upgrade %N"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
-        parallelism: 2
+        parallelism: 4
         artifact_paths: junit_*.xml
         agents:
           queue: linux-aarch64
@@ -545,7 +546,7 @@ steps:
   - id: replica-isolation
     label: Replica isolation
     depends_on: build-aarch64
-    timeout_in_minutes: 20
+    timeout_in_minutes: 30
     inputs: [test/replica-isolation]
     artifact_paths: junit_*.xml
     plugins:
@@ -584,6 +585,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: chbench
+          run: no-load
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:

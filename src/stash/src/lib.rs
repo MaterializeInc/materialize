@@ -218,7 +218,7 @@ where
     }
 
     /// Returns all ((key, value), timestamp, diff) tuples in this [`TypedCollection`].
-    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
+    #[mz_ore::instrument(level = "debug", fields(collection = self.name))]
     pub async fn iter(
         &self,
         stash: &mut Stash,
@@ -235,7 +235,7 @@ where
     }
 
     /// Returns all key, value pairs in this [`TypedCollection`].
-    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
+    #[mz_ore::instrument(level = "debug", fields(collection = self.name))]
     pub async fn peek_one(&self, stash: &mut Stash) -> Result<BTreeMap<K, V>, StashError> {
         let name = self.name;
         stash
@@ -249,7 +249,7 @@ where
     }
 
     /// Returns the value of `key` in this [`TypedCollection`].
-    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
+    #[mz_ore::instrument(level = "debug", fields(collection = self.name))]
     pub async fn peek_key_one(&self, stash: &mut Stash, key: K) -> Result<Option<V>, StashError>
     where
         // TODO: Is it possible to remove the 'static?
@@ -270,7 +270,7 @@ where
     /// Sets the given k,v pair, if not already set.
     ///
     /// Returns the new value stored in stash after this operations.
-    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
+    #[mz_ore::instrument(level = "debug", fields(collection = self.name))]
     pub async fn insert_key_without_overwrite(
         &self,
         stash: &mut Stash,
@@ -323,7 +323,7 @@ where
     /// in `entries`.
     ///
     /// Returns the new state of the collection after this operation.
-    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
+    #[mz_ore::instrument(level = "debug", fields(collection = self.name))]
     pub async fn insert_without_overwrite<I>(
         &self,
         stash: &mut Stash,
@@ -376,7 +376,7 @@ where
     ///
     /// Returns the previous value if one existed and the value returned from
     /// `f`.
-    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
+    #[mz_ore::instrument(level = "debug", fields(collection = self.name))]
     pub async fn upsert_key<F, R>(
         &self,
         stash: &mut Stash,
@@ -428,7 +428,7 @@ where
     }
 
     /// Sets the given key value pairs, removing existing entries match any key.
-    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
+    #[mz_ore::instrument(level = "debug", fields(collection = self.name))]
     pub async fn upsert<I>(&self, stash: &mut Stash, entries: I) -> Result<(), StashError>
     where
         I: IntoIterator<Item = (K, V)>,
@@ -479,7 +479,7 @@ where
     ///   is likely not performant for more than 10-or-so keys.
     /// - This operation runs in a single transaction and cannot be combined
     ///   with other transactions.
-    #[tracing::instrument(level = "debug", skip_all, fields(collection = self.name))]
+    #[mz_ore::instrument(level = "debug", fields(collection = self.name))]
     pub async fn delete_keys(&self, stash: &mut Stash, keys: BTreeSet<K>) -> Result<(), StashError>
     where
         K: Clone + 'static,

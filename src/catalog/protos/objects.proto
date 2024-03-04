@@ -315,6 +315,11 @@ message ReplicaMergeEffort {
     uint32 effort = 1;
 }
 
+message OptimizerFeatureOverride {
+    string name = 1;
+    string value = 2;
+}
+
 message ClusterConfig {
     message ManagedCluster {
         string size = 1;
@@ -323,6 +328,7 @@ message ClusterConfig {
         ReplicaLogging logging = 4;
         ReplicaMergeEffort idle_arrangement_merge_effort = 5;
         bool disk = 6;
+        repeated OptimizerFeatureOverride optimizer_feature_overrides = 7;
     }
 
     oneof variant {

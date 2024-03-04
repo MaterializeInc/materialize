@@ -620,7 +620,7 @@ where
     }
 
     /// Sends a command to all replicas of this instance.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn send(&mut self, cmd: ComputeCommand<T>) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
@@ -1118,7 +1118,7 @@ where
     }
 
     /// Initiate a peek request for the contents of `id` at `timestamp`.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn peek(
         &mut self,
         id: GlobalId,
@@ -1223,7 +1223,7 @@ where
     ///
     /// It is an error to attempt to set a read policy for a collection that is not readable in the
     /// context of compute. At this time, only indexes are readable compute collections.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
@@ -1266,7 +1266,7 @@ where
     ///
     /// Panics if any of the `updates` references an absent collection.
     /// Panics if any of the `updates` regresses an existing write frontier.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn update_write_frontiers(
         &mut self,
         replica_id: ReplicaId,
@@ -1285,7 +1285,7 @@ where
     ///
     /// Panics if any of the `updates` references an absent collection.
     /// Panics if any of the `updates` regresses an existing replica write frontier.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn update_replica_write_frontiers(
         &mut self,
         replica_id: ReplicaId,
@@ -1333,7 +1333,7 @@ where
     }
 
     /// Remove frontier tracking state for the given replica.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn remove_replica_write_frontiers(&mut self, replica_id: ReplicaId) {
         let mut storage_read_capability_changes = BTreeMap::default();
         for collection in self.compute.collections.values_mut() {
@@ -1363,7 +1363,7 @@ where
     /// # Panics
     ///
     /// Panics if any of the `updates` references an absent collection.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn maybe_update_global_write_frontiers(&mut self, updates: &BTreeMap<GlobalId, Antichain<T>>) {
         // Compute and apply read capability downgrades that result from collection frontier
         // advancements.
@@ -1419,7 +1419,7 @@ where
 
     /// Applies `updates`, propagates consequences through other read capabilities, and sends
     /// appropriate compaction commands.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn update_read_capabilities(&mut self, mut updates: BTreeMap<GlobalId, ChangeBatch<T>>) {
         // Records storage read capability updates.
         let mut storage_updates = BTreeMap::default();
@@ -1532,27 +1532,7 @@ where
     ) -> Option<ComputeControllerResponse<T>> {
         match response {
             ComputeResponse::FrontierUpper { id, upper } => {
-                let old_upper = self
-                    .compute
-                    .collection(id)
-                    .ok()
-                    .map(|state| state.write_frontier.clone());
-
-                self.handle_frontier_upper(id, upper.clone(), replica_id);
-
-                let new_upper = self
-                    .compute
-                    .collection(id)
-                    .ok()
-                    .map(|state| state.write_frontier.clone());
-
-                if let (Some(old), Some(new)) = (old_upper, new_upper) {
-                    (old != new).then_some(ComputeControllerResponse::FrontierUpper { id, upper })
-                } else {
-                    // this is surprising, but we should already log something in `handle_frontier_upper`,
-                    // so no need to do so here
-                    None
-                }
+                self.handle_frontier_upper(id, upper, replica_id)
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
@@ -1570,12 +1550,14 @@ where
         }
     }
 
+    /// Handle new frontiers, returning any compute response that needs to
+    /// be sent to the client.
     fn handle_frontier_upper(
         &mut self,
         id: GlobalId,
         new_frontier: Antichain<T>,
         replica_id: ReplicaId,
-    ) {
+    ) -> Option<ComputeControllerResponse<T>> {
         // According to the compute protocol, replicas are not allowed to send `FrontierUpper`s
         // that regress frontiers they have reported previously. We still perform a check here,
         // rather than risking the controller becoming confused trying to handle regressions.
@@ -1586,7 +1568,7 @@ where
                 new_frontier.elements(),
             );
             tracing::error!("Replica reported an untracked collection frontier");
-            return;
+            return None;
         };
 
         if let Some(old_frontier) = coll.replica_write_frontiers.get(&replica_id) {
@@ -1598,13 +1580,26 @@ where
                     new_frontier.elements(),
                 );
                 tracing::error!("Replica reported a regressed collection frontier");
-                return;
+                return None;
             }
         }
 
+        let old_global_frontier = coll.write_frontier.clone();
+
         self.compute
             .update_hydration_status(id, replica_id, &new_frontier);
-        self.update_write_frontiers(replica_id, &[(id, new_frontier)].into());
+        self.update_write_frontiers(replica_id, &[(id, new_frontier.clone())].into());
+
+        if let Ok(coll) = self.compute.collection(id) {
+            (coll.write_frontier != old_global_frontier).then_some(
+                ComputeControllerResponse::FrontierUpper {
+                    id,
+                    upper: coll.write_frontier.clone(),
+                },
+            )
+        } else {
+            None
+        }
     }
 
     fn handle_peek_response(

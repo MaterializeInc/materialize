@@ -46,7 +46,7 @@ def get(
         if isinstance(result, dict) and result.get("message"):
             raise RuntimeError(f"Something went wrong! ({result['message']})")
 
-        params["created_to"] = result[-1]["created_at"]
+        params["page"] = str(int(params.get("page", "1")) + 1)
 
         entry_count = len(result)
         created_at = result[-1]["created_at"]

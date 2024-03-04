@@ -47,6 +47,3 @@ DROP DATABASE materialize
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 CREATE DATABASE materialize
-
-# Cleanup.
-> DROP CLUSTER gh_23037_cluster CASCADE;

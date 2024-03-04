@@ -26,12 +26,19 @@ models:
   canary_environment:
     loadgen:
       schema: loadgen
+      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\""
     tpch:
       schema: tpch
+      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\""
     pg_cdc:
       schema: pg_cdc
+      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\""
+    mysql_cdc:
+      schema: mysql_cdc
+      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\""
     simple_table:
       schema: simple_table
+      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\""
 
 tests:
     +cluster: qa_canary_environment_compute

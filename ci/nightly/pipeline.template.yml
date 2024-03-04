@@ -257,7 +257,7 @@ steps:
         label: Full Testdrive in Cloudtest (K8s)
         timeout_in_minutes: 300
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-large
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -288,6 +288,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: limits
+            run: main
       timeout_in_minutes: 120
 
     - id: limits-instance-size
@@ -406,6 +407,18 @@ steps:
               composition: zippy
               args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m]
 
+      - id: zippy-mysql-cdc
+        label: "Zippy MySQL CDC"
+        skip: "TODO: #25582 (invalid data in source)"
+        timeout_in_minutes: 120
+        agents:
+          queue: linux-aarch64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m]
+
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
         timeout_in_minutes: 120
@@ -450,12 +463,41 @@ steps:
               composition: zippy
               args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
 
+  - group: "MySQL: other versions"
+    key: mysql-versions
+    steps:
+      - id: mysql-cdc-5_7_44
+        label: "MySQL CDC tests w/ 5.7.44"
+        timeout_in_minutes: 30
+        agents:
+          # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
+          queue: linux-x86_64-small
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=5.7.44" ]
+      - id: mysql-cdc-8_3_0
+        label: "MySQL CDC tests w/ 8.3.0"
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-aarch64-small
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              args: [ "--mysql-version=8.3.0" ]
+
   - group: AWS
     key: aws
     steps:
       - id: aws-real
         label: AWS (Real)
         timeout_in_minutes: 30
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 1
         agents:
           queue: linux-aarch64-small
         artifact_paths: junit_*.xml
@@ -660,17 +702,6 @@ steps:
               composition: platform-checks
               args: [--scenario=PreflightCheckRollback]
 
-      - id: checks-upgrade-entire-mz-previous-version
-        label: "Checks upgrade from previous version, whole-Mz restart"
-        timeout_in_minutes: 60
-        agents:
-          queue: linux-aarch64-large
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=UpgradeEntireMzPreviousVersion]
-
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
         timeout_in_minutes: 60
@@ -793,17 +824,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=PersistCatalogToggle, "--seed=$BUILDKITE_JOB_ID"]
-
-      - id: checks-timestamp-oracle-toggle
-        label: "Checks + Toggle timestamp oracle"
-        timeout_in_minutes: 45
-        artifact_paths: junit_*.xml
-        agents:
-          queue: builder-linux-aarch64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=TimestampOracleToggle, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-migrate-x86-64-aarch64
         label: "Checks migrate from x86-64 to aarch64"

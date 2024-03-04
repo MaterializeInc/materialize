@@ -33,6 +33,15 @@ SERVICES = [
 ]
 
 
+def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
 def workflow_postgres(c: Composition) -> None:
     c.up(*prerequisites, "postgres")
 

@@ -13,6 +13,7 @@ use mz_sql::session::user::SYSTEM_USER;
 use tracing::{error, info};
 
 use crate::config::SynchronizedParameters;
+use crate::session::SessionConfig;
 use crate::{AdapterError, Client, SessionClient};
 
 /// A backend client for pushing and pulling [SynchronizedParameters].
@@ -26,7 +27,11 @@ pub struct SystemParameterBackend {
 impl SystemParameterBackend {
     pub async fn new(client: Client) -> Result<Self, AdapterError> {
         let conn_id = client.new_conn_id()?;
-        let session = client.new_session(conn_id, SYSTEM_USER.clone());
+        let session = client.new_session(SessionConfig {
+            conn_id,
+            user: SYSTEM_USER.name.clone(),
+            external_metadata_rx: None,
+        });
         let session_client = client.startup(session).await?;
         Ok(Self { session_client })
     }

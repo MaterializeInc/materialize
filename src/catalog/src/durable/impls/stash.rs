@@ -32,7 +32,6 @@ use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::session::vars::CatalogKind;
 use mz_stash::{AppendBatch, DebugStashFactory, Diff, Stash, StashFactory, TypedCollection};
 use mz_stash_types::StashError;
-use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
 use crate::durable::initialize::{
@@ -40,10 +39,7 @@ use crate::durable::initialize::{
     TOMBSTONE_KEY, USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
-use crate::durable::objects::{
-    AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
-    TimelineTimestamp, TimestampValue,
-};
+use crate::durable::objects::{AuditLogKey, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey};
 use crate::durable::transaction::{Transaction, TransactionBatch};
 use crate::durable::upgrade::stash::upgrade;
 use crate::durable::{
@@ -204,7 +200,7 @@ impl OpenableConnection {
 
 #[async_trait]
 impl OpenableDurableCatalogState for OpenableConnection {
-    #[tracing::instrument(name = "storage::open_check", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "storage::open_check", level = "info")]
     async fn open_savepoint(
         mut self: Box<Self>,
         initial_ts: EpochMillis,
@@ -217,7 +213,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         retry_open(stash, initial_ts, bootstrap_args, deploy_generation).await
     }
 
-    #[tracing::instrument(name = "storage::open_read_only", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "storage::open_read_only", level = "info")]
     async fn open_read_only(
         mut self: Box<Self>,
         bootstrap_args: &BootstrapArgs,
@@ -227,7 +223,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         retry_open(stash, EpochMillis::MIN, bootstrap_args, None).await
     }
 
-    #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "storage::open", level = "info")]
     async fn open(
         mut self: Box<Self>,
         initial_ts: EpochMillis,
@@ -240,7 +236,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         retry_open(stash, initial_ts, bootstrap_args, deploy_generation).await
     }
 
-    #[tracing::instrument(name = "storage::open_debug", level = "info", skip_all)]
+    #[mz_ore::instrument(name = "storage::open_debug", level = "info")]
     async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
         self.open_stash(None).await?;
         let stash = self.stash.take().expect("opened above");
@@ -299,7 +295,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
         })
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         fn stringify<T: Collection>(
             values: Vec<((T::Key, T::Value), mz_stash::Timestamp, Diff)>,
@@ -476,7 +472,7 @@ async fn retry_open(
     }
 }
 
-#[tracing::instrument(name = "storage::open_inner", level = "info", skip_all)]
+#[mz_ore::instrument(name = "storage::open_inner", level = "info")]
 async fn open_inner(
     mut stash: Stash,
     initial_ts: EpochMillis,
@@ -538,7 +534,7 @@ async fn open_inner(
 
 /// Returns whether this Stash is initialized. We consider a Stash to be initialized if
 /// it contains an entry in the [`CONFIG_COLLECTION`] with the key of [`USER_VERSION_KEY`].
-#[tracing::instrument(name = "stash::is_initialized", level = "debug", skip_all)]
+#[mz_ore::instrument(name = "stash::is_initialized", level = "debug")]
 pub async fn is_stash_initialized(stash: &mut Stash) -> Result<bool, StashError> {
     // Check to see what collections exist, this prevents us from unnecessarily creating a
     // config collection, if one doesn't yet exist.
@@ -577,7 +573,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), CatalogError> {
         CONFIG_COLLECTION
             .upsert_key(
@@ -608,19 +604,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         // Nothing to release in the stash.
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
-        let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
-        let timestamps = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-
-        Ok(timestamps)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         let entries = AUDIT_LOG_COLLECTION.peek_one(&mut self.stash).await?;
         let logs: Vec<_> = entries
@@ -632,7 +616,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         Ok(logs)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
         ID_ALLOCATOR_COLLECTION
             .peek_key_one(
@@ -667,7 +651,7 @@ impl ReadOnlyDurableCatalogState for Connection {
             .map(|value| value > 0))
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         let (
             databases,
@@ -759,7 +743,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         })
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn whole_migration_snapshot(
         &mut self,
     ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
@@ -881,13 +865,13 @@ impl DurableCatalogState for Connection {
         self.stash.is_readonly()
     }
 
-    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "storage::transaction", level = "debug")]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn whole_migration_transaction(
         &mut self,
     ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
@@ -896,7 +880,7 @@ impl DurableCatalogState for Connection {
         Ok((transaction, audit_events, storage_usages))
     }
 
-    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
+    #[mz_ore::instrument(name = "storage::transaction", level = "debug")]
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
@@ -1120,12 +1104,12 @@ impl DurableCatalogState for Connection {
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
         Ok(self.stash.confirm_leadership().await?)
     }
 
-    #[tracing::instrument(level = "info", skip_all)]
+    #[mz_ore::instrument]
     async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
@@ -1182,32 +1166,7 @@ impl DurableCatalogState for Connection {
         Ok(events)
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: Timestamp,
-    ) -> Result<(), CatalogError> {
-        let key = proto::TimestampKey {
-            id: timeline.to_string(),
-        };
-        let (prev, next) = TIMESTAMP_COLLECTION
-            .upsert_key(&mut self.stash, key, move |_| {
-                Ok::<_, CatalogError>(TimestampValue { ts: timestamp }.into_proto())
-            })
-            .await??;
-        if let Some(prev) = prev {
-            assert!(
-                next >= prev,
-                "global timestamp must always go up; prev = {:?}, next = {:?}",
-                prev,
-                next
-            );
-        }
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
         if amount == 0 {
             return Ok(Vec::new());
@@ -1233,7 +1192,7 @@ impl DurableCatalogState for Connection {
 // Debug methods.
 
 /// Manually update value of `key` in collection `T` to `value`.
-#[tracing::instrument(level = "info", skip(stash))]
+#[mz_ore::instrument]
 pub(crate) async fn debug_edit<T: Collection>(
     stash: &mut Stash,
     key: T::Key,
@@ -1251,7 +1210,7 @@ where
 }
 
 /// Manually delete `key` from collection `T`.
-#[tracing::instrument(level = "info", skip(stash))]
+#[mz_ore::instrument]
 pub(crate) async fn debug_delete<T: Collection>(
     stash: &mut Stash,
     key: T::Key,

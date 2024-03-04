@@ -41,16 +41,6 @@ ERROR_RE = re.compile(
     | fatal runtime error: # stack overflow
     | \[SQLsmith\] # Unknown errors are logged
     | \[SQLancer\] # Unknown errors are logged
-    # From src/testdrive/src/action/sql.rs
-    | column\ name\ mismatch
-    | non-matching\ rows:
-    | wrong\ row\ count:
-    | wrong\ hash\ value:
-    | expected\ one\ statement
-    | query\ succeeded,\ but\ expected
-    | expected\ .*,\ got\ .*
-    | expected\ .*,\ but\ found\ none
-    | unsupported\ SQL\ type\ in\ testdrive:
     | environmentd:\ fatal: # startup failure
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
@@ -108,6 +98,7 @@ IGNORE_RE = re.compile(
     | persist-txn-fencing-mz_first-.* \| .*unexpected\ fence\ epoch
     | persist-txn-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ upper
     | platform-checks-mz_txn_tables.* \| .*unexpected\ fence\ epoch
+    | platform-checks-mz_txn_tables.* \| .*fenced\ by\ new\ catalog\ upper
     # For platform-checks upgrade tests
     | platform-checks-clusterd.* \| .* received\ persist\ state\ from\ the\ future
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?

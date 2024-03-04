@@ -20,6 +20,7 @@ mod codec;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,6 +28,7 @@ use std::time::{Duration, Instant};
 use axum::response::IntoResponse;
 use axum::{routing, Router};
 use bytes::BytesMut;
+use futures::stream::BoxStream;
 use futures::TryFutureExt;
 use hyper::StatusCode;
 use mz_build_info::{build_info, BuildInfo};
@@ -40,12 +42,16 @@ use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
     ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
 };
-use mz_server_core::{listen, ConnectionStream, ListenerHandle, TlsCertConfig, TlsConfig, TlsMode};
-use openssl::ssl::{NameType, Ssl, SslContext};
+use mz_server_core::{
+    listen, ConnectionStream, ListenerHandle, ReloadingSslContext, ReloadingTlsConfig,
+    TlsCertConfig, TlsMode,
+};
+use openssl::ssl::{NameType, Ssl};
 use prometheus::{IntCounterVec, IntGaugeVec};
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
@@ -66,13 +72,14 @@ pub struct BalancerConfig {
     pgwire_listen_addr: SocketAddr,
     /// Listen address for HTTPS connections.
     https_listen_addr: SocketAddr,
-    /// Cancellation DNS resolver.
-    cancellation_resolver_template: Option<String>,
+    /// Cancellation resolver configmap directory.
+    cancellation_resolver_dir: Option<PathBuf>,
     /// DNS resolver.
     resolver: Resolver,
     https_addr_template: String,
     tls: Option<TlsCertConfig>,
     metrics_registry: MetricsRegistry,
+    reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
 }
 
 impl BalancerConfig {
@@ -82,11 +89,12 @@ impl BalancerConfig {
         internal_http_listen_addr: SocketAddr,
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
-        cancellation_resolver_template: Option<String>,
+        cancellation_resolver_dir: Option<PathBuf>,
         resolver: Resolver,
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
         metrics_registry: MetricsRegistry,
+        reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),
@@ -94,11 +102,12 @@ impl BalancerConfig {
             internal_http_listen_addr,
             pgwire_listen_addr,
             https_listen_addr,
-            cancellation_resolver_template,
+            cancellation_resolver_dir,
             resolver,
             https_addr_template,
             tls,
             metrics_registry,
+            reload_certs,
         }
     }
 }
@@ -154,9 +163,9 @@ impl BalancerService {
     pub async fn serve(self) -> Result<(), anyhow::Error> {
         let (pgwire_tls, https_tls) = match &self.cfg.tls {
             Some(tls) => {
-                let context = tls.context()?;
+                let context = tls.reloading_context(self.cfg.reload_certs)?;
                 (
-                    Some(TlsConfig {
+                    Some(ReloadingTlsConfig {
                         context: context.clone(),
                         mode: TlsMode::Require,
                     }),
@@ -174,9 +183,15 @@ impl BalancerService {
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
         {
+            if let Some(dir) = &self.cfg.cancellation_resolver_dir {
+                if !dir.is_dir() {
+                    anyhow::bail!("{dir:?} is not a directory");
+                }
+            }
+            let cancellation_resolver = self.cfg.cancellation_resolver_dir.map(Arc::new);
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
-                cancellation_resolver: self.cfg.cancellation_resolver_template.map(Arc::new),
+                cancellation_resolver,
                 tls: pgwire_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
             };
@@ -189,7 +204,7 @@ impl BalancerService {
         }
         {
             let https = HttpsBalancer {
-                tls: Arc::new(https_tls),
+                tls: https_tls,
                 resolve_template: Arc::from(self.cfg.https_addr_template),
                 metrics: ServerMetrics::new(metrics, "https"),
             };
@@ -358,14 +373,14 @@ impl ServerMetrics {
 }
 
 struct PgwireBalancer {
-    tls: Option<TlsConfig>,
-    cancellation_resolver: Option<Arc<String>>,
+    tls: Option<ReloadingTlsConfig>,
+    cancellation_resolver: Option<Arc<PathBuf>>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
 }
 
 impl PgwireBalancer {
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn run<'a, A>(
         conn: &'a mut FramedConn<A>,
         version: i32,
@@ -422,7 +437,7 @@ impl PgwireBalancer {
         Ok(())
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn stream<'a, A>(
         conn: &'a mut FramedConn<A>,
         envd_addr: SocketAddr,
@@ -533,7 +548,8 @@ impl mz_server_core::Server for PgwireBalancer {
                         Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
                             (Conn::Unencrypted(mut conn), Some(tls)) => {
                                 conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                                let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
+                                let mut ssl_stream =
+                                    SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
                                 if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                                     let _ = ssl_stream.get_mut().shutdown().await;
                                     return Err(e.into());
@@ -577,15 +593,29 @@ impl mz_server_core::Server for PgwireBalancer {
 /// bits of randomness, and the secret key the full 32, for a total of 51 bits. That is more than
 /// 2e15 combinations, enough to nearly certainly prevent two different envds generating identical
 /// combinations.
-async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &str) {
-    let addr = cancellation_resolver.replace("{}", &conn_id_org_uuid(conn_id));
-    let ips = match tokio::net::lookup_host(&addr).await {
-        Ok(ips) => ips,
+async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &PathBuf) {
+    let suffix = conn_id_org_uuid(conn_id);
+    let path = cancellation_resolver.join(&suffix);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
         Err(err) => {
-            error!("{addr} failed resolution: {err}");
+            error!("could not read cancel file {path:?}: {err}");
             return;
         }
     };
+    let mut all_ips = Vec::new();
+    for addr in contents.lines() {
+        let addr = addr.trim();
+        if addr.is_empty() {
+            continue;
+        }
+        match tokio::net::lookup_host(addr).await {
+            Ok(ips) => all_ips.extend(ips),
+            Err(err) => {
+                error!("{addr} failed resolution: {err}");
+            }
+        }
+    }
     let mut buf = BytesMut::with_capacity(16);
     let msg = FrontendStartupMessage::CancelRequest {
         conn_id,
@@ -595,8 +625,8 @@ async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &s
     // TODO: Is there a way to not use an Arc here by convincing rust that buf will outlive the
     // spawn? Will awaiting the JoinHandle work?
     let buf = buf.freeze();
-    for ip in ips {
-        debug!("resolved {addr} to {ip}");
+    for ip in all_ips {
+        debug!("cancelling {suffix} to {ip}");
         let buf = buf.clone();
         spawn(|| "cancel request for ip", async move {
             let send = async {
@@ -613,7 +643,7 @@ async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &s
 }
 
 struct HttpsBalancer {
-    tls: Arc<Option<SslContext>>,
+    tls: Option<ReloadingSslContext>,
     resolve_template: Arc<str>,
     metrics: ServerMetrics,
 }
@@ -622,16 +652,17 @@ impl mz_server_core::Server for HttpsBalancer {
     const NAME: &'static str = "https_balancer";
 
     fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
-        let tls_context = Arc::clone(&self.tls);
+        let tls_context = self.tls.clone();
         let resolve_template = Arc::clone(&self.resolve_template);
         let metrics = self.metrics.clone();
         Box::pin(async move {
             let active_guard = metrics.active_connections();
             let result = Box::pin(async move {
                 let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
-                    match &*tls_context {
+                    match tls_context {
                         Some(tls_context) => {
-                            let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
+                            let mut ssl_stream =
+                                SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
                             if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                                 let _ = ssl_stream.get_mut().shutdown().await;
                                 return Err(e.into());

@@ -136,21 +136,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
 use mz_expr::MirScalarExpr;
 use mz_ore::result::ResultExt;
-use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::tunnel::Config;
 use mz_postgres_util::{simple_query_opt, PostgresError};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_types::parameters::PgSourceSnapshotConfig;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -162,11 +158,12 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
 use tokio_postgres::types::{Oid, PgLsn};
 use tokio_postgres::Client;
-use tracing::{trace, warn};
+use tracing::{error, trace};
 
 use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
+use crate::source::types::ProgressStatisticsUpdate;
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
@@ -181,6 +178,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, RewindRequest>,
+    Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -193,6 +191,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (mut rewinds_handle, rewinds) = builder.new_output();
     let (mut snapshot_handle, snapshot) = builder.new_output();
     let (mut definite_error_handle, definite_errors) = builder.new_output();
+
+    let (mut stats_output, stats_stream) = builder.new_output();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
@@ -242,8 +242,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 data_cap_set,
                 rewind_cap_set,
                 snapshot_cap_set,
-                definite_error_cap_set
-            ]: &mut [_; 4] = caps.try_into().unwrap();
+                definite_error_cap_set,
+                stats_cap,
+            ]: &mut [_; 5] = caps.try_into().unwrap();
 
             trace!(
                 %id,
@@ -255,6 +256,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // Nothing needs to be snapshot.
             if exports_to_snapshot.is_empty() {
                 trace!(%id, "no exports to snapshot");
+                // Note we do not emit a `ProgressStatisticsUpdate::Snapshot` update here,
+                // as we do not want to attempt to override the current value with 0. We
+                // just leave it null.
                 return Ok(());
             }
 
@@ -402,17 +406,20 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 })
                 .collect();
 
-            let client = Arc::new(client);
-            let _count_join_handle = record_table_sizes(
-                &config,
-                &connection_config,
-                &snapshot,
-                metrics,
-                worker_tables,
-                Arc::clone(&client),
-            )
-            .await?;
+            let snapshot_total =
+                fetch_snapshot_size(&client, worker_tables, metrics, &config).await?;
 
+            stats_output
+                .give(
+                    &stats_cap[0],
+                    ProgressStatisticsUpdate::Snapshot {
+                        records_known: snapshot_total,
+                        records_staged: 0,
+                    },
+                )
+                .await;
+
+            let mut snapshot_staged = 0;
             for (&oid, (_, expected_desc, _)) in reader_snapshot_table_info.iter() {
                 let desc = match verify_schema(oid, expected_desc, &upstream_info) {
                     Ok(()) => expected_desc,
@@ -443,8 +450,37 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     raw_handle
                         .give(&data_cap_set[0], ((oid, Ok(bytes)), MzOffset::minimum(), 1))
                         .await;
+                    snapshot_staged += 1;
+                    // TODO(guswynn): does this 1000 need to be configurable?
+                    if snapshot_staged % 1000 == 0 {
+                        stats_output
+                            .give(
+                                &stats_cap[0],
+                                ProgressStatisticsUpdate::Snapshot {
+                                    records_known: snapshot_total,
+                                    records_staged: snapshot_staged,
+                                },
+                            )
+                            .await;
+                    }
                 }
             }
+
+            if snapshot_staged < snapshot_total {
+                error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow
+                                 bigger than records staged {snapshot_staged}");
+                snapshot_staged = snapshot_total;
+            }
+            stats_output
+                .give(
+                    &stats_cap[0],
+                    ProgressStatisticsUpdate::Snapshot {
+                        records_known: snapshot_total,
+                        records_staged: snapshot_staged,
+                    },
+                )
+                .await;
+
             // Failure scenario after we have produced the snapshot, but before a successful COMMIT
             fail::fail_point!("pg_snapshot_failure", |_| Err(
                 TransientError::SyntheticError
@@ -490,7 +526,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
-    (snapshot_updates, rewinds, errors, button.press_on_drop())
+    (
+        snapshot_updates,
+        rewinds,
+        stats_stream,
+        errors,
+        button.press_on_drop(),
+    )
 }
 
 /// Starts a read-only transaction on the SQL session of `client` at a consistent LSN point by
@@ -546,7 +588,7 @@ async fn set_statement_timeout(client: &Client, timeout: Duration) -> Result<(),
 /// Decodes a row of `col_len` columns obtained from a text encoded COPY query into `row`.
 fn decode_copy_row(data: &[u8], col_len: usize, row: &mut Row) -> Result<(), DefiniteError> {
     let mut packer = row.packer();
-    let row_parser = mz_pgcopy::CopyTextFormatParser::new(data, "\t", "\\N");
+    let row_parser = mz_pgcopy::CopyTextFormatParser::new(data, b'\t', "\\N");
     let mut column_iter = row_parser.iter_raw_truncating(col_len);
     for _ in 0..col_len {
         let value = match column_iter.next() {
@@ -561,139 +603,76 @@ fn decode_copy_row(data: &[u8], col_len: usize, row: &mut Row) -> Result<(), Def
 }
 
 /// Record the sizes of the tables being snapshotted in `PgSnapshotMetrics`.
-async fn record_table_sizes(
-    config: &RawSourceCreationConfig,
-    connection_config: &Config,
-    snapshot: &str,
-    metrics: PgSnapshotMetrics,
+async fn fetch_snapshot_size(
+    client: &Client,
     // The table names and oids owned by this worker.
     tables: Vec<(String, Oid)>,
-    // An optimization: when `wait_for_count` is true, we can use the client
-    // used for replication.
-    replication_client: Arc<Client>,
-) -> Result<Option<AbortOnDropHandle<Result<(), anyhow::Error>>>, anyhow::Error> {
+    metrics: PgSnapshotMetrics,
+    config: &RawSourceCreationConfig,
+) -> Result<u64, anyhow::Error> {
+    // TODO(guswynn): delete unused configs
     let snapshot_config = config.config.parameters.pg_snapshot_config;
-    let statement_timeout = config
-        .config
-        .parameters
-        .pg_source_snapshot_statement_timeout;
-    let connection_context = &config.config.connection_context;
 
-    let source_id = config.id;
-    let worker_id = config.worker_id;
-
-    if tables.is_empty() {
-        return Ok(None);
+    let mut total = 0;
+    for (table, oid) in tables {
+        let stats =
+            collect_table_statistics(client, snapshot_config.collect_strict_count, &table, oid)
+                .await?;
+        metrics.record_table_count_latency(
+            table,
+            stats.count_latency,
+            snapshot_config.collect_strict_count,
+        );
+        total += stats.count;
     }
-
-    let task_name = format!("timely-{worker_id} PG snapshot counter");
-
-    // We create a new connection here so that postgres can actually process this in parallel
-    // with the main snapshotting, unless we are waiting for the count.
-    let client = if snapshot_config.wait_for_count {
-        replication_client
-    } else {
-        let new_client = connection_config
-            .connect(&task_name, &connection_context.ssh_tunnel_manager)
-            .await?;
-
-        set_statement_timeout(&new_client, statement_timeout).await?;
-
-        // If we want a strict count, we want to count the rows in the snapshot
-        // determined in the operator.
-        if snapshot_config.collect_strict_count || snapshot_config.fallback_to_strict_count {
-            use_snapshot(&new_client, snapshot).await?
-        }
-        Arc::new(new_client)
-    };
-
-    let jh = mz_ore::task::spawn(|| format!("pg_source_count"), async move {
-        let metrics = &metrics;
-        let client = &client;
-
-        let mut result = Ok(());
-        for (table, oid) in tables {
-            match collect_table_statistics(client, snapshot_config, &table, oid).await {
-                Ok(stats) => {
-                    if let Some(count) = stats.estimate_count {
-                        metrics.record_table_estimate(table.clone(), count, stats.estimate_latency);
-                    }
-                    if let Some(count) = stats.count {
-                        metrics.record_table_count(table.clone(), count, stats.count_latency);
-                    }
-                }
-                Err(err) => {
-                    if !snapshot_config.wait_for_count {
-                        warn!(?err, "error when collecting pg count");
-                    }
-                    result = result.and(Err(err));
-                }
-            }
-        }
-        result.context(format!("{source_id}: "))?;
-
-        // If we want a strict count, we want to count the rows in the snapshot
-        // determined in the operator.
-        if !snapshot_config.wait_for_count
-            && (snapshot_config.collect_strict_count || snapshot_config.fallback_to_strict_count)
-        {
-            client.simple_query("COMMIT").await?;
-        }
-        Ok(())
-    });
-
-    if snapshot_config.wait_for_count {
-        jh.wait_and_assert_finished().await.map(|_| None)
-    } else {
-        // TODO(guswynn): should errors be communicated back to the health stream?
-        Ok(Some(jh.abort_on_drop()))
-    }
+    Ok(total)
 }
 
 #[derive(Default)]
 struct TableStatistics {
+    count: u64,
     count_latency: f64,
-    count: Option<i64>,
-    estimate_latency: f64,
-    estimate_count: Option<i64>,
 }
 
 async fn collect_table_statistics(
     client: &Client,
-    config: PgSourceSnapshotConfig,
+    strict: bool,
     table: &str,
     oid: u32,
 ) -> Result<TableStatistics, anyhow::Error> {
     use mz_ore::metrics::MetricsFutureExt;
     let mut stats = TableStatistics::default();
 
-    let estimate_row = simple_query_opt(
-        client,
-        &format!("SELECT reltuples::bigint AS estimate_count FROM pg_class WHERE oid = '{oid}'"),
-    )
-    .wall_time()
-    .set_at(&mut stats.estimate_latency)
-    .await?;
-
-    match estimate_row {
-        Some(row) => match row.get("estimate_count").unwrap().parse().unwrap() {
-            -1 => stats.estimate_count = None,
-            n => stats.estimate_count = Some(n),
-        },
-        None => bail!("failed to get estimate count for {table}"),
-    }
-
-    // Postgres returns an estimate of -1 if the table doesn't have sufficient writes/analysis/vacuuming happening.
-    let should_fallback = config.fallback_to_strict_count && stats.estimate_count.is_none();
-    if config.collect_strict_count || should_fallback {
+    if strict {
         let count_row = simple_query_opt(client, &format!("SELECT count(*) as count from {table}"))
             .wall_time()
             .set_at(&mut stats.count_latency)
             .await?;
         match count_row {
-            Some(row) => stats.count = Some(row.get("count").unwrap().parse().unwrap()),
+            Some(row) => {
+                let count: i64 = row.get("count").unwrap().parse().unwrap();
+                stats.count = count.try_into()?;
+            }
             None => bail!("failed to get count for {table}"),
         }
+    } else {
+        let estimate_row = simple_query_opt(
+            client,
+            &format!(
+                "SELECT reltuples::bigint AS estimate_count FROM pg_class WHERE oid = '{oid}'"
+            ),
+        )
+        .wall_time()
+        .set_at(&mut stats.count_latency)
+        .await?;
+        match estimate_row {
+            Some(row) => match row.get("estimate_count").unwrap().parse().unwrap() {
+                -1 => stats.count = 0,
+                n => stats.count = n.try_into()?,
+            },
+            None => bail!("failed to get estimate count for {table}"),
+        };
     }
+
     Ok(stats)
 }

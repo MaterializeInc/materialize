@@ -1052,6 +1052,77 @@ SELECT to_jsonb(1.234::FLOAT)
 ----
 1.234
 
+query T
+SELECT to_jsonb(null::int[])
+----
+NULL
+
+query T
+SELECT to_jsonb(array[1]::int[])
+----
+[1]
+
+query T
+SELECT to_jsonb(array[1, 2]::int[])
+----
+[1,2]
+
+query T
+SELECT to_jsonb(array[array[1, 2], array[3, 4]]::int[])
+----
+[[1,2],[3,4]]
+
+query T
+SELECT to_jsonb(array[array[array[1, 2], array[3, 4]], array[array[5, 6], array[7, 8]]]::int[])
+----
+[[[1,2],[3,4]],[[5,6],[7,8]]]
+
+query T
+SELECT to_jsonb(array[1.2, .3]::float[])
+----
+[1.2,0.3]
+
+query T
+SELECT to_jsonb(array[row(1, 2), row(3, 4)])
+----
+[{"f1":1,"f2":2},{"f1":3,"f2":4}]
+
+query T
+SELECT to_jsonb(null::int list)
+----
+NULL
+
+query T
+SELECT to_jsonb(list[1]::int list)
+----
+[1]
+
+query T
+SELECT to_jsonb(list[1, 2]::int list)
+----
+[1,2]
+
+query T
+SELECT to_jsonb(list[list[1], list[3, 4]]::int list list)
+----
+[[1],[3,4]]
+
+query T
+SELECT to_jsonb(list[list[list[1, 2], list[3]], list[list[7, 8]]]::int list list list)
+----
+[[[1,2],[3]],[[7,8]]]
+
+query T
+SELECT to_jsonb(list[1.2, .3]::float list)
+----
+[1.2,0.3]
+
+query T
+SELECT to_jsonb(list[row(1, 2), row(3, 4)])
+----
+[{"f1":1,"f2":2},{"f1":3,"f2":4}]
+
+
 # query T
 # SELECT to_jsonb(1.234::DECIMAL)
 # ----

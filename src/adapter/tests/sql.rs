@@ -104,7 +104,6 @@ async fn datadriven() {
                                         }),
                                         owner_id: MZ_SYSTEM_ROLE_ID,
                                     }],
-                                    |_| Ok(()),
                                 )
                                 .await
                                 .unwrap();

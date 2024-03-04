@@ -55,7 +55,7 @@ impl fmt::Display for OpError {
 pub enum OpErrorKind {
     #[error("the required field '{0}' is missing")]
     FieldMissing(&'static str),
-    #[error("failed to create a temporary resource")]
+    #[error("failed to create a temporary resource: {0:?}")]
     TemporaryResource(tokio_postgres::Error),
     #[error("internal invariant was violated: {0}")]
     InvariantViolated(String),

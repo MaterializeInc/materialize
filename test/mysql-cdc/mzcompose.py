@@ -10,11 +10,33 @@
 import threading
 from textwrap import dedent
 
+from materialize.mysql_util import (
+    retrieve_invalid_ssl_context_for_mysql,
+    retrieve_ssl_context_for_mysql,
+)
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+
+
+def create_mysql(mysql_version: str) -> MySql:
+    return MySql(version=mysql_version)
+
+
+def create_mysql_replica(mysql_version: str) -> MySql:
+    return MySql(
+        name="mysql-replica",
+        version=mysql_version,
+        additional_args=[
+            "--gtid_mode=ON",
+            "--enforce_gtid_consistency=ON",
+            "--skip-replica-start",
+            "--server-id=2",
+        ],
+    )
+
 
 SERVICES = [
     Materialized(
@@ -22,24 +44,32 @@ SERVICES = [
             "log_filter": "mz_storage::source::mysql=trace,info"
         },
     ),
-    MySql(),
-    MySql(
-        name="mysql-replica",
-        additional_args=[
-            "--gtid_mode=ON",
-            "--enforce_gtid_consistency=ON",
-            "--skip-replica-start",
-            "--server-id=2",
-        ],
-    ),
+    create_mysql(MySql.DEFAULT_VERSION),
+    create_mysql_replica(MySql.DEFAULT_VERSION),
     TestCerts(),
     Testdrive(default_timeout="60s"),
 ]
 
 
+def get_targeted_mysql_version(parser: WorkflowArgumentParser) -> str:
+    parser.add_argument(
+        "--mysql-version",
+        default=MySql.DEFAULT_VERSION,
+        type=str,
+    )
+
+    args, _ = parser.parse_known_args()
+    print(f"Running with MySQL version {args.mysql_version}")
+    return args.mysql_version
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    remaining_args = [
+        arg for arg in parser.args if not arg.startswith("--mysql-version")
+    ]
+
     # If args were passed then we are running the main CDC workflow
-    if parser.args:
+    if remaining_args:
         workflow_cdc(c, parser)
     else:
         # Otherwise we are running all workflows
@@ -60,65 +90,57 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.up("materialized", "mysql")
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(create_mysql(mysql_version)):
+        c.up("materialized", "mysql")
 
-    # MySQL generates self-signed certificates for SSL connections on startup,
-    # for both the server and client:
-    # https://dev.mysql.com/doc/refman/8.3/en/creating-ssl-rsa-files-using-mysql.html
-    # Grab the correct Server CA and Client Key and Cert from the MySQL container
-    # (and strip the trailing null byte):
-    ssl_ca = c.exec("mysql", "cat", "/var/lib/mysql/ca.pem", capture=True).stdout.split(
-        "\x00", 1
-    )[0]
-    ssl_client_cert = c.exec(
-        "mysql", "cat", "/var/lib/mysql/client-cert.pem", capture=True
-    ).stdout.split("\x00", 1)[0]
-    ssl_client_key = c.exec(
-        "mysql", "cat", "/var/lib/mysql/client-key.pem", capture=True
-    ).stdout.split("\x00", 1)[0]
+        valid_ssl_context = retrieve_ssl_context_for_mysql(c)
+        wrong_ssl_context = retrieve_invalid_ssl_context_for_mysql(c)
 
-    # Use the TestCert service to obtain a wrong CA and client cert/key:
-    ssl_wrong_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
-    ssl_wrong_client_cert = c.run(
-        "test-certs", "cat", "/secrets/certuser.crt", capture=True
-    ).stdout
-    ssl_wrong_client_key = c.run(
-        "test-certs", "cat", "/secrets/certuser.key", capture=True
-    ).stdout
+        c.sources_and_sinks_ignored_from_validation.add("drop_table")
 
-    c.run_testdrive_files(
-        f"--var=ssl-ca={ssl_ca}",
-        f"--var=ssl-client-cert={ssl_client_cert}",
-        f"--var=ssl-client-key={ssl_client_key}",
-        f"--var=ssl-wrong-ca={ssl_wrong_ca}",
-        f"--var=ssl-wrong-client-cert={ssl_wrong_client_cert}",
-        f"--var=ssl-wrong-client-key={ssl_wrong_client_key}",
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-        "--var=mysql-user-password=us3rp4ssw0rd",
-        *args.filter,
-    )
+        c.run_testdrive_files(
+            f"--var=ssl-ca={valid_ssl_context.ca}",
+            f"--var=ssl-client-cert={valid_ssl_context.client_cert}",
+            f"--var=ssl-client-key={valid_ssl_context.client_key}",
+            f"--var=ssl-wrong-ca={wrong_ssl_context.ca}",
+            f"--var=ssl-wrong-client-cert={wrong_ssl_context.client_cert}",
+            f"--var=ssl-wrong-client-key={wrong_ssl_context.client_key}",
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "--var=mysql-user-password=us3rp4ssw0rd",
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            *args.filter,
+        )
 
 
-def workflow_replica_connection(c: Composition) -> None:
-    c.up("materialized", "mysql", "mysql-replica")
-    c.run_testdrive_files(
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-        "override/10-replica-connection.td",
-    )
+def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) -> None:
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(create_mysql(mysql_version), create_mysql_replica(mysql_version)):
+        c.up("materialized", "mysql", "mysql-replica")
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "override/10-replica-connection.td",
+        )
 
 
-def workflow_schema_change_restart(c: Composition) -> None:
+def workflow_schema_change_restart(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     """
     Validates that a schema change done to a table after the MySQL source is created
     but before the snapshot is completed is detected after a restart.
     """
-    c.up("materialized", "mysql")
-    c.run_testdrive_files(
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-        "schema-restart/before-restart.td",
-    )
 
-    with c.override(Testdrive(no_reset=True)):
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(create_mysql(mysql_version)):
+        c.up("materialized", "mysql")
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "schema-restart/before-restart.td",
+        )
+
+    with c.override(Testdrive(no_reset=True), create_mysql(mysql_version)):
         # Restart mz
         c.kill("materialized")
         c.up("materialized")
@@ -143,7 +165,7 @@ def _make_inserts(*, txns: int, txn_size: int) -> tuple[str, int]:
     return (sql, records)
 
 
-def workflow_many_inserts(c: Composition) -> None:
+def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> None:
     """
     Tests a scenario that caused a consistency issue in the past. We insert a
     large number of rows into a table, then create a source for that table while
@@ -154,41 +176,45 @@ def workflow_many_inserts(c: Composition) -> None:
     In earlier incarnations of the MySQL source, the source accidentally failed
     to snapshot inside of a repeatable read transaction.
     """
-    c.up("materialized", "mysql")
-    c.up("testdrive", persistent=True)
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(create_mysql(mysql_version)):
+        c.up("materialized", "mysql")
+        c.up("testdrive", persistent=True)
 
-    # Records to before creating the source.
-    (initial_sql, initial_records) = _make_inserts(txns=1, txn_size=1_000_000)
+        # Records to before creating the source.
+        (initial_sql, initial_records) = _make_inserts(txns=1, txn_size=1_000_000)
 
-    # Records to insert concurrently with creating the source.
-    (concurrent_sql, concurrent_records) = _make_inserts(txns=1000, txn_size=100)
+        # Records to insert concurrently with creating the source.
+        (concurrent_sql, concurrent_records) = _make_inserts(txns=1000, txn_size=100)
 
-    # Set up the MySQL server with the initial records, set up the connection to
-    # the MySQL server in Materialize.
-    c.testdrive(
-        dedent(
-            f"""
-            $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-            ALTER SYSTEM SET enable_mysql_source = true
+        # Set up the MySQL server with the initial records, set up the connection to
+        # the MySQL server in Materialize.
+        c.testdrive(
+            dedent(
+                f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                ALTER SYSTEM SET enable_mysql_source = true
 
-            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
-            > CREATE SECRET IF NOT EXISTS mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'
-            > CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
+                > CREATE SECRET IF NOT EXISTS mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'
+                > CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
 
-            $ mysql-execute name=mysql
-            DROP DATABASE IF EXISTS public;
-            CREATE DATABASE public;
-            USE public;
-            DROP TABLE IF EXISTS many_inserts;
-            CREATE TABLE many_inserts (pk SERIAL PRIMARY KEY, f2 BIGINT);
-
-            {initial_sql}
-
-            > DROP SOURCE IF EXISTS s1;
-            """
+                $ mysql-execute name=mysql
+                DROP DATABASE IF EXISTS public;
+                CREATE DATABASE public;
+                USE public;
+                DROP TABLE IF EXISTS many_inserts;
+                CREATE TABLE many_inserts (pk SERIAL PRIMARY KEY, f2 BIGINT);
+                """
+            )
+            + dedent(initial_sql)
+            + dedent(
+                """
+                > DROP SOURCE IF EXISTS s1;
+                """
+            )
         )
-    )
 
     # Start inserting in the background.
 

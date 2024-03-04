@@ -51,7 +51,7 @@ class StartMz(MzcomposeAction):
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
         self.catalog_store = catalog_store or (
-            "shadow"
+            "persist"
             if scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev")
             else "stash"
         )
@@ -247,8 +247,11 @@ class UseClusterdCompute(MzcomposeAction):
         )
 
         if self.base_version >= MzVersion(0, 55, 0):
+            param = "enable_unmanaged_cluster_replicas"
+            if self.base_version >= MzVersion.parse_mz("v0.90.0-dev"):
+                param = "enable_unorchestrated_cluster_replicas"
             c.sql(
-                "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;",
+                f"ALTER SYSTEM SET {param} = on;",
                 port=6877,
                 user="mz_system",
             )

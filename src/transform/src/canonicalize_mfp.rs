@@ -38,10 +38,9 @@ use crate::{IndexOracle, TransformCtx};
 pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "canonicalize_mfp")
     )]
     fn transform(
@@ -62,9 +61,17 @@ impl CanonicalizeMfp {
         indexes: &dyn IndexOracle,
     ) -> Result<(), crate::TransformError> {
         let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(relation);
-        relation.try_visit_mut_children(|e| self.action(e, indexes))?;
         mfp.optimize(); // Optimize MFP, e.g., perform CSE
-        Self::rebuild_mfp(mfp, relation);
+                        // Push MFPs through `Negate` operators, if encountered.
+                        // This is a first steps toward a `CanonicalizeLinear`,
+                        // which puts linear operators in a canonical representation.
+        if let MirRelationExpr::Negate { input } = relation {
+            Self::rebuild_mfp(mfp, &mut **input);
+            relation.try_visit_mut_children(|e| self.action(e, indexes))?;
+        } else {
+            relation.try_visit_mut_children(|e| self.action(e, indexes))?;
+            Self::rebuild_mfp(mfp, relation);
+        }
         Ok(())
     }
 

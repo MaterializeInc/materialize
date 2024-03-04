@@ -199,7 +199,10 @@ where
 
                 // Layers are ordered from largest to smallest.
                 // Skip to the largest occupied layer.
-                let layers = layers.skip_while(|(_idx, count, _len)| *count == 0);
+                let layers = layers
+                    .iter()
+                    .copied()
+                    .skip_while(|(_idx, count, _len)| *count == 0);
 
                 let mut first = true;
                 for (_idx, count, len) in layers {

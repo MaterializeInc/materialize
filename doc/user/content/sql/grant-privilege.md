@@ -39,6 +39,7 @@ _role_name_                                         | The role name that is gain
 **CREATEDB**                                        | Allows creating databases. The abbreviation for this privilege is 'B' (dataBase).
 **CREATECLUSTER**                                   | Allows creating clusters. The abbreviation for this privilege is 'N' (compute Node).
 **ALL PRIVILEGES**                                  | All applicable privileges for the provided object type.
+**GROUP**                                           | This is an optional keyword that has no effect but is part of the SQL standard.
 
 ## Details
 

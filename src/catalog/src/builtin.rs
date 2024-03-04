@@ -112,6 +112,7 @@ pub struct BuiltinLog {
     pub variant: LogVariant,
     pub name: &'static str,
     pub schema: &'static str,
+    pub oid: u32,
     /// ACL items to apply to the object
     pub access: Vec<MzAclItem>,
 }
@@ -120,6 +121,7 @@ pub struct BuiltinLog {
 pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
+    pub oid: u32,
     pub desc: RelationDesc,
     /// Whether the table's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
@@ -132,6 +134,7 @@ pub struct BuiltinTable {
 pub struct BuiltinSource {
     pub name: &'static str,
     pub schema: &'static str,
+    pub oid: u32,
     pub desc: RelationDesc,
     pub data_source: IntrospectionType,
     /// Whether the source's retention policy is controlled by
@@ -145,6 +148,7 @@ pub struct BuiltinSource {
 pub struct BuiltinView {
     pub name: &'static str,
     pub schema: &'static str,
+    pub oid: u32,
     pub column_defs: Option<&'static str>,
     pub sql: &'static str,
     /// ACL items to apply to the object
@@ -187,6 +191,7 @@ pub struct BuiltinFunc {
 pub struct BuiltinIndex {
     pub name: &'static str,
     pub schema: &'static str,
+    pub oid: u32,
     /// SQL fragment for the index, following `CREATE INDEX [name]`
     ///
     /// Format: `IN CLUSTER [cluster_name] ON [table_name] ([column_exprs])`
@@ -207,6 +212,7 @@ pub struct BuiltinRole {
     ///
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
+    pub oid: u32,
     pub attributes: RoleAttributes,
 }
 
@@ -252,6 +258,7 @@ impl<T: TypeReference> Fingerprint for &BuiltinType<T> {
         "".to_string()
     }
 }
+
 impl Fingerprint for &BuiltinFunc {
     fn fingerprint(&self) -> String {
         "".to_string()
@@ -278,6 +285,7 @@ impl Fingerprint for &BuiltinTable {
 pub static REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE: Mutex<
     Option<String>,
 > = Mutex::new(None);
+
 impl Fingerprint for &BuiltinView {
     fn fingerprint(&self) -> String {
         // This is only called during bootstrapping so it's not that big of a deal to lock a mutex,
@@ -1672,6 +1680,7 @@ const MONITOR_REDACTED_SELECT: MzAclItem = MzAclItem {
 pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_DATAFLOW_OPERATORS_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Operates),
     access: vec![PUBLIC_SELECT],
 });
@@ -1679,6 +1688,7 @@ pub static MZ_DATAFLOW_OPERATORS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Bui
 pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_dataflow_addresses_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_DATAFLOW_ADDRESSES_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Addresses),
     access: vec![PUBLIC_SELECT],
 });
@@ -1686,6 +1696,7 @@ pub static MZ_DATAFLOW_ADDRESSES_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Bui
 pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_dataflow_channels_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_DATAFLOW_CHANNELS_PER_WORKER_OID,
     variant: LogVariant::Timely(TimelyLog::Channels),
     access: vec![PUBLIC_SELECT],
 });
@@ -1693,6 +1704,7 @@ pub static MZ_DATAFLOW_CHANNELS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Buil
 pub static MZ_SCHEDULING_ELAPSED_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_scheduling_elapsed_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_SCHEDULING_ELAPSED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
     access: vec![PUBLIC_SELECT],
 });
@@ -1701,6 +1713,7 @@ pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> =
     Lazy::new(|| BuiltinLog {
         name: "mz_compute_operator_durations_histogram_raw",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::LOG_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW_OID,
         variant: LogVariant::Timely(TimelyLog::Histogram),
         access: vec![PUBLIC_SELECT],
     });
@@ -1708,6 +1721,7 @@ pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> =
 pub static MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_scheduling_parks_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_SCHEDULING_PARKS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Parks),
     access: vec![PUBLIC_SELECT],
 });
@@ -1715,6 +1729,7 @@ pub static MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| Bu
 pub static MZ_ARRANGEMENT_RECORDS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_records_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_RECORDS_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
     access: vec![PUBLIC_SELECT],
 });
@@ -1722,6 +1737,7 @@ pub static MZ_ARRANGEMENT_RECORDS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 pub static MZ_ARRANGEMENT_BATCHES_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batches_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_BATCHES_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
     access: vec![PUBLIC_SELECT],
 });
@@ -1729,6 +1745,7 @@ pub static MZ_ARRANGEMENT_BATCHES_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 pub static MZ_ARRANGEMENT_SHARING_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_sharing_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_SHARING_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
     access: vec![PUBLIC_SELECT],
 });
@@ -1736,6 +1753,7 @@ pub static MZ_ARRANGEMENT_SHARING_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 pub static MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batcher_records_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_RECORDS_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherRecords),
     access: vec![PUBLIC_SELECT],
 });
@@ -1743,6 +1761,7 @@ pub static MZ_ARRANGEMENT_BATCHER_RECORDS_RAW: Lazy<BuiltinLog> = Lazy::new(|| B
 pub static MZ_ARRANGEMENT_BATCHER_SIZE_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batcher_size_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_SIZE_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherSize),
     access: vec![PUBLIC_SELECT],
 });
@@ -1750,6 +1769,7 @@ pub static MZ_ARRANGEMENT_BATCHER_SIZE_RAW: Lazy<BuiltinLog> = Lazy::new(|| Buil
 pub static MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batcher_capacity_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherCapacity),
     access: vec![PUBLIC_SELECT],
 });
@@ -1757,6 +1777,7 @@ pub static MZ_ARRANGEMENT_BATCHER_CAPACITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| 
 pub static MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_batcher_allocations_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW_OID,
     variant: LogVariant::Differential(DifferentialLog::BatcherAllocations),
     access: vec![PUBLIC_SELECT],
 });
@@ -1764,6 +1785,7 @@ pub static MZ_ARRANGEMENT_BATCHER_ALLOCATIONS_RAW: Lazy<BuiltinLog> = Lazy::new(
 pub static MZ_COMPUTE_EXPORTS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_exports_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_EXPORTS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
     access: vec![PUBLIC_SELECT],
 });
@@ -1771,6 +1793,7 @@ pub static MZ_COMPUTE_EXPORTS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Builti
 pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_frontiers_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_FRONTIERS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
     access: vec![PUBLIC_SELECT],
 });
@@ -1778,6 +1801,7 @@ pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| Buil
 pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_import_frontiers_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
     access: vec![PUBLIC_SELECT],
 });
@@ -1785,6 +1809,7 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(
 pub static MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_delays_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_DELAYS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
     access: vec![PUBLIC_SELECT],
 });
@@ -1792,6 +1817,7 @@ pub static MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| Buil
 pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_compute_error_counts_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_COMPUTE_ERROR_COUNTS_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ErrorCount),
     access: vec![PUBLIC_SELECT],
 });
@@ -1799,6 +1825,7 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinL
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_active_peeks_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ACTIVE_PEEKS_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
     access: vec![PUBLIC_SELECT],
 });
@@ -1806,6 +1833,7 @@ pub static MZ_ACTIVE_PEEKS_PER_WORKER: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_peek_durations_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_PEEK_DURATIONS_HISTOGRAM_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
     access: vec![PUBLIC_SELECT],
 });
@@ -1814,6 +1842,7 @@ pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> =
     Lazy::new(|| BuiltinLog {
         name: "mz_dataflow_shutdown_durations_histogram_raw",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::LOG_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW_OID,
         variant: LogVariant::Compute(ComputeLog::ShutdownDuration),
         access: vec![PUBLIC_SELECT],
     });
@@ -1821,6 +1850,7 @@ pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: Lazy<BuiltinLog> =
 pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_heap_size_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_HEAP_SIZE_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapSize),
     access: vec![PUBLIC_SELECT],
 });
@@ -1828,6 +1858,7 @@ pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: Lazy<BuiltinLog> = Lazy::new(|| Builtin
 pub static MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_heap_capacity_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_HEAP_CAPACITY_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
     access: vec![PUBLIC_SELECT],
 });
@@ -1835,6 +1866,7 @@ pub static MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| Bui
 pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_arrangement_heap_allocations_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW_OID,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
     access: vec![PUBLIC_SELECT],
 });
@@ -1842,6 +1874,7 @@ pub static MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: Lazy<BuiltinLog> = Lazy::new(|| 
 pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_message_batch_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::BatchesReceived),
     access: vec![PUBLIC_SELECT],
 });
@@ -1849,6 +1882,7 @@ pub static MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: Lazy<BuiltinLog> = Lazy::new(||
 pub static MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_message_batch_counts_sent_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_MESSAGE_BATCH_COUNTS_SENT_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::BatchesSent),
     access: vec![PUBLIC_SELECT],
 });
@@ -1856,6 +1890,7 @@ pub static MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: Lazy<BuiltinLog> = Lazy::new(|| Bui
 pub static MZ_MESSAGE_COUNTS_RECEIVED_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_message_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_MESSAGE_COUNTS_RECEIVED_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
     access: vec![PUBLIC_SELECT],
 });
@@ -1863,6 +1898,7 @@ pub static MZ_MESSAGE_COUNTS_RECEIVED_RAW: Lazy<BuiltinLog> = Lazy::new(|| Built
 pub static MZ_MESSAGE_COUNTS_SENT_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_message_counts_sent_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_MESSAGE_COUNTS_SENT_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
     access: vec![PUBLIC_SELECT],
 });
@@ -1870,6 +1906,7 @@ pub static MZ_MESSAGE_COUNTS_SENT_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLo
 pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: Lazy<BuiltinLog> = Lazy::new(|| BuiltinLog {
     name: "mz_dataflow_operator_reachability_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::LOG_MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW_OID,
     variant: LogVariant::Timely(TimelyLog::Reachability),
     access: vec![PUBLIC_SELECT],
 });
@@ -1877,6 +1914,7 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: Lazy<BuiltinLog> = Lazy::new(|
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_KAFKA_SINKS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("topic", ScalarType::String.nullable(false))
@@ -1887,6 +1925,7 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_connections",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_KAFKA_CONNECTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column(
@@ -1901,6 +1940,7 @@ pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sources",
     // `mz_internal` for now, while we work out the desc.
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_KAFKA_SOURCES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("group_id_prefix", ScalarType::String.nullable(false))
@@ -1911,6 +1951,7 @@ pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_postgres_sources",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_POSTGRES_SOURCES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("replication_slot", ScalarType::String.nullable(false)),
@@ -1920,15 +1961,17 @@ pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_object_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_OBJECT_DEPENDENCIES_OID,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("referenced_object_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
 pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_COMPUTE_DEPENDENCIES_OID,
     data_source: IntrospectionType::ComputeDependencies,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
@@ -1939,6 +1982,7 @@ pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
 pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_STATUSES_OID,
     data_source: IntrospectionType::ComputeHydrationStatus,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
@@ -1951,6 +1995,7 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: Lazy<BuiltinSource
     Lazy::new(|| BuiltinSource {
         name: "mz_compute_operator_hydration_statuses_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
         data_source: IntrospectionType::ComputeOperatorHydrationStatus,
         desc: RelationDesc::empty()
             .with_column("object_id", ScalarType::String.nullable(false))
@@ -1965,6 +2010,7 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: Lazy<BuiltinSource
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_DATABASES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1980,6 +2026,7 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_schemas",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_SCHEMAS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -1996,6 +2043,7 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_columns",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_COLUMNS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -2011,6 +2059,7 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_indexes",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_INDEXES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2026,6 +2075,7 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_index_columns",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_INDEX_COLUMNS_OID,
     desc: RelationDesc::empty()
         .with_column("index_id", ScalarType::String.nullable(false))
         .with_column("index_position", ScalarType::UInt64.nullable(false))
@@ -2038,6 +2088,7 @@ pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_tables",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_TABLES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2056,6 +2107,7 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_connections",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_CONNECTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2075,6 +2127,7 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_ssh_tunnel_connections",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_SSH_TUNNEL_CONNECTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("public_key_1", ScalarType::String.nullable(false))
@@ -2085,6 +2138,7 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_SOURCES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2110,6 +2164,7 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_SINKS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2130,6 +2185,7 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_VIEWS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2149,6 +2205,7 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_materialized_views",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_MATERIALIZED_VIEWS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2169,6 +2226,7 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_types",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_TYPES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2190,6 +2248,7 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_TYPE_PG_METADATA: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_type_pg_metadata",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_TYPE_PG_METADATA_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("typinput", ScalarType::Oid.nullable(false))
@@ -2200,6 +2259,7 @@ pub static MZ_TYPE_PG_METADATA: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_array_types",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_ARRAY_TYPES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
@@ -2209,6 +2269,7 @@ pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_BASE_TYPES_OID,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2216,6 +2277,7 @@ pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_list_types",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_LIST_TYPES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false))
@@ -2233,6 +2295,7 @@ pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_map_types",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_MAP_TYPES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("key_id", ScalarType::String.nullable(false))
@@ -2259,6 +2322,7 @@ pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_roles",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_ROLES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2270,6 +2334,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_role_members",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_ROLE_MEMBERS_OID,
     desc: RelationDesc::empty()
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column("member", ScalarType::String.nullable(false))
@@ -2280,6 +2345,7 @@ pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_PSEUDO_TYPES_OID,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2287,6 +2353,7 @@ pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_functions",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_FUNCTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2309,6 +2376,7 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_operators",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_OPERATORS_OID,
     desc: RelationDesc::empty()
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -2323,6 +2391,7 @@ pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_aggregates",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_AGGREGATES_OID,
     desc: RelationDesc::empty()
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("agg_kind", ScalarType::String.nullable(false))
@@ -2334,6 +2403,7 @@ pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_clusters",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTERS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -2361,6 +2431,7 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_secrets",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_SECRETS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
@@ -2378,6 +2449,7 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replicas",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTER_REPLICAS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -2395,6 +2467,7 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_INTERNAL_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_internal_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_INTERNAL_CLUSTER_REPLICAS_OID,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2403,6 +2476,7 @@ pub static MZ_INTERNAL_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| Built
 pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTER_REPLICA_STATUSES_OID,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
@@ -2419,6 +2493,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
 pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_cluster_replica_sizes",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTER_REPLICA_SIZES_OID,
     desc: RelationDesc::empty()
         .with_column("size", ScalarType::String.nullable(false))
         .with_column("processes", ScalarType::UInt64.nullable(false))
@@ -2437,6 +2512,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_CLUSTER_REPLICA_HEARTBEATS_OID,
     data_source: IntrospectionType::ComputeReplicaHeartbeats,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::String.nullable(false))
@@ -2451,6 +2527,7 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| Bui
 pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_AUDIT_EVENTS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))
@@ -2468,6 +2545,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_SOURCE_STATUS_HISTORY_OID,
     data_source: IntrospectionType::SourceStatusHistory,
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
@@ -2478,6 +2556,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
     Lazy::new(|| BuiltinSource {
         name: "mz_aws_privatelink_connection_status_history",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_OID,
         data_source: IntrospectionType::PrivatelinkConnectionStatusHistory,
         desc: MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
         is_retained_metrics_object: false,
@@ -2487,6 +2566,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
 pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_aws_privatelink_connection_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_AWS_PRIVATELINK_CONNECTION_STATUSES_OID,
     column_defs: None,
     sql: "
     WITH statuses_w_last_status AS (
@@ -2519,6 +2599,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: Lazy<BuiltinView> = Lazy::new
 pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_statement_execution_history",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_STATEMENT_EXECUTION_HISTORY_OID,
     data_source: IntrospectionType::StatementExecutionHistory,
     desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
@@ -2528,12 +2609,13 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
 pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_statement_execution_history_redacted",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_STATEMENT_EXECUTION_HISTORY_REDACTED_OID,
     column_defs: None,
     // everything but `params`
     sql: "
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, transaction_isolation, execution_timestamp, transaction_id,
-transient_index_id, began_at, finished_at, finished_status,
+transient_index_id, mz_version, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
@@ -2542,6 +2624,7 @@ FROM mz_internal.mz_statement_execution_history",
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_prepared_statement_history",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_PREPARED_STATEMENT_HISTORY_OID,
     data_source: IntrospectionType::PreparedStatementHistory,
     desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
@@ -2551,6 +2634,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bui
 pub static MZ_SQL_TEXT: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sql_text",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_SQL_TEXT_OID,
     desc: MZ_SQL_TEXT_DESC.clone(),
     data_source: IntrospectionType::SqlText,
     is_retained_metrics_object: false,
@@ -2560,6 +2644,7 @@ pub static MZ_SQL_TEXT: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
 pub static MZ_SQL_TEXT_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_sql_text_redacted",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SQL_TEXT_REDACTED_OID,
     column_defs: None,
     sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_sql_text",
     access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
@@ -2567,21 +2652,23 @@ pub static MZ_SQL_TEXT_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 
 pub static MZ_RECENT_SQL_TEXT: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "mz_recent_sql_text",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    // This should always be 1 day more than the interval in
-    // `MZ_RECENT_THINNED_ACTIVITY_LOG` , because `prepared_day`
-    // is rounded down to the nearest day.  Thus something that actually happened three days ago
-    // could have a `prepared day` anywhere from 3 to 4 days back.
-    sql: "SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text WHERE prepared_day + INTERVAL '4 days' >= mz_now()",
-    access: vec![MONITOR_SELECT],
-}
+        name: "mz_recent_sql_text",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_RECENT_SQL_TEXT_OID,
+        column_defs: None,
+        // This should always be 1 day more than the interval in
+        // `MZ_RECENT_THINNED_ACTIVITY_LOG` , because `prepared_day`
+        // is rounded down to the nearest day.  Thus something that actually happened three days ago
+        // could have a `prepared day` anywhere from 3 to 4 days back.
+        sql: "SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text WHERE prepared_day + INTERVAL '4 days' >= mz_now()",
+        access: vec![MONITOR_SELECT],
+    }
 });
 
 pub static MZ_RECENT_SQL_TEXT_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_recent_sql_text_redacted",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_RECENT_SQL_TEXT_REDACTED_OID,
     column_defs: None,
     sql: "SELECT sql_hash, redacted_sql FROM mz_internal.mz_recent_sql_text",
     access: vec![MONITOR_SELECT, MONITOR_REDACTED_SELECT, SUPPORT_SELECT],
@@ -2590,6 +2677,7 @@ pub static MZ_RECENT_SQL_TEXT_REDACTED: Lazy<BuiltinView> = Lazy::new(|| Builtin
 pub static MZ_RECENT_SQL_TEXT_IND: Lazy<BuiltinIndex> = Lazy::new(|| BuiltinIndex {
     name: "mz_recent_sql_text_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_RECENT_SQL_TEXT_IND_OID,
     sql: "IN CLUSTER mz_introspection ON mz_internal.mz_recent_sql_text (sql_hash)",
     is_retained_metrics_object: false,
 });
@@ -2597,6 +2685,7 @@ pub static MZ_RECENT_SQL_TEXT_IND: Lazy<BuiltinIndex> = Lazy::new(|| BuiltinInde
 pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_session_history",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_SESSION_HISTORY_OID,
     data_source: IntrospectionType::SessionHistory,
     desc: MZ_SESSION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
@@ -2605,12 +2694,13 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
 
 pub static MZ_ACTIVITY_LOG_THINNED: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "mz_activity_log_thinned",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
+        name: "mz_activity_log_thinned",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_ACTIVITY_LOG_THINNED_OID,
+        column_defs: None,
+        sql: "
 SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name,
-transaction_isolation, execution_timestamp, transient_index_id, params, began_at, finished_at, finished_status,
+transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
 session_id, prepared_at, statement_type, throttled_count,
@@ -2620,25 +2710,27 @@ FROM mz_internal.mz_statement_execution_history mseh,
      mz_internal.mz_session_history msh
 WHERE mseh.prepared_statement_id = mpsh.id
 AND mpsh.session_id = msh.id",
-    access: vec![MONITOR_SELECT],
-}
+        access: vec![MONITOR_SELECT],
+    }
 });
 
 pub static MZ_RECENT_ACTIVITY_LOG_THINNED: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "mz_recent_activity_log_thinned",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql:
+        name: "mz_recent_activity_log_thinned",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_THINNED_OID,
+        column_defs: None,
+        sql:
         "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '3 days' > mz_now()
 AND began_at + INTERVAL '3 days' > mz_now()",
-    access: vec![MONITOR_SELECT],
-}
+        access: vec![MONITOR_SELECT],
+    }
 });
 
 pub static MZ_RECENT_ACTIVITY_LOG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_recent_activity_log",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_OID,
     column_defs: None,
     sql: "SELECT mralt.*, mrst.sql
 FROM mz_internal.mz_recent_activity_log_thinned mralt,
@@ -2650,6 +2742,7 @@ WHERE mralt.sql_hash = mrst.sql_hash",
 pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_recent_activity_log_redacted",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_REDACTED_OID,
     column_defs: None,
     sql: "SELECT mralt.*, mrst.redacted_sql
 FROM mz_internal.mz_recent_activity_log_thinned mralt,
@@ -2661,6 +2754,7 @@ WHERE mralt.sql_hash = mrst.sql_hash",
 pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_statement_lifecycle_history",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_STATEMENT_LIFECYCLE_HISTORY_OID,
     desc: RelationDesc::empty()
         .with_column("statement_id", ScalarType::Uuid.nullable(false))
         .with_column("event_type", ScalarType::String.nullable(false))
@@ -2679,6 +2773,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
 pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SOURCE_STATUSES_OID,
     column_defs: None,
     sql: "
     WITH
@@ -2709,7 +2804,7 @@ pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
             -- If self not errored, but parent is, use parent; else self
             CASE
                 WHEN
-                    self_events.status <> 'stalled' AND
+                    self_events.status <> 'ceased' AND
                     parent_events.status = 'stalled'
                 THEN parent_events.source_id
                 ELSE self_events.source_id
@@ -2754,6 +2849,7 @@ WHERE mz_sources.id NOT LIKE 's%';",
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_SINK_STATUS_HISTORY_OID,
     data_source: IntrospectionType::SinkStatusHistory,
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
@@ -2763,6 +2859,7 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
 pub static MZ_SINK_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_sink_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SINK_STATUSES_OID,
     column_defs: None,
     sql: "
 WITH latest_events AS (
@@ -2789,6 +2886,7 @@ WHERE
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_storage_usage_by_shard",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_STORAGE_USAGE_BY_SHARD_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("shard_id", ScalarType::String.nullable(true))
@@ -2804,6 +2902,7 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
 pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_egress_ips",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_EGRESS_IPS_OID,
     desc: RelationDesc::empty().with_column("egress_ip", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2812,6 +2911,7 @@ pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_aws_privatelink_connections",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_AWS_PRIVATELINK_CONNECTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("principal", ScalarType::String.nullable(false)),
@@ -2822,6 +2922,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| Bui
 pub static MZ_AWS_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_aws_connections",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_AWS_CONNECTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("endpoint", ScalarType::String.nullable(true))
@@ -2851,6 +2952,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     // TODO[btv] - make this public once we work out whether and how to fuse it with
     // the corresponding Storage tables.
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_CLUSTER_REPLICA_METRICS_OID,
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column("process_id", ScalarType::UInt64.nullable(false))
@@ -2864,6 +2966,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_cluster_replica_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_CLUSTER_REPLICA_FRONTIERS_OID,
     data_source: IntrospectionType::ReplicaFrontiers,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
@@ -2876,6 +2979,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| Buil
 pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_FRONTIERS_OID,
     data_source: IntrospectionType::Frontiers,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
@@ -2889,6 +2993,7 @@ pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
 pub static MZ_GLOBAL_FRONTIERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_global_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_GLOBAL_FRONTIERS_OID,
     column_defs: None,
     sql: "
 SELECT object_id, write_frontier AS time
@@ -2900,6 +3005,7 @@ WHERE write_frontier IS NOT NULL",
 pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_subscriptions",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("session_id", ScalarType::UInt32.nullable(false))
@@ -2923,6 +3029,7 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sessions",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_SESSIONS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::UInt32.nullable(false))
         .with_column("role_id", ScalarType::String.nullable(false))
@@ -2937,6 +3044,7 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_default_privileges",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_DEFAULT_PRIVILEGES_OID,
     desc: RelationDesc::empty()
         .with_column("role_id", ScalarType::String.nullable(false))
         .with_column("database_id", ScalarType::String.nullable(true))
@@ -2951,6 +3059,7 @@ pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
 pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_system_privileges",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_SYSTEM_PRIVILEGES_OID,
     desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2959,6 +3068,7 @@ pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
 pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_comments",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_COMMENTS_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
@@ -2971,6 +3081,7 @@ pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_webhook_sources",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_WEBHOOK_SOURCES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
@@ -2984,6 +3095,7 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_source_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_SOURCE_STATISTICS_RAW_OID,
     data_source: IntrospectionType::StorageSourceStatistics,
     desc: MZ_SOURCE_STATISTICS_RAW_DESC.clone(),
     is_retained_metrics_object: true,
@@ -2992,6 +3104,7 @@ pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
 pub static MZ_SINK_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_SINK_STATISTICS_RAW_OID,
     data_source: IntrospectionType::StorageSinkStatistics,
     desc: MZ_SINK_STATISTICS_RAW_DESC.clone(),
     is_retained_metrics_object: true,
@@ -3001,6 +3114,7 @@ pub static MZ_SINK_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
 pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_storage_shards",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_STORAGE_SHARDS_OID,
     data_source: IntrospectionType::ShardMapping,
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
@@ -3012,6 +3126,7 @@ pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
 pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_storage_usage",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::VIEW_MZ_STORAGE_USAGE_OID,
     column_defs: Some("object_id, size_bytes, collection_timestamp"),
     sql: "
 SELECT
@@ -3027,21 +3142,23 @@ GROUP BY object_id, collection_timestamp",
 
 pub static MZ_RELATIONS: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "mz_relations",
-    schema: MZ_CATALOG_SCHEMA,
-    column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
-    sql: "
+        name: "mz_relations",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::VIEW_MZ_RELATIONS_OID,
+        column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
+        sql: "
       SELECT id, oid, schema_id, name, 'table', owner_id, privileges FROM mz_catalog.mz_tables
 UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, privileges FROM mz_catalog.mz_sources
 UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, privileges FROM mz_catalog.mz_views
 UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, privileges FROM mz_catalog.mz_materialized_views",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static MZ_OBJECT_OID_ALIAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_object_oid_alias",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_OID_ALIAS_OID,
     column_defs: Some("object_type, oid_alias"),
     sql: "SELECT object_type, oid_alias
     FROM (
@@ -3063,10 +3180,11 @@ pub static MZ_OBJECT_OID_ALIAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 
 pub static MZ_OBJECTS: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "mz_objects",
-    schema: MZ_CATALOG_SCHEMA,
-    column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
-    sql:
+        name: "mz_objects",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::VIEW_MZ_OBJECTS_OID,
+        column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
+        sql:
         "SELECT id, oid, schema_id, name, type, owner_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
     SELECT id, oid, schema_id, name, 'sink', owner_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
@@ -3082,13 +3200,14 @@ UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
     SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_object_fully_qualified_names",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_FULLY_QUALIFIED_NAMES_OID,
     column_defs: Some("id, name, object_type, schema_name, database_name"),
     sql: "
     SELECT o.id, o.name, o.type, sc.name as schema_name, db.name as database_name
@@ -3102,6 +3221,7 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: Lazy<BuiltinView> = Lazy::new(|| Bui
 pub static MZ_OBJECT_LIFETIMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
     column_defs: Some("id, object_type, event_type, occurred_at"),
     sql: "
     SELECT
@@ -3120,6 +3240,7 @@ pub static MZ_OBJECT_LIFETIMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 pub static MZ_DATAFLOWS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflows_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOWS_PER_WORKER_OID,
     column_defs: None,
     sql: "SELECT
     addrs.address[1] AS id,
@@ -3138,6 +3259,7 @@ WHERE
 pub static MZ_DATAFLOWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOWS_OID,
     column_defs: None,
     sql: "
 SELECT id, name
@@ -3149,6 +3271,7 @@ WHERE worker_id = 0",
 pub static MZ_DATAFLOW_ADDRESSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_addresses",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_ADDRESSES_OID,
     column_defs: None,
     sql: "
 SELECT id, address
@@ -3160,6 +3283,7 @@ WHERE worker_id = 0",
 pub static MZ_DATAFLOW_CHANNELS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_channels",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_CHANNELS_OID,
     column_defs: None,
     sql: "
 SELECT id, from_index, from_port, to_index, to_port
@@ -3171,6 +3295,7 @@ WHERE worker_id = 0",
 pub static MZ_DATAFLOW_OPERATORS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operators",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATORS_OID,
     column_defs: None,
     sql: "
 SELECT id, name
@@ -3183,6 +3308,7 @@ pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_operator_dataflows_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
     ops.id,
@@ -3205,6 +3331,7 @@ WHERE
 pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operator_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_DATAFLOWS_OID,
     column_defs: None,
     sql: "
 SELECT id, name, dataflow_id, dataflow_name
@@ -3216,6 +3343,7 @@ WHERE worker_id = 0",
 pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_object_transitive_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_OID,
     column_defs: None,
     sql: "
 WITH MUTUALLY RECURSIVE
@@ -3231,6 +3359,7 @@ SELECT object_id, referenced_object_id FROM reach;",
 pub static MZ_COMPUTE_EXPORTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_exports",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_EXPORTS_OID,
     column_defs: None,
     sql: "
 SELECT export_id, dataflow_id
@@ -3242,6 +3371,7 @@ WHERE worker_id = 0",
 pub static MZ_COMPUTE_FRONTIERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_FRONTIERS_OID,
     column_defs: None,
     sql: "SELECT
     export_id, pg_catalog.min(time) AS time
@@ -3254,6 +3384,7 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_channel_operators_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER_OID,
         column_defs: None,
         sql: "
 WITH
@@ -3295,6 +3426,7 @@ FROM channel_operator_addresses coa
 pub static MZ_DATAFLOW_CHANNEL_OPERATORS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_channel_operators",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_CHANNEL_OPERATORS_OID,
     column_defs: None,
     sql: "
 SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
@@ -3306,6 +3438,7 @@ WHERE worker_id = 0",
 pub static MZ_COMPUTE_IMPORT_FRONTIERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_IMPORT_FRONTIERS_OID,
     column_defs: None,
     sql: "SELECT
     export_id, import_id, pg_catalog.min(time) AS time
@@ -3318,6 +3451,7 @@ pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_records_per_dataflow_operator_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER_OID,
         column_defs: None,
         sql: "
 SELECT
@@ -3341,6 +3475,7 @@ FROM
 pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_records_per_dataflow_operator",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OPERATOR_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -3360,6 +3495,7 @@ GROUP BY id, name, dataflow_id",
 pub static MZ_RECORDS_PER_DATAFLOW_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_records_per_dataflow_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_PER_WORKER_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -3387,6 +3523,7 @@ GROUP BY
 pub static MZ_RECORDS_PER_DATAFLOW: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_records_per_dataflow",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_RECORDS_PER_DATAFLOW_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -3408,6 +3545,7 @@ GROUP BY
 pub static PG_NAMESPACE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_NAMESPACE_OID,
     column_defs: None,
     sql: "SELECT
 s.oid AS oid,
@@ -3423,10 +3561,11 @@ WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database()",
 
 pub static PG_CLASS: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "pg_class",
-    schema: PG_CATALOG_SCHEMA,
-    column_defs: None,
-    sql: "SELECT
+        name: "pg_class",
+        schema: PG_CATALOG_SCHEMA,
+        oid: oid::VIEW_PG_CLASS_OID,
+        column_defs: None,
+        sql: "SELECT
     class_objects.oid,
     class_objects.name AS relname,
     mz_schemas.oid AS relnamespace,
@@ -3481,13 +3620,14 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static PG_DEPEND: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_depend",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_DEPEND_OID,
     column_defs: None,
     sql: "
 WITH class_objects AS (
@@ -3542,6 +3682,7 @@ JOIN current_objects dependents ON referenced_object_id = dependents.id",
 pub static PG_DATABASE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_DATABASE_OID,
     column_defs: None,
     sql: "SELECT
     d.oid as oid,
@@ -3561,10 +3702,11 @@ JOIN mz_catalog.mz_roles role_owner ON role_owner.id = d.owner_id",
 
 pub static PG_INDEX: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "pg_index",
-    schema: PG_CATALOG_SCHEMA,
-    column_defs: None,
-    sql: "SELECT
+        name: "pg_index",
+        schema: PG_CATALOG_SCHEMA,
+        oid: oid::VIEW_PG_INDEX_OID,
+        column_defs: None,
+        sql: "SELECT
     mz_indexes.oid AS indexrelid,
     mz_relations.oid AS indrelid,
     -- MZ doesn't support creating unique indexes so indisunique is filled with false
@@ -3596,13 +3738,14 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
 GROUP BY mz_indexes.oid, mz_relations.oid",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static PG_INDEXES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_indexes",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_INDEXES_OID,
     column_defs: None,
     sql: "SELECT
     current_database() as table_catalog,
@@ -3625,10 +3768,11 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 /// which is required for this view.
 pub static PG_DESCRIPTION: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "pg_description",
-    schema: PG_CATALOG_SCHEMA,
-    column_defs: None,
-    sql: "
+        name: "pg_description",
+        schema: PG_CATALOG_SCHEMA,
+        oid: oid::VIEW_PG_DESCRIPTION_OID,
+        column_defs: None,
+        sql: "
     (
         -- Gather all of the class oid's for objects that can have comments.
         WITH pg_classoids AS (
@@ -3659,16 +3803,17 @@ pub static PG_DESCRIPTION: Lazy<BuiltinView> = Lazy::new(|| {
         JOIN
             mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
     )",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static PG_TYPE: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "pg_type",
-    schema: PG_CATALOG_SCHEMA,
-    column_defs: None,
-    sql: "SELECT
+        name: "pg_type",
+        schema: PG_CATALOG_SCHEMA,
+        oid: oid::VIEW_PG_TYPE_OID,
+        column_defs: None,
+        sql: "SELECT
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
@@ -3744,16 +3889,17 @@ FROM
     LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
     JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_types.owner_id
     WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static PG_ATTRIBUTE: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "pg_attribute",
-    schema: PG_CATALOG_SCHEMA,
-    column_defs: None,
-    sql: "SELECT
+        name: "pg_attribute",
+        schema: PG_CATALOG_SCHEMA,
+        oid: oid::VIEW_PG_ATTRIBUTE_OID,
+        column_defs: None,
+        sql: "SELECT
     class_objects.oid as attrelid,
     mz_columns.name as attname,
     mz_columns.type_oid AS atttypid,
@@ -3781,15 +3927,16 @@ JOIN pg_catalog.pg_type ON pg_type.oid = mz_columns.type_oid
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
-    // Since this depends on pg_type, its id must be higher due to initialization
-    // ordering.
-    access: vec![PUBLIC_SELECT],
-}
+        // Since this depends on pg_type, its id must be higher due to initialization
+        // ordering.
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static PG_PROC: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_PROC_OID,
     column_defs: None,
     sql: "SELECT
     mz_functions.oid,
@@ -3810,6 +3957,7 @@ WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 pub static PG_OPERATOR: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_operator",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_OPERATOR_OID,
     column_defs: None,
     sql: "SELECT
     mz_operators.oid,
@@ -3838,6 +3986,7 @@ WHERE array_length(mz_operators.argument_type_ids, 1) = 1",
 pub static PG_RANGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_range",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_RANGE_OID,
     column_defs: None,
     sql: "SELECT
     NULL::pg_catalog.oid AS rngtypid,
@@ -3849,6 +3998,7 @@ WHERE false",
 pub static PG_ENUM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_enum",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_ENUM_OID,
     column_defs: None,
     sql: "SELECT
     NULL::pg_catalog.oid AS oid,
@@ -3862,6 +4012,7 @@ WHERE false",
 pub static PG_ATTRDEF: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_attrdef",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_ATTRDEF_OID,
     column_defs: None,
     sql: "SELECT
     NULL::pg_catalog.oid AS oid,
@@ -3879,6 +4030,7 @@ WHERE default IS NOT NULL",
 pub static PG_SETTINGS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_settings",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_SETTINGS_OID,
     column_defs: None,
     sql: "SELECT
     name, setting
@@ -3891,6 +4043,7 @@ FROM (VALUES
 pub static PG_AUTH_MEMBERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_auth_members",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_AUTH_MEMBERS_OID,
     column_defs: None,
     sql: "SELECT
     role.oid AS roleid,
@@ -3908,6 +4061,7 @@ JOIN mz_roles grantor ON membership.grantor = grantor.id",
 pub static PG_EVENT_TRIGGER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_event_trigger",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_EVENT_TRIGGER_OID,
     column_defs: None,
     sql: "SELECT
         NULL::pg_catalog.oid AS oid,
@@ -3924,6 +4078,7 @@ pub static PG_EVENT_TRIGGER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 pub static PG_LANGUAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_language",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_LANGUAGE_OID,
     column_defs: None,
     sql: "SELECT
         NULL::pg_catalog.oid  AS oid,
@@ -3943,6 +4098,7 @@ pub static PG_SHDESCRIPTION: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_shdescription",
     column_defs: None,
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_SHDESCRIPTION_OID,
     sql: "SELECT
         NULL::pg_catalog.oid AS objoid,
         NULL::pg_catalog.oid AS classoid,
@@ -3953,23 +4109,25 @@ pub static PG_SHDESCRIPTION: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 
 pub static PG_TIMEZONE_ABBREVS: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "pg_timezone_abbrevs",
-    schema: PG_CATALOG_SCHEMA,
-    column_defs: Some("abbrev, utc_offset, is_dst"),
-    sql: "SELECT
+        name: "pg_timezone_abbrevs",
+        schema: PG_CATALOG_SCHEMA,
+        oid: oid::VIEW_PG_TIMEZONE_ABBREVS_OID,
+        column_defs: Some("abbrev, utc_offset, is_dst"),
+        sql: "SELECT
     abbreviation AS abbrev,
     COALESCE(utc_offset, timezone_offset(timezone_name, now()).base_utc_offset + timezone_offset(timezone_name, now()).dst_offset)
         AS utc_offset,
     COALESCE(dst, timezone_offset(timezone_name, now()).dst_offset <> INTERVAL '0')
         AS is_dst
 FROM mz_catalog.mz_timezone_abbreviations",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static PG_TIMEZONE_NAMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_timezone_names",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_TIMEZONE_NAMES_OID,
     column_defs: Some("name, abbrev, utc_offset, is_dst"),
     sql: "SELECT
     name,
@@ -3985,6 +4143,7 @@ FROM mz_catalog.mz_timezone_names",
 pub static MZ_TIMEZONE_ABBREVIATIONS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_timezone_abbreviations",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::VIEW_MZ_TIMEZONE_ABBREVIATIONS_OID,
     column_defs: Some("abbreviation, utc_offset, dst, timezone_name"),
     sql: mz_pgtz::abbrev::MZ_CATALOG_TIMEZONE_ABBREVIATIONS_SQL,
     access: vec![PUBLIC_SELECT],
@@ -3993,6 +4152,7 @@ pub static MZ_TIMEZONE_ABBREVIATIONS: Lazy<BuiltinView> = Lazy::new(|| BuiltinVi
 pub static MZ_TIMEZONE_NAMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_timezone_names",
     schema: MZ_CATALOG_SCHEMA,
+    oid: oid::VIEW_MZ_TIMEZONE_NAMES_OID,
     column_defs: Some("name"),
     sql: mz_pgtz::timezone::MZ_CATALOG_TIMEZONE_NAMES_SQL,
     access: vec![PUBLIC_SELECT],
@@ -4001,6 +4161,7 @@ pub static MZ_TIMEZONE_NAMES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 pub static MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_peek_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER_OID,
     column_defs: None,
     sql: "SELECT
     worker_id, type, duration_ns, pg_catalog.count(*) AS count
@@ -4014,6 +4175,7 @@ GROUP BY
 pub static MZ_PEEK_DURATIONS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_peek_durations_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_PEEK_DURATIONS_HISTOGRAM_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4028,6 +4190,7 @@ pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_shutdown_durations_histogram_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
     worker_id, duration_ns, pg_catalog.count(*) AS count
@@ -4042,6 +4205,7 @@ pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_shutdown_durations_histogram",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_OID,
         column_defs: None,
         sql: "
 SELECT
@@ -4055,6 +4219,7 @@ GROUP BY duration_ns",
 pub static MZ_SCHEDULING_ELAPSED_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_scheduling_elapsed_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SCHEDULING_ELAPSED_PER_WORKER_OID,
     column_defs: None,
     sql: "SELECT
     id, worker_id, pg_catalog.count(*) AS elapsed_ns
@@ -4068,6 +4233,7 @@ GROUP BY
 pub static MZ_SCHEDULING_ELAPSED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_scheduling_elapsed",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SCHEDULING_ELAPSED_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4082,6 +4248,7 @@ pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView>
     Lazy::new(|| BuiltinView {
         name: "mz_compute_operator_durations_histogram_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
@@ -4095,6 +4262,7 @@ GROUP BY
 pub static MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_operator_durations_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4110,6 +4278,7 @@ pub static MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_scheduling_parks_histogram_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
     worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
@@ -4123,6 +4292,7 @@ GROUP BY
 pub static MZ_SCHEDULING_PARKS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_scheduling_parks_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SCHEDULING_PARKS_HISTOGRAM_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4137,6 +4307,7 @@ GROUP BY slept_for_ns, requested_ns",
 pub static MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_delays_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER_OID,
     column_defs: None,
     sql: "SELECT
     export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
@@ -4150,6 +4321,7 @@ GROUP BY
 pub static MZ_COMPUTE_DELAYS_HISTOGRAM: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_delays_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_DELAYS_HISTOGRAM_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4165,6 +4337,7 @@ GROUP BY export_id, import_id, delay_ns",
 pub static MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_error_counts_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_ERROR_COUNTS_PER_WORKER_OID,
     column_defs: None,
     sql: "
 WITH MUTUALLY RECURSIVE
@@ -4200,6 +4373,7 @@ SELECT * FROM all_errors",
 pub static MZ_COMPUTE_ERROR_COUNTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_error_counts",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_ERROR_COUNTS_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4214,6 +4388,7 @@ HAVING pg_catalog.sum(count) != 0",
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_compute_operator_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4229,6 +4404,7 @@ GROUP BY object_id, physical_plan_node_id, replica_id",
 pub static MZ_MESSAGE_COUNTS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_message_counts_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_MESSAGE_COUNTS_PER_WORKER_OID,
     column_defs: None,
     sql: "
 WITH batch_sent_cte AS (
@@ -4293,6 +4469,7 @@ JOIN batch_received_cte USING (channel_id, from_worker_id, to_worker_id)",
 pub static MZ_MESSAGE_COUNTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_message_counts",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_MESSAGE_COUNTS_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4309,6 +4486,7 @@ GROUP BY channel_id",
 pub static MZ_ACTIVE_PEEKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_active_peeks",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_ACTIVE_PEEKS_OID,
     column_defs: None,
     sql: "
 SELECT id, object_id, type, time
@@ -4321,6 +4499,7 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "mz_dataflow_operator_reachability_per_worker",
         schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
     address,
@@ -4338,6 +4517,7 @@ GROUP BY address, port, worker_id, update_type, time",
 pub static MZ_DATAFLOW_OPERATOR_REACHABILITY: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operator_reachability",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_REACHABILITY_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4353,10 +4533,11 @@ GROUP BY address, port, update_type, time",
 
 pub static MZ_ARRANGEMENT_SIZES_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "mz_arrangement_sizes_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
-    column_defs: None,
-    sql: "
+        name: "mz_arrangement_sizes_per_worker",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_ARRANGEMENT_SIZES_PER_WORKER_OID,
+        column_defs: None,
+        sql: "
 WITH batches_cte AS (
     SELECT
         operator_id,
@@ -4464,13 +4645,14 @@ LEFT OUTER JOIN batcher_records_cte USING (operator_id, worker_id)
 LEFT OUTER JOIN batcher_size_cte USING (operator_id, worker_id)
 LEFT OUTER JOIN batcher_capacity_cte USING (operator_id, worker_id)
 LEFT OUTER JOIN batcher_allocations_cte USING (operator_id, worker_id)",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static MZ_ARRANGEMENT_SIZES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_arrangement_sizes",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_ARRANGEMENT_SIZES_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4488,6 +4670,7 @@ GROUP BY operator_id",
 pub static MZ_ARRANGEMENT_SHARING_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_arrangement_sharing_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_ARRANGEMENT_SHARING_PER_WORKER_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4502,6 +4685,7 @@ GROUP BY operator_id, worker_id",
 pub static MZ_ARRANGEMENT_SHARING: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_arrangement_sharing",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_ARRANGEMENT_SHARING_OID,
     column_defs: None,
     sql: "
 SELECT operator_id, count
@@ -4513,6 +4697,7 @@ WHERE worker_id = 0",
 pub static MZ_CLUSTER_REPLICA_UTILIZATION: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_cluster_replica_utilization",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_REPLICA_UTILIZATION_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4531,6 +4716,7 @@ FROM
 pub static MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operator_parents_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER_OID,
     column_defs: None,
     sql: "
 WITH operator_addrs AS(
@@ -4558,6 +4744,7 @@ FROM parent_addrs AS pa
 pub static MZ_DATAFLOW_OPERATOR_PARENTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_operator_parents",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_PARENTS_OID,
     column_defs: None,
     sql: "
 SELECT id, parent_id
@@ -4569,6 +4756,7 @@ WHERE worker_id = 0",
 pub static MZ_DATAFLOW_ARRANGEMENT_SIZES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_dataflow_arrangement_sizes",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_ARRANGEMENT_SIZES_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4589,6 +4777,7 @@ GROUP BY mdod.dataflow_id, mdod.dataflow_name",
 pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_expected_group_size_advice",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_EXPECTED_GROUP_SIZE_ADVICE_OID,
     column_defs: None,
     sql: "
         -- The mz_expected_group_size_advice view provides tuning suggestions for the GROUP SIZE
@@ -4726,6 +4915,7 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: Lazy<BuiltinView> = Lazy::new(|| Built
 pub static PG_CONSTRAINT: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_constraint",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_CONSTRAINT_OID,
     column_defs: None,
     sql: "SELECT
     NULL::pg_catalog.oid as oid,
@@ -4760,6 +4950,7 @@ WHERE false",
 pub static PG_TABLES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_tables",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_TABLES_OID,
     column_defs: None,
     sql: "
 SELECT n.nspname AS schemaname,
@@ -4774,6 +4965,7 @@ WHERE c.relkind IN ('r', 'p')",
 pub static PG_TABLESPACE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_tablespace",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_TABLESPACE_OID,
     column_defs: None,
     sql: "
     SELECT oid, spcname, spcowner, spcacl, spcoptions
@@ -4794,6 +4986,7 @@ pub static PG_TABLESPACE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 pub static PG_ACCESS_METHODS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_am",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_AM_OID,
     column_defs: None,
     sql: "
 SELECT NULL::pg_catalog.oid AS oid,
@@ -4807,6 +5000,7 @@ WHERE false",
 pub static PG_ROLES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_roles",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_ROLES_OID,
     column_defs: None,
     sql: "SELECT
     r.rolname,
@@ -4830,6 +5024,7 @@ FROM pg_catalog.pg_authid r",
 pub static PG_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_views",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_VIEWS_OID,
     column_defs: None,
     sql: "SELECT
     s.name AS schemaname,
@@ -4847,6 +5042,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub static PG_MATVIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_matviews",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_MATVIEWS_OID,
     column_defs: None,
     sql: "SELECT
     s.name AS schemaname,
@@ -4864,6 +5060,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub static INFORMATION_SCHEMA_APPLICABLE_ROLES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "applicable_roles",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_APPLICABLE_ROLES_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4881,6 +5078,7 @@ WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USA
 pub static INFORMATION_SCHEMA_COLUMNS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "columns",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_COLUMNS_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4905,6 +5103,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub static INFORMATION_SCHEMA_ENABLED_ROLES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "enabled_roles",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_ENABLED_ROLES_OID,
     column_defs: None,
     sql: "
 SELECT name AS role_name
@@ -4915,22 +5114,24 @@ WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
 
 pub static INFORMATION_SCHEMA_ROLE_TABLE_GRANTS: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "role_table_grants",
-    schema: INFORMATION_SCHEMA,
-    column_defs: None,
-    sql: "
+        name: "role_table_grants",
+        schema: INFORMATION_SCHEMA,
+        oid: oid::VIEW_ROLE_TABLE_GRANTS_OID,
+        column_defs: None,
+        sql: "
 SELECT grantor, grantee, table_catalog, table_schema, table_name, privilege_type, is_grantable, with_hierarchy
 FROM information_schema.table_privileges
 WHERE
     grantor IN (SELECT role_name FROM information_schema.enabled_roles)
     OR grantee IN (SELECT role_name FROM information_schema.enabled_roles)",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static INFORMATION_SCHEMA_KEY_COLUMN_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "key_column_usage",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_KEY_COLUMN_USAGE_OID,
     column_defs: None,
     sql: "SELECT
     NULL::text AS constraint_catalog,
@@ -4950,6 +5151,7 @@ pub static INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS: Lazy<BuiltinView> =
     Lazy::new(|| BuiltinView {
         name: "referential_constraints",
         schema: INFORMATION_SCHEMA,
+        oid: oid::VIEW_REFERENTIAL_CONSTRAINTS_OID,
         column_defs: None,
         sql: "SELECT
     NULL::text AS constraint_catalog,
@@ -4968,6 +5170,7 @@ WHERE false",
 pub static INFORMATION_SCHEMA_ROUTINES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "routines",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_ROUTINES_OID,
     column_defs: None,
     sql: "SELECT
     current_database() as routine_catalog,
@@ -4985,6 +5188,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub static INFORMATION_SCHEMA_SCHEMATA: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "schemata",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_SCHEMATA_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -4999,6 +5203,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub static INFORMATION_SCHEMA_TABLES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "tables",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_TABLES_OID,
     column_defs: None,
     sql: "SELECT
     current_database() as table_catalog,
@@ -5019,6 +5224,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub static INFORMATION_SCHEMA_TABLE_CONSTRAINTS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "table_constraints",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_TABLE_CONSTRAINTS_OID,
     column_defs: None,
     sql: "SELECT
     NULL::text AS constraint_catalog,
@@ -5038,10 +5244,11 @@ WHERE false",
 
 pub static INFORMATION_SCHEMA_TABLE_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| {
     BuiltinView {
-    name: "table_privileges",
-    schema: INFORMATION_SCHEMA,
-    column_defs: None,
-    sql: "
+        name: "table_privileges",
+        schema: INFORMATION_SCHEMA,
+        oid: oid::VIEW_TABLE_PRIVILEGES_OID,
+        column_defs: None,
+        sql: "
 SELECT
     grantor,
     grantee,
@@ -5091,13 +5298,14 @@ WHERE
             OR pg_has_role(current_role, grantee, 'USAGE')
             OR pg_has_role(current_role, grantor, 'USAGE')
     END",
-    access: vec![PUBLIC_SELECT],
-}
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static INFORMATION_SCHEMA_TRIGGERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "triggers",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_TRIGGERS_OID,
     column_defs: None,
     sql: "SELECT
     NULL::text as trigger_catalog,
@@ -5121,6 +5329,7 @@ WHERE FALSE",
 pub static INFORMATION_SCHEMA_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "views",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_VIEWS_OID,
     column_defs: None,
     sql: "SELECT
     current_database() as table_catalog,
@@ -5137,6 +5346,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub static INFORMATION_SCHEMA_CHARACTER_SETS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "character_sets",
     schema: INFORMATION_SCHEMA,
+    oid: oid::VIEW_CHARACTER_SETS_OID,
     column_defs: None,
     sql: "SELECT
     NULL as character_set_catalog,
@@ -5155,6 +5365,7 @@ pub static INFORMATION_SCHEMA_CHARACTER_SETS: Lazy<BuiltinView> = Lazy::new(|| B
 pub static PG_COLLATION: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_collation",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_COLLATION_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -5176,6 +5387,7 @@ WHERE false",
 pub static PG_POLICY: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_policy",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_POLICY_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -5195,6 +5407,7 @@ WHERE false",
 pub static PG_INHERITS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_inherits",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_INHERITS_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -5209,6 +5422,7 @@ WHERE false",
 pub static PG_LOCKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_locks",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_LOCKS_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -5236,6 +5450,7 @@ WHERE false",
 pub static PG_AUTHID: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_authid",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_AUTHID_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -5271,6 +5486,7 @@ FROM mz_catalog.mz_roles r",
 pub static PG_AGGREGATE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_aggregate",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_AGGREGATE_OID,
     column_defs: None,
     sql: "SELECT
     a.oid as aggfnoid,
@@ -5304,6 +5520,7 @@ FROM mz_internal.mz_aggregates a",
 pub static PG_TRIGGER: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_trigger",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_TRIGGER_OID,
     column_defs: None,
     sql: "SELECT
     -- MZ doesn't support triggers so all of these fields are NULL.
@@ -5336,6 +5553,7 @@ WHERE false
 pub static PG_REWRITE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_rewrite",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_REWRITE_OID,
     column_defs: None,
     sql: "SELECT
     -- MZ doesn't support rewrite rules so all of these fields are NULL.
@@ -5357,6 +5575,7 @@ WHERE false
 pub static PG_EXTENSION: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "pg_extension",
     schema: PG_CATALOG_SCHEMA,
+    oid: oid::VIEW_PG_EXTENSION_OID,
     column_defs: None,
     sql: "SELECT
     -- MZ doesn't support extensions so all of these fields are NULL.
@@ -5376,6 +5595,7 @@ WHERE false
 pub static MZ_SHOW_SOURCES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_sources",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_SOURCES_OID,
     column_defs: None,
     sql: "SELECT
     sources.name,
@@ -5395,6 +5615,7 @@ FROM
 pub static MZ_SHOW_SINKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_sinks",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_SINKS_OID,
     column_defs: None,
     sql: "SELECT
         sinks.name,
@@ -5414,6 +5635,7 @@ pub static MZ_SHOW_SINKS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 pub static MZ_SHOW_MATERIALIZED_VIEWS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_materialized_views",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_MATERIALIZED_VIEWS_OID,
     column_defs: None,
     sql: "SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
 FROM mz_materialized_views AS mviews
@@ -5424,6 +5646,7 @@ JOIN mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
 pub static MZ_SHOW_INDEXES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_indexes",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_INDEXES_OID,
     column_defs: None,
     sql: "SELECT
     idxs.name AS name,
@@ -5460,6 +5683,7 @@ FROM
 pub static MZ_SHOW_CLUSTER_REPLICAS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_CLUSTER_REPLICAS_OID,
     column_defs: None,
     sql: r#"SELECT
     mz_catalog.mz_clusters.name AS cluster,
@@ -5486,6 +5710,7 @@ ORDER BY 1, 2"#,
 pub static MZ_SHOW_ROLE_MEMBERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_role_members",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_ROLE_MEMBERS_OID,
     column_defs: None,
     sql: r#"SELECT
     r1.name AS role,
@@ -5502,6 +5727,7 @@ ORDER BY role"#,
 pub static MZ_SHOW_MY_ROLE_MEMBERS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_my_role_members",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_MY_ROLE_MEMBERS_OID,
     column_defs: None,
     sql: r#"SELECT role, member, grantor
 FROM mz_internal.mz_show_role_members
@@ -5512,6 +5738,7 @@ WHERE pg_has_role(member, 'USAGE')"#,
 pub static MZ_SHOW_SYSTEM_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_system_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_SYSTEM_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT
     grantor.name AS grantor,
@@ -5532,6 +5759,7 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub static MZ_SHOW_MY_SYSTEM_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_my_system_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_MY_SYSTEM_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT grantor, grantee, privilege_type
 FROM mz_internal.mz_show_system_privileges
@@ -5546,6 +5774,7 @@ WHERE
 pub static MZ_SHOW_CLUSTER_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_cluster_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_CLUSTER_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT
     grantor.name AS grantor,
@@ -5568,6 +5797,7 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub static MZ_SHOW_MY_CLUSTER_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_my_cluster_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_MY_CLUSTER_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT grantor, grantee, name, privilege_type
 FROM mz_internal.mz_show_cluster_privileges
@@ -5582,6 +5812,7 @@ WHERE
 pub static MZ_SHOW_DATABASE_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_database_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_DATABASE_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT
     grantor.name AS grantor,
@@ -5604,6 +5835,7 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub static MZ_SHOW_MY_DATABASE_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_my_database_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_MY_DATABASE_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT grantor, grantee, name, privilege_type
 FROM mz_internal.mz_show_database_privileges
@@ -5618,6 +5850,7 @@ WHERE
 pub static MZ_SHOW_SCHEMA_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_schema_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_SCHEMA_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT
     grantor.name AS grantor,
@@ -5642,6 +5875,7 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub static MZ_SHOW_MY_SCHEMA_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_my_schema_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_MY_SCHEMA_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT grantor, grantee, database, name, privilege_type
 FROM mz_internal.mz_show_schema_privileges
@@ -5656,6 +5890,7 @@ WHERE
 pub static MZ_SHOW_OBJECT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_object_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_OBJECT_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT
     grantor.name AS grantor,
@@ -5683,6 +5918,7 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub static MZ_SHOW_MY_OBJECT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_my_object_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_MY_OBJECT_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_object_privileges
@@ -5697,6 +5933,7 @@ WHERE
 pub static MZ_SHOW_ALL_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_all_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_ALL_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT grantor, grantee, NULL AS database, NULL AS schema, NULL AS name, 'system' AS object_type, privilege_type
 FROM mz_internal.mz_show_system_privileges
@@ -5718,6 +5955,7 @@ FROM mz_internal.mz_show_object_privileges"#,
 pub static MZ_SHOW_ALL_MY_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_all_my_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_ALL_MY_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_all_privileges
@@ -5732,6 +5970,7 @@ WHERE
 pub static MZ_SHOW_DEFAULT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_default_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_DEFAULT_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT
     CASE defaults.role_id
@@ -5760,6 +5999,7 @@ WHERE defaults.grantee NOT LIKE 's%'
 pub static MZ_SHOW_MY_DEFAULT_PRIVILEGES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_show_my_default_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_MY_DEFAULT_PRIVILEGES_OID,
     column_defs: None,
     sql: r#"SELECT object_owner, database, schema, object_type, grantee, privilege_type
 FROM mz_internal.mz_show_default_privileges
@@ -5774,6 +6014,7 @@ WHERE
 pub static MZ_CLUSTER_REPLICA_HISTORY: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_cluster_replica_history",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_REPLICA_HISTORY_OID,
     column_defs: None,
     sql: r#"
         WITH
@@ -5822,6 +6063,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: Lazy<BuiltinView> = Lazy::new(|| BuiltinV
 pub static MZ_HYDRATION_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_HYDRATION_STATUSES_OID,
     column_defs: None,
     sql: r#"WITH
 -- Joining against the linearizable catalog tables ensures that this view
@@ -5907,6 +6149,7 @@ SELECT * FROM sinks"#,
 pub static MZ_MATERIALIZATION_LAG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_materialization_lag",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_MATERIALIZATION_LAG_OID,
     column_defs: None,
     sql: "
 WITH MUTUALLY RECURSIVE
@@ -6004,6 +6247,7 @@ JOIN root_times r USING (id)",
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_DATABASES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_databases (name)",
     is_retained_metrics_object: false,
@@ -6012,6 +6256,7 @@ ON mz_catalog.mz_databases (name)",
 pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_schemas_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_SCHEMAS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_schemas (database_id)",
     is_retained_metrics_object: false,
@@ -6020,6 +6265,7 @@ ON mz_catalog.mz_schemas (database_id)",
 pub const MZ_SHOW_CONNECTIONS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_connections_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_CONNECTIONS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_connections (schema_id)",
     is_retained_metrics_object: false,
@@ -6028,6 +6274,7 @@ ON mz_catalog.mz_connections (schema_id)",
 pub const MZ_SHOW_TABLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_tables_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_TABLES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_tables (schema_id)",
     is_retained_metrics_object: false,
@@ -6036,6 +6283,7 @@ ON mz_catalog.mz_tables (schema_id)",
 pub const MZ_SHOW_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_sources_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_SOURCES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_sources (schema_id)",
     is_retained_metrics_object: false,
@@ -6044,6 +6292,7 @@ ON mz_internal.mz_show_sources (schema_id)",
 pub const MZ_SHOW_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_views_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_views (schema_id)",
     is_retained_metrics_object: false,
@@ -6052,6 +6301,7 @@ ON mz_catalog.mz_views (schema_id)",
 pub const MZ_SHOW_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_materialized_views_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_MATERIALIZED_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_materialized_views (schema_id)",
     is_retained_metrics_object: false,
@@ -6060,6 +6310,7 @@ ON mz_internal.mz_show_materialized_views (schema_id)",
 pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_sinks_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_SINKS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_sinks (schema_id)",
     is_retained_metrics_object: false,
@@ -6068,6 +6319,7 @@ ON mz_internal.mz_show_sinks (schema_id)",
 pub const MZ_SHOW_TYPES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_types_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_TYPES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_types (schema_id)",
     is_retained_metrics_object: false,
@@ -6076,6 +6328,7 @@ ON mz_catalog.mz_types (schema_id)",
 pub const MZ_SHOW_ALL_OBJECTS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_all_objects_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_ALL_OBJECTS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_objects (schema_id)",
     is_retained_metrics_object: false,
@@ -6084,6 +6337,7 @@ ON mz_catalog.mz_objects (schema_id)",
 pub const MZ_SHOW_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_indexes_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_INDEXES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_indexes (schema_id)",
     is_retained_metrics_object: false,
@@ -6092,6 +6346,7 @@ ON mz_internal.mz_show_indexes (schema_id)",
 pub const MZ_SHOW_COLUMNS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_columns_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_COLUMNS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_columns (id)",
     is_retained_metrics_object: false,
@@ -6100,6 +6355,7 @@ ON mz_catalog.mz_columns (id)",
 pub const MZ_SHOW_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_clusters_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_CLUSTERS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (name)",
     is_retained_metrics_object: false,
@@ -6108,6 +6364,7 @@ ON mz_catalog.mz_clusters (name)",
 pub const MZ_SHOW_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_cluster_replicas_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_CLUSTER_REPLICAS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_show_cluster_replicas (cluster)",
     is_retained_metrics_object: false,
@@ -6116,6 +6373,7 @@ ON mz_internal.mz_show_cluster_replicas (cluster)",
 pub const MZ_SHOW_SECRETS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_secrets_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_SECRETS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_secrets (schema_id)",
     is_retained_metrics_object: false,
@@ -6124,6 +6382,7 @@ ON mz_catalog.mz_secrets (schema_id)",
 pub const MZ_CLUSTERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_clusters_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTERS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_clusters (id)",
     is_retained_metrics_object: false,
@@ -6132,6 +6391,7 @@ ON mz_catalog.mz_clusters (id)",
 pub const MZ_INDEXES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_indexes_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_INDEXES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_indexes (id)",
     is_retained_metrics_object: false,
@@ -6140,6 +6400,7 @@ ON mz_catalog.mz_indexes (id)",
 pub const MZ_ROLES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_roles_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_ROLES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_roles (id)",
     is_retained_metrics_object: false,
@@ -6148,22 +6409,25 @@ ON mz_catalog.mz_roles (id)",
 pub const MZ_SOURCES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sources_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SOURCES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_sources (id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sinks_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SINKS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_sinks (id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_materialized_views_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_MATERIALIZED_VIEWS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_materialized_views (id)",
     is_retained_metrics_object: false,
@@ -6172,6 +6436,7 @@ ON mz_catalog.mz_materialized_views (id)",
 pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SOURCE_STATUSES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_statuses (id)",
     is_retained_metrics_object: false,
@@ -6180,6 +6445,7 @@ ON mz_internal.mz_source_statuses (id)",
 pub const MZ_SINK_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SINK_STATUSES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_sink_statuses (id)",
     is_retained_metrics_object: false,
@@ -6188,6 +6454,7 @@ ON mz_internal.mz_sink_statuses (id)",
 pub const MZ_SOURCE_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SOURCE_STATUS_HISTORY_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_status_history (source_id)",
     is_retained_metrics_object: false,
@@ -6196,6 +6463,7 @@ ON mz_internal.mz_source_status_history (source_id)",
 pub const MZ_SINK_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_status_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SINK_STATUS_HISTORY_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
@@ -6205,25 +6473,37 @@ ON mz_internal.mz_sink_status_history (sink_id)",
 // uint8's to `uint8` instead of leaving them as `numeric`. This is because we want to
 // save index space, and we don't expect the sum to be > 2^63
 // (even if a source with 2000 workers, that each produce 400 terabytes in a month ~ 2^61).
+//
+//
+// These aggregations are just to make `GROUP BY` happy. Each id has a single row in the
+// underlying relation.
 pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_source_statistics",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SOURCE_STATISTICS_OID,
     column_defs: None,
     sql: "
 SELECT
     id,
-    bool_and(snapshot_committed) as snapshot_committed,
+    -- Counters
     SUM(messages_received)::uint8 AS messages_received,
     SUM(bytes_received)::uint8 AS bytes_received,
     SUM(updates_staged)::uint8 AS updates_staged,
     SUM(updates_committed)::uint8 AS updates_committed,
-    SUM(bytes_indexed)::uint8 AS bytes_indexed,
+    -- Resetting Gauges
     SUM(records_indexed)::uint8 AS records_indexed,
+    SUM(bytes_indexed)::uint8 AS bytes_indexed,
     -- Ensure we aggregate to NULL when not all workers are done rehydrating.
     CASE
         WHEN bool_or(rehydration_latency IS NULL) THEN NULL
         ELSE MAX(rehydration_latency)::interval
-    END AS rehydration_latency
+    END AS rehydration_latency,
+    SUM(snapshot_records_known)::uint8 AS snapshot_records_known,
+    SUM(snapshot_records_staged)::uint8 AS snapshot_records_staged,
+    bool_and(snapshot_committed) as snapshot_committed,
+    -- Gauges
+    SUM(offset_known)::uint8 AS offset_known,
+    SUM(offset_committed)::uint8 AS offset_committed
 FROM mz_internal.mz_source_statistics_raw
 GROUP BY id",
     access: vec![PUBLIC_SELECT],
@@ -6232,6 +6512,7 @@ GROUP BY id",
 pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SOURCE_STATISTICS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_statistics (id)",
     is_retained_metrics_object: true,
@@ -6240,6 +6521,7 @@ ON mz_internal.mz_source_statistics (id)",
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_sink_statistics",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SINK_STATISTICS_OID,
     column_defs: None,
     sql: "
 SELECT
@@ -6256,6 +6538,7 @@ GROUP BY id",
 pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SINK_STATISTICS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_sink_statistics (id)",
     is_retained_metrics_object: true,
@@ -6264,6 +6547,7 @@ ON mz_internal.mz_sink_statistics (id)",
 pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replicas_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICAS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_cluster_replicas (id)",
     is_retained_metrics_object: true,
@@ -6272,6 +6556,7 @@ ON mz_catalog.mz_cluster_replicas (id)",
 pub const MZ_CLUSTER_REPLICA_SIZES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_sizes_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_SIZES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_sizes (size)",
     is_retained_metrics_object: true,
@@ -6280,6 +6565,7 @@ ON mz_internal.mz_cluster_replica_sizes (size)",
 pub const MZ_CLUSTER_REPLICA_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_STATUSES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_statuses (replica_id)",
     is_retained_metrics_object: true,
@@ -6288,6 +6574,7 @@ ON mz_internal.mz_cluster_replica_statuses (replica_id)",
 pub const MZ_CLUSTER_REPLICA_METRICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_metrics_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_METRICS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_metrics (replica_id)",
     is_retained_metrics_object: true,
@@ -6296,6 +6583,7 @@ ON mz_internal.mz_cluster_replica_metrics (replica_id)",
 pub const MZ_CLUSTER_REPLICA_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_replica_history_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_REPLICA_HISTORY_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_cluster_replica_history (dropped_at)",
     is_retained_metrics_object: true,
@@ -6304,6 +6592,7 @@ ON mz_internal.mz_cluster_replica_history (dropped_at)",
 pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_lifetimes_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECT_LIFETIMES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_object_lifetimes (id)",
     is_retained_metrics_object: false,
@@ -6312,14 +6601,16 @@ ON mz_internal.mz_object_lifetimes (id)",
 pub const MZ_OBJECT_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECT_DEPENDENCIES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_object_dependencies (object_id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_COMPUTE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_compute_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_COMPUTE_DEPENDENCIES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_compute_dependencies (dependency_id)",
     is_retained_metrics_object: false,
@@ -6328,6 +6619,7 @@ ON mz_internal.mz_compute_dependencies (dependency_id)",
 pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_transitive_dependencies_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_object_transitive_dependencies (object_id)",
     is_retained_metrics_object: false,
@@ -6336,6 +6628,7 @@ ON mz_internal.mz_object_transitive_dependencies (object_id)",
 pub const MZ_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_frontiers_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_FRONTIERS_IND_OID,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_frontiers (object_id)",
     is_retained_metrics_object: false,
@@ -6344,6 +6637,7 @@ ON mz_internal.mz_frontiers (object_id)",
 pub const MZ_RECENT_ACTIVITY_LOG_THINNED_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_recent_activity_log_thinned_ind",
     schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_RECENT_ACTIVITY_LOG_THINNED_IND_OID,
     sql: "IN CLUSTER mz_introspection
 -- sql_hash because we plan to join
 -- this against mz_internal.mz_sql_text
@@ -6354,12 +6648,14 @@ ON mz_internal.mz_recent_activity_log_thinned (sql_hash)",
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
+    oid: oid::ROLE_MZ_SYSTEM_OID,
     attributes: RoleAttributes::new().with_all(),
 };
 
 pub const MZ_SUPPORT_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SUPPORT_ROLE_ID,
     name: SUPPORT_USER_NAME,
+    oid: oid::ROLE_MZ_SUPPORT_OID,
     attributes: RoleAttributes::new(),
 };
 
@@ -6368,6 +6664,7 @@ pub const MZ_SUPPORT_ROLE: BuiltinRole = BuiltinRole {
 pub const MZ_MONITOR_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_MONITOR_ROLE_ID,
     name: "mz_monitor",
+    oid: oid::ROLE_MZ_MONITOR_OID,
     attributes: RoleAttributes::new(),
 };
 
@@ -6376,6 +6673,7 @@ pub const MZ_MONITOR_ROLE: BuiltinRole = BuiltinRole {
 pub const MZ_MONITOR_REDACTED: BuiltinRole = BuiltinRole {
     id: MZ_MONITOR_REDACTED_ROLE_ID,
     name: "mz_monitor_redacted",
+    oid: oid::ROLE_MZ_MONITOR_REDACTED_OID,
     attributes: RoleAttributes::new(),
 };
 

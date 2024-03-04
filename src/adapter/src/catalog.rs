@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::CompactionWindow;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
-use tracing::{info, instrument, trace};
+use tracing::{info, trace};
 use uuid::Uuid;
 
 use mz_adapter_types::connection::ConnectionId;
@@ -50,6 +50,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::option::FallibleMapExt;
@@ -82,10 +83,9 @@ use mz_sql::session::vars::{
 };
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_stash::{DebugStashFactory, StashFactory};
+use mz_stash::StashFactory;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
@@ -160,7 +160,7 @@ pub struct CatalogPlans {
 
 impl Catalog {
     /// Set the optimized plan for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
         &mut self,
         id: GlobalId,
@@ -170,7 +170,7 @@ impl Catalog {
     }
 
     /// Set the optimized plan for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
@@ -180,7 +180,7 @@ impl Catalog {
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn try_get_optimized_plan(
         &self,
         id: &GlobalId,
@@ -189,7 +189,7 @@ impl Catalog {
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
@@ -198,7 +198,7 @@ impl Catalog {
     }
 
     /// Set the `DataflowMetainfo` for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
@@ -216,7 +216,7 @@ impl Catalog {
     }
 
     /// Try to get the `DataflowMetainfo` for the item identified by `id`.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn try_get_dataflow_metainfo(
         &self,
         id: &GlobalId,
@@ -232,7 +232,7 @@ impl Catalog {
     /// Return a set containing all dropped notices. Note that if for some
     /// reason we end up with two identical notices being dropped by the same
     /// call, the result will contain only one instance of that notice.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[mz_ore::instrument(level = "trace")]
     pub fn drop_plans_and_metainfos(
         &mut self,
         drop_ids: &BTreeSet<GlobalId>,
@@ -409,10 +409,9 @@ impl ConnectionResolver for ConnCatalog<'_> {
     }
 }
 
-pub struct TransactionResult<R> {
+pub struct TransactionResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     pub audit_events: Vec<VersionedEvent>,
-    pub result: R,
 }
 
 impl Catalog {
@@ -524,51 +523,30 @@ impl Catalog {
         F: FnOnce(Catalog) -> Fut,
         Fut: Future<Output = T>,
     {
-        let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog = match Self::open_debug_catalog(
-            &debug_stash_factory,
-            persist_client,
-            environmentd_id,
-            now,
-            None,
-        )
-        .await
-        {
-            Ok(catalog) => catalog,
-            Err(err) => {
-                debug_stash_factory.drop().await;
-                panic!("unable to open debug stash: {err}");
-            }
-        };
-        let res = f(catalog).await;
-        debug_stash_factory.drop().await;
-        res
+        let catalog =
+            match Self::open_debug_catalog(persist_client, environmentd_id, now, None).await {
+                Ok(catalog) => catalog,
+                Err(err) => {
+                    panic!("unable to open debug stash: {err}");
+                }
+            };
+        f(catalog).await
     }
 
     /// Opens a debug catalog.
     ///
     /// See [`Catalog::with_debug`].
     pub async fn open_debug_catalog(
-        debug_stash_factory: &DebugStashFactory,
         persist_client: PersistClient,
         organization_id: Uuid,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
-            mz_catalog::durable::shadow_catalog_state(
-                StashConfig {
-                    stash_factory: debug_stash_factory.stash_factory().clone(),
-                    stash_url: debug_stash_factory.url().to_string(),
-                    schema: Some(debug_stash_factory.schema().to_string()),
-                    tls: debug_stash_factory.tls().clone(),
-                },
-                persist_client,
-                organization_id,
-            )
-            .await,
+            mz_catalog::durable::test_persist_backed_catalog_state(persist_client, organization_id)
+                .await,
         );
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None, None)
@@ -642,37 +620,13 @@ impl Catalog {
         Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
     }
 
-    /// Opens a read only debug persist backed catalog defined by `stash_config`, `persist_client`
-    /// and `organization_id`.
-    ///
-    /// See [`Catalog::with_debug`].
-    pub async fn open_debug_read_only_shadow_catalog_config(
-        stash_config: StashConfig,
-        persist_client: PersistClient,
-        now: NowFn,
-        environment_id: EnvironmentId,
-    ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(
-            mz_catalog::durable::shadow_catalog_state(
-                stash_config,
-                persist_client,
-                environment_id.organization_id(),
-            )
-            .await,
-        );
-        let storage = openable_storage
-            .open_read_only(&test_bootstrap_args())
-            .await?;
-        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
-    }
-
     async fn open_debug_catalog_inner(
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
+        let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0, 0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         // Used as a lower boundary of the boot_ts, but it's ok to use now() for
         // debugging/testing.
@@ -762,20 +716,6 @@ impl Catalog {
         self.state.allocate_oid()
     }
 
-    /// Get all global timestamps that has been persisted to disk.
-    pub async fn get_all_persisted_timestamps(
-        &self,
-    ) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error> {
-        Ok(self
-            .storage()
-            .await
-            .get_timestamps()
-            .await?
-            .into_iter()
-            .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
-            .collect())
-    }
-
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
         self.storage()
@@ -790,19 +730,6 @@ impl Catalog {
         self.storage()
             .await
             .get_next_user_replica_id()
-            .await
-            .err_into()
-    }
-
-    /// Persist new global timestamp for a timeline to disk.
-    pub async fn persist_timestamp(
-        &self,
-        timeline: &Timeline,
-        timestamp: mz_repr::Timestamp,
-    ) -> Result<(), Error> {
-        self.storage()
-            .await
-            .set_timestamp(timeline, timestamp)
             .await
             .err_into()
     }
@@ -1177,17 +1104,13 @@ impl Catalog {
         }
     }
 
-    #[instrument(name = "catalog::transact", skip_all)]
-    pub async fn transact<F, R>(
+    #[instrument(name = "catalog::transact")]
+    pub async fn transact(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
-        f: F,
-    ) -> Result<TransactionResult<R>, AdapterError>
-    where
-        F: FnOnce(&CatalogState) -> Result<R, AdapterError>,
-    {
+    ) -> Result<TransactionResult, AdapterError> {
         trace!("transact: {:?}", ops);
         fail::fail_point!("catalog_transact", |arg| {
             Err(AdapterError::Unstructured(anyhow::anyhow!(
@@ -1231,8 +1154,6 @@ impl Catalog {
             &mut state,
         )?;
 
-        let result = f(&state)?;
-
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
@@ -1261,23 +1182,42 @@ impl Catalog {
         Ok(TransactionResult {
             builtin_table_updates,
             audit_events,
-            result,
         })
     }
 
-    #[instrument(name = "catalog::transact_inner", skip_all)]
+    /// Performs the transaction described by `ops`.
+    ///
+    /// # Panics
+    /// - If `ops` contains [`Op::TransactionDryRun`] and the value is not the
+    ///   final element.
+    /// - If the only element of `ops` is [`Op::TransactionDryRun`].
+    #[instrument(name = "catalog::transact_inner")]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        ops: Vec<Op>,
+        mut ops: Vec<Op>,
         temporary_ids: Vec<GlobalId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
     ) -> Result<(), AdapterError> {
+        let dry_run_ops = match ops.last() {
+            Some(Op::TransactionDryRun) => {
+                // Remove dry run marker.
+                ops.pop();
+                assert!(!ops.is_empty(), "TransactionDryRun must not be the only op");
+                ops.clone()
+            }
+            Some(_) => vec![],
+            None => return Ok(()),
+        };
+
         for op in ops {
             match op {
+                Op::TransactionDryRun => {
+                    unreachable!("TransactionDryRun can only be used a final element of ops")
+                }
                 Op::AlterRole {
                     id,
                     name,
@@ -3008,7 +2948,15 @@ impl Catalog {
                 }
             };
         }
-        Ok(())
+
+        if dry_run_ops.is_empty() {
+            Ok(())
+        } else {
+            Err(AdapterError::TransactionDryRun {
+                new_ops: dry_run_ops,
+                new_state: state.clone(),
+            })
+        }
     }
 
     pub(crate) fn update_item(
@@ -3238,13 +3186,13 @@ impl Catalog {
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub async fn confirm_leadership(&self) -> Result<(), AdapterError> {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
-    #[tracing::instrument(level = "info", skip(self, pcx))]
+    #[mz_ore::instrument]
     fn parse_item(
         &self,
         id: GlobalId,
@@ -3672,6 +3620,12 @@ pub enum Op {
         previous_public_key_pair: (String, String),
         new_public_key_pair: (String, String),
     },
+    /// Performs a dry run of the commit, but errors with
+    /// [`AdapterError::TransactionDryRun`].
+    ///
+    /// When using this value, it should be included only as the last element of
+    /// the transaction and should not be the only value in the transaction.
+    TransactionDryRun,
 }
 
 impl ConnCatalog<'_> {
@@ -4375,12 +4329,10 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_catalog_revision() {
-        let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         {
             let mut catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
@@ -4399,7 +4351,6 @@ mod tests {
                         public_schema_oid: 2,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
-                    |_catalog| Ok(()),
                 )
                 .await
                 .expect("failed to transact");
@@ -4408,7 +4359,6 @@ mod tests {
         }
         {
             let catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client,
                 organization_id,
                 NOW_ZERO.clone(),
@@ -4420,7 +4370,6 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
         }
-        debug_stash_factory.drop().await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -4613,13 +4562,11 @@ mod tests {
         assert!(mz_sql_parser::parser::parse_statements(&create_sql).is_ok());
         assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
 
-        let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         let id = GlobalId::User(1);
         {
             let mut catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client.clone(),
                 organization_id.clone(),
                 SYSTEM_TIME.clone(),
@@ -4648,7 +4595,6 @@ mod tests {
                         id,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
-                    |_catalog| Ok(()),
                 )
                 .await
                 .expect("failed to transact");
@@ -4656,7 +4602,6 @@ mod tests {
         }
         {
             let catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client,
                 organization_id,
                 SYSTEM_TIME.clone(),
@@ -4672,7 +4617,6 @@ mod tests {
             }
             catalog.expire().await;
         }
-        debug_stash_factory.drop().await;
     }
 
     #[mz_ore::test]
@@ -5561,12 +5505,10 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_builtin_migrations() {
-        let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         let id = {
             let catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
@@ -5592,7 +5534,6 @@ mod tests {
         }
         {
             let catalog = Catalog::open_debug_catalog(
-                &debug_stash_factory,
                 persist_client,
                 organization_id,
                 NOW_ZERO.clone(),
@@ -5611,7 +5552,6 @@ mod tests {
 
             catalog.expire().await;
         }
-        debug_stash_factory.drop().await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -5624,7 +5564,7 @@ mod tests {
                 value: OwnedVarInput::Flat(CatalogKind::Persist.as_str().to_string()),
             };
             catalog
-                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .transact(mz_repr::Timestamp::MIN, None, vec![op])
                 .await
                 .expect("failed to transact");
 
@@ -5651,7 +5591,7 @@ mod tests {
                 name: CATALOG_KIND_IMPL.name().to_string(),
             };
             catalog
-                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .transact(mz_repr::Timestamp::MIN, None, vec![op])
                 .await
                 .expect("failed to transact");
 

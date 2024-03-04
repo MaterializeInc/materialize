@@ -95,9 +95,9 @@ class PostgresResultComparator(ResultComparator):
             value1 = value1.replace(", ", ",").replace(": ", ":")
             value2 = value2.replace(", ", ",").replace(": ", ":")
 
-        # Postgres uses 'mons' instead of 'months'
-        value1 = value1.replace(" mons", " months")
-        value2 = value2.replace(" mons", " months")
+        # Postgres uses 'mon' / 'mons' instead of 'month' / 'months'
+        value1 = value1.replace(" month", " mon")
+        value2 = value2.replace(" month", " mon")
 
         return value1 == value2
 

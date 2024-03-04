@@ -59,7 +59,7 @@ steps:
             args: [--scenario=DataflowsLarge, --actions=35000]
 
     - id: zippy-pg-cdc-large
-      label: "Large Zippy PogresCdc"
+      label: "Large Zippy PostgresCdc"
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
@@ -68,6 +68,18 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: zippy
             args: [--scenario=PostgresCdcLarge, --actions=200000]
+
+    - id: zippy-mysql-cdc-large
+      label: "Large Zippy MySqlCdc"
+      skip: "TODO: #25582 (invalid data in source)"
+      timeout_in_minutes: 2880
+      agents:
+        queue: linux-aarch64-large
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: zippy
+            args: [--scenario=MySqlCdcLarge, --actions=200000]
 
     - id: zippy-cluster-replicas-long
       label: "Longer Zippy ClusterReplicas"
@@ -167,50 +179,18 @@ steps:
     trigger: tests
     async: false
     build:
-      # TODO(def-): How to get the last release version here? For now v0.87.2
-      commit: "f79ca55f07854fa0f1c0f7bdba8001b615c822e6"
-      branch: "v0.87.2"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
 
-  - id: tests-preflight-check-upgrade
-    label: Tests with preflight check and upgrade
-    trigger: tests
-    async: false
-    build:
-      # TODO(def-): How to get the last release version here? For now v0.87.2
-      commit: "f79ca55f07854fa0f1c0f7bdba8001b615c822e6"
-      branch: "v0.87.2"
-      env:
-        CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
-        CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 0
-    skip: "Currently can't run pipeline two times at once, rollback is more interesting anyway"
   - id: nightlies-preflight-check-rollback
     label: Nightlies with preflight check and rollback
     trigger: nightlies
     async: false
     build:
-      # TODO(def-): How to get the last release version here? For now v0.87.2
-      commit: "f79ca55f07854fa0f1c0f7bdba8001b615c822e6"
-      branch: "v0.87.2"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
-
-  - id: nightlies-preflight-check-upgrade
-    label: Nightlies with preflight check and upgrade
-    trigger: nightlies
-    async: false
-    build:
-      # TODO(def-): How to get the last release version here? For now v0.87.2
-      commit: "f79ca55f07854fa0f1c0f7bdba8001b615c822e6"
-      branch: "v0.87.2"
-      env:
-        CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
-        CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 0
-    skip: "Currently can't run pipeline two times at once, rollback is more interesting anyway"
-
 
   - wait: ~
     continue_on_failure: true

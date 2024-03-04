@@ -19,12 +19,13 @@ use differential_dataflow::Hashable;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
+use mz_ore::instrument;
 use mz_persist_client::ShardId;
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, instrument};
+use tracing::debug;
 
 use crate::proto::ProtoIdBatch;
 use crate::txns::{Tidy, TxnsHandle};
@@ -77,7 +78,7 @@ where
     /// correctness nor liveness require this followup be done.
     ///
     /// Panics if any involved data shards were not registered before commit ts.
-    #[instrument(level = "debug", skip_all, fields(ts = ?commit_ts))]
+    #[instrument(level = "debug", fields(ts = ?commit_ts))]
     pub async fn commit_at<T, O, C>(
         &self,
         handle: &mut TxnsHandle<K, V, T, D, O, C>,

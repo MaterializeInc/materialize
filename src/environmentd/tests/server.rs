@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::io::Write as _;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,22 +24,29 @@ use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use http::{Request, StatusCode};
 use itertools::Itertools;
+use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_environmentd::http::{
     BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
 };
-use mz_environmentd::test_util::{self, PostgresErrorExt, KAFKA_ADDRS};
+use mz_environmentd::test_util::{self, make_pg_tls, Ca, PostgresErrorExt, KAFKA_ADDRS};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_frontegg_auth::{
+    Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
+};
+use mz_frontegg_mock::{FronteggMockServer, UserConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::{to_datetime, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_pgrepr::UInt8;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
-
+use openssl::ssl::SslVerifyMode;
+use postgres::config::SslMode;
 use postgres_array::Array;
 use rand::RngCore;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
@@ -53,6 +60,7 @@ use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
+use uuid::Uuid;
 
 // Allow the use of banned rdkafka methods, because we are just in tests.
 #[allow(clippy::disallowed_methods)]
@@ -1863,6 +1871,9 @@ fn test_max_connections_on_all_interfaces() {
     mz_client
         .batch_execute("ALTER SYSTEM SET max_connections = 1")
         .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        .unwrap();
 
     let client = server.connect(postgres::NoTls).unwrap();
 
@@ -1949,6 +1960,209 @@ fn test_max_connections_on_all_interfaces() {
     let text = res.text().expect("no body?");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(text, "creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)");
+}
+
+// Test max_connections and superuser_reserved_connections.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_max_connections_limits() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let regular_user = UserConfig::generate(tenant_id.clone(), "user@_.com", Vec::new());
+    let admin_user = UserConfig::generate(tenant_id.clone(), "admin@_.com", vec!["mzadmin".into()]);
+    let users = BTreeMap::from([
+        (regular_user.email.clone(), regular_user.clone()),
+        (admin_user.email.clone(), admin_user.clone()),
+    ]);
+
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        SYSTEM_TIME.clone(),
+        500,
+        None,
+    )
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let tls = make_pg_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE)));
+
+    let connect_regular_user = || async {
+        server
+            .connect()
+            .ssl_mode(SslMode::Require)
+            .with_tls(tls.clone())
+            .user(&regular_user.email)
+            .password(&regular_user.frontegg_password())
+            .await
+    };
+    let connect_external_admin = || async {
+        server
+            .connect()
+            .ssl_mode(SslMode::Require)
+            .with_tls(tls.clone())
+            .user(&admin_user.email)
+            .password(&admin_user.frontegg_password())
+            .await
+    };
+    let connect_system_user = || async { server.connect().internal().await };
+
+    let mz_client = connect_system_user().await.unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections TO 1")
+        .await
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 1")
+        .await
+        .unwrap();
+
+    // No regular user connections when max_connections = superuser_reserved_connections.
+    assert_contains!(
+        connect_regular_user()
+            .await
+            .expect_err("connect should fail")
+            .to_string(),
+        "creating connection would violate max_connections limit"
+    );
+
+    // Set this real high to make sure nothing bad happens.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 100")
+        .await
+        .unwrap();
+    assert_contains!(
+        connect_regular_user()
+            .await
+            .expect_err("connect should fail")
+            .to_string(),
+        "creating connection would violate max_connections limit"
+    );
+
+    mz_client
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        .await
+        .unwrap();
+
+    {
+        let client1 = connect_regular_user().await.unwrap();
+        let _ = client1.batch_execute("SELECT 1").await.unwrap();
+
+        assert_contains!(
+            connect_regular_user()
+                .await
+                .expect_err("connect should fail")
+                .to_string(),
+            "creating connection would violate max_connections limit"
+        );
+
+        assert_contains!(
+            connect_regular_user()
+                .await
+                .expect_err("connect should fail")
+                .to_string(),
+            "creating connection would violate max_connections limit"
+        );
+
+        let mz_client2 = connect_system_user().await.unwrap();
+        mz_client2
+            .batch_execute("SELECT 1")
+            .await
+            .expect("super users are still allowed to do queries");
+
+        // External admins can't get around the connection limit.
+        assert_contains!(
+            connect_external_admin()
+                .await
+                .expect_err("connect should fail")
+                .to_string(),
+            "creating connection would violate max_connections limit"
+        );
+
+        // Bump the limits.
+        mz_client
+            .batch_execute("ALTER SYSTEM SET max_connections TO 2")
+            .await
+            .unwrap();
+        mz_client
+            .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 1")
+            .await
+            .unwrap();
+
+        // Regular users still should not connect.
+        assert_contains!(
+            connect_regular_user()
+                .await
+                .expect_err("connect should fail")
+                .to_string(),
+            "creating connection would violate max_connections limit"
+        );
+
+        // But external admin should succeed.
+        connect_external_admin().await.unwrap();
+    }
+    // after a client disconnects we can connect once the server notices the close
+    Retry::default()
+        .max_tries(10)
+        .retry_async(|_state| async {
+            let client = match connect_regular_user().await {
+                Err(e) => {
+                    assert_contains!(
+                        e.to_string(),
+                        "creating connection would violate max_connections limit"
+                    );
+                    return Err(());
+                }
+                Ok(client) => client,
+            };
+            let _ = client.batch_execute("SELECT 1").await.unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    mz_client
+        .batch_execute("ALTER SYSTEM RESET max_connections")
+        .await
+        .unwrap();
+
+    // We can create lots of clients now
+    let mut clients = Vec::new();
+    for _ in 0..10 {
+        let client = connect_regular_user().await.unwrap();
+        client.batch_execute("SELECT 1").await.unwrap();
+        clients.push(client);
+    }
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -3555,4 +3769,167 @@ async fn test_connection_id() {
     let pid = u32::from_le_bytes(pid.to_le_bytes());
     let pid_envid = pid >> 19;
     assert_eq!(envid_lower, pid_envid);
+}
+
+// Test connection ID properties.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_github_25388() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start()
+        .await;
+    server
+        .enable_feature_flags(&["enable_unsafe_functions"])
+        .await;
+    let client1 = server.connect().await.unwrap();
+
+    client1
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+
+    // May be flakey/racey due to various sleeps.
+    Retry::default()
+        .retry_async(|_| async {
+            client1
+                .batch_execute("DROP INDEX IF EXISTS idx")
+                .await
+                .unwrap();
+            client1
+                .batch_execute("CREATE INDEX idx ON t(a)")
+                .await
+                .unwrap();
+
+            let client2 = server.connect().await.unwrap();
+            mz_ore::task::spawn(|| "test", async move {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                client2.batch_execute("DROP INDEX idx").await.unwrap();
+            });
+
+            match client1
+                .query("SUBSCRIBE (SELECT *, mz_unsafe.mz_sleep(2) FROM t)", &[])
+                .await
+            {
+                Ok(_) => Err("unexpected query success".to_string()),
+                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
+                Err(err) => Err(err.to_string()),
+            }
+        })
+        .await
+        .unwrap();
+
+    Retry::default()
+        .retry_async(|_| async {
+            client1
+                .batch_execute("DROP INDEX IF EXISTS idx")
+                .await
+                .unwrap();
+            client1
+                .batch_execute("CREATE INDEX idx ON t(a)")
+                .await
+                .unwrap();
+
+            let client2 = server.connect().await.unwrap();
+            mz_ore::task::spawn(|| "test", async move {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                client2.batch_execute("DROP INDEX idx").await.unwrap();
+            });
+
+            match client1
+                .query("SELECT *, mz_unsafe.mz_sleep(2) FROM t", &[])
+                .await
+            {
+                Ok(_) => Err("unexpected query success".to_string()),
+                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
+                Err(err) => Err(err.to_string()),
+            }
+        })
+        .await
+        .unwrap();
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_webhook_source_batch_interval() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone)]
+    struct WebhookEvent {
+        name: &'static str,
+    }
+
+    // Create a webhook source.
+    client
+        .execute(
+            "CREATE SOURCE webhook_batch_interval_test FROM WEBHOOK BODY FORMAT JSON",
+            &[],
+        )
+        .await
+        .expect("failed to create source");
+
+    let http_client = reqwest::Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_batch_interval_test",
+        server.inner.http_local_addr()
+    );
+
+    // Send one event to our webhook source.
+    let start = Instant::now();
+    let event = WebhookEvent { name: "first" };
+    let resp = http_client
+        .post(&webhook_url)
+        .json(&event)
+        .send()
+        .await
+        .expect("failed to POST event");
+    let first_duration = start.elapsed();
+    assert!(resp.status().is_success());
+    // All is normal, the request should be fast.
+    assert!(first_duration < Duration::from_secs(2));
+
+    // Change our batch interval to be very high.
+    let sys_client = server
+        .connect()
+        .internal()
+        .user(&SYSTEM_USER.name)
+        .await
+        .unwrap();
+    sys_client
+        .execute(
+            "ALTER SYSTEM SET user_storage_managed_collections_batch_duration TO '10s'",
+            &[],
+        )
+        .await
+        .expect("failed to set batch duration");
+
+    // Send a second event...
+    let start = Instant::now();
+    let event = WebhookEvent { name: "second" };
+    let resp = http_client
+        .post(&webhook_url)
+        .json(&event)
+        .send()
+        .await
+        .expect("failed to POST event");
+    let second_duration = start.elapsed();
+    assert!(resp.status().is_success());
+
+    // ... and then quickly follow up with a third.
+    let start = Instant::now();
+    let event = WebhookEvent { name: "third" };
+    let resp = http_client
+        .post(&webhook_url)
+        .json(&event)
+        .send()
+        .await
+        .expect("failed to POST event");
+    let third_duration = start.elapsed();
+    assert!(resp.status().is_success());
+
+    // The second event should finish quickly like the first!
+    assert!(second_duration < Duration::from_secs(2));
+    // But the third will now be stuck behind the batch interval so it will take longer!
+    assert!(third_duration > Duration::from_secs(7));
 }

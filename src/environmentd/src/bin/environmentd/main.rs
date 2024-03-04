@@ -376,13 +376,12 @@ pub struct Args {
         env = "ADAPTER_STASH_URL",
         value_name = "POSTGRES_URL",
         required_if_eq("catalog-store", "stash"),
-        required_if_eq("catalog-store", "shadow"),
         required_if_eq("catalog-store", "persist"),
         required_if_eq("catalog-store", "emergency-stash")
     )]
     adapter_stash_url: Option<String>,
     /// The backing durable store of the catalog.
-    #[clap(long, arg_enum, env = "CATALOG_STORE", default_value("stash"))]
+    #[clap(long, arg_enum, env = "CATALOG_STORE", default_value("persist"))]
     catalog_store: CatalogKind,
     /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
     #[clap(long, env = "TIMESTAMP_ORACLE_URL", value_name = "POSTGRES_URL")]
@@ -801,8 +800,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
 
-    // We can remove the last branch once we upgrade to 1.75
-    #[allow(unreachable_patterns)]
     match args.persist_isolated_runtime_threads {
         // Use the default.
         None | Some(0) => (),
@@ -814,7 +811,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             let threads = usize::try_from(x).expect("pattern matched a positive value");
             persist_config.isolated_runtime_worker_threads = threads;
         }
-        Some(_) => unreachable!("isize is technically non-exhaustive"),
     };
 
     let _server = runtime.spawn_named(
@@ -912,10 +908,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .expect("required for persist catalog"),
                 persist_clients,
                 metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
-            },
-            CatalogKind::Shadow => CatalogConfig::Shadow {
-                url: args.adapter_stash_url.expect("required for shadow catalog"),
-                persist_clients,
             },
             CatalogKind::EmergencyStash => CatalogConfig::EmergencyStash {
                 url: args

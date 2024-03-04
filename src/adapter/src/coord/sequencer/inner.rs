@@ -33,7 +33,7 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
-use mz_sql::ast::{ExplainStage, IndexOptionName};
+use mz_sql::ast::IndexOptionName;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -48,6 +48,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
+use mz_ore::instrument;
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, IndexOption, MutationKind,
     Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
@@ -55,8 +56,8 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, SessionVars, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
+    self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, SCHEMA_ALIAS,
+    TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -73,7 +74,7 @@ use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizer
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, OwnedMutexGuard};
-use tracing::{instrument, warn, Instrument, Span};
+use tracing::{warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
@@ -86,7 +87,6 @@ use crate::coord::{
     RealTimeRecencyContext, StageResult, Staged, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::explain::explain_dataflow;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize};
@@ -254,7 +254,7 @@ impl Coordinator {
         })
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_source(
         &mut self,
         session: &mut Session,
@@ -359,7 +359,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_connection(
         &mut self,
         mut ctx: ExecuteContext,
@@ -447,7 +447,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
@@ -507,7 +507,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_database(
         &mut self,
         session: &mut Session,
@@ -534,7 +534,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_schema(
         &mut self,
         session: &mut Session,
@@ -562,7 +562,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_role(
         &mut self,
         conn_id: Option<&ConnectionId>,
@@ -579,7 +579,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_table(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -664,7 +664,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_secret(
         &mut self,
         session: &mut Session,
@@ -718,7 +718,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_sink(
         &mut self,
         ctx: ExecuteContext,
@@ -764,28 +764,27 @@ impl Coordinator {
         }];
 
         let from = self.catalog().get_entry(&catalog_sink.from);
-        let from_name = from.name().item.clone();
-        let from_type = from.item().typ().to_string();
-
-        // TODO(parkmycar): Move this to a catalog_transact_with_side_effects model.
-        let result = self
-            .catalog_transact_with(Some(ctx.session().conn_id()), ops, move |txn| {
-                // Validate that the from collection is in fact a persist collection we can export.
-                txn.dataflow_client
-                    .storage
-                    .collection(sink.from)
-                    .map_err(|e| match e {
-                        StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
-                            "{from_name} is a {from_type}, which cannot be exported as a sink"
-                        )),
-                        e => AdapterError::Storage(e),
-                    })?;
-                Ok(())
+        if let Err(e) = self
+            .controller
+            .storage
+            .collection(sink.from)
+            .map_err(|e| match e {
+                StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
+                    "{} is a {}, which cannot be exported as a sink",
+                    from.name().item.clone(),
+                    from.item().typ().to_string(),
+                )),
+                e => AdapterError::Storage(e),
             })
-            .await;
+        {
+            ctx.retire(Err(e));
+            return;
+        }
 
-        let builtin_table_notify = match result {
-            Ok(((), table_updates)) => table_updates,
+        let result = self.catalog_transact(Some(ctx.session()), ops).await;
+
+        match result {
+            Ok(()) => {}
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -807,11 +806,6 @@ impl Coordinator {
         self.create_storage_export(id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
-
-        // Block on the builtin table updates completing.
-        //
-        // Note: these are run in a separate task, so they're run concurrently to everything else.
-        builtin_table_notify.await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
@@ -854,7 +848,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_create_type(
         &mut self,
         session: &Session,
@@ -886,7 +880,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_comment_on(
         &mut self,
         session: &Session,
@@ -901,7 +895,7 @@ impl Coordinator {
         Ok(ExecuteResponse::Comment)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_drop_objects(
         &mut self,
         session: &Session,
@@ -1123,7 +1117,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_drop_owned(
         &mut self,
         session: &Session,
@@ -1462,7 +1456,7 @@ impl Coordinator {
         variable.visible(session.user(), Some(self.catalog().system_config()))?;
 
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
-        if variable.name() == DATABASE_VAR_NAME
+        if variable.name() == vars::DATABASE.name()
             && matches!(
                 self.catalog().resolve_database(&variable.value()),
                 Err(CatalogError::UnknownDatabase(_))
@@ -1470,7 +1464,7 @@ impl Coordinator {
         {
             let name = variable.value();
             session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
-        } else if variable.name() == CLUSTER_VAR_NAME
+        } else if variable.name() == vars::CLUSTER.name()
             && matches!(
                 self.catalog().resolve_cluster(&variable.value()),
                 Err(CatalogError::UnknownCluster(_))
@@ -1482,7 +1476,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(vec![row]))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_inspect_shard(
         &self,
         session: &Session,
@@ -1506,7 +1500,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) fn sequence_set_variable(
         &self,
         session: &mut Session,
@@ -1516,7 +1510,7 @@ impl Coordinator {
         if &name == TRANSACTION_ISOLATION_VAR_NAME {
             self.validate_set_isolation_level(session)?;
         }
-        if &name == CLUSTER_VAR_NAME {
+        if &name == vars::CLUSTER.name() {
             self.validate_set_cluster(session)?;
         }
 
@@ -1536,7 +1530,7 @@ impl Coordinator {
                 )?;
 
                 // Database or cluster value does not correspond to a catalog item.
-                if name.as_str() == DATABASE_VAR_NAME
+                if name.as_str() == vars::DATABASE.name()
                     && matches!(
                         self.catalog().resolve_database(vars.database()),
                         Err(CatalogError::UnknownDatabase(_))
@@ -1544,7 +1538,7 @@ impl Coordinator {
                 {
                     let name = vars.database().to_string();
                     session.add_notice(AdapterNotice::DatabaseDoesNotExist { name });
-                } else if name.as_str() == CLUSTER_VAR_NAME
+                } else if name.as_str() == vars::CLUSTER.name()
                     && matches!(
                         self.catalog().resolve_cluster(vars.cluster()),
                         Err(CatalogError::UnknownCluster(_))
@@ -1581,7 +1575,7 @@ impl Coordinator {
         if &name == TRANSACTION_ISOLATION_VAR_NAME {
             self.validate_set_isolation_level(session)?;
         }
-        if &name == CLUSTER_VAR_NAME {
+        if &name == vars::CLUSTER.name() {
             self.validate_set_cluster(session)?;
         }
         session
@@ -1606,7 +1600,7 @@ impl Coordinator {
 
                     session.vars_mut().set(
                         Some(self.catalog().system_config()),
-                        TRANSACTION_ISOLATION_VAR_NAME.as_str(),
+                        TRANSACTION_ISOLATION_VAR_NAME,
                         VarInput::Flat(&isolation_level.to_ast_string_stable()),
                         plan.local,
                     )?
@@ -1635,7 +1629,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -1747,7 +1741,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
@@ -1851,7 +1845,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_explain_plan(
         &mut self,
         ctx: ExecuteContext,
@@ -1860,6 +1854,9 @@ impl Coordinator {
     ) {
         match &plan.explainee {
             plan::Explainee::Statement(stmt) => match stmt {
+                plan::ExplaineeStatement::CreateView { .. } => {
+                    self.explain_create_view(ctx, plan).await;
+                }
                 plan::ExplaineeStatement::CreateMaterializedView { .. } => {
                     self.explain_create_materialized_view(ctx, plan).await;
                 }
@@ -1870,6 +1867,10 @@ impl Coordinator {
                     self.explain_peek(ctx, plan, target_cluster).await;
                 }
             },
+            plan::Explainee::View(_) => {
+                let result = self.explain_view(&ctx, plan);
+                ctx.retire(result);
+            }
             plan::Explainee::MaterializedView(_) => {
                 let result = self.explain_materialized_view(&ctx, plan);
                 ctx.retire(result);
@@ -1877,6 +1878,9 @@ impl Coordinator {
             plan::Explainee::Index(_) => {
                 let result = self.explain_index(&ctx, plan);
                 ctx.retire(result);
+            }
+            plan::Explainee::ReplanView(_) => {
+                self.explain_replan_view(ctx, plan).await;
             }
             plan::Explainee::ReplanMaterializedView(_) => {
                 self.explain_replan_materialized_view(ctx, plan).await;
@@ -1887,129 +1891,7 @@ impl Coordinator {
         };
     }
 
-    fn explain_materialized_view(
-        &mut self,
-        ctx: &ExecuteContext,
-        plan::ExplainPlanPlan {
-            stage,
-            format,
-            config,
-            explainee,
-        }: plan::ExplainPlanPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::Explainee::MaterializedView(id) = explainee else {
-            unreachable!() // Asserted in `sequence_explain_plan`.
-        };
-        let CatalogItem::MaterializedView(_) = self.catalog().get_entry(&id).item() else {
-            unreachable!() // Asserted in `plan_explain_plan`.
-        };
-
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
-            tracing::error!(
-                "cannot find dataflow metainformation for materialized view {id} in catalog"
-            );
-            coord_bail!(
-                "cannot find dataflow metainformation for materialized view {id} in catalog"
-            );
-        };
-
-        let explain = match stage {
-            ExplainStage::OptimizedPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
-                    coord_bail!("cannot find {stage} for materialized view in catalog");
-                };
-                explain_dataflow(
-                    plan,
-                    format,
-                    &config,
-                    &self.catalog().for_session(ctx.session()),
-                    dataflow_metainfo,
-                )?
-            }
-            ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
-                    coord_bail!("cannot find {stage} for materialized view in catalog");
-                };
-                explain_dataflow(
-                    plan,
-                    format,
-                    &config,
-                    &self.catalog().for_session(ctx.session()),
-                    dataflow_metainfo,
-                )?
-            }
-            _ => {
-                coord_bail!("cannot EXPLAIN {} FOR MATERIALIZED VIEW", stage);
-            }
-        };
-
-        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
-
-        Ok(Self::send_immediate_rows(rows))
-    }
-
-    fn explain_index(
-        &mut self,
-        ctx: &ExecuteContext,
-        plan::ExplainPlanPlan {
-            stage,
-            format,
-            config,
-            explainee,
-        }: plan::ExplainPlanPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::Explainee::Index(id) = explainee else {
-            unreachable!() // Asserted in `sequence_explain_plan`.
-        };
-        let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
-            unreachable!() // Asserted in `plan_explain_plan`.
-        };
-
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
-            tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
-            coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
-        };
-
-        let explain = match stage {
-            ExplainStage::OptimizedPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for index {id} in catalog");
-                    coord_bail!("cannot find {stage} for index in catalog");
-                };
-                explain_dataflow(
-                    plan,
-                    format,
-                    &config,
-                    &self.catalog().for_session(ctx.session()),
-                    dataflow_metainfo,
-                )?
-            }
-            ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for index {id} in catalog");
-                    coord_bail!("cannot find {stage} for index in catalog");
-                };
-                explain_dataflow(
-                    plan,
-                    format,
-                    &config,
-                    &self.catalog().for_session(ctx.session()),
-                    dataflow_metainfo,
-                )?
-            }
-            _ => {
-                coord_bail!("cannot EXPLAIN {} FOR INDEX", stage);
-            }
-        };
-
-        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
-
-        Ok(Self::send_immediate_rows(rows))
-    }
-
-    #[instrument(skip_all)]
+    #[instrument]
     pub async fn sequence_explain_timestamp(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2180,7 +2062,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_explain_timestamp_finish_inner(
         &mut self,
         session: &mut Session,
@@ -2227,7 +2109,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_insert(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2330,7 +2212,7 @@ impl Coordinator {
     /// read. This works by doing a Peek then queuing a SendDiffs. No writes
     /// or read-then-writes can occur between the Peek and SendDiff otherwise a
     /// serializability violation could occur.
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_read_then_write(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2672,7 +2554,7 @@ impl Coordinator {
         });
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
         session: &mut Session,
@@ -2692,7 +2574,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
         session: &mut Session,
@@ -2714,7 +2596,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_schema_swap(
         &mut self,
         session: &mut Session,
@@ -2770,7 +2652,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) fn sequence_alter_index_reset_options(
         &mut self,
         plan: plan::AlterIndexResetOptionsPlan,
@@ -2785,7 +2667,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) fn set_index_compaction_window(
         &mut self,
         id: GlobalId,
@@ -2802,7 +2684,7 @@ impl Coordinator {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_role(
         &mut self,
         session: &Session,
@@ -2884,7 +2766,7 @@ impl Coordinator {
         Ok(response)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_secret(
         &mut self,
         session: &Session,
@@ -2899,7 +2781,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_connection(
         &mut self,
         ctx: ExecuteContext,
@@ -2921,7 +2803,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn sequence_rotate_keys(
         &mut self,
         session: &Session,
@@ -2946,7 +2828,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn sequence_alter_connection_options(
         &mut self,
         mut ctx: ExecuteContext,
@@ -3088,7 +2970,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_alter_connection_stage_finish(
         &mut self,
         session: &mut Session,
@@ -3195,7 +3077,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_source(
         &mut self,
         session: &Session,
@@ -3751,7 +3633,7 @@ impl Coordinator {
         Ok(Vec::from(payload))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_system_set(
         &mut self,
         session: &Session,
@@ -3776,7 +3658,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_system_reset(
         &mut self,
         session: &Session,
@@ -3792,7 +3674,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_system_reset_all(
         &mut self,
         session: &Session,
@@ -3848,7 +3730,7 @@ impl Coordinator {
     }
 
     // Returns the name of the portal to execute.
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) fn sequence_execute(
         &mut self,
         session: &mut Session,
@@ -3866,7 +3748,7 @@ impl Coordinator {
         session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), revision)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_grant_privileges(
         &mut self,
         session: &Session,
@@ -3884,7 +3766,7 @@ impl Coordinator {
         .await
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_revoke_privileges(
         &mut self,
         session: &Session,
@@ -3902,7 +3784,7 @@ impl Coordinator {
         .await
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn sequence_update_privileges(
         &mut self,
         session: &Session,
@@ -4011,7 +3893,7 @@ impl Coordinator {
         res
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_default_privileges(
         &mut self,
         session: &Session,
@@ -4058,7 +3940,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredDefaultPrivileges)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_grant_role(
         &mut self,
         session: &Session,
@@ -4103,7 +3985,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::GrantedRole)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_revoke_role(
         &mut self,
         session: &Session,
@@ -4148,7 +4030,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::RevokedRole)
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_alter_owner(
         &mut self,
         session: &Session,
@@ -4217,7 +4099,7 @@ impl Coordinator {
             .map(|_| ExecuteResponse::AlteredObject(object_type))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(super) async fn sequence_reassign_owned(
         &mut self,
         session: &Session,

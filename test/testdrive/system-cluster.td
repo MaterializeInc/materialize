@@ -99,5 +99,3 @@ CREATE CLUSTER REPLICA mz_system.r1 SIZE '${arg.default-replica-size}';
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
 mz_system r1 ${arg.default-replica-size} <TRUE_OR_FALSE>
-
-$ unset-regex

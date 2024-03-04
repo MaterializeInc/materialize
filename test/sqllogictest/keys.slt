@@ -12,7 +12,7 @@
 # no duplicates in a column.
 
 query T multiline
-EXPLAIN WITH(keys, no_fast_path) (VALUES (1, 1), (1, 2))
+EXPLAIN WITH(keys, no fast path) (VALUES (1, 1), (1, 2))
 ----
 Explained Query:
   Constant // { keys: "([1])" }
@@ -24,7 +24,7 @@ EOF
 # A global primary key should be detected for constants with fewer than two rows.
 
 query T multiline
-EXPLAIN WITH(keys, no_fast_path) (VALUES (1, 2, 3))
+EXPLAIN WITH(keys, no fast path) (VALUES (1, 2, 3))
 ----
 Explained Query:
   Constant // { keys: "([])" }
@@ -35,7 +35,7 @@ EOF
 # Each detected-unique column belongs in a separate key.
 
 query T multiline
-EXPLAIN WITH(keys, no_fast_path) (VALUES (1, 1, 1), (2, 2, 1), (3, 3, 1))
+EXPLAIN WITH(keys, no fast path) (VALUES (1, 1, 1), (2, 2, 1), (3, 3, 1))
 ----
 Explained Query:
   Constant // { keys: "([0], [1])" }

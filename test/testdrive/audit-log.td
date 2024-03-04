@@ -41,5 +41,3 @@ create source "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter
 create source "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_counter_src\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"r1\"}" materialize
 create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_counter_src\"}" materialize
-
-> DROP CLUSTER audit_log_kafka_src, audit_log_counter_src CASCADE;

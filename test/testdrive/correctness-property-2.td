@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
+ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 
 $ set keyschema={
     "type": "record",
@@ -51,6 +51,7 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+  WITH (RETAIN HISTORY = FOR '365000 days');
 
 # Prime tokio-postgres with the missing OIDs.
 > SELECT mz_now(), * FROM correctness_data WHERE false AS OF AT LEAST 0
@@ -70,5 +71,3 @@ CREATE CLUSTER REPLICA storage.r1 SIZE = '1';
 0 1 crustycrab ${count}
 
 > COMMIT
-
-> DROP CLUSTER storage CASCADE;

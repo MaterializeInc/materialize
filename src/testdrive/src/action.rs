@@ -63,6 +63,7 @@ mod protobuf;
 mod psql;
 mod schema_registry;
 mod set;
+mod skip_end;
 mod skip_if;
 mod sleep;
 mod sql;
@@ -357,26 +358,6 @@ impl State {
                     )
                     .await?
                 }
-                CatalogConfig::Shadow {
-                    url,
-                    persist_consensus_url,
-                    persist_blob_url,
-                } => {
-                    let stash_config = stash_config(url.clone(), self.postgres_factory.clone());
-                    let persist_client = persist_client(
-                        persist_consensus_url.clone(),
-                        persist_blob_url.clone(),
-                        &self.persist_clients,
-                    )
-                    .await?;
-                    Catalog::open_debug_read_only_shadow_catalog_config(
-                        stash_config,
-                        persist_client,
-                        SYSTEM_TIME.clone(),
-                        self.environment_id.clone(),
-                    )
-                    .await?
-                }
             };
             let res = f(catalog.for_session(&Session::dummy()));
             catalog.expire().await;
@@ -661,21 +642,12 @@ pub enum CatalogConfig {
         /// Handle to the persist blob storage.
         persist_blob_url: String,
     },
-    /// The catalog contents are stored in both persist and the stash and their contents are
-    /// compared. This is mostly used for testing purposes.
-    Shadow {
-        /// The PostgreSQL URL for the adapter stash.
-        url: String,
-        /// Handle to the persist consensus system.
-        persist_consensus_url: String,
-        /// Handle to the persist blob storage.
-        persist_blob_url: String,
-    },
 }
 
 pub enum ControlFlow {
     Continue,
-    Break,
+    SkipBegin,
+    SkipEnd,
 }
 
 #[async_trait]
@@ -750,6 +722,7 @@ impl Run for PosCommand {
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
                     "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
                     "skip-if" => skip_if::run_skip_if(builtin, state).await,
+                    "skip-end" => skip_end::run_skip_end(),
                     "sql-server-connect" => sql_server::run_connect(builtin, state).await,
                     "sql-server-execute" => sql_server::run_execute(builtin, state).await,
                     "persist-force-compaction" => {

@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::instrument;
 use mz_sql::plan::{self, QueryWhen};
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::{instrument, Span};
+use tracing::Span;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
@@ -20,12 +21,11 @@ use crate::coord::{
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::optimize::Optimize;
+use crate::optimize::{Optimize, OverrideFrom};
 use crate::session::{Session, TransactionOps};
 use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
-#[async_trait::async_trait(?Send)]
 impl Staged for SubscribeStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
@@ -61,7 +61,7 @@ impl Staged for SubscribeStage {
 }
 
 impl Coordinator {
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_subscribe(
         &mut self,
         mut ctx: ExecuteContext,
@@ -75,7 +75,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn subscribe_validate(
         &mut self,
         session: &mut Session,
@@ -145,12 +145,12 @@ impl Coordinator {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn subscribe_optimize_mir(
         &mut self,
         session: &Session,
         SubscribeOptimizeMir {
-            validity,
+            mut validity,
             plan,
             timeline,
         }: SubscribeOptimizeMir,
@@ -162,8 +162,9 @@ impl Coordinator {
         } = &plan;
 
         // Collect optimizer parameters.
+        let cluster_id = validity.cluster_id.expect("cluser_id");
         let compute_instance = self
-            .instance_snapshot(validity.cluster_id.expect("cluser_id"))
+            .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
         let id = self.allocate_transient_id()?;
         let conn_id = session.conn_id().clone();
@@ -171,7 +172,8 @@ impl Coordinator {
             .as_ref()
             .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr.clone(), session))
             .transpose()?;
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(cluster_id).config.features());
 
         // Build an optimizer for this SUBSCRIBE.
         let mut optimizer = optimize::subscribe::Optimizer::new(
@@ -191,6 +193,10 @@ impl Coordinator {
                 span.in_scope(|| {
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
+                    // Add introduced indexes as validity dependencies.
+                    validity
+                        .dependency_ids
+                        .extend(global_mir_plan.id_bundle(optimizer.cluster_id()).iter());
 
                     let stage =
                         SubscribeStage::TimestampOptimizeLir(SubscribeTimestampOptimizeLir {
@@ -206,7 +212,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn subscribe_timestamp_optimize_lir(
         &mut self,
         ctx: &ExecuteContext,
@@ -222,10 +228,11 @@ impl Coordinator {
 
         // Timestamp selection
         let oracle_read_ts = self.oracle_read_ts(ctx.session(), &timeline, when).await;
+        let bundle = &global_mir_plan.id_bundle(optimizer.cluster_id());
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
-                &global_mir_plan.id_bundle(optimizer.cluster_id()),
+                bundle,
                 when,
                 optimizer.cluster_id(),
                 &timeline,
@@ -246,6 +253,11 @@ impl Coordinator {
                 return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
             }
         }
+        // Get read holds so that dependencies cannot be dropped during off-thread optimization.
+        // Invariant: the last element in this connection's self.txn_read_holds must be the holds
+        // here, because the last that same element will be removed during the finish stage.
+        self.acquire_read_holds_auto_cleanup(ctx.session(), as_of, bundle, true)
+            .expect("able to acquire read holds at the time that we just got from `determine_timestamp`");
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
         // Optimize LIR
@@ -270,7 +282,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn subscribe_finish(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -308,6 +320,18 @@ impl Coordinator {
         let (df_desc, df_meta) = global_lir_plan.unapply();
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+
+        // Release the pre-optimization read holds because the controller is now handling those.
+        let mut txn_reads = self
+            .txn_read_holds
+            .remove(ctx.session().conn_id())
+            .expect("expected read holds to exist for sequenced SUBSCRIBE");
+        let last = txn_reads.pop().expect("expected read hold to exist");
+        self.release_read_holds(vec![last]);
+        if !txn_reads.is_empty() {
+            self.txn_read_holds
+                .insert(ctx.session().conn_id().clone(), txn_reads);
+        }
 
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self

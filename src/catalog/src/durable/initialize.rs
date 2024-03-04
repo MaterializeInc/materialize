@@ -83,7 +83,7 @@ pub const MZ_UNSAFE_SCHEMA_ID: u64 = 6;
 const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
 /// Initializes the Catalog with some default objects.
-#[tracing::instrument(level = "info", skip_all)]
+#[mz_ore::instrument]
 pub async fn initialize(
     tx: &mut Transaction<'_>,
     options: &BootstrapArgs,
@@ -628,6 +628,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> ClusterConfig {
             },
             idle_arrangement_merge_effort: None,
             disk: false,
+            optimizer_feature_overrides: Default::default(),
         }),
     }
 }

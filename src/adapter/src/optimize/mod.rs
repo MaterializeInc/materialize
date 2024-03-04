@@ -67,6 +67,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
+use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
@@ -115,7 +116,7 @@ where
     /// Like [`Self::optimize`], but additionally ensures that panics occurring
     /// in the [`Self::optimize`] call are caught and demoted to an
     /// [`OptimizerError::Internal`] error.
-    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
+    #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
             Ok(result) => {
@@ -151,7 +152,39 @@ where
 // Optimizer configuration
 // -----------------------
 
-// Feature flags for the optimizer.
+/// Feature flags for the optimizer.
+///
+/// To add a new feature flag, do the following steps:
+///
+/// 1. To make the flag available to all stages in our [`Optimize`] pipelines:
+///    1. Add the flag as an [`OptimizerConfig`] field.
+///
+/// 2. To allow engineers to set a system-wide override for this feature flag:
+///    1. Add the flag to the `feature_flags!(...)` macro call.
+///    2. Extend the `From<&SystemVars>` implementation for [`OptimizerConfig`].
+///
+/// 3. To enable `EXPLAIN ... WITH(...)` overrides which will allow engineers to
+///    inspect plan differences before deploying the optimizer changes:
+///    1. Add the flag as a [`mz_repr::explain::ExplainConfig`] field.
+///    2. Add the flag to the `ExplainPlanOptionName` definition.
+///    3. Add the flag to the `generate_extracted_config!(ExplainPlanOption,
+///       ...)` macro call.
+///    4. Extend the `TryFrom<ExplainPlanOptionExtracted>` implementation for
+///       [`mz_repr::explain::ExplainConfig`].
+///    5. Extend the `OverrideFrom<ExplainContext>` implementation for
+///       [`OptimizerConfig`].
+///
+/// 4. To enable `CLUSTER ... FEATURES(...)` overrides which will allow
+///    engineers to experiment with runtime differences before deploying the
+///    optimizer changes:
+///    1. Add the flag to the `optimizer_feature_flags!(...)` macro call.
+///    2. Add the flag to the `ClusterFeatureName` definition.
+///    3. Add the flag to the `generate_extracted_config!(ClusterFeature, ...)`
+///       macro call.
+///    4. Extend the `let optimizer_feature_overrides = ...` call in
+///       `plan_create_cluster`.
+///    4. Extend the `OverrideFrom<OptimizerFeatureOverrides>` implementation
+///       for [`OptimizerConfig`].
 #[derive(Clone, Debug)]
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.
@@ -161,6 +194,9 @@ pub struct OptimizerConfig {
     /// This means that it will not consider catalog items (more specifically
     /// indexes) with [`GlobalId`] greater or equal than the one provided here.
     pub replan: Option<GlobalId>,
+    /// Reoptimize imported views when building and optimizing a
+    /// [`DataflowDescription`] in the global MIR optimization phase.
+    pub reoptimize_imported_views: bool,
     /// Enable fast path optimization.
     pub enable_fast_path: bool,
     /// Enable consolidation of unions that happen immediately after negate.
@@ -192,6 +228,7 @@ impl From<&SystemVars> for OptimizerConfig {
         Self {
             mode: OptimizeMode::Execute,
             replan: None,
+            reoptimize_imported_views: false,
             enable_fast_path: true, // Always enable fast path if available.
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
@@ -209,6 +246,35 @@ pub trait OverrideFrom<T> {
     fn override_from(self, layer: &T) -> Self;
 }
 
+/// [`OptimizerConfig`] overrides coming from an optional `T`.
+impl<T> OverrideFrom<Option<&T>> for OptimizerConfig
+where
+    Self: OverrideFrom<T>,
+{
+    fn override_from(self, layer: &Option<&T>) -> Self {
+        match layer {
+            Some(layer) => self.override_from(layer),
+            None => self,
+        }
+    }
+}
+
+/// [`OptimizerConfig`] overrides coming from a [`OptimizerFeatureOverrides`].
+impl OverrideFrom<OptimizerFeatureOverrides> for OptimizerConfig {
+    fn override_from(mut self, overrides: &OptimizerFeatureOverrides) -> Self {
+        if let Some(feature_value) = overrides.reoptimize_imported_views {
+            self.reoptimize_imported_views = feature_value;
+        }
+        if let Some(feature_value) = overrides.enable_new_outer_join_lowering {
+            self.enable_new_outer_join_lowering = feature_value;
+        }
+        if let Some(feature_value) = overrides.enable_eager_delta_joins {
+            self.enable_eager_delta_joins = feature_value;
+        }
+        self
+    }
+}
+
 /// [`OptimizerConfig`] overrides coming from an [`ExplainContext`].
 impl OverrideFrom<ExplainContext> for OptimizerConfig {
     fn override_from(mut self, ctx: &ExplainContext) -> Self {
@@ -222,6 +288,9 @@ impl OverrideFrom<ExplainContext> for OptimizerConfig {
         self.enable_fast_path = !ctx.config.no_fast_path;
 
         // Override feature flags that can be enabled in the EXPLAIN config.
+        if let Some(explain_flag) = ctx.config.reoptimize_imported_views {
+            self.reoptimize_imported_views = explain_flag;
+        }
         if let Some(explain_flag) = ctx.config.enable_new_outer_join_lowering {
             self.enable_new_outer_join_lowering = explain_flag;
         }
@@ -229,7 +298,7 @@ impl OverrideFrom<ExplainContext> for OptimizerConfig {
             self.enable_eager_delta_joins = explain_flag;
         }
 
-        // Return final result.
+        // Return the final result.
         self
     }
 }
@@ -302,7 +371,7 @@ impl From<anyhow::Error> for OptimizerError {
 // Tracing helpers
 // ---------------
 
-#[tracing::instrument(target = "optimizer", level = "debug", name = "local", skip_all)]
+#[mz_ore::instrument(target = "optimizer", level = "debug", name = "local")]
 fn optimize_mir_local(
     expr: MirRelationExpr,
     typecheck_ctx: &TypecheckContext,

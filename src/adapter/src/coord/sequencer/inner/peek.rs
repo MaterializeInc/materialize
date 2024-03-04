@@ -59,7 +59,7 @@ impl Coordinator {
     /// deploying the most efficient evaluation plan. The peek could evaluate to a constant,
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_peek(
         &mut self,
         ctx: ExecuteContext,
@@ -81,7 +81,7 @@ impl Coordinator {
         .await;
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_copy_to(
         &mut self,
         ctx: ExecuteContext,
@@ -90,7 +90,9 @@ impl Coordinator {
             desc,
             to,
             connection,
+            connection_id,
             format_params,
+            max_file_size,
         }: plan::CopyToPlan,
         target_cluster: TargetCluster,
     ) {
@@ -131,7 +133,9 @@ impl Coordinator {
                     desc,
                     uri,
                     connection,
+                    connection_id,
                     format_params,
+                    max_file_size,
                 }),
                 explain_ctx: ExplainContext::None,
             }),
@@ -139,7 +143,7 @@ impl Coordinator {
         .await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn explain_peek(
         &mut self,
         ctx: ExecuteContext,
@@ -188,7 +192,7 @@ impl Coordinator {
     }
 
     /// Processes as many `peek` stages as possible.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn execute_peek_stage(
         &mut self,
         mut ctx: ExecuteContext,
@@ -260,7 +264,7 @@ impl Coordinator {
     }
 
     /// Do some simple validation. We must defer most of it until after any off-thread work.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     fn peek_stage_validate(
         &mut self,
         session: &Session,
@@ -279,6 +283,7 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
 
         let optimizer = match copy_to_ctx {
@@ -306,10 +311,7 @@ impl Coordinator {
                     Arc::clone(&catalog),
                     compute_instance,
                     view_id,
-                    copy_to_ctx.desc,
-                    copy_to_ctx.uri,
-                    copy_to_ctx.connection,
-                    copy_to_ctx.format_params,
+                    copy_to_ctx,
                     optimizer_config,
                 ))
             }
@@ -373,7 +375,7 @@ impl Coordinator {
     }
 
     /// Possibly linearize a timestamp from a `TimestampOracle`.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn peek_stage_linearize_timestamp(
         &mut self,
         ctx: ExecuteContext,
@@ -407,30 +409,14 @@ impl Coordinator {
 
         match linearized_timeline {
             Some(timeline) => {
-                let shared_oracle = self.get_shared_timestamp_oracle(&timeline);
+                let oracle = self.get_timestamp_oracle(&timeline);
 
-                if let Some(shared_oracle) = shared_oracle {
-                    // We can do it in an async task, because we can ship off
-                    // the timetamp oracle.
+                // We ship the timestamp oracle off to an async task, so that we
+                // don't block the main task while we wait.
 
-                    let span = tracing::debug_span!("linearized timestamp task");
-                    mz_ore::task::spawn(|| "linearized timestamp task", async move {
-                        let oracle_read_ts = shared_oracle.read_ts().instrument(span).await;
-                        let stage = build_stage(Some(oracle_read_ts));
-
-                        let stage = PeekStage::RealTimeRecency(stage);
-                        // Ignore errors if the coordinator has shut down.
-                        let _ = internal_cmd_tx.send(Message::PeekStageReady {
-                            ctx,
-                            otel_ctx: root_otel_ctx,
-                            stage,
-                        });
-                    });
-                } else {
-                    // Timestamp oracle can't be shipped to an async task, we
-                    // have to do it here.
-                    let oracle = self.get_timestamp_oracle(&timeline);
-                    let oracle_read_ts = oracle.read_ts().await;
+                let span = tracing::debug_span!("linearized timestamp task");
+                mz_ore::task::spawn(|| "linearized timestamp task", async move {
+                    let oracle_read_ts = oracle.read_ts().instrument(span).await;
                     let stage = build_stage(Some(oracle_read_ts));
 
                     let stage = PeekStage::RealTimeRecency(stage);
@@ -440,7 +426,7 @@ impl Coordinator {
                         otel_ctx: root_otel_ctx,
                         stage,
                     });
-                }
+                });
             }
             None => {
                 let stage = build_stage(None);
@@ -456,7 +442,7 @@ impl Coordinator {
     }
 
     /// Determine a read timestamp and create appropriate read holds.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn peek_stage_timestamp_read_hold(
         &mut self,
         session: &mut Session,
@@ -510,7 +496,7 @@ impl Coordinator {
         })
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn peek_stage_optimize(
         &mut self,
         ctx: ExecuteContext,
@@ -652,7 +638,7 @@ impl Coordinator {
         );
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     fn peek_stage_real_time_recency(
         &mut self,
         ctx: ExecuteContext,
@@ -717,7 +703,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn peek_stage_finish(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -823,7 +809,7 @@ impl Coordinator {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     async fn peek_stage_copy_to_dataflow(
         &mut self,
         ctx: ExecuteContext,
@@ -915,7 +901,7 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,

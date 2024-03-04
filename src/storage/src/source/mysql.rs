@@ -58,7 +58,7 @@ use std::rc::Rc;
 use differential_dataflow::Collection;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map};
+use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use uuid::Uuid;
@@ -137,14 +137,15 @@ impl SourceRender for MySqlSourceConnection {
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
-            scope.clone(),
-            config.clone(),
-            self.clone(),
-            subsource_resume_uppers.clone(),
-            table_info.clone(),
-            metrics.snapshot_metrics.clone(),
-        );
+        let (snapshot_updates, rewinds, snapshot_stats, snapshot_err, snapshot_token) =
+            snapshot::render(
+                scope.clone(),
+                config.clone(),
+                self.clone(),
+                subsource_resume_uppers.clone(),
+                table_info.clone(),
+                metrics.snapshot_metrics.clone(),
+            );
 
         let (repl_updates, uppers, repl_err, repl_token) = replication::render(
             scope.clone(),
@@ -159,6 +160,8 @@ impl SourceRender for MySqlSourceConnection {
         let (stats_stream, stats_err, stats_token) =
             statistics::render(scope.clone(), config, self, resume_uppers);
 
+        let stats_stream = stats_stream.concat(&snapshot_stats);
+
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
             let res = res.map(|row| SourceMessage {
                 key: Row::default(),
@@ -168,15 +171,29 @@ impl SourceRender for MySqlSourceConnection {
             (output, res)
         });
 
-        let health = snapshot_err
+        let health_init = std::iter::once(HealthStatusMessage {
+            index: 0,
+            namespace: Self::STATUS_NAMESPACE,
+            update: HealthStatusUpdate::Running,
+        })
+        .to_stream(scope);
+
+        let health_errs = snapshot_err
             .concat(&repl_err)
             .concat(&stats_err)
             .map(move |err| {
                 // This update will cause the dataflow to restart
                 let err_string = err.display_with_causes().to_string();
                 let update = HealthStatusUpdate::halting(err_string.clone(), None);
-                // TODO: change namespace for SSH errors
-                let namespace = Self::STATUS_NAMESPACE.clone();
+
+                let namespace = match err {
+                    ReplicationError::Transient(err)
+                        if matches!(&*err, TransientError::MySqlError(MySqlError::Ssh(_))) =>
+                    {
+                        StatusNamespace::Ssh
+                    }
+                    _ => Self::STATUS_NAMESPACE,
+                };
 
                 HealthStatusMessage {
                     index: 0,
@@ -184,6 +201,7 @@ impl SourceRender for MySqlSourceConnection {
                     update,
                 }
             });
+        let health = health_init.concat(&health_errs);
 
         (
             updates,

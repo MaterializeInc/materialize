@@ -53,7 +53,7 @@ function deps() {
     # output if there is no dependency to any of the specified packages.
     for crate in "${crates[@]}"; do
         # Gather data for the current target, reverse lines, find the dependency hierarchy to the root, reverse lines.
-        output=$(cargo tree --format ':{lib}:{f}' \
+        output=$(cargo tree --workspace --format ':{lib}:{f}' \
             --prefix depth \
             --edges normal,build \
             --locked \

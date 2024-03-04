@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement, RawItemName,
-    ShowStatement, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
+    ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
@@ -212,6 +212,7 @@ pub fn describe(
         Statement::Copy(stmt) => dml::describe_copy(&scx, stmt)?,
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
         Statement::ExplainPlan(stmt) => dml::describe_explain_plan(&scx, stmt)?,
+        Statement::ExplainPushdown(stmt) => dml::describe_explain_pushdown(&scx, stmt)?,
         Statement::ExplainTimestamp(stmt) => dml::describe_explain_timestamp(&scx, stmt)?,
         Statement::ExplainSinkSchema(stmt) => dml::describe_explain_schema(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
@@ -256,7 +257,7 @@ pub fn describe(
 /// connections), these might want to take different code paths than
 /// `purify_statement`. Feel free to rationalize this by thinking of those
 /// statements as not necessarily depending on external state.
-#[tracing::instrument(level = "debug", skip_all)]
+#[mz_ore::instrument(level = "debug")]
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
@@ -271,7 +272,8 @@ pub fn plan(
         .map(|(i, ty)| (i + 1, ty.clone()))
         .collect();
 
-    let permitted_plans = Plan::generated_from((&stmt).into());
+    let kind: StatementKind = (&stmt).into();
+    let permitted_plans = Plan::generated_from(&kind);
 
     let scx = &mut StatementContext {
         pcx,
@@ -344,6 +346,7 @@ pub fn plan(
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
+        Statement::ExplainPushdown(stmt) => dml::plan_explain_pushdown(scx, stmt, params),
         Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
         Statement::ExplainSinkSchema(stmt) => dml::plan_explain_schema(scx, stmt),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),

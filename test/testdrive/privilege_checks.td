@@ -251,16 +251,3 @@ GRANT CREATE ON SCHEMA materialize.public TO materialize;
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
-
-$ postgres-execute connection=mz_system
-REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM materialize;
-REVOKE USAGE ON CONNECTION kafka_conn, csr_conn FROM materialize;
-REVOKE CREATECLUSTER ON SYSTEM FROM materialize;
-REVOKE CREATE ON CLUSTER source_cluster FROM materialize;
-DROP SOURCE s;
-DROP CLUSTER source_cluster;
-
-$ postgres-execute connection=mz_system
-DROP CONNECTION csr_conn;
-DROP CONNECTION kafka_conn;
-ALTER SYSTEM SET enable_rbac_checks TO false;

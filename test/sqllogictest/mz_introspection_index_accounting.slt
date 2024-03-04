@@ -127,6 +127,7 @@ mz_activity_log_thinned  execution_timestamp
 mz_activity_log_thinned  finished_at
 mz_activity_log_thinned  finished_status
 mz_activity_log_thinned  initial_application_name
+mz_activity_log_thinned  mz_version
 mz_activity_log_thinned  params
 mz_activity_log_thinned  prepared_at
 mz_activity_log_thinned  prepared_statement_id
@@ -376,6 +377,7 @@ mz_recent_activity_log_thinned  execution_timestamp
 mz_recent_activity_log_thinned  finished_at
 mz_recent_activity_log_thinned  finished_status
 mz_recent_activity_log_thinned  initial_application_name
+mz_recent_activity_log_thinned  mz_version
 mz_recent_activity_log_thinned  params
 mz_recent_activity_log_thinned  prepared_at
 mz_recent_activity_log_thinned  prepared_statement_id
@@ -490,9 +492,13 @@ mz_source_statistics  bytes_indexed
 mz_source_statistics  bytes_received
 mz_source_statistics  id
 mz_source_statistics  messages_received
+mz_source_statistics  offset_committed
+mz_source_statistics  offset_known
 mz_source_statistics  records_indexed
 mz_source_statistics  rehydration_latency
 mz_source_statistics  snapshot_committed
+mz_source_statistics  snapshot_records_known
+mz_source_statistics  snapshot_records_staged
 mz_source_statistics  updates_committed
 mz_source_statistics  updates_staged
 mz_source_statistics_raw  bytes_indexed
@@ -549,6 +555,7 @@ mz_statement_execution_history  execution_timestamp
 mz_statement_execution_history  finished_at
 mz_statement_execution_history  finished_status
 mz_statement_execution_history  id
+mz_statement_execution_history  mz_version
 mz_statement_execution_history  params
 mz_statement_execution_history  prepared_statement_id
 mz_statement_execution_history  rows_returned

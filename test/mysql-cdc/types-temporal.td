@@ -7,16 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-#
-# Test mysql temporal data types (DATE, DATETIME, TIME, TIMESTAMP)
-#
-
-> CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
+$ set-sql-timeout duration=1s
+$ set-max-tries max-tries=20
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_mysql_source = true
 
-> CREATE CONNECTION mysqc TO MYSQL (
+#
+# Test the temporal data types (DATE, DATETIME, TIME, TIMESTAMP)
+#
+
+> CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
+> CREATE CONNECTION mysql_conn TO MYSQL (
     HOST mysql,
     USER root,
     PASSWORD SECRET mysqlpass
@@ -24,17 +26,19 @@ ALTER SYSTEM SET enable_mysql_source = true
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
-# Insert data pre-snapshot
-# We insert values with both default precision (0) and a value of 6 where allowed
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
-CREATE TABLE t1 ( date_col DATE, time_col TIME(6), time_trunc_col TIME, datetime_col DATETIME(6), datetime_trunc_col DATETIME, timestamp_col TIMESTAMP(6), timestamp_trunc_col TIMESTAMP);
+
+# MySQL 5.7 needs a default value for timestamp_trunc_col
+CREATE TABLE t1 (date_col DATE, time_col TIME(6), time_trunc_col TIME, datetime_col DATETIME(6), datetime_trunc_col DATETIME, timestamp_col TIMESTAMP(6), timestamp_trunc_col TIMESTAMP DEFAULT '2000-01-01');
 
 INSERT INTO t1 VALUES ('2011-11-11', '11:11:11.123456', '11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456');
 
-> CREATE SOURCE da FROM MYSQL CONNECTION mysqc FOR TABLES (public.t1);
+> CREATE SOURCE mz_source
+  FROM MYSQL CONNECTION mysql_conn
+  FOR ALL TABLES;
 
 > SELECT * FROM t1;
 2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"

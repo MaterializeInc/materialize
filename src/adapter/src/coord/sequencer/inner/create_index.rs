@@ -11,11 +11,14 @@ use std::collections::BTreeSet;
 
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
+use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::{Datum, Row};
+use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
-use tracing::{instrument, Span};
+use tracing::Span;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -24,13 +27,13 @@ use crate::coord::{
     ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
 };
 use crate::error::AdapterError;
+use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
-#[async_trait::async_trait(?Send)]
 impl Staged for CreateIndexStage {
     fn validity(&mut self) -> &mut PlanValidity {
         match self {
@@ -64,7 +67,7 @@ impl Staged for CreateIndexStage {
 }
 
 impl Coordinator {
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn sequence_create_index(
         &mut self,
         ctx: ExecuteContext,
@@ -78,7 +81,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn explain_create_index(
         &mut self,
         ctx: ExecuteContext,
@@ -123,7 +126,7 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     pub(crate) async fn explain_replan_index(
         &mut self,
         ctx: ExecuteContext,
@@ -173,9 +176,69 @@ impl Coordinator {
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
 
+    #[instrument]
+    pub(crate) fn explain_index(
+        &mut self,
+        ctx: &ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::Explainee::Index(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
+        };
+        let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
+            unreachable!() // Asserted in `plan_explain_plan`.
+        };
+
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+            tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
+            coord_bail!("cannot find dataflow metainformation for index {id} in catalog");
+        };
+
+        let explain = match stage {
+            ExplainStage::GlobalPlan => {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for index {id} in catalog");
+                    coord_bail!("cannot find {stage} for index in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            ExplainStage::PhysicalPlan => {
+                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                    tracing::error!("cannot find {stage} for index {id} in catalog");
+                    coord_bail!("cannot find {stage} for index in catalog");
+                };
+                explain_dataflow(
+                    plan,
+                    format,
+                    &config,
+                    &self.catalog().for_session(ctx.session()),
+                    dataflow_metainfo,
+                )?
+            }
+            _ => {
+                coord_bail!("cannot EXPLAIN {} FOR INDEX", stage);
+            }
+        };
+
+        let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
+
+        Ok(Self::send_immediate_rows(rows))
+    }
+
     // `explain_ctx` is an optional context set iff the state machine is initiated from
-    // sequencing an EXPALIN for this statement.
-    #[instrument(skip_all)]
+    // sequencing an EXPLAIN for this statement.
+    #[instrument]
     fn create_index_validate(
         &mut self,
         session: &Session,
@@ -204,7 +267,7 @@ impl Coordinator {
         }))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_index_optimize(
         &mut self,
         CreateIndexOptimize {
@@ -229,6 +292,7 @@ impl Coordinator {
             self.allocate_transient_id()?
         };
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
 
         // Build an optimizer for this INDEX.
@@ -314,7 +378,7 @@ impl Coordinator {
         )))
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     async fn create_index_finish(
         &mut self,
         session: &mut Session,
@@ -438,7 +502,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn create_index_explain(
         &mut self,
         session: &Session,

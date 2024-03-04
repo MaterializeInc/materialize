@@ -47,8 +47,22 @@ pub fn process_statistics<G, FromTime>(
             );
 
             for d in data {
-                source_statistics.set_offset_known(d.offset_known);
-                source_statistics.set_offset_committed(d.offset_committed);
+                match d {
+                    ProgressStatisticsUpdate::Snapshot {
+                        records_known,
+                        records_staged,
+                    } => {
+                        source_statistics.set_snapshot_records_known(records_known);
+                        source_statistics.set_snapshot_records_staged(records_staged);
+                    }
+                    ProgressStatisticsUpdate::SteadyState {
+                        offset_known,
+                        offset_committed,
+                    } => {
+                        source_statistics.set_offset_known(offset_known);
+                        source_statistics.set_offset_committed(offset_committed);
+                    }
+                }
             }
         }
     });

@@ -521,7 +521,7 @@ EOF
 
 # Test EXISTS subqueries.
 query T multiline
-EXPLAIN RAW PLAN WITH(raw_syntax) AS JSON FOR
+EXPLAIN RAW PLAN WITH(raw syntax) AS JSON FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 {
@@ -691,7 +691,7 @@ EOF
 
 # Test SELECT subqueries.
 query T multiline
-EXPLAIN RAW PLAN WITH(raw_syntax) AS JSON FOR
+EXPLAIN RAW PLAN WITH(raw syntax) AS JSON FOR
 SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 {

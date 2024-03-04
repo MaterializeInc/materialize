@@ -11,16 +11,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView, View};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
+use mz_ore::instrument;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
 use mz_repr::{GlobalId, Timestamp};
@@ -31,14 +33,11 @@ use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use mz_timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle, WriteTimestamp};
+use mz_timestamp_oracle::{self, TimestampOracle, WriteTimestamp};
+use once_cell::sync::Lazy;
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::{debug, error, info, instrument, Instrument};
+use tracing::{debug, error, info, Instrument};
 
-use crate::coord::catalog_oracle::{
-    self, CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
-    TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
-};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
@@ -80,7 +79,7 @@ impl TimelineContext {
 /// providing read (and sometimes write) timestamps, and a set of read holds which
 /// guarantee that those read timestamps are valid.
 pub(crate) struct TimelineState<T> {
-    pub(crate) oracle: Box<dyn TimestampOracle<T>>,
+    pub(crate) oracle: Arc<dyn TimestampOracle<T> + Send + Sync>,
     pub(crate) read_holds: ReadHolds<T>,
 }
 
@@ -104,36 +103,19 @@ impl Coordinator {
     pub(crate) fn get_timestamp_oracle(
         &self,
         timeline: &Timeline,
-    ) -> &dyn TimestampOracle<Timestamp> {
-        self.global_timelines
+    ) -> Arc<dyn TimestampOracle<Timestamp> + Send + Sync> {
+        let oracle = &self
+            .global_timelines
             .get(timeline)
             .expect("all timelines have a timestamp oracle")
-            .oracle
-            .as_ref()
+            .oracle;
+
+        Arc::clone(oracle)
     }
 
-    pub(crate) fn get_shared_timestamp_oracle(
-        &self,
-        timeline: &Timeline,
-    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
-        self.global_timelines
-            .get(timeline)
-            .expect("all timelines have a timestamp oracle")
-            .oracle
-            .get_shared()
-    }
-
-    /// Returns a reference to the timestamp oracle used for reads and writes
-    /// from/to a local input.
-    fn get_local_timestamp_oracle(&self) -> &dyn TimestampOracle<Timestamp> {
+    /// Returns a [`TimestampOracle`] used for reads and writes from/to a local input.
+    fn get_local_timestamp_oracle(&self) -> Arc<dyn TimestampOracle<Timestamp> + Send + Sync> {
         self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
-    }
-
-    /// Returns a [`ShareableTimestampOracle`] used for reads and writes from/to a local input.
-    fn get_local_shared_timestamp_oracle(
-        &self,
-    ) -> Option<Arc<dyn ShareableTimestampOracle<Timestamp> + Send + Sync>> {
-        self.get_shared_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 
     /// Assign a timestamp for a read from a local input. Reads following writes
@@ -146,7 +128,7 @@ impl Coordinator {
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
-    #[instrument(name = "coord::get_local_write_ts", skip_all)]
+    #[instrument(name = "coord::get_local_write_ts")]
     pub(crate) async fn get_local_write_ts(&mut self) -> WriteTimestamp {
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
@@ -162,53 +144,30 @@ impl Coordinator {
         self.get_local_timestamp_oracle().peek_write_ts().await
     }
 
-    /// Peek the current timestamp used for operations on local inputs. Used to determine how much
-    /// to block group commits by.
-    #[instrument(name = "coord::apply_local_write", skip(self))]
-    pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
-        let now = self.now().into();
-
-        if timestamp > catalog_oracle::upper_bound(&now) {
-            error!(
-                "Setting local read timestamp to {timestamp}, which is more than \
-                {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
-                *TIMESTAMP_PERSIST_INTERVAL
-            );
-        }
-        self.global_timelines
-            .get_mut(&Timeline::EpochMilliseconds)
-            .expect("no realtime timeline")
-            .oracle
-            .apply_write(timestamp)
-            .await;
-    }
-
-    /// Marks a write at `timestamp` as completed, using a [`ShareableTimestampOracle`].
-    ///
-    /// TODO(parkmycar): [`ShareableTimestampOracle`] is a new concept and not always available.
-    /// When we move entirely to the shareable model, this method and
-    /// [`Coordinator::apply_local_write`] should get merged.
-    pub(crate) fn apply_local_write_shareable(
-        &mut self,
+    /// Marks a write at `timestamp` as completed, using a [`TimestampOracle`].
+    pub(crate) fn apply_local_write(
+        &self,
         timestamp: Timestamp,
-    ) -> Option<impl Future<Output = ()> + Send + 'static> {
+    ) -> impl Future<Output = ()> + Send + 'static {
         let now = self.now().into();
 
-        if timestamp > catalog_oracle::upper_bound(&now) {
+        let upper_bound = upper_bound(&now);
+        if timestamp > upper_bound {
             error!(
+                %now,
                 "Setting local read timestamp to {timestamp}, which is more than \
-                {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
-                *TIMESTAMP_PERSIST_INTERVAL
+                the desired upper bound {upper_bound}."
             );
         }
 
-        self.get_local_shared_timestamp_oracle()
-            .map(|oracle| async move {
-                oracle
-                    .apply_write(timestamp)
-                    .instrument(tracing::debug_span!("apply_local_write_static", ?timestamp))
-                    .await
-            })
+        let oracle = self.get_local_timestamp_oracle();
+
+        async move {
+            oracle
+                .apply_write(timestamp)
+                .instrument(tracing::debug_span!("apply_local_write_static", ?timestamp))
+                .await
+        }
     }
 
     /// Ensures that a global timeline state exists for `timeline`.
@@ -216,15 +175,11 @@ impl Coordinator {
         &'a mut self,
         timeline: &'a Timeline,
     ) -> &mut TimelineState<Timestamp> {
-        let catalog = Arc::clone(&self.catalog);
-        let timestamp_persistence = CatalogTimestampPersistence::new(timeline.clone(), catalog);
-
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
             self.timestamp_oracle_impl,
-            timestamp_persistence,
             self.pg_timestamp_oracle_config.clone(),
             &mut self.global_timelines,
         )
@@ -233,19 +188,15 @@ impl Coordinator {
 
     /// Ensures that a global timeline state exists for `timeline`, with an initial time
     /// of `initially`.
-    #[instrument(skip_all)]
-    pub(crate) async fn ensure_timeline_state_with_initial_time<'a, P>(
+    #[instrument]
+    pub(crate) async fn ensure_timeline_state_with_initial_time<'a>(
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
         timestamp_oracle_impl: TimestampOracleImpl,
-        timestamp_persistence: P,
         pg_oracle_config: Option<PostgresTimestampOracleConfig>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
-    ) -> &'a mut TimelineState<Timestamp>
-    where
-        P: TimestampPersistence<mz_repr::Timestamp> + 'static,
-    {
+    ) -> &'a mut TimelineState<Timestamp> {
         if !global_timelines.contains_key(timeline) {
             info!(
                 "opening a new {:?} TimestampOracle for timeline {:?}",
@@ -273,38 +224,21 @@ impl Coordinator {
 
                     let batching_metrics = Arc::clone(&pg_oracle_config.metrics);
 
-                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
-                        PostgresTimestampOracle::open(
-                            pg_oracle_config,
-                            timeline.to_string(),
-                            initially,
-                            now_fn,
-                        )
-                        .await,
-                    );
+                    let pg_oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
+                        Arc::new(
+                            PostgresTimestampOracle::open(
+                                pg_oracle_config,
+                                timeline.to_string(),
+                                initially,
+                                now_fn,
+                            )
+                            .await,
+                        );
 
-                    let shared_oracle = oracle
-                        .get_shared()
-                        .expect("postgres timestamp oracle is shareable");
+                    let batching_oracle = BatchingTimestampOracle::new(batching_metrics, pg_oracle);
 
-                    let batching_oracle =
-                        BatchingTimestampOracle::new(batching_metrics, shared_oracle);
-
-                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> =
-                        Box::new(batching_oracle);
-
-                    oracle
-                }
-                TimestampOracleImpl::Catalog => {
-                    let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
-                        CatalogTimestampOracle::new(
-                            initially,
-                            now_fn,
-                            *TIMESTAMP_PERSIST_INTERVAL,
-                            timestamp_persistence,
-                        )
-                        .await,
-                    );
+                    let oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
+                        Arc::new(batching_oracle);
 
                     oracle
                 }
@@ -686,13 +620,13 @@ impl Coordinator {
         Ok(id_bundle)
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug")]
     pub(crate) async fn advance_timelines(&mut self) {
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (
             timeline,
             TimelineState {
-                mut oracle,
+                oracle,
                 mut read_holds,
             },
         ) in global_timelines
@@ -729,4 +663,21 @@ impl Coordinator {
                 .insert(timeline, TimelineState { oracle, read_holds });
         }
     }
+}
+
+/// Convenience function for calculating the current upper bound that we want to
+/// prevent the global timestamp from exceeding.
+fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
+    const TIMESTAMP_INTERVAL: Lazy<mz_repr::Timestamp> = Lazy::new(|| {
+        Duration::from_secs(5)
+            .as_millis()
+            .try_into()
+            .expect("5 seconds can fit into `Timestamp`")
+    });
+
+    const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
+
+    now.saturating_add(
+        TIMESTAMP_INTERVAL.saturating_mul(Timestamp::from(TIMESTAMP_INTERVAL_UPPER_BOUND)),
+    )
 }

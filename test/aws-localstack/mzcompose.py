@@ -9,6 +9,8 @@
 
 """Tests of AWS functionality that run against localstack."""
 
+import uuid
+from datetime import datetime
 from typing import Any, cast
 
 import boto3
@@ -38,13 +40,14 @@ AWS_EXTERNAL_ID_PREFIX = "eb5cb59b-e2fe-41f3-87ca-d2176a495345"
 
 AWS_ACCESS_KEY_ID = "LSIAQAAAAAAVNCBMPNSG"
 AWS_SECRET_ACCESS_KEY = "secret"
+AWS_ENDPOINT_URL_MZ = "http://localstack:4566"
 
 SERVICES = [
     Localstack(),
     Materialized(
         depends_on=["localstack"],
         environment_extra=[
-            "AWS_ENDPOINT_URL=http://localstack:4566",
+            f"AWS_ENDPOINT_URL={AWS_ENDPOINT_URL_MZ}",
             f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}",
             f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}",
         ],
@@ -211,5 +214,56 @@ def workflow_aws_connection(c: Composition) -> None:
 
 
 def workflow_copy_to_s3(c: Composition) -> None:
-    c.up("localstack", "materialized")
-    c.run_testdrive_files("copy-to-s3/copy-to-s3.td")
+    with c.override(
+        Materialized(
+            depends_on=["localstack"],
+            environment_extra=[
+                f"AWS_ENDPOINT_URL={AWS_ENDPOINT_URL_MZ}",
+                f"AWS_ACCESS_KEY_ID={AWS_ACCESS_KEY_ID}",
+                f"AWS_SECRET_ACCESS_KEY={AWS_SECRET_ACCESS_KEY}",
+            ],
+        )
+    ):
+        c.up("localstack", "materialized")
+        localhost_aws_endpoint_url = f"http://localhost:{c.port('localstack', 4566)}"
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=localhost_aws_endpoint_url,
+            region_name=DEFAULT_CLOUD_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        )
+        bucket_name = "copy-to-s3"
+        s3_client.create_bucket(Bucket=bucket_name)
+        path_prefix = str(uuid.uuid4())
+        c.run_testdrive_files(
+            f"--var=endpoint={AWS_ENDPOINT_URL_MZ}",
+            f"--var=access-key={AWS_ACCESS_KEY_ID}",
+            f"--var=secret-key={AWS_SECRET_ACCESS_KEY}",
+            f"--var=s3-prefix={bucket_name}/{path_prefix}",
+            f"--var=region={DEFAULT_CLOUD_REGION}",
+            "copy-to-s3/copy-to-s3.td",
+        )
+
+        # asserting the uploaded files
+        date = datetime.now().strftime("%Y-%m-%d")
+        assert (
+            s3_client.list_objects_v2(
+                Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
+            )["Contents"][0]["Key"]
+            == f"{path_prefix}/1/{date}/part-0001.csv"
+        )
+
+        assert (
+            s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/2/")[
+                "Contents"
+            ][0]["Key"]
+            == f"{path_prefix}/2/part-0001.csv"
+        )
+
+        assert (
+            s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{path_prefix}/3/")[
+                "Contents"
+            ][0]["Key"]
+            == f"{path_prefix}/3/part-0001.csv"
+        )

@@ -439,3 +439,11 @@ detail:the following tables are referenced but not added: public.table_f
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source_wo_init_text_cols);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
+
+# add a table after having created the source
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+CREATE TABLE t2 (f1 BOOLEAN);
+ALTER TABLE t2 REPLICA IDENTITY FULL;
+
+! SELECT COUNT(*) > 0 FROM t2;
+contains:unknown catalog item 't2'

@@ -1429,7 +1429,16 @@ SERVICES = [
 ]
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run all the limits tests against a multi-node, multi-replica cluster"""
 
     parser.add_argument(
@@ -1459,7 +1468,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up(*[n.name for n in nodes])
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
             port=6877,
             user="mz_system",
         )
@@ -1635,7 +1644,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     )
 
                 c.sql(
-                    "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+                    "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
                     port=6877,
                     user="mz_system",
                 )

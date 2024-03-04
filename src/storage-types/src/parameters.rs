@@ -73,10 +73,13 @@ pub struct StorageParameters {
     pub statistics_collection_interval: Duration,
     pub pg_snapshot_config: PgSourceSnapshotConfig,
     pub enable_dependency_read_hold_asserts: bool,
+    /// Duration that we wait to batch rows for user owned, storage managed, collections.
+    pub user_storage_managed_collections_batch_duration: Duration,
 }
 
 pub const STATISTICS_INTERVAL_DEFAULT: Duration = Duration::from_secs(60);
 pub const STATISTICS_COLLECTION_INTERVAL_DEFAULT: Duration = Duration::from_secs(10);
+pub const STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT: Duration = Duration::from_secs(1);
 
 // Implement `Default` manually, so that the default can match the
 // LD default. This is not strictly necessary, but improves clarity.
@@ -104,6 +107,8 @@ impl Default for StorageParameters {
             statistics_collection_interval: STATISTICS_COLLECTION_INTERVAL_DEFAULT,
             pg_snapshot_config: Default::default(),
             enable_dependency_read_hold_asserts: true,
+            user_storage_managed_collections_batch_duration:
+                STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
         }
     }
 }
@@ -201,6 +206,7 @@ impl StorageParameters {
             statistics_collection_interval,
             pg_snapshot_config,
             enable_dependency_read_hold_asserts,
+            user_storage_managed_collections_batch_duration,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -227,6 +233,8 @@ impl StorageParameters {
         self.statistics_collection_interval = statistics_collection_interval;
         self.pg_snapshot_config = pg_snapshot_config;
         self.enable_dependency_read_hold_asserts = enable_dependency_read_hold_asserts;
+        self.user_storage_managed_collections_batch_duration =
+            user_storage_managed_collections_batch_duration;
     }
 }
 
@@ -266,6 +274,10 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             statistics_collection_interval: Some(self.statistics_collection_interval.into_proto()),
             pg_snapshot_config: Some(self.pg_snapshot_config.into_proto()),
             enable_dependency_read_hold_asserts: self.enable_dependency_read_hold_asserts,
+            user_storage_managed_collections_batch_duration: Some(
+                self.user_storage_managed_collections_batch_duration
+                    .into_proto(),
+            ),
         }
     }
 
@@ -330,6 +342,11 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .pg_snapshot_config
                 .into_rust_if_some("ProtoStorageParameters::pg_snapshot_config")?,
             enable_dependency_read_hold_asserts: proto.enable_dependency_read_hold_asserts,
+            user_storage_managed_collections_batch_duration: proto
+                .user_storage_managed_collections_batch_duration
+                .into_rust_if_some(
+                    "ProtoStorageParameters::user_storage_managed_collections_batch_duration",
+                )?,
         })
     }
 }
@@ -419,6 +436,9 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
             ),
             fetch_metadata_timeout: Some(self.fetch_metadata_timeout.into_proto()),
             progress_record_fetch_timeout: Some(self.progress_record_fetch_timeout.into_proto()),
+            default_metadata_fetch_interval: Some(
+                self.default_metadata_fetch_interval.into_proto(),
+            ),
         }
     }
 
@@ -442,6 +462,11 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
             progress_record_fetch_timeout: proto
                 .progress_record_fetch_timeout
                 .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::progress_record_fetch_timeout")?,
+            default_metadata_fetch_interval: proto
+                .default_metadata_fetch_interval
+                .into_rust_if_some(
+                    "ProtoKafkaSourceTcpTimeouts::default_metadata_fetch_interval",
+                )?,
         })
     }
 }

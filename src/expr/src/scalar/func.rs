@@ -4614,8 +4614,10 @@ derive_unary!(
     CastRecordToString,
     CastRecord1ToRecord2,
     CastArrayToArray,
+    CastArrayToJsonb,
     CastArrayToString,
     CastListToString,
+    CastListToJsonb,
     CastList1ToList2,
     CastArrayToListOneDim,
     CastMapToString,
@@ -5005,8 +5007,10 @@ impl Arbitrary for UnaryFunc {
                     })
                 })
                 .boxed(),
+            CastArrayToJsonb::arbitrary().prop_map_into().boxed(),
             CastArrayToString::arbitrary().prop_map_into().boxed(),
             CastListToString::arbitrary().prop_map_into().boxed(),
+            CastListToJsonb::arbitrary().prop_map_into().boxed(),
             (any::<ScalarType>(), any::<MirScalarExpr>())
                 .prop_map(|(return_ty, expr)| {
                     UnaryFunc::CastList1ToList2(CastList1ToList2 {
@@ -5392,7 +5396,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                     cast_expr: Some(inner.cast_expr.into_proto()),
                 }))
             }
+            UnaryFunc::CastArrayToJsonb(inner) => CastArrayToJsonb(inner.cast_element.into_proto()),
             UnaryFunc::CastArrayToString(func) => CastArrayToString(func.ty.into_proto()),
+            UnaryFunc::CastListToJsonb(inner) => CastListToJsonb(inner.cast_element.into_proto()),
             UnaryFunc::CastListToString(func) => CastListToString(func.ty.into_proto()),
             UnaryFunc::CastList1ToList2(inner) => {
                 CastList1ToList2(Box::new(ProtoCastToVariableType {
@@ -5824,8 +5830,16 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                         .into_rust_if_some("ProtoCastArrayToArray::cast_expr")?,
                 }
                 .into()),
+                CastArrayToJsonb(cast_element) => Ok(impls::CastArrayToJsonb {
+                    cast_element: cast_element.into_rust()?,
+                }
+                .into()),
                 CastArrayToString(ty) => Ok(impls::CastArrayToString {
                     ty: ty.into_rust()?,
+                }
+                .into()),
+                CastListToJsonb(cast_element) => Ok(impls::CastListToJsonb {
+                    cast_element: cast_element.into_rust()?,
                 }
                 .into()),
                 CastListToString(ty) => Ok(impls::CastListToString {

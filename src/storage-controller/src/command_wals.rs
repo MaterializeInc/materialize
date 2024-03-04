@@ -49,7 +49,7 @@ where
     /// finalize a shard so we can perform the finalization on reboot if we
     /// crash and do not find the shard in use in any collection.
     #[allow(dead_code)]
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[mz_ore::instrument(level = "debug")]
     pub(super) async fn register_shards_for_finalization<I>(&mut self, entries: I)
     where
         I: IntoIterator<Item = ShardId>,

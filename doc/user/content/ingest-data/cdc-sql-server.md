@@ -28,7 +28,8 @@ Connect-compatible connectors.
 
 ### Database setup
 
-Before deploying a Debezium connector, ensure that the upstream database is configured to support CDC.
+Before deploying a Debezium connector, ensure that the upstream database is
+configured to support CDC.
 
 1.  Enable CDC on the SQL Server instance and database:
 
@@ -44,7 +45,9 @@ Before deploying a Debezium connector, ensure that the upstream database is conf
 
 **Minimum requirements:** Debezium 1.5+
 
-Debezium is deployed as a set of Kafka Connect-compatible connectors. First, define a SQL Server connector configuration, then start the connector by adding it to Kafka Connect.
+Debezium is deployed as a set of Kafka Connect-compatible connectors. First,
+define a SQL Server connector configuration, then start the connector by adding
+it to Kafka Connect.
 
 {{< tabs >}}
 {{< tab "Debezium 1.5+">}}
@@ -79,7 +82,11 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors. First, def
 {{< /tab >}}
 {{< tab "Debezium 2.0+">}}
 
-1. Beginning with Debezium 2.0.0, Confluent Schema Registry support is not included in the Debezium containers. To enable the Confluent Schema Registry for a Debezium container, install the following Confluent Avro converter JAR files into the Connect plugin directory:
+1. Beginning with Debezium 2.0.0, Confluent Schema Registry support is not
+   included in the Debezium containers. To enable the Confluent Schema Registry
+   for a Debezium container, install the following Confluent Avro converter JAR
+   files into the Connect plugin directory:
+
     * `kafka-connect-avro-converter`
     * `kafka-connect-avro-data`
     * `kafka-avro-serializer`
@@ -115,7 +122,10 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors. First, def
     }
     ```
 
-    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/sqlserver.html). By default, the connector writes events for each table to a Kafka topic named `serverName.databaseName.tableName`.
+    You can read more about each configuration property in the
+    [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/sqlserver.html).
+    By default, the connector writes events for each table to a Kafka topic
+    named `serverName.databaseName.tableName`.
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -134,11 +144,15 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors. First, def
     curl http://$CURRENT_HOST:8083/connectors/inventory-connector/status
     ```
 
-Now, Debezium will capture changes from the SQL Server database and publish them to Kafka.
+Now, Debezium will capture changes from the SQL Server database and publish them
+to Kafka.
 
 ### Create a source
 
-Debezium emits change events using an envelope that contains detailed information about upstream database operations, like the `before` and `after` values for each record. To create a source that interprets the [Debezium envelope](/sql/create-source/kafka/#using-debezium) in Materialize:
+Debezium emits change events using an envelope that contains detailed
+information about upstream database operations, like the `before` and `after`
+values for each record. To create a source that interprets the
+[Debezium envelope](/sql/create-source/kafka/#using-debezium) in Materialize:
 
 ```sql
 CREATE SOURCE kafka_repl
@@ -147,13 +161,21 @@ CREATE SOURCE kafka_repl
     ENVELOPE DEBEZIUM;
 ```
 
+By default, the source will be created in the active cluster; to use a different
+cluster, use the `IN CLUSTER` clause.
+
 #### Transaction support
 
-Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata) that can be used to preserve transactional boundaries downstream. Work is in progress to utilize this topic to support transaction-aware processing in Materialize ([#7537](https://github.com/MaterializeInc/materialize/issues/7537))!
+Debezium provides [transaction metadata](https://debezium.io/documentation/reference/connectors/sqlserver.html#sqlserver-transaction-metadata)
+that can be used to preserve transactional boundaries downstream. Work is in
+progress to utilize this topic to support transaction-aware processing in
+[Materialize #7537](https://github.com/MaterializeInc/materialize/issues/7537)!
 
 ### Create a materialized view
 
-Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, resulting from `INSERT`, `UPDATE`, and `DELETE` operations in the original SQL Server database.
+Any materialized view defined on top of this source will be incrementally
+updated as new change events stream in through Kafka, resulting from `INSERT`,
+`UPDATE`, and `DELETE` operations in the original SQL Server database.
 
 ```sql
 CREATE MATERIALIZED VIEW cnt_table AS
@@ -182,4 +204,5 @@ initial snapshot for all tables has been completed.
 
 ##### Supported types
 
-`DATETIMEOFFSET` columns are replicated as `text` {{% gh 8017 %}}, and `DATETIME2` columns are replicated as `bigint` {{% gh 8041 %}} in Materialize.
+`DATETIMEOFFSET` columns are replicated as `text` {{% gh 8017 %}}, and
+`DATETIME2` columns are replicated as `bigint` {{% gh 8041 %}} in Materialize.

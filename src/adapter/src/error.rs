@@ -186,7 +186,7 @@ pub enum AdapterError {
     DDLTransactionRace,
     /// Used to prevent us from durably committing state while a DDL transaction is open, should
     /// never be returned to the user.
-    DDLTransactionDryRun {
+    TransactionDryRun {
         /// New operations that were run in the transaction.
         new_ops: Vec<crate::catalog::Op>,
         /// New resulting `CatalogState`.
@@ -404,8 +404,8 @@ impl AdapterError {
             AdapterError::Catalog(e) => match &e.kind {
                 mz_catalog::memory::error::ErrorKind::VarError(e) => match e {
                     VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
-                    VarError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
-                    VarError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+                    VarError::FixedValueParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
+                    VarError::InvalidParameterType { .. } => SqlState::INVALID_PARAMETER_VALUE,
                     VarError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
                     VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
                     VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
@@ -491,7 +491,7 @@ impl AdapterError {
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
-            AdapterError::DDLTransactionDryRun { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::TransactionDryRun { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
             // transaction" are not things in Postgres. This error code is the generic "bad txn
@@ -690,7 +690,7 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLTransactionRace => {
                 f.write_str("object state changed while transaction was in progress")
             }
-            AdapterError::DDLTransactionDryRun { .. } => f.write_str("ddl transaction dry run"),
+            AdapterError::TransactionDryRun { .. } => f.write_str("transaction dry run"),
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),

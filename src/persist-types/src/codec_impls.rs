@@ -66,6 +66,7 @@ impl Schema<()> for UnitSchema {
 }
 
 impl Codec for () {
+    type Storage = ();
     type Schema = UnitSchema;
 
     fn codec_name() -> String {
@@ -190,6 +191,7 @@ impl Schema<String> for StringSchema {
 }
 
 impl Codec for String {
+    type Storage = ();
     type Schema = StringSchema;
 
     fn codec_name() -> String {
@@ -231,6 +233,7 @@ impl Schema<Vec<u8>> for VecU8Schema {
 }
 
 impl Codec for Vec<u8> {
+    type Storage = ();
     type Schema = VecU8Schema;
 
     fn codec_name() -> String {

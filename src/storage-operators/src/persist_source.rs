@@ -519,7 +519,10 @@ impl PendingWork {
     {
         let fetched_part = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
-        while let Some(((key, val), time, diff)) = fetched_part.next() {
+        let mut row_buf = None;
+        while let Some(((key, val), time, diff)) =
+            fetched_part.next_with_storage(&mut row_buf, &mut None)
+        {
             if until.less_equal(&time) {
                 continue;
             }
@@ -569,6 +572,11 @@ impl PendingWork {
                                 }
                             }
                         }
+                        // At the moment, this is the only case where we can re-use the allocs for
+                        // the `SourceData`/`Row` we decoded. This could be improved if this timely
+                        // operator used a different container than `Vec<Row>`.
+                        drop(datums_local);
+                        row_buf.replace(SourceData(Ok(row)));
                     } else {
                         let mut emit_time = *self.capability.time();
                         emit_time.0 = time;

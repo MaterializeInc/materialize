@@ -79,12 +79,15 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         // The following are not yet reported by sources and have 0 or `NULL` values.
         // They have been added here to reduce churn changing the schema of this collection.
         //
+        // These are left nullable for now in case we want semantics for `NULL` values. We
+        // currently never expose null values.
+        //
         // A gauge of the number of _values_ (source defined unit) available to be read from upstream.
         // Never resets. Not to be confused with any of the counters above.
-        .with_column("offset_known", ScalarType::UInt64.nullable(false))
+        .with_column("offset_known", ScalarType::UInt64.nullable(true))
         // A gauge of the number of _values_ (source defined unit) we have committed.
         // Never resets. Not to be confused with any of the counters above.
-        .with_column("offset_committed", ScalarType::UInt64.nullable(false))
+        .with_column("offset_committed", ScalarType::UInt64.nullable(true))
 });
 
 pub static MZ_SINK_STATISTICS_RAW_DESC: Lazy<RelationDesc> = Lazy::new(|| {
@@ -312,7 +315,9 @@ impl StorageMetric for Total {
         // A `Total` regressing to is a bug.
         if other.0 < self.0 {
             tracing::error!(
-                "boolean gauge for field {field_name} erroneously regressed from true to false",
+                "total gauge {field_name} erroneously regressed from {} to {}",
+                self.0,
+                other.0
             );
             return;
         }
@@ -549,7 +554,7 @@ impl PackableStats for SourceStatisticsUpdate {
             rehydration_latency_ms: Gauge::gauge(
                 <Option<mz_repr::adt::interval::Interval>>::try_from(iter.next().unwrap())
                     .unwrap()
-                    .map(|int| int.micros),
+                    .map(|int| int.micros / 1000),
             ),
             snapshot_records_known: Gauge::gauge(
                 <Option<u64>>::try_from(iter.next().unwrap()).unwrap(),

@@ -26,7 +26,7 @@ import os
 import subprocess
 import sys
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +34,10 @@ import yaml
 
 from materialize import buildkite, mzbuild, spawn
 from materialize.ci_util.trim_pipeline import permit_rerunning_successful_steps
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.ui import UIError
+from materialize.version_list import get_previous_published_version
 from materialize.xcompile import Arch
 
 from .deploy.deploy_util import rust_version
@@ -52,6 +54,13 @@ from .deploy.deploy_util import rust_version
 CI_GLUE_GLOBS = ["bin", "ci", "misc/python"]
 
 
+def steps(pipeline: Any) -> Iterator[dict[str, Any]]:
+    for step in pipeline["steps"]:
+        yield step
+        if "group" in step:
+            yield from step.get("steps", [])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mkpipeline",
@@ -64,6 +73,8 @@ so it is executed.""",
     parser.add_argument("--coverage", action="store_true")
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
+
+    print(f"Pipeline is: {args.pipeline}")
 
     # Make sure we have an up to date view of main.
     spawn.runv(["git", "fetch", "origin", "main"])
@@ -94,6 +105,7 @@ so it is executed.""",
             print("--- Trimming unchanged steps from pipeline")
             trim_tests_pipeline(pipeline, args.coverage)
 
+    if args.pipeline in ["test", "nightly"]:
         # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
         # if we trim away all the JUnit report-generating steps.
         Path("junit_dummy.xml").write_text("")
@@ -103,7 +115,7 @@ so it is executed.""",
         pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
         pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
 
-        def visit(step: dict[str, Any]) -> None:
+        for step in steps(pipeline):
             # Coverage runs are slower
             if "timeout_in_minutes" in step:
                 step["timeout_in_minutes"] *= 3
@@ -112,24 +124,10 @@ so it is executed.""",
                 step["skip"] = True
             if step.get("id") == "build-x86_64":
                 step["name"] = "Build x86_64 with coverage"
-
-        for step in pipeline["steps"]:
-            visit(step)
-            # Groups can't be nested, so handle them explicitly here instead of recursing
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
     else:
-
-        def visit(step: dict[str, Any]) -> None:
+        for step in steps(pipeline):
             if step.get("coverage") == "only":
                 step["skip"] = True
-
-        for step in pipeline["steps"]:
-            visit(step)
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
 
     prioritize_pipeline(pipeline)
 
@@ -144,11 +142,13 @@ so it is executed.""",
 
     check_depends_on(pipeline, args.pipeline)
 
+    add_version_to_preflight_tests(pipeline)
+
     trim_builds(pipeline, args.coverage)
 
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
-    def visit(step: dict[str, Any]) -> None:
+    for step in steps(pipeline):
         if "inputs" in step:
             del step["inputs"]
         if "coverage" in step:
@@ -164,12 +164,6 @@ so it is executed.""",
             raise UIError(
                 f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
             )
-
-    for step in pipeline["steps"]:
-        visit(step)
-        if "group" in step:
-            for inner_step in step.get("steps", []):
-                visit(inner_step)
 
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
@@ -218,7 +212,7 @@ def prioritize_pipeline(pipeline: Any) -> None:
 
 
 def set_default_agents_queue(pipeline: Any) -> None:
-    def visit(step: dict[str, Any]) -> None:
+    for step in steps(pipeline):
         if (
             "agents" not in step
             and "prompt" not in step
@@ -228,18 +222,12 @@ def set_default_agents_queue(pipeline: Any) -> None:
         ):
             step["agents"] = {"queue": "linux-aarch64-small"}
 
-    for step in pipeline["steps"]:
-        visit(step)
-        if "group" in step:
-            for inner_step in step.get("steps", []):
-                visit(inner_step)
-
 
 def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
     if pipeline_name != "test":
         return
 
-    def visit(step: dict[str, Any]) -> None:
+    for step in steps(pipeline):
         # From buildkite documentation:
         # Note that a step with an explicit dependency specified with the
         # depends_on attribute will run immediately after the dependency step
@@ -258,15 +246,23 @@ def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
                 f"Every step should have an explicit depends_on value, missing in: {step}"
             )
 
-    for step in pipeline["steps"]:
-        visit(step)
-        if "group" in step:
-            for inner_step in step.get("steps", []):
-                visit(inner_step)
+
+def add_version_to_preflight_tests(pipeline: Any) -> None:
+    for step in steps(pipeline):
+        if step.get("id", "") in (
+            "tests-preflight-check-rollback",
+            "nightlies-preflight-check-rollback",
+        ):
+            current_version = MzVersion.parse_cargo()
+            version = get_previous_published_version(
+                current_version, previous_minor=True
+            )
+            step["build"]["commit"] = str(version)
+            step["build"]["branch"] = str(version)
 
 
 def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
-    def visit(step: dict[str, Any]) -> None:
+    for step in steps(pipeline):
         ident = step.get("id") or step.get("command")
         if (
             ident not in steps_to_run
@@ -284,12 +280,6 @@ def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
             and not step.get("async")
         ):
             step["skip"] = True
-
-    for step in pipeline["steps"]:
-        visit(step)
-        if "group" in step:
-            for inner_step in step.get("steps", []):
-                visit(inner_step)
 
 
 def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
@@ -315,19 +305,13 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
     else:
         return
 
-    def visit(step: dict[str, Any]) -> None:
+    for step in steps(pipeline):
         if (
             "id" in step
             and step["id"] not in ("analyze", "build-x86_64")
             and "skip" not in step
         ):
             selection_step["fields"][0]["options"].append({"value": step["id"]})
-
-    for step in pipeline["steps"]:
-        visit(step)
-        if "group" in step:
-            for inner_step in step.get("steps", []):
-                visit(inner_step)
 
     pipeline["steps"].insert(0, selection_step)
 
@@ -458,7 +442,7 @@ def trim_builds(pipeline: Any, coverage: bool) -> None:
             h.update(dep.spec().encode())
         return h.hexdigest()
 
-    def visit(step: dict[str, Any]) -> None:
+    for step in steps(pipeline):
         if step.get("id") == "build-x86_64":
             deps = deps_publish(Arch.X86_64)
             if deps.check():
@@ -479,12 +463,6 @@ def trim_builds(pipeline: Any, coverage: bool) -> None:
                 # resources.
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
-
-    for step in pipeline["steps"]:
-        visit(step)
-        if "group" in step:
-            for inner_step in step.get("steps", []):
-                visit(inner_step)
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:

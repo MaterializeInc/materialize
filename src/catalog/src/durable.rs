@@ -25,7 +25,6 @@ use mz_repr::GlobalId;
 use mz_sql::session::vars::CatalogKind;
 use mz_stash::DebugStashFactory;
 use mz_storage_types::controller::PersistTxnTablesImpl;
-use mz_storage_types::sources::Timeline;
 use uuid::Uuid;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
@@ -33,7 +32,6 @@ pub use crate::durable::error::{CatalogError, DurableCatalogError};
 use crate::durable::impls::migrate::{CatalogMigrator, Direction};
 pub use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
-use crate::durable::impls::shadow::OpenableShadowCatalogState;
 use crate::durable::impls::stash::{OpenableConnection, TestOpenableConnection};
 pub use crate::durable::impls::stash::{
     StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
@@ -200,10 +198,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
 
-    /// Get all timelines and their persisted timestamps.
-    // TODO(jkosh44) This should be removed once the timestamp oracle is extracted.
-    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError>;
-
     /// Get all audit log events.
     ///
     /// Results are guaranteed to be sorted by ID.
@@ -279,13 +273,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         boot_ts: mz_repr::Timestamp,
         wait_for_consolidation: bool,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
-
-    /// Persist new global timestamp for a timeline.
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError>;
@@ -373,21 +360,6 @@ pub async fn test_persist_backed_catalog_state_with_version(
 ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     persist_backed_catalog_state(persist_client, organization_id, version, metrics).await
-}
-
-/// Creates an openable durable catalog state implemented using both the stash and persist, that
-/// compares the results. The stash results is used as the source of truth when there's a
-/// discrepancy.
-pub async fn shadow_catalog_state(
-    stash_config: StashConfig,
-    persist_client: PersistClient,
-    organization_id: Uuid,
-) -> impl OpenableDurableCatalogState {
-    let stash = Box::new(stash_backed_catalog_state(stash_config));
-    // Shadow catalog is only used for tests, so it's OK to get a test persist catalog state.
-    let persist =
-        Box::new(test_persist_backed_catalog_state(persist_client, organization_id).await);
-    OpenableShadowCatalogState { stash, persist }
 }
 
 /// Creates an openable durable catalog state that migrates the current state from the stash to

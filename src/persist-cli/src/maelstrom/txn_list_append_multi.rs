@@ -38,7 +38,7 @@ use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
-use mz_timestamp_oracle::ShareableTimestampOracle;
+use mz_timestamp_oracle::TimestampOracle;
 use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
@@ -54,7 +54,7 @@ use crate::maelstrom::Args;
 #[derive(Debug)]
 pub struct Transactor {
     txns_id: ShardId,
-    oracle: Box<dyn ShareableTimestampOracle<mz_repr::Timestamp> + Send>,
+    oracle: Box<dyn TimestampOracle<mz_repr::Timestamp> + Send>,
     client: PersistClient,
     txns: TxnsHandle<String, (), u64, i64>,
     tidy: Tidy,
@@ -66,7 +66,7 @@ impl Transactor {
     pub async fn new(
         client: PersistClient,
         txns_id: ShardId,
-        oracle: Box<dyn ShareableTimestampOracle<mz_repr::Timestamp> + Send>,
+        oracle: Box<dyn TimestampOracle<mz_repr::Timestamp> + Send>,
     ) -> Result<Self, MaelstromError> {
         let init_ts = u64::from(oracle.write_ts().await.timestamp);
         let txns = TxnsHandle::open(
@@ -458,24 +458,23 @@ impl Service for TransactorService {
             Url::parse(x).unwrap_or_else(|err| panic!("failed to parse oracle_uri {}: {}", x, err))
         });
         let oracle_scheme = oracle_uri.as_ref().map(|x| (x.scheme(), x));
-        let oracle: Box<dyn ShareableTimestampOracle<mz_repr::Timestamp> + Send> =
-            match oracle_scheme {
-                Some(("postgres", uri)) | Some(("postgresql", uri)) => {
-                    let cfg = PostgresTimestampOracleConfig::new(uri.as_str(), &metrics_registry);
-                    Box::new(
-                        PostgresTimestampOracle::open(
-                            cfg,
-                            "maelstrom".to_owned(),
-                            mz_repr::Timestamp::minimum(),
-                            NOW_ZERO.clone(),
-                        )
-                        .await,
+        let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp> + Send> = match oracle_scheme {
+            Some(("postgres", uri)) | Some(("postgresql", uri)) => {
+                let cfg = PostgresTimestampOracleConfig::new(uri.as_str(), &metrics_registry);
+                Box::new(
+                    PostgresTimestampOracle::open(
+                        cfg,
+                        "maelstrom".to_owned(),
+                        mz_repr::Timestamp::minimum(),
+                        NOW_ZERO.clone(),
                     )
-                }
-                Some(("mem", _)) => Box::new(MemTimestampOracle::default()),
-                Some((scheme, _)) => unimplemented!("unsupported oracle type: {}", scheme),
-                None => unimplemented!("TODO: support maelstrom oracle"),
-            };
+                    .await,
+                )
+            }
+            Some(("mem", _)) => Box::new(MemTimestampOracle::default()),
+            Some((scheme, _)) => unimplemented!("unsupported oracle type: {}", scheme),
+            None => unimplemented!("TODO: support maelstrom oracle"),
+        };
         let transactor = Transactor::new(client, shard_id, oracle).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)

@@ -195,6 +195,8 @@ pub struct ExplainConfig {
     // -------------
     // Feature flags
     // -------------
+    /// Re-optimize view imported directly in DataflowDescriptions.
+    pub reoptimize_imported_views: Option<bool>,
     /// Enable outer join lowering implemented in #22347 and #22348.
     pub enable_new_outer_join_lowering: Option<bool>,
     /// Enable the eager delta join planning implemented in #23318.
@@ -223,6 +225,7 @@ impl Default for ExplainConfig {
             subtree_size: false,
             timing: false,
             types: false,
+            reoptimize_imported_views: None,
             enable_new_outer_join_lowering: None,
             enable_eager_delta_joins: None,
         }
@@ -238,73 +241,6 @@ impl ExplainConfig {
             || self.keys
             || self.cardinality
             || self.column_names
-    }
-}
-
-impl TryFrom<BTreeSet<String>> for ExplainConfig {
-    type Error = anyhow::Error;
-    fn try_from(mut flags: BTreeSet<String>) -> Result<Self, anyhow::Error> {
-        // If `WITH(raw)` is specified, ensure that the config will be as
-        // representative for the original plan as possible.
-        if flags.remove("raw") {
-            flags.insert("raw_plans".into());
-            flags.insert("raw_syntax".into());
-        }
-        let result = ExplainConfig {
-            redacted: flags.remove("redacted"),
-            arity: flags.remove("arity") || !SOFT_ASSERTIONS.load(Ordering::Relaxed),
-            cardinality: flags.remove("cardinality"),
-            column_names: flags.remove("column_names"),
-            filter_pushdown: flags.remove("filter_pushdown")
-                || flags.remove("mfp_pushdown")
-                || !SOFT_ASSERTIONS.load(Ordering::Relaxed),
-            humanized_exprs: !flags.contains("raw_plans")
-                && (flags.remove("humanized_exprs") || !SOFT_ASSERTIONS.load(Ordering::Relaxed)),
-            join_impls: flags.remove("join_impls"),
-            keys: flags.remove("keys"),
-            linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),
-            no_fast_path: flags.remove("no_fast_path") || flags.contains("timing"),
-            no_notices: flags.remove("no_notices"),
-            node_ids: flags.remove("node_ids"),
-            non_negative: flags.remove("non_negative"),
-            raw_plans: flags.remove("raw_plans"),
-            raw_syntax: flags.remove("raw_syntax"),
-            subtree_size: flags.remove("subtree_size"),
-            timing: flags.remove("timing"),
-            types: flags.remove("types"),
-            enable_new_outer_join_lowering: parse_flag(&mut flags, "new_outer_join_lowering")?,
-            enable_eager_delta_joins: parse_flag(&mut flags, "eager_delta_joins")?,
-        };
-        if flags.is_empty() {
-            Ok(result)
-        } else {
-            anyhow::bail!("unsupported 'EXPLAIN ... WITH' unknown flags: {flags:?}")
-        }
-    }
-}
-
-/// Parses a `feature` flag that can be overriden in [`ExplainConfig`].
-///
-/// Either `enable_$feature` or `disable_$feature` can be given, but not both at
-/// the same time. Returns `Some(true)` / `Some(false)` if the corresponding
-/// `ExplainConfig` flag is set and `None` if neither are present. If both flags
-/// are set at the same time bails with an error.
-fn parse_flag(
-    flags: &mut BTreeSet<String>,
-    feature: &'static str,
-) -> Result<Option<bool>, anyhow::Error> {
-    let enabled = flags.remove(&format!("enable_{feature}"));
-    let disabled = flags.remove(&format!("disable_{feature}"));
-
-    if enabled ^ disabled {
-        Ok(Some(enabled && !disabled))
-    } else if !(enabled && disabled) {
-        Ok(None)
-    } else {
-        let mut flags = BTreeSet::<String>::new();
-        flags.insert(format!("enable_{feature}"));
-        flags.insert(format!("disable_{feature}"));
-        anyhow::bail!("unsupported 'EXPLAIN ... WITH' conflicting flags: {flags:?}")
     }
 }
 
@@ -964,6 +900,7 @@ mod tests {
             subtree_size: false,
             timing: true,
             types: false,
+            reoptimize_imported_views: None,
             enable_new_outer_join_lowering: None,
             enable_eager_delta_joins: None,
         };

@@ -18,6 +18,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
+use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
@@ -28,7 +29,7 @@ use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::txn_cache::{TxnsCache, TxnsCacheState};
@@ -61,7 +62,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     /// physical upper of the data shard. This is suitable for use as an initial
     /// input to `TxnsCache::data_listen_next` (after reading up to it, of
     /// course).
-    #[instrument(level = "debug", skip_all, fields(shard = %self.data_id, ts = ?self.as_of))]
+    #[instrument(level = "debug", fields(shard = %self.data_id, ts = ?self.as_of))]
     pub(crate) async fn unblock_read<K, V, D>(
         &self,
         mut data_write: WriteHandle<K, V, T, D>,

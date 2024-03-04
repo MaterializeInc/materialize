@@ -37,11 +37,12 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         dataflow_max_inflight_bytes: Some(config.compute_dataflow_max_inflight_bytes()),
         linear_join_yielding: Some(linear_join_yielding),
         enable_mz_join_core: Some(config.enable_mz_join_core()),
-        enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),
         enable_columnation_lgalloc: Some(config.enable_columnation_lgalloc()),
+        enable_chunked_stack: Some(config.enable_compute_chunked_stack()),
         enable_operator_hydration_status_logging: Some(
             config.enable_compute_operator_hydration_status_logging(),
         ),
+        enable_lgalloc_eager_reclamation: Some(config.enable_lgalloc_eager_reclamation()),
         persist: persist_config(config),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
@@ -175,6 +176,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.kafka_socket_connection_setup_timeout(),
             config.kafka_fetch_metadata_timeout(),
             config.kafka_progress_record_fetch_timeout(),
+            config.kafka_default_metadata_fetch_interval(),
         ),
         statistics_interval: config.storage_statistics_interval(),
         statistics_collection_interval: config.storage_statistics_collection_interval(),
@@ -184,6 +186,8 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             wait_for_count: config.pg_source_snapshot_wait_for_count(),
         },
         enable_dependency_read_hold_asserts: config.enable_dependency_read_hold_asserts(),
+        user_storage_managed_collections_batch_duration: config
+            .user_storage_managed_collections_batch_duration(),
     }
 }
 

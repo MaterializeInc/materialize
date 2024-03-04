@@ -8,11 +8,10 @@
 # by the Apache License, Version 2.0.
 
 
-# Primary source is starting because of snapshot error in one subsource
 > SELECT true
     FROM mz_internal.mz_source_statuses
     WHERE
-        name = 'schema_test' AND status = 'starting';
+        name = 'schema_test' AND status = 'running';
 true
 
 # dummy subsource is put into error state

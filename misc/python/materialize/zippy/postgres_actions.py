@@ -136,7 +136,7 @@ class PostgresInsert(PostgresDML):
 
 
 class PostgresShiftForward(PostgresDML):
-    """Update all rows from a Postgres table by incrementing their values by a constant (tables with a PK only)"""
+    """Update all rows from a Postgres table by incrementing their values by a constant (tables without a PK only)"""
 
     def run(self, c: Composition) -> None:
         if not self.postgres_table.has_pk:
@@ -152,7 +152,7 @@ class PostgresShiftForward(PostgresDML):
 
 
 class PostgresShiftBackward(PostgresDML):
-    """Update all rows from a Postgres table by decrementing their values by a constant (tables with a PK only)"""
+    """Update all rows from a Postgres table by decrementing their values by a constant (tables without a PK only)"""
 
     def run(self, c: Composition) -> None:
         if not self.postgres_table.has_pk:

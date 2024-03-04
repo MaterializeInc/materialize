@@ -15,6 +15,7 @@ import sys
 
 from materialize.buildkite import add_annotation
 from materialize.buildkite_insights.step_durations.build_step import (
+    BuildStepOutcome,
     extract_build_step_data,
 )
 from materialize.buildkite_insights.util.buildkite_api import fetch_builds
@@ -51,7 +52,6 @@ def main() -> None:
             f"Fetched {len(last_build_step_outcomes)} finished builds of pipeline {pipeline_slug} and step {step_key}"
         )
 
-    last_execution_on_main_failed = not last_build_step_outcomes[0].passed
     failed_execution_count = len(
         [execution for execution in last_build_step_outcomes if not execution.passed]
     )
@@ -61,15 +61,24 @@ def main() -> None:
         print("None of the fetched builds failed")
         return
 
+    index_of_last_failed_execution = determine_index_of_last_failed_execution(
+        last_build_step_outcomes
+    )
+    last_execution_on_main_failed = index_of_last_failed_execution == 0
+
+    url_to_last_failed_build_step = f"{builds_data[index_of_last_failed_execution]['web_url']}#{last_build_step_outcomes[index_of_last_failed_execution].id}"
+
     if last_execution_on_main_failed:
+        last_build_link = f"[last build]({url_to_last_failed_build_step})"
+
         recent_failures_info = (
-            f"This job also failed in the last build on main! "
+            f"This job also failed in the {last_build_link} on main! "
             f"It failed in {failed_execution_count} of the last {total_execution_count} builds."
         )
     else:
         recent_failures_info = (
             f"This job passed in the last build on main. "
-            f"However, it failed in {failed_execution_count} of the last {total_execution_count} builds."
+            f"However, it [failed]({url_to_last_failed_build_step}) in {failed_execution_count} of the last {total_execution_count} builds."
         )
 
     add_annotation(
@@ -77,6 +86,16 @@ def main() -> None:
         title=f"{step_name}: Failed recently also on main",
         content=recent_failures_info,
     )
+
+
+def determine_index_of_last_failed_execution(
+    build_step_outcomes_in_desc_order: list[BuildStepOutcome],
+) -> int:
+    for index, outcome in enumerate(build_step_outcomes_in_desc_order):
+        if not outcome.passed:
+            return index
+
+    raise RuntimeError("No failed execution")
 
 
 if __name__ == "__main__":

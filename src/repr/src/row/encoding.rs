@@ -42,6 +42,7 @@ use crate::stats::{jsonb_stats_nulls, proto_datum_min_max_nulls};
 use crate::{ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
 impl Codec for Row {
+    type Storage = ProtoRow;
     type Schema = RelationDesc;
 
     fn codec_name() -> String {
@@ -68,8 +69,29 @@ impl Codec for Row {
     /// encoded by historical versions of Materialize back to v(TODO: Figure out
     /// our policy).
     fn decode(buf: &[u8]) -> Result<Row, String> {
-        let proto_row = ProtoRow::decode(buf).map_err(|err| err.to_string())?;
-        Row::try_from(&proto_row)
+        // NB: We could easily implement this directly instead of via
+        // `decode_from`, but do this so that we get maximal coverage of the
+        // more complicated codepath.
+        //
+        // The length of the encoded ProtoRow (i.e. `buf.len()`) doesn't perfect
+        // predict the length of the resulting Row, but it's definitely
+        // correlated, so probably a decent estimate.
+        let mut row = Row::with_capacity(buf.len());
+        <Self as Codec>::decode_from(&mut row, buf, &mut None)?;
+        Ok(row)
+    }
+
+    fn decode_from<'a>(
+        &mut self,
+        buf: &'a [u8],
+        storage: &mut Option<ProtoRow>,
+    ) -> Result<(), String> {
+        let mut proto = storage.take().unwrap_or_default();
+        proto.clear();
+        proto.merge(buf).map_err(|err| err.to_string())?;
+        let ret = self.decode_from_proto(&proto);
+        storage.replace(proto);
+        ret
     }
 }
 
@@ -854,7 +876,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
 }
 
 impl RowPacker<'_> {
-    fn try_push_proto(&mut self, x: &ProtoDatum) -> Result<(), String> {
+    pub(crate) fn try_push_proto(&mut self, x: &ProtoDatum) -> Result<(), String> {
         match &x.datum_type {
             Some(DatumType::Other(o)) => match ProtoDatumOther::from_i32(*o) {
                 Some(ProtoDatumOther::Unknown) => return Err("unknown datum type".into()),

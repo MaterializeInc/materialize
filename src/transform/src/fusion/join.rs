@@ -35,10 +35,9 @@ use crate::{TransformCtx, TransformError};
 pub struct Join;
 
 impl crate::Transform for Join {
-    #[tracing::instrument(
+    #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        skip_all,
         fields(path.segment = "join_fusion")
     )]
     fn transform(

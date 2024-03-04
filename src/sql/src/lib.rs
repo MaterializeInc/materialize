@@ -124,7 +124,7 @@ macro_rules! sql_err {
 pub const DEFAULT_SCHEMA: &str = "public";
 
 /// The number of concurrent requests we allow at once for webhook sources.
-pub const WEBHOOK_CONCURRENCY_LIMIT: usize = 250;
+pub const WEBHOOK_CONCURRENCY_LIMIT: usize = 500;
 
 pub mod ast;
 pub mod catalog;

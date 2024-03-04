@@ -1998,12 +1998,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 }
 
 /// Resolves names in an AST node using the provided catalog.
-#[tracing::instrument(
-    target = "compiler",
-    level = "trace",
-    name = "ast_resolve_names",
-    skip_all
-)]
+#[mz_ore::instrument(target = "compiler", level = "trace", name = "ast_resolve_names")]
 pub fn resolve<N>(
     catalog: &dyn SessionCatalog,
     node: N,

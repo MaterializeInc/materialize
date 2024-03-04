@@ -67,7 +67,7 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN RAW PLAN WITH (raw_syntax) AS TEXT FOR
+EXPLAIN RAW PLAN WITH (raw syntax) AS TEXT FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
 Threshold

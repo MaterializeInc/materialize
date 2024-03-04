@@ -200,7 +200,7 @@ impl SinkToken {
 
 impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
@@ -233,9 +233,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             dataflow_max_inflight_bytes,
             linear_join_yielding,
             enable_mz_join_core,
-            enable_jemalloc_profiling,
             enable_columnation_lgalloc,
+            enable_chunked_stack,
             enable_operator_hydration_status_logging,
+            enable_lgalloc_eager_reclamation,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -256,34 +257,32 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 true => LinearJoinImpl::Materialize,
             };
         }
-        match enable_jemalloc_profiling {
-            Some(true) => {
-                mz_ore::task::spawn(
-                    || "activate-jemalloc-profiling",
-                    mz_prof::activate_jemalloc_profiling(),
-                );
-            }
-            Some(false) => {
-                mz_ore::task::spawn(
-                    || "deactivate-jemalloc-profiling",
-                    mz_prof::deactivate_jemalloc_profiling(),
-                );
-            }
-            None => (),
-        }
+
+        // TODO(mh): This has a potential problem that when `enable_columnation_lgalloc` and
+        // `enable_lgalloc_eager_reclamation` arrive at different times, we won't pick up
+        // the expected configuration. This works at the moment because we receive a whole
+        // copy of the parameters when any single one changes, but it's not a guarantee
+        // that's written down.
         match enable_columnation_lgalloc {
             Some(true) => {
                 if let Some(path) = self.compute_state.context.scratch_directory.as_ref() {
-                    info!(path = ?path, "Enabling lgalloc");
-                    lgalloc::lgalloc_set_config(
-                        lgalloc::LgAlloc::new()
-                            .enable()
-                            .with_path(path.clone())
-                            .with_background_config(lgalloc::BackgroundWorkerConfig {
-                                interval: Duration::from_secs(1),
-                                batch: 32,
-                            }),
+                    info!(
+                        ?path,
+                        eager_return = enable_lgalloc_eager_reclamation,
+                        "Enabling lgalloc"
                     );
+                    let mut config = lgalloc::LgAlloc::new();
+                    config
+                        .enable()
+                        .with_path(path.clone())
+                        .with_background_config(lgalloc::BackgroundWorkerConfig {
+                            interval: Duration::from_secs(1),
+                            batch: 32,
+                        });
+                    if let Some(eager_return) = enable_lgalloc_eager_reclamation {
+                        config.eager_return(eager_return);
+                    }
+                    lgalloc::lgalloc_set_config(&config);
                 } else {
                     debug!("Not enabling lgalloc, scratch directory not specified");
                 }
@@ -292,6 +291,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 info!("Disabling lgalloc");
                 lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
             }
+            None => {}
+        }
+        match enable_chunked_stack {
+            Some(setting) => crate::containers::stack::use_chunked_stack(setting),
             None => {}
         }
         if let Some(v) = enable_operator_hydration_status_logging {
@@ -372,7 +375,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[mz_ore::instrument(level = "debug")]
     fn handle_peek(&mut self, peek: Peek) {
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
@@ -614,7 +617,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     ///
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
-    #[tracing::instrument(level = "debug", skip(self, peek))]
+    #[mz_ore::instrument(level = "debug")]
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         let log_event = peek.as_log_event(false);
         // Respond with the response.

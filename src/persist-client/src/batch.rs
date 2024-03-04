@@ -25,6 +25,7 @@ use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
+use mz_ore::instrument;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -37,7 +38,7 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, error, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
@@ -152,7 +153,7 @@ where
 
     /// Deletes the blobs that make up this batch from the given blob store and
     /// marks them as deleted.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
+    #[instrument(level = "debug", fields(shard = %self.shard_id))]
     pub async fn delete(mut self) {
         self.mark_consumed();
         if !self.batch_delete_enabled {
@@ -463,7 +464,7 @@ where
     ///
     /// This fails if any of the updates in this batch are beyond the given
     /// `upper`.
-    #[instrument(level = "debug", name = "batch::finish", skip_all, fields(shard = %self.shard_id))]
+    #[instrument(level = "debug", name = "batch::finish", fields(shard = %self.shard_id))]
     pub async fn finish<StatsK: Codec, StatsV: Codec>(
         mut self,
         stats_schemas: &Schemas<StatsK, StatsV>,
@@ -924,7 +925,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    #[instrument(level = "debug", name = "batch::finish_upload", skip_all, fields(shard = %self.shard_id))]
+    #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
     pub(crate) async fn finish(self) -> Vec<HollowBatchPart> {
         let mut parts = self.finished_parts;
         for handle in self.writing_parts {
