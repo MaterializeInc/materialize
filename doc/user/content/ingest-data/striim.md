@@ -35,7 +35,7 @@ Ensure you have the following:
 
 Alternatively, follow the [Oracle CDC guide](https://www.striim.com/docs/en/oracle-database-cdc.html) or [SQL Server CDC guide](https://www.striim.com/docs/en/sql-server-cdc.html) for database-specific integration steps.
 
-### Kafka Target Configuration
+### Kafka target configuration
 
 1. **Kafka Cluster Verification:**
     - Create a [Kafka Writer](https://www.striim.com/docs/en/kafka-writer.html) within Striim to direct data to the Kafka cluster.
