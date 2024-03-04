@@ -93,11 +93,35 @@ this means that the index was correctly used. If that's not the case, consider:
 * Does the index's indexed expression (key) match up with how you're querying
   the data?
 
-#### Computation-intensive queries
+#### Resource-intensive queries
+##### Data-intensive queries
+Queries with aggregations, ordering, or offsets can be data-intensive, because
+they need to read in the full underlying dataset in order to compute the
+result. Some examples are operations like `COUNT()`, `MAX()` and `ORDER BY`.
+If the underlying data is not indexed, then the query execution needs to read
+it in from storage. Ingesting all that data can take time, causing your query
+to run slowly.
 
-Another thing to be aware of, in Materialize, aggregations like `COUNT(*)` and limit constraints that return more than 25 rows like `LIMIT 50` perform a computation across the full underlying dataset being queried, so can be resource intensive. If you want to execute these types of queries you should either:
-* Create a materialized view or index for these queries if you plan to issue them often
-* Use a large enough cluster to fit the full underlying dataset being queried
+##### Computation-intensive queries
+Other queries, like those with `JOIN`s can be computation-intensive.
+Performing those computations on the fly can also take time. During the execution
+of the query, Materialize will temporarily use memory to store the joined
+data and CPU to execute the join. You can read more about the impacts of CPU
+and memory usage in the [cluster CPU](#cluster-cpu) and
+[unhealthy cluster](#unhealthy-cluster) sections.
+
+##### Address
+* If you're looking to explore your data, simple `SELECT ... LIMIT <25 or less>`
+queries on objects will return more quickly. This only applies to queries from a 
+single source, table, or materialized view, with no ordering or offsets.
+* Create a materialized view and/or index for resource-intesive queries that you
+plan to issue often  and want fast query times. You can consider either adding an
+index on the underlying dataset(s) or a materialized view and/or index directly
+for the query. For more information on which makes most sense for your use case,
+see the [indexing and query optimization](#indexing-and-query-optimization) section
+above.
+* For computation-intensive queries, use a large enough cluster to fit the full
+underlying dataset being queried.
 
 ### Other things to consider
 
