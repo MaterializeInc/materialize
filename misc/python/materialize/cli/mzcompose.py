@@ -179,7 +179,7 @@ def load_composition(args: argparse.Namespace) -> Composition:
     except UnknownCompositionError as e:
         if args.find:
             hint = "available compositions:\n"
-            for name in repo.compositions:
+            for name in sorted(repo.compositions):
                 hint += f"    {name}\n"
             e.set_hint(hint)
             raise e
