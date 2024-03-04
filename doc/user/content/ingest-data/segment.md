@@ -20,7 +20,12 @@ Ensure that you have:
 
 ## Step 1. (Optional) Create a cluster
 
-If you already have a cluster for your webhook sources, you can skip this step.
+{{< note >}}
+If you are prototyping and already have a cluster to host your webhook
+source (e.g. `quickstart`), **you can skip this step**. For production
+scenarios, we recommend separating your workloads into multiple clusters for
+[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+{{< /note >}}
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 

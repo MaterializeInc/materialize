@@ -105,7 +105,14 @@ network to allow traffic from the bastion host.
 
 ## Step 5. (Optional) Create a cluster
 
-{{% postgres-direct/create-an-ingestion-cluster %}}
+{{< note >}}
+If you are prototyping and already have a cluster to host your PostgreSQL
+source (e.g. `quickstart`), **you can skip this step**. For production
+scenarios, we recommend separating your workloads into multiple clusters for
+[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+{{< /note >}}
+
+{{% postgres-direct/create-a-cluster %}}
 
 ## Step 6. Start ingesting data
 
