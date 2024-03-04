@@ -20,6 +20,7 @@
 
 use proc_macro::TokenStream;
 
+mod instrument;
 mod static_list;
 
 /// A macro that collects all of the static objects of a specific type in the annotated module into
@@ -62,3 +63,15 @@ mod static_list;
 pub fn static_list(args: TokenStream, item: TokenStream) -> TokenStream {
     static_list::static_list_impl(args, item)
 }
+
+/// Materialize wrapper around the `#[tracing::insrument]` macro.
+///
+/// We wrap the `tracing::instrument` macro to skip tracing all arguments by default, this prevents
+/// noisy or actively harmful things (e.g. the entire Catalog) from accidentally getting traced. If
+/// you would like to include a function's argument in the traced span, you can use the
+/// `fields(...)` syntax.
+#[proc_macro_attribute]
+pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
+    instrument::instrument_impl(attr, item)
+}
+

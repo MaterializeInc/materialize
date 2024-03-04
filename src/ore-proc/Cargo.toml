@@ -19,6 +19,9 @@ quote = { version = "1.0" }
 syn = { version = "1.0", features = ["extra-traits", "full"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
+[dev-dependencies]
+tracing = "0.1.37"
+
 [features]
 default = ["workspace-hack"]
 

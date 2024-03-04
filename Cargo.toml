@@ -47,7 +47,6 @@ members = [
     "src/orchestrator-process",
     "src/orchestrator-tracing",
     "src/ore",
-    "src/ore-instrument-macro",
     "src/ore-proc",
     "src/persist",
     "src/persist-cli",
