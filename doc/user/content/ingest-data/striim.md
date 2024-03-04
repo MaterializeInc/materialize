@@ -141,7 +141,7 @@ Here's how you can leverage JSON formatting with Materialize:
 
     {{< json-parser >}}
 
-## Database Specifics
+## Database specifics
 
 ### Oracle
 
