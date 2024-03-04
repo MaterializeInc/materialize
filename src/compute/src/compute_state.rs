@@ -293,9 +293,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             }
             None => {}
         }
-        match enable_chunked_stack {
-            Some(setting) => crate::containers::stack::use_chunked_stack(setting),
-            None => {}
+        if let Some(enabled) = enable_chunked_stack {
+            info!(enabled, "Chunked stack");
+            crate::containers::stack::use_chunked_stack(enabled);
         }
         if let Some(v) = enable_operator_hydration_status_logging {
             self.compute_state.enable_operator_hydration_status_logging = v;
