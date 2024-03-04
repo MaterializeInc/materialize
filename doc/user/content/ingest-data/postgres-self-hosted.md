@@ -8,7 +8,8 @@ menu:
     weight: 25
 ---
 
-This page shows you how to stream data from a self-hosted PostgreSQL database to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
+This page shows you how to stream data from a self-hosted PostgreSQL database to
+Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 ## Before you begin
 
@@ -16,11 +17,13 @@ This page shows you how to stream data from a self-hosted PostgreSQL database to
 
 ## Step 1. Enable logical replication
 
-Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html) protocol to track changes in your database and propagate them to Materialize.
+Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
+protocol to track changes in your database and propagate them to Materialize.
 
 As a first step, you need to make sure logical replication is enabled.
 
-1. As a _superuser_, use `psql` to connect to your PostgreSQL database.
+1. As a _superuser_, use `psql` (or your preferred SQL client) to connect to your
+   PostgreSQL database.
 
 1. Check if logical replication is enabled:
 
@@ -28,11 +31,15 @@ As a first step, you need to make sure logical replication is enabled.
     SHOW wal_level;
     ```
 
-    The `wal_level` setting must be set to `logical`. If it's set to any other value, change it to `logical` in the database configuration file (`postgresql.conf`).
+    The `wal_level` setting must be set to `logical`. If it's set to any other
+    value, change it to `logical` in the database configuration file
+    (`postgresql.conf`).
 
-1. Restart the database in order for the new `wal_level` to take effect. Keep in mind that restarting can affect database performance.
+1. Restart the database in order for the new `wal_level` to take effect. Keep in
+   mind that restarting can affect database performance.
 
-1. Back in your `psql` shell, verify that replication is now enabled:
+1. Back in the SQL client connected to PostgreSQL, verify that replication is
+   now enabled:
 
     ```sql
     SHOW wal_level;
@@ -44,11 +51,15 @@ As a first step, you need to make sure logical replication is enabled.
 
 ## Step 3. Configure network security
 
-There are various ways to configure your database's network to allow Materialize to connect:
+There are various ways to configure your database's network to allow Materialize
+to connect:
 
-- **Allow Materialize IPs:** If your database is publicly accessible, you can configure your database's firewall to allow connections from a set of static Materialize IP addresses.
+- **Allow Materialize IPs:** If your database is publicly accessible, you can
+    configure your database's firewall to allow connections from a set of
+    static Materialize IP addresses.
 
-- **Use an SSH tunnel:** If your database is running in a private network, you can use an SSH tunnel to connect Materialize to the database.
+- **Use an SSH tunnel:** If your database is running in a private network, you
+    can use an SSH tunnel to connect Materialize to the database.
 
 Select the option that works best for you.
 
@@ -56,13 +67,16 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the `psql` shell connected to Materialize, find the static egress IP addresses for the Materialize region you are running in:
+1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+   client connected to Materialize, find the static egress IP addresses for the
+   Materialize region you are running in:
 
     ```sql
     SELECT * FROM mz_egress_ips;
     ```
 
-1. Update your database firewall rules to allow traffic from each IP address from the previous step.
+1. Update your database firewall rules to allow traffic from each IP address
+   from the previous step.
 
 {{< /tab >}}
 
@@ -70,10 +84,14 @@ Select the option that works best for you.
 
 {{< public-preview />}}
 
-Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/) service. Your PostgreSQL database must be running on AWS in order to use this option.
+Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
+service. Your PostgreSQL database must be running on AWS in order to use this
+option.
 
 1. #### Create a target group
-    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html) for your Postgres instance with the following details:
+
+    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html)
+    for your Postgres instance with the following details:
 
     a. Target type as **IP address**.
 
@@ -81,40 +99,62 @@ Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](ht
 
     c. Port as **5432**, or the port that you are using in case it is not 5432.
 
-    d. Make sure that the target group is in the same VPC as the PostgreSQL instance.
+    d. Make sure that the target group is in the same VPC as the PostgreSQL
+    instance.
 
-    e. Click next, and register the respective PostgreSQL instance to the target group using its IP address.
+    e. Click next, and register the respective PostgreSQL instance to the target
+    group using its IP address.
 
 1. #### Create a Network Load Balancer (NLB)
-    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html) that is **enabled for the same subnets** that the PostgreSQL instance is in.
+
+    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html)
+    that is **enabled for the same subnets** that the PostgreSQL instance is
+    in.
 
 1. #### Create TCP listener
 
-    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html) for your PostgreSQL instance that forwards to the corresponding target group you created.
+    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html)
+    for your PostgreSQL instance that forwards to the corresponding target
+    group you created.
 
 1. #### Verify security groups and health checks
 
-    Once the TCP listener has been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) are passing and that the target is reported as healthy.
+    Once the TCP listener has been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
+    are passing and that the target is reported as healthy.
 
-    If you have set up a security group for your PostgreSQL instance, you must ensure that it allows traffic on the health check port.
+    If you have set up a security group for your PostgreSQL instance, you must
+    ensure that it allows traffic on the health check port.
 
     **Remarks**:
 
-    a. Network Load Balancers do not have associated security groups. Therefore, the security groups for your targets must use IP addresses to allow traffic.
+    a. Network Load Balancers do not have associated security groups. Therefore,
+    the security groups for your targets must use IP addresses to allow
+    traffic.
 
-    b. You can't use the security groups for the clients as a source in the security groups for the targets. Therefore, the security groups for your targets must use the IP addresses of the clients to allow traffic. For more details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+    b. You can't use the security groups for the clients as a source in the
+    security groups for the targets. Therefore, the security groups for your
+    targets must use the IP addresses of the clients to allow traffic. For more
+    details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
 
 1. #### Create a VPC endpoint service
 
-    Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html) and associate it with the **Network Load Balancer** that you’ve just created.
+    Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
+    and associate it with the **Network Load Balancer** that you’ve just
+    created.
 
     Note the **service name** that is generated for the endpoint service.
 
     **Remarks**:
-    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests), while still strictly managing who can view your endpoint via IAM, Materialze will be able to seamlessly recreate and migrate endpoints as we work to stabilize this feature.
+
+    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
+    while still strictly managing who can view your endpoint via IAM,
+    Materialze will be able to seamlessly recreate and migrate endpoints as we
+    work to stabilize this feature.
 
 1. #### Create an AWS PrivateLink Connection
-     In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the endpoint service that you created in the previous step.
+
+     In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the
+     endpoint service that you created in the previous step.
 
      ```sql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -123,11 +163,13 @@ Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](ht
     );
     ```
 
-    Update the list of the availability zones to match the ones that you are using in your AWS account.
+    Update the list of the availability zones to match the ones that you are
+    using in your AWS account.
 
 1. #### Configure the AWS PrivateLink service
 
-    Retrieve the AWS principal for the AWS PrivateLink connection you just created:
+    Retrieve the AWS principal for the AWS PrivateLink connection you just
+    created:
 
     ```sql
     SELECT principal
@@ -146,33 +188,48 @@ Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](ht
     to configure your VPC endpoint service to accept connections from the
     provided AWS principal.
 
-    If your AWS PrivateLink service is configured to require acceptance of connection requests, you must manually approve the connection request from Materialize after executing the `CREATE CONNECTION` statement. For more details, check the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
+    If your AWS PrivateLink service is configured to require acceptance of
+    connection requests, you must manually approve the connection request from
+    Materialize after executing the `CREATE CONNECTION` statement. For more
+    details, check the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
 
-    **Note:** It might take some time for the endpoint service connection to show up, so you would need to wait for the endpoint service connection to be ready before you create a source.
+    **Note:** It might take some time for the endpoint service connection to
+      show up, so you would need to wait for the endpoint service connection to
+      be ready before you create a source.
 
 {{< /tab >}}
 
 {{< tab "Use an SSH tunnel">}}
 
-To create an SSH tunnel from Materialize to your database, you launch an VM to serve as an SSH bastion host, configure the bastion host to allow traffic only from Materialize, and then configure your database's private network to allow traffic from the bastion host.
+To create an SSH tunnel from Materialize to your database, you launch an VM to
+serve as an SSH bastion host, configure the bastion host to allow traffic only
+from Materialize, and then configure your database's private network to allow
+traffic from the bastion host.
 
 1. Launch a VM to serve as your SSH bastion host.
 
-    - Make sure the VM is publicly accessible and in the same VPC as your database.
-    - Add a key pair and note the username. You'll use this username when connecting Materialize to your bastion host.
-    - Make sure the VM has a static public IP address. You'll use this IP address when connecting Materialize to your bastion host.
+    - Make sure the VM is publicly accessible and in the same VPC as your
+      database.
+    - Add a key pair and note the username. You'll use this username when
+      connecting Materialize to your bastion host.
+    - Make sure the VM has a static public IP address. You'll use this IP
+      address when connecting Materialize to your bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the `psql` shell connected to Materialize, get the static egress IP addresses for the Materialize region you are running in:
+    1. In the [SQL Shell](https://console.materialize.com/), or your preferred
+       SQL client connected to Materialize, get the static egress IP addresses for
+       the Materialize region you are running in:
 
-        ```sql
-        SELECT * FROM mz_egress_ips;
-        ```
+       ```sql
+       SELECT * FROM mz_egress_ips;
+       ```
 
-    1. Update your SSH bastion host's firewall rules to allow traffic from each IP address from the previous step.
+    1. Update your SSH bastion host's firewall rules to allow traffic from each
+       IP address from the previous step.
 
-1. Update your database firewall rules to allow traffic from the SSH bastion host.
+1. Update your database firewall rules to allow traffic from the SSH bastion
+   host.
 
 {{< /tab >}}
 
@@ -184,19 +241,26 @@ To create an SSH tunnel from Materialize to your database, you launch an VM to s
 
 ## Step 5. Start ingesting data
 
-Now that you've configured your database network and created an ingestion cluster, you can connect Materialize to your PostgreSQL database and start ingesting data. The exact steps depend on your networking configuration, so start by selecting the relevant option.
+Now that you've configured your database network and created an ingestion
+cluster, you can connect Materialize to your PostgreSQL database and start
+ingesting data. The exact steps depend on your networking configuration, so
+start by selecting the relevant option.
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the `psql` shell connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+1. In the SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
+   command to securely store the password for the `materialize` PostgreSQL user you
+   created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a connection object with access and authentication details for Materialize to use:
+1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
+   connection object with access and authentication details for Materialize to
+   use:
 
     ```sql
     CREATE CONNECTION pg_connection TO POSTGRES (
@@ -211,9 +275,12 @@ Now that you've configured your database network and created an ingestion cluste
 
     - Replace `<host>` with your database endpoint.
 
-    - Replace `<database>` with the name of the database containing the tables you want to replicate to Materialize.
+    - Replace `<database>` with the name of the database containing the tables
+      you want to replicate to Materialize.
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize to your database and start ingesting data from the publication you created [earlier](#step-2-create-a-publication):
+1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
+   to your database and start ingesting data from the publication you created
+   [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SOURCE mz_source
@@ -222,13 +289,19 @@ Now that you've configured your database network and created an ingestion cluste
       FOR ALL TABLES;
     ```
 
-    To ingest data from specific schemas or tables in your publication, use `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR ALL TABLES`.
+    By default, the source will be created in the active cluster; to use a
+    different cluster, use the `IN CLUSTER` clause. To ingest data from
+    specific schemas or tables in your publication, use `FOR SCHEMAS
+    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
+    ALL TABLES`.
 
 {{< /tab >}}
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the `psql` shell connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH tunnel connection:
+1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+   client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel)
+   command to create an SSH tunnel connection:
 
     ```sql
     CREATE CONNECTION ssh_connection TO SSH TUNNEL (
@@ -238,10 +311,14 @@ Now that you've configured your database network and created an ingestion cluste
     );
     ```
 
-    - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP address and port of the SSH bastion host you created [earlier](#step-3-configure-network-security).
-    - Replace `<SSH_BASTION_USER>` with the username for the key pair you created for your SSH bastion host.
+    - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
+      address and port of the SSH bastion host you created [earlier](#step-3-configure-network-security).
 
-1. Get Materialize's public keys for the SSH tunnel connection you just created:
+    - Replace `<SSH_BASTION_USER>` with the username for the key pair you
+      created for your SSH bastion host.
+
+1. Get Materialize's public keys for the SSH tunnel connection you just
+   created:
 
     ```sql
     SELECT
@@ -254,7 +331,8 @@ Now that you've configured your database network and created an ingestion cluste
         mz_connections.name = 'ssh_connection';
     ```
 
-1. Log in to your SSH bastion host and add Materialize's public keys to the `authorized_keys` file, for example:
+1. Log in to your SSH bastion host and add Materialize's public keys to the
+   `authorized_keys` file, for example:
 
     ```sh
     # Command for Linux
@@ -262,7 +340,9 @@ Now that you've configured your database network and created an ingestion cluste
     echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
     ```
 
-1. Back in the `psql` shell connected to Materialize, validate the SSH tunnel connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+1. Back in the SQL client connected to Materialize, validate the SSH tunnel
+   connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection)
+   command:
 
     ```sql
     VALIDATE CONNECTION ssh_connection;
@@ -270,13 +350,16 @@ Now that you've configured your database network and created an ingestion cluste
 
     If no validation error is returned, move to the next step.
 
-1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
+   password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
+1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
+   another connection object, this time with database access and authentication
+   details for Materialize to use:
 
     ```sql
     CREATE CONNECTION pg_connection TO POSTGRES (
@@ -291,9 +374,12 @@ Now that you've configured your database network and created an ingestion cluste
 
     - Replace `<host>` with your database endpoint.
 
-    - Replace `<database>` with the name of the database containing the tables you want to replicate to Materialize.
+    - Replace `<database>` with the name of the database containing the tables
+      you want to replicate to Materialize.
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize to your Azure instance and start ingesting data from the publication you created [earlier](#step-2-create-a-publication):
+1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
+   to your Azure instance and start ingesting data from the publication you
+   created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SOURCE mz_source
@@ -302,21 +388,31 @@ Now that you've configured your database network and created an ingestion cluste
       FOR ALL TABLES;
     ```
 
-    To ingest data from specific schemas or tables in your publication, use `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR ALL TABLES`.
+    By default, the source will be created in the active cluster; to use a
+    different cluster, use the `IN CLUSTER` clause. To ingest data from
+    specific schemas or tables in your publication, use `FOR SCHEMAS
+    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
+    ALL TABLES`.
 
-1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes) for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP} SUBSOURCE`](/sql/alter-source/#context) syntax.
+1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
+   for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP} SUBSOURCE`](/sql/alter-source/#context)
+   syntax.
 
 {{< /tab >}}
 
 {{< tab "AWS PrivateLink">}}
 
-1. Back in the `psql` shell connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+1. Back in the SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
+   command to securely store the password for the `materialize` PostgreSQL user you
+   created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SECRET pgpass AS '<PASSWORD>';
     ```
 
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
+1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
+   another connection object, this time with database access and authentication
+   details for Materialize to use:
 
     ```sql
     CREATE CONNECTION pg_connection TO POSTGRES (
@@ -331,9 +427,12 @@ Now that you've configured your database network and created an ingestion cluste
 
     - Replace `<host>` with your database endpoint.
 
-    - Replace `<database>` with the name of the database containing the tables you want to replicate to Materialize.
+    - Replace `<database>` with the name of the database containing the tables
+      you want to replicate to Materialize.
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize to your database and start ingesting data from the publication you created [earlier](#step-2-create-a-publication):
+1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
+   to your database and start ingesting data from the publication you created
+   [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SOURCE mz_source
@@ -342,7 +441,11 @@ Now that you've configured your database network and created an ingestion cluste
       FOR ALL TABLES;
     ```
 
-    To ingest data from specific schemas or tables in your publication, use `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR ALL TABLES`.
+    By default, the source will be created in the active cluster; to use a
+    different cluster, use the `IN CLUSTER` clause. To ingest data from
+    specific schemas or tables in your publication, use `FOR SCHEMAS
+    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
+    ALL TABLES`.
 
 {{< /tab >}}
 

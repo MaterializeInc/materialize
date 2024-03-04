@@ -220,8 +220,10 @@ The process to connect Materialize to Amazon MSK consists of the following steps
 
 ## Creating a source
 
-The Kafka connection created in the previous section can then be reused across multiple [`CREATE SOURCE`](/sql/create-source/kafka/)
-statements:
+The Kafka connection created in the previous section can then be reused across
+multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements. By default,
+the source will be created in the active cluster; to use a different cluster,
+use the `IN CLUSTER` clause.
 
 ```sql
 CREATE SOURCE json_source
