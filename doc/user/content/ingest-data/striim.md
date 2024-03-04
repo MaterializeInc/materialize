@@ -105,7 +105,7 @@ The Striim app will stream data from the database to Kafka in Avro format, ready
 
 ### Alternative approaches
 
-#### JSON Formatting
+#### JSON formatting
 
 Striim’s JSON formatter offers an alternative to Avro, simplifying the configuration process as it does not require a Schema Registry.
 
