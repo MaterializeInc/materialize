@@ -197,10 +197,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     // The following two fields must always be locked in order.
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
-    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
-    source_statistics: Arc<Mutex<BTreeMap<GlobalId, Option<SourceStatisticsUpdate>>>>,
-    /// Statistics shared with `WebhookAppender`s.
-    webhook_statistics: Arc<Mutex<BTreeMap<GlobalId, Arc<WebhookStatistics>>>>,
+    /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s, as well
+    /// as webhook statistics.
+    source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     /// Consolidated metrics updates to periodically write. We do not eagerly initialize this,
     /// and its contents are entirely driven by `StorageResponse::StatisticsUpdates`'s.
     sink_statistics: Arc<Mutex<BTreeMap<GlobalId, Option<SinkStatisticsUpdate>>>>,
@@ -585,7 +584,6 @@ where
             // We hold this lock for a very short amount of time, just doing some hashmap inserts
             // and unbounded channel sends.
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-            let mut webhook_statistics = self.webhook_statistics.lock().expect("poisoned");
             for (id, description, write, since_handle, metadata) in to_register {
                 let data_shard_since = since_handle.since().clone();
 
@@ -608,8 +606,12 @@ where
                         self.persist_monotonic_worker.register(id, write);
                         self.collections.insert(id, collection_state);
 
-                        source_statistics.insert(id, None);
-                        webhook_statistics.insert(id, Default::default());
+                        source_statistics.source_statistics.insert(id, None);
+                        // This collection of statistics is periodically aggregated into
+                        // `source_statistics`.
+                        source_statistics
+                            .webhook_statistics
+                            .insert(id, Default::default());
                     }
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
@@ -622,7 +624,7 @@ where
                     DataSource::Ingestion(_) | DataSource::Other(DataSourceOther::Source) => {
                         debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
                         self.collections.insert(id, collection_state);
-                        source_statistics.insert(id, None);
+                        source_statistics.source_statistics.insert(id, None);
                     }
                 }
                 self.persist_read_handles.register(id, since_handle);
@@ -749,19 +751,21 @@ where
                         IntrospectionType::StorageSourceStatistics => {
                             let prev = self.snapshot_statistics(id).await;
 
-                            let scraper_token =
-                                statistics::spawn_statistics_scraper::<SourceStatisticsUpdate, _>(
-                                    id.clone(),
-                                    // These do a shallow copy.
-                                    self.collection_manager.clone(),
-                                    Arc::clone(&self.source_statistics),
-                                    prev,
-                                    self.config.parameters.statistics_interval,
-                                    self.statistics_interval_sender.subscribe(),
-                                );
+                            let scraper_token = statistics::spawn_statistics_scraper::<
+                                statistics::SourceStatistics,
+                                SourceStatisticsUpdate,
+                                _,
+                            >(
+                                id.clone(),
+                                // These do a shallow copy.
+                                self.collection_manager.clone(),
+                                Arc::clone(&self.source_statistics),
+                                prev,
+                                self.config.parameters.statistics_interval,
+                                self.statistics_interval_sender.subscribe(),
+                            );
                             let web_token = statistics::spawn_webhook_statistics_scraper(
                                 Arc::clone(&self.source_statistics),
-                                Arc::clone(&self.webhook_statistics),
                                 self.config.parameters.statistics_interval,
                                 self.statistics_interval_sender.subscribe(),
                             );
@@ -775,7 +779,7 @@ where
                             let prev = self.snapshot_statistics(id).await;
 
                             let scraper_token =
-                                statistics::spawn_statistics_scraper::<SinkStatisticsUpdate, _>(
+                                statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
                                     id.clone(),
                                     // These do a shallow copy.
                                     self.collection_manager.clone(),
@@ -1225,8 +1229,9 @@ where
 
     fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError> {
         // Call to this method are usually cached so the lock is not in the critical path.
-        let webhook_statistics = self.webhook_statistics.lock().expect("poisoned");
-        webhook_statistics
+        let source_statistics = self.source_statistics.lock().expect("poisoned");
+        source_statistics
+            .webhook_statistics
             .get(&id)
             .cloned()
             .ok_or(StorageError::IdentifierMissing(id))
@@ -1695,6 +1700,7 @@ where
                     for stat in source_stats {
                         // Don't override it if its been removed.
                         shared_stats
+                            .source_statistics
                             .entry(stat.id)
                             .and_modify(|current| match current {
                                 Some(ref mut current) => current.incorporate(stat),
@@ -1863,10 +1869,9 @@ where
 
         {
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-            let mut webhook_statistics = self.webhook_statistics.lock().expect("poisoned");
             for id in source_statistics_to_drop {
-                source_statistics.remove(&id);
-                webhook_statistics.remove(&id);
+                source_statistics.source_statistics.remove(&id);
+                source_statistics.webhook_statistics.remove(&id);
             }
         }
 
@@ -2350,8 +2355,10 @@ where
             introspection_tokens: BTreeMap::new(),
             now,
             envd_epoch,
-            source_statistics: Arc::new(Mutex::new(BTreeMap::new())),
-            webhook_statistics: Arc::new(Mutex::new(BTreeMap::new())),
+            source_statistics: Arc::new(Mutex::new(statistics::SourceStatistics {
+                source_statistics: BTreeMap::new(),
+                webhook_statistics: BTreeMap::new(),
+            })),
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             statistics_interval_sender,
             clients: BTreeMap::new(),
@@ -2568,6 +2575,7 @@ where
         self.source_statistics
             .lock()
             .expect("poisoned")
+            .source_statistics
             // collections should also contain subsources.
             .retain(|k, _| self.collections.contains_key(k));
         self.sink_statistics

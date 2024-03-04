@@ -29,17 +29,33 @@ use tokio::sync::watch::Receiver;
 
 use crate::collection_mgmt::CollectionManager;
 
+/// Conversion trait to allow multiple shapes of data in `spawn_statistics_scraper`.
+pub(super) trait AsStats<Stats> {
+    fn as_stats(&self) -> &BTreeMap<GlobalId, Option<Stats>>;
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, Option<Stats>>;
+}
+
+impl<Stats> AsStats<Stats> for BTreeMap<GlobalId, Option<Stats>> {
+    fn as_stats(&self) -> &BTreeMap<GlobalId, Option<Stats>> {
+        self
+    }
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, Option<Stats>> {
+        self
+    }
+}
+
 /// Spawns a task that continually (at an interval) writes statistics from storaged's
 /// that are consolidated in shared memory in the controller.
-pub(super) fn spawn_statistics_scraper<Stats, T>(
+pub(super) fn spawn_statistics_scraper<As, Stats, T>(
     statistics_collection_id: GlobalId,
     collection_mgmt: CollectionManager<T>,
-    shared_stats: Arc<Mutex<BTreeMap<GlobalId, Option<Stats>>>>,
+    shared_stats: Arc<Mutex<As>>,
     previous_values: Vec<Row>,
     initial_interval: Duration,
     mut interval_updated: Receiver<Duration>,
 ) -> Box<dyn Any + Send + Sync>
 where
+    As: AsStats<Stats> + Debug + Send + 'static,
     Stats: PackableStats + Debug + Send + 'static,
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
@@ -59,7 +75,9 @@ where
             for row in previous_values {
                 current_metrics.update(row.clone(), 1);
                 let current = Stats::unpack(row);
-                shared_stats.insert(current.0, Some(current.1));
+                shared_stats
+                    .as_mut_stats()
+                    .insert(current.0, Some(current.1));
             }
         }
 
@@ -94,7 +112,7 @@ where
                     // be fine!
                     {
                         let shared_stats = shared_stats.lock().expect("poisoned");
-                        for (_, stats) in shared_stats.iter() {
+                        for (_, stats) in shared_stats.as_stats().iter() {
                             if let Some(stats) = stats {
                                 stats.pack(row_buf.packer());
                                 correction.push((row_buf.clone(), 1));
@@ -120,10 +138,25 @@ where
     Box::new(shutdown_tx)
 }
 
+/// A wrapper around `source_statistics` that ensures locks are always locked in order.
+#[derive(Debug)]
+pub(super) struct SourceStatistics {
+    pub source_statistics: BTreeMap<GlobalId, Option<SourceStatisticsUpdate>>,
+    pub webhook_statistics: BTreeMap<GlobalId, Arc<WebhookStatistics>>,
+}
+
+impl AsStats<SourceStatisticsUpdate> for SourceStatistics {
+    fn as_stats(&self) -> &BTreeMap<GlobalId, Option<SourceStatisticsUpdate>> {
+        &self.source_statistics
+    }
+    fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, Option<SourceStatisticsUpdate>> {
+        &mut self.source_statistics
+    }
+}
+
 /// Spawns a task that continually drains webhook statistics into `shared_stats.
 pub(super) fn spawn_webhook_statistics_scraper(
-    shared_stats: Arc<Mutex<BTreeMap<GlobalId, Option<SourceStatisticsUpdate>>>>,
-    webhook_stats: Arc<Mutex<BTreeMap<GlobalId, Arc<WebhookStatistics>>>>,
+    shared_stats: Arc<Mutex<SourceStatistics>>,
     initial_interval: Duration,
     mut interval_updated: Receiver<Duration>,
 ) -> Box<dyn Any + Send + Sync> {
@@ -150,10 +183,11 @@ pub(super) fn spawn_webhook_statistics_scraper(
 
                 _ = interval.tick() => {
                     let mut shared_stats = shared_stats.lock().expect("poisoned");
-                    let webhook_stats = webhook_stats.lock().expect("poisoned");
-                    for (id, ws) in webhook_stats.iter() {
+                    let shared_stats = &mut *shared_stats;
+                    for (id, ws) in shared_stats.webhook_statistics.iter() {
                         // Don't override it if its been removed.
                         shared_stats
+                            .source_statistics
                             .entry(*id)
                             .and_modify(|current| match current {
                                 Some(ref mut current) => current.incorporate(ws.drain_into_update(*id)),
