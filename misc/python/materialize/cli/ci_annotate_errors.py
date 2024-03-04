@@ -22,11 +22,12 @@ import requests
 from junitparser.junitparser import Error, Failure, JUnitXml
 
 from materialize import ci_util, ui
-from materialize.buildkite import add_annotation_raw
+from materialize.buildkite import add_annotation_raw, get_artifact_url, truncate_str
 from materialize.buildkite_insights.step_durations.build_step import (
+    BuildStep,
     extract_build_step_data,
 )
-from materialize.buildkite_insights.util.buildkite_api import fetch_builds
+from materialize.buildkite_insights.util.buildkite_api import fetch, fetch_builds
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
@@ -123,7 +124,7 @@ IGNORE_RE = re.compile(
 class KnownIssue:
     regex: re.Pattern[Any]
     apply_to: str | None
-    info: Any
+    info: dict[str, Any]
 
 
 @dataclass
@@ -151,12 +152,28 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    compare_against_main = (
-        ui.env_is_truthy("BUILDKITE")
+    num_errors = annotate_logged_errors(args.log_files)
+
+    # No need for rest of the logic as no error logs were found, but since
+    # this script was called the test still failed, so showing the current
+    # failures on main branch.
+    # Only fetch the main branch status when we are running in CI, but no on
+    # main, so inside of a PR or a release branch instead.
+    if (
+        num_errors == 0
+        and ui.env_is_truthy("BUILDKITE")
         and os.getenv("BUILDKITE_BRANCH") != "main"
         and os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
-    )
-    return annotate_logged_errors(args.log_files, compare_against_main)
+        and get_job_state() not in ("canceling", "canceled")
+    ):
+        failures_on_main = get_failures_on_main()
+        suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
+        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> failed, but no error in logs found"
+        if failures_on_main:
+            text += ", " + failures_on_main
+        add_annotation_raw(style="error", markdown=text)
+
+    return num_errors
 
 
 def annotate_errors(
@@ -170,15 +187,22 @@ def annotate_errors(
     known_errors = group_identical_errors(known_errors)
     suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
 
-    action = "succeded with error logs" if not unknown_errors else "failed"
-
-    text = f"[{suite_name}](#{os.getenv('BUILDKITE_JOB_ID') or ''}) {action}"
-    if failures_on_main:
-        text += ", " + failures_on_main
+    if unknown_errors:
+        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> failed"
+        if failures_on_main:
+            text += ", " + failures_on_main
+    else:
+        text = f"<details><summary><a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> succeeded with error logs"
+        if failures_on_main:
+            text += ", " + failures_on_main
+        text += "</summary>\n"
     if unknown_errors:
         text += "\n" + "\n".join(f"* {error}" for error in unknown_errors)
     if known_errors:
         text += "\n" + "\n".join(f"* {error}" for error in known_errors)
+    if not unknown_errors:
+        text += "\n</details>"
+    print(text)
     add_annotation_raw(style=style, markdown=text)
 
 
@@ -198,7 +222,7 @@ def group_identical_errors(errors: list[str]) -> list[str]:
     return consolidated_errors
 
 
-def annotate_logged_errors(log_files: list[str], compare_against_main: bool) -> int:
+def annotate_logged_errors(log_files: list[str]) -> int:
     """
     Returns the number of unknown errors, 0 when all errors are known or there
     were no errors logged. This will be used to fail a test even if the test
@@ -208,14 +232,6 @@ def annotate_logged_errors(log_files: list[str], compare_against_main: bool) -> 
     errors = get_errors(log_files)
 
     if not errors:
-        if compare_against_main:
-            failures_on_main = get_failures_on_main()
-            suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
-            text = f"[{suite_name}](#{os.getenv('BUILDKITE_JOB_ID') or ''}) failed, but no error in logs found"
-            if failures_on_main:
-                text += ", " + failures_on_main
-            add_annotation_raw(style="error", markdown=text)
-
         return 0
 
     step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
@@ -232,13 +248,8 @@ def annotate_logged_errors(log_files: list[str], compare_against_main: bool) -> 
     already_reported_issue_numbers: set[int] = set()
 
     def handle_error(error_message: bytes, location: str):
-        # Don't have too huge output
-        print_error_message = (
-            error_message.decode("utf-8")
-            if len(error_message) < 10_000
-            else error_message.decode("utf-8")[:10_000] + "..."
-        )
-        formatted_error_message = f"```\n{sanitize_text(print_error_message)}\n```"
+        # Don't have too huge output, so truncate
+        formatted_error_message = f"```\n{sanitize_text(truncate_str(error_message.decode('utf-8'), 10_000))}\n```"
 
         for issue in known_issues:
             match = issue.regex.search(error_message)
@@ -251,7 +262,7 @@ def annotate_logged_errors(log_files: list[str], compare_against_main: bool) -> 
 
                 if issue.info["number"] not in already_reported_issue_numbers:
                     known_errors.append(
-                        f"Known issue [{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {location}:\n{formatted_error_message}"
+                        f"Known issue <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a> in {location}:\n{formatted_error_message}"
                     )
                     already_reported_issue_numbers.add(issue.info["number"])
                 break
@@ -267,7 +278,7 @@ def annotate_logged_errors(log_files: list[str], compare_against_main: bool) -> 
 
                     if issue.info["number"] not in already_reported_issue_numbers:
                         unknown_errors.append(
-                            f"Potential regression [{issue.info['title']} (#{issue.info['number']}, closed)]({issue.info['html_url']}) in {location}:\n{formatted_error_message}"
+                            f"Potential regression <a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']}, closed)</a> in {location}:\n{formatted_error_message}"
                         )
                         already_reported_issue_numbers.add(issue.info["number"])
                     break
@@ -280,10 +291,9 @@ def annotate_logged_errors(log_files: list[str], compare_against_main: bool) -> 
         if isinstance(error, ErrorLog):
             for artifact in artifacts:
                 if artifact["job_id"] == job and artifact["path"] == error.file:
-                    org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
-                    pipeline = os.environ["BUILDKITE_PIPELINE_SLUG"]
-                    build = os.environ["BUILDKITE_BUILD_NUMBER"]
-                    linked_file: str = f'[{error.file}](https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact["job_id"]}/artifacts/{artifact["id"]})'
+                    linked_file: str = (
+                        f'<a href="{get_artifact_url(artifact)}">{error.file}</a>'
+                    )
                     break
             else:
                 linked_file: str = error.file
@@ -291,11 +301,12 @@ def annotate_logged_errors(log_files: list[str], compare_against_main: bool) -> 
             handle_error(error.match, linked_file)
 
         else:
-            if "in Code Coverage" in error.text:
+            msg = "\n".join(filter(None, [error.message, error.text]))
+            if "in Code Coverage" in error.text or "covered" in error.message:
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
-                known_errors.append(f"{error.testcase}:\n{error.text}")
+                known_errors.append(f"{error.testcase}:\n{msg}")
             else:
-                handle_error(error.text.encode("utf-8"), error.testcase)
+                handle_error(msg.encode("utf-8"), error.testcase)
 
     annotate_errors(unknown_errors, known_errors, get_failures_on_main())
 
@@ -309,7 +320,9 @@ def annotate_logged_errors(log_files: list[str], compare_against_main: bool) -> 
 def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
     error_logs = []
     for log_file_name in log_file_names:
-        if "junit_" in log_file_name:
+        # junit_testdrive_* is excluded by this, but currently
+        # not more useful than junit_mzcompose anyway
+        if "junit_" in log_file_name and "junit_testdrive_" not in log_file_name:
             xml = JUnitXml.fromfile(log_file_name)
             for suite in xml:
                 for case in suite:
@@ -318,12 +331,11 @@ def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
                             result, Failure
                         ):
                             continue
-                        # junit_testdrive_* is excluded by this, but currently
-                        # not more useful than junit_mzcompose anyway
-                        if result.message is not None and result.text is not None:
-                            error_logs.append(
-                                JunitError(case.name, result.message, result.text)
+                        error_logs.append(
+                            JunitError(
+                                case.name, result.message or "", result.text or ""
                             )
+                        )
         else:
             with open(log_file_name, "r+") as f:
                 try:
@@ -467,7 +479,7 @@ def get_known_issues_from_github() -> tuple[list[KnownIssue], list[str]]:
                 regex_pattern = re.compile(match.strip().encode("utf-8"))
             except:
                 unknown_errors.append(
-                    f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}): Invalid regex in ci-regexp: {match.strip()}, ignoring"
+                    f"<a href=\"{issue.info['html_url']}\">{issue.info['title']} (#{issue.info['number']})</a>: Invalid regex in ci-regexp: {match.strip()}, ignoring"
                 )
                 continue
 
@@ -511,21 +523,33 @@ def get_failures_on_main() -> str | None:
         )
 
     last_build_step_outcomes = extract_build_step_data(
-        builds_data, selected_build_steps=[(step_key, parallel_job)]
+        builds_data, selected_build_steps=[BuildStep(step_key, parallel_job)]
     )
 
     if not last_build_step_outcomes:
         return None
 
     return (
-        f"[main](/materialize/{os.getenv('BUILDKITE_PIPELINE_SLUG')}/builds?branch=main) history: "
+        f"<a href=\"/materialize/{os.getenv('BUILDKITE_PIPELINE_SLUG')}/builds?branch=main\">main</a> history: "
         + "".join(
             [
-                f"[{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}]({outcome.web_url})"
+                f"<a href=\"{outcome.web_url}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
                 for outcome in last_build_step_outcomes
             ]
         )
     )
+
+
+def get_job_state() -> str:
+    pipeline_slug = os.getenv("BUILDKITE_PIPELINE_SLUG")
+    build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
+    job_id = os.getenv("BUILDKITE_JOB_ID")
+    url = f"organizations/materialize/pipelines/{pipeline_slug}/builds/{build_number}"
+    build = fetch(url, {})
+    for job in build["jobs"]:
+        if job["id"] == job_id:
+            return job["state"]
+    raise ValueError("Job not found")
 
 
 if __name__ == "__main__":

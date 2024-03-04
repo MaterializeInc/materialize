@@ -18,6 +18,7 @@ from typing import Any
 class BuildStepOutcome:
     id: str
     step_key: str
+    parallel_job: int | None
     build_number: int
     created_at: datetime
     duration_in_min: float | None
@@ -27,9 +28,15 @@ class BuildStepOutcome:
     web_url: str
 
 
+@dataclass
+class BuildStep:
+    step_key: str
+    parallel_job: int | None
+
+
 def extract_build_step_data(
     builds_data: list[Any],
-    selected_build_steps: list[tuple[str, int | None]],
+    selected_build_steps: list[BuildStep],
 ) -> list[BuildStepOutcome]:
     result = []
     for build in builds_data:
@@ -40,7 +47,7 @@ def extract_build_step_data(
 
 
 def _extract_build_step_data_from_build(
-    build_data: Any, selected_build_steps: list[tuple[str, int | None]]
+    build_data: Any, selected_build_steps: list[BuildStep]
 ) -> list[BuildStepOutcome]:
     collected_steps = []
 
@@ -50,7 +57,7 @@ def _extract_build_step_data_from_build(
 
         if (
             len(selected_build_steps) > 0
-            and (job["step_key"], job.get("parallel_group_index"))
+            and BuildStep(job["step_key"], job.get("parallel_group_index"))
             not in selected_build_steps
         ):
             continue
@@ -81,6 +88,7 @@ def _extract_build_step_data_from_build(
         step_data = BuildStepOutcome(
             id,
             build_step_key,
+            None,  # TODO: The parallel_job number
             build_number,
             created_at,
             duration_in_min,

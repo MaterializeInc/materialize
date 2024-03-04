@@ -11,6 +11,7 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 from materialize import git, spawn, ui
 
@@ -150,6 +151,18 @@ def _validate_parallelism_configuration() -> None:
     ), f"$BUILDKITE_PARALLEL_JOB (= '{job_index}') and $BUILDKITE_PARALLEL_JOB_COUNT (= '{job_count}') need to be either both specified or not specified"
 
 
+def truncate_str(text: str, length: int = 900_000) -> str:
+    # 400 Bad Request: The annotation body must be less than 1 MB
+    return text if len(text) <= length else text[:length] + "..."
+
+
+def get_artifact_url(artifact: dict[str, Any]) -> str:
+    org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
+    pipeline = os.environ["BUILDKITE_PIPELINE_SLUG"]
+    build = os.environ["BUILDKITE_BUILD_NUMBER"]
+    return f"https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact['job_id']}/artifacts/{artifact['id']}"
+
+
 def add_annotation_raw(style: str, markdown: str) -> None:
     spawn.runv(
         [
@@ -163,17 +176,13 @@ def add_annotation_raw(style: str, markdown: str) -> None:
 
 
 def add_annotation(style: str, title: str, content: str) -> None:
-    # 400 Bad Request: The annotation body must be less than 1 MB
-    if len(content) > 900_000:
-        content = content[:900_000] + "..."
-
     if style == "info":
         markdown = f"""<details><summary>{title}</summary>
 
-{content}
+{truncate_str(content)}
 </details>"""
     else:
         markdown = f"""{title}
 
-{content}"""
+{truncate_str(content)}"""
     add_annotation_raw(style, markdown)
