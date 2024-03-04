@@ -527,10 +527,6 @@ mz_timezone_names
 
 # Check default sources, tables, and views in mz_internal.
 
-# The sources in the catalog depend on the number of replicas
-$ skip-if
-SELECT ${arg.replicas} > 1;
-
 > SHOW SOURCES FROM mz_internal
 name                                           type   size  cluster
 ------------------------------------------------------------------
