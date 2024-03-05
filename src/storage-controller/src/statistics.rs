@@ -29,7 +29,7 @@ use tokio::sync::watch::Receiver;
 
 use crate::collection_mgmt::CollectionManager;
 
-/// Conversion trait to allow multiple shapes of data in `spawn_statistics_scraper`.
+/// Conversion trait to allow multiple shapes of data in [`spawn_statistics_scraper`].
 pub(super) trait AsStats<Stats> {
     fn as_stats(&self) -> &BTreeMap<GlobalId, Option<Stats>>;
     fn as_mut_stats(&mut self) -> &mut BTreeMap<GlobalId, Option<Stats>>;
@@ -46,16 +46,16 @@ impl<Stats> AsStats<Stats> for BTreeMap<GlobalId, Option<Stats>> {
 
 /// Spawns a task that continually (at an interval) writes statistics from storaged's
 /// that are consolidated in shared memory in the controller.
-pub(super) fn spawn_statistics_scraper<As, Stats, T>(
+pub(super) fn spawn_statistics_scraper<StatsWrapper, Stats, T>(
     statistics_collection_id: GlobalId,
     collection_mgmt: CollectionManager<T>,
-    shared_stats: Arc<Mutex<As>>,
+    shared_stats: Arc<Mutex<StatsWrapper>>,
     previous_values: Vec<Row>,
     initial_interval: Duration,
     mut interval_updated: Receiver<Duration>,
 ) -> Box<dyn Any + Send + Sync>
 where
-    As: AsStats<Stats> + Debug + Send + 'static,
+    StatsWrapper: AsStats<Stats> + Debug + Send + 'static,
     Stats: PackableStats + Debug + Send + 'static,
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
@@ -138,10 +138,19 @@ where
     Box::new(shutdown_tx)
 }
 
-/// A wrapper around `source_statistics` that ensures locks are always locked in order.
+/// A wrapper around source and webhook statistics maps so we can hold them within a single lock.
 #[derive(Debug)]
 pub(super) struct SourceStatistics {
+    /// Statistics-per-source that will be emitted to the source statistics table with
+    /// the [`spawn_statistics_scraper`] above. Values are optional as cluster-hosted
+    /// sources must initialize the first values, but we need `None` to mark a source
+    /// having been created vs dropped (particularly when a cluster can race and report
+    /// statistics for a dropped source, which we must ignore).
     pub source_statistics: BTreeMap<GlobalId, Option<SourceStatisticsUpdate>>,
+    /// A shared map with atomics for webhook appenders to update the (currently 4)
+    /// statistics that can meaningfully produce. These are periodically
+    /// copied into `source_statistics` [`spawn_webhook_statistics_scraper`] to avoid
+    /// contention.
     pub webhook_statistics: BTreeMap<GlobalId, Arc<WebhookStatistics>>,
 }
 
