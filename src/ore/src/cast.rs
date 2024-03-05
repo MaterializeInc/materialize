@@ -269,7 +269,7 @@ cast_lossy!(u64, f64);
 cast_lossy!(f64, u64);
 cast_lossy!(f64, u32);
 
-#[mz_test_macro::test]
+#[crate::test]
 fn test_try_cast_from() {
     let f64_i64_cases = vec![
         (0.0, Some(0)),

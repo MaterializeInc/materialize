@@ -91,14 +91,14 @@ mod tests {
 
     use super::*;
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn basic_usage() {
         let error = anyhow!("root");
         let error = error.context("context");
         assert_eq!(error.to_string_with_causes(), "context: root");
     }
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn basic_usage_with_arc() {
         // The reason for this signature is that our Plan errors have a `cause` field like this:
         // ```

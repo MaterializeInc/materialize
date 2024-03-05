@@ -63,9 +63,10 @@ class FailedTestExecutionError(UIError):
 def try_determine_errors_from_cmd_execution(
     e: CommandFailureCausedUIError,
 ) -> list[TestFailureDetails]:
-    output = e.stderr
-    if output is None:
-        output = e.stdout
+    output = e.stderr or e.stdout
+
+    if "running docker compose failed" in str(e):
+        return [determine_error_from_docker_compose_failure(e, output)]
 
     if output is None:
         return []
@@ -107,6 +108,18 @@ def try_determine_errors_from_cmd_execution(
             collected_errors.append(failure_details)
 
     return collected_errors
+
+
+def determine_error_from_docker_compose_failure(
+    e: CommandFailureCausedUIError, output: str | None
+) -> TestFailureDetails:
+    command = " ".join([str(x) for x in e.cmd])
+    return TestFailureDetails(
+        f"Docker compose failed: {command}",
+        details=output,
+        location=None,
+        line_number=None,
+    )
 
 
 def try_determine_error_location_from_cmd(cmd: list[str]) -> str | None:

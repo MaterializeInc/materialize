@@ -29,6 +29,7 @@ use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::instrument;
 use mz_repr::{GlobalId, Timestamp};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::Antichain;
 

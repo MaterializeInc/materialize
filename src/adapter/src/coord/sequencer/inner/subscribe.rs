@@ -9,6 +9,7 @@
 
 use mz_ore::instrument;
 use mz_sql::plan::{self, QueryWhen};
+use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::Span;

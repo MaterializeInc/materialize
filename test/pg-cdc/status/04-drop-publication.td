@@ -23,6 +23,9 @@ true
 > SELECT error ILIKE '%publication "mz_source" does not exist' FROM mz_internal.mz_source_statuses WHERE name = 't';
 true
 
+# TODO: This should be made reliable without sleeping, #25479
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
+
 ! SELECT * FROM t;
 contains:publication "mz_source" does not exist
 

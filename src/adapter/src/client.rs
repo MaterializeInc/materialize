@@ -33,6 +33,7 @@ use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::StatementKind;

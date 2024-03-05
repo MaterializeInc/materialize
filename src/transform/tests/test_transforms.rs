@@ -211,6 +211,11 @@ fn handle_apply(
             let transform = TopK;
             apply_transform(transform, catalog, input)
         }
+        "fusion_join" => {
+            use mz_transform::fusion::join::Join;
+            let transform = Join;
+            apply_transform(transform, catalog, input)
+        }
         transform => Err(format!("unsupported pipeline transform: {transform}")),
     };
 

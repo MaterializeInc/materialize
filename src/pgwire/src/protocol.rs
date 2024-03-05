@@ -41,6 +41,7 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::INTERNAL_USER_NAMES;
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, Var, VarInput, MAX_COPY_FROM_SIZE};
 use postgres::error::SqlState;

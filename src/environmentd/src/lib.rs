@@ -612,6 +612,7 @@ impl Listeners {
         // Launch SQL server.
         task::spawn(|| "sql_server", {
             let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                label: "external_pgwire",
                 tls: pgwire_tls.clone(),
                 adapter_client: adapter_client.clone(),
                 frontegg: config.frontegg.clone(),
@@ -625,6 +626,7 @@ impl Listeners {
         // Launch internal SQL server.
         task::spawn(|| "internal_sql_server", {
             let internal_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                label: "internal_pgwire",
                 tls: pgwire_tls.map(|mut pgwire_tls| {
                     // Allow, but do not require, TLS connections on the internal
                     // port. Some users of the internal SQL server do not support
@@ -677,6 +679,7 @@ impl Listeners {
         // Launch SQL server exposed to balancers
         task::spawn(|| "balancer_sql_server", {
             let balancer_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                label: "balancer_pgwire",
                 tls: None,
                 adapter_client: adapter_client.clone(),
                 frontegg: config.frontegg.clone(),

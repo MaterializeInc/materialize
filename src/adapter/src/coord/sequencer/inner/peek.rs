@@ -25,6 +25,7 @@ use mz_sql::catalog::CatalogCluster;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self, HirScalarExpr};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
@@ -526,6 +527,7 @@ impl Coordinator {
             )
             .await
             .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
+        let session = ctx.session().meta();
 
         mz_ore::task::spawn_blocking(
             || "optimize peek",
@@ -541,7 +543,7 @@ impl Coordinator {
                             // HIR ⇒ MIR lowering and MIR optimization (local)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                             // Attach resolved context required to continue the pipeline.
-                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, ctx.session(), stats);
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, &session, stats);
                             // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                             let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
@@ -552,7 +554,7 @@ impl Coordinator {
                             // HIR ⇒ MIR lowering and MIR optimization (local and global)
                             let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                             // Attach resolved context required to continue the pipeline.
-                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, ctx.session(), stats);
+                            let local_mir_plan = local_mir_plan.resolve(timestamp_context, &session, stats);
                             // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                             let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 

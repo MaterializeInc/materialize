@@ -754,7 +754,7 @@ mod tests {
     use tracing::Level;
     use tracing_subscriber::filter::{EnvFilter, LevelFilter, Targets};
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn overriding_targets() {
         let user_defined = Targets::new().with_target("my_crate", Level::INFO);
 
@@ -768,7 +768,7 @@ mod tests {
         assert!(filters.would_enable("my_crate", &Level::INFO));
     }
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn crate_level() {
         // target=level directives only. should default to ERROR if unspecified
         let filter = EnvFilter::from_str("abc=trace,def=debug").expect("valid");

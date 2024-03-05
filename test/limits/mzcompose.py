@@ -18,6 +18,8 @@ from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -81,8 +83,8 @@ class Connections(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         # three extra connections for mz_system, default connection, and one
-        # since sqlparse 0.4.4
-        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+3};")
+        # since sqlparse 0.4.4. 3 reserved superuser connections since #25666
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+4};")
 
         for i in cls.all():
             print(
@@ -205,7 +207,7 @@ class KafkaTopics(Generator):
 
 
 class KafkaSourcesSameTopic(Generator):
-    COUNT = min(Generator.COUNT, 50)  # 400% CPU usage in librdkafka
+    COUNT = 500  # high memory consumption
 
     @classmethod
     def body(cls) -> None:
@@ -1415,9 +1417,115 @@ class RowsJoinOuter(Generator):
         print(f"{cls.COUNT}")
 
 
+class PostgresSources(Generator):
+    COUNT = 500  # high memory consumption
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=postgres://postgres:postgres@postgres")
+        print("ALTER USER postgres WITH replication;")
+        print("DROP SCHEMA IF EXISTS public CASCADE;")
+        print("DROP PUBLICATION IF EXISTS mz_source;")
+        print("CREATE SCHEMA public;")
+        for i in cls.all():
+            print(f"CREATE TABLE t{i} (c int);")
+            print(f"ALTER TABLE t{i} REPLICA IDENTITY FULL;")
+            print(f"INSERT INTO t{i} VALUES ({i});")
+        print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
+        print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
+        print(
+            """> CREATE CONNECTION pg TO POSTGRES (
+                HOST postgres,
+                DATABASE postgres,
+                USER postgres,
+                PASSWORD SECRET pgpass
+            )"""
+        )
+        for i in cls.all():
+            print(
+                f"""> CREATE SOURCE p{i}
+              IN CLUSTER single_replica_cluster
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (t{i})
+              """
+            )
+
+        for i in cls.all():
+            print(f"> SELECT * FROM t{i};\n{i}")
+
+
+class MySqlSources(Generator):
+    COUNT = 500  # high memory consumption
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print(
+            f"$ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}"
+        )
+        print("$ mysql-execute name=mysql")
+        print(f"SET GLOBAL max_connections={cls.COUNT * 2 + 2}")
+        print("DROP DATABASE IF EXISTS public;")
+        print("CREATE DATABASE public;")
+        print("USE public;")
+        for i in cls.all():
+            print(f"CREATE TABLE t{i} (c int);")
+            print(f"INSERT INTO t{i} VALUES ({i});")
+        print(
+            f"> CREATE SECRET IF NOT EXISTS mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'"
+        )
+        print(
+            """> CREATE CONNECTION mysql TO MYSQL (
+                HOST mysql,
+                USER root,
+                PASSWORD SECRET mysqlpass
+            )"""
+        )
+        for i in cls.all():
+            print(
+                f"""> CREATE SOURCE m{i}
+              IN CLUSTER single_replica_cluster
+              FROM MYSQL CONNECTION mysql FOR TABLES (public.t{i})
+              """
+            )
+
+        for i in cls.all():
+            print(f"> SELECT * FROM t{i};\n{i}")
+
+
+class WebhookSources(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        for i in cls.all():
+            print(
+                f"> CREATE SOURCE w{i} IN CLUSTER single_replica_cluster FROM WEBHOOK BODY FORMAT TEXT;"
+            )
+
+        # TODO(def-): Figure out how to use webhooks with balancerd
+        # for i in cls.all():
+        #     print(f"$ webhook-append database=materialize schema=public name=w{i}")
+        #     print(f"text{i}")
+
+        for i in cls.all():
+            print(f"> SELECT * FROM w{i}")
+            # print(f"text{i}")
+
+
 SERVICES = [
     Zookeeper(),
     Kafka(),
+    Postgres(max_wal_senders=Generator.COUNT, max_replication_slots=Generator.COUNT),
+    MySql(),
     SchemaRegistry(),
     # We create all sources, sinks and dataflows by default with SIZE '1'
     # The workflow_instance_size workflow is testing multi-process clusters
@@ -1454,7 +1562,15 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "balancerd")
+    c.up(
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "postgres",
+        "mysql",
+        "materialized",
+        "balancerd",
+    )
 
     nodes = [
         Clusterd(name="clusterd_1_1"),

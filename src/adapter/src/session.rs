@@ -29,11 +29,12 @@ use mz_repr::user::ExternalUserMetadata;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
     RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
 };
 pub use mz_sql::session::vars::{
-    EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
+    EndTransactionAction, SessionVars, Var, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 use mz_sql::session::vars::{IsolationLevel, VarInput};
@@ -109,6 +110,62 @@ where
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
 }
 
+impl<T> SessionMetadata for Session<T>
+where
+    T: Debug + Clone + Send + Sync,
+    T: TimestampManipulation,
+{
+    fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    fn pcx(&self) -> &PlanContext {
+        &self
+            .transaction()
+            .inner()
+            .expect("no active transaction")
+            .pcx
+    }
+
+    fn role_metadata(&self) -> &RoleMetadata {
+        self.role_metadata
+            .as_ref()
+            .expect("role_metadata invariant violated")
+    }
+
+    fn vars(&self) -> &SessionVars {
+        &self.vars
+    }
+}
+
+/// Data structure suitable for passing to other threads that need access to some common Session
+/// properties.
+#[derive(Debug)]
+pub struct SessionMeta {
+    conn_id: ConnectionId,
+    pcx: PlanContext,
+    role_metadata: RoleMetadata,
+    vars: SessionVars,
+}
+
+impl SessionMetadata for SessionMeta {
+    fn vars(&self) -> &SessionVars {
+        &self.vars
+    }
+
+    fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    fn pcx(&self) -> &PlanContext {
+        &self.pcx
+    }
+
+    fn role_metadata(&self) -> &RoleMetadata {
+        &self.role_metadata
+    }
+}
+
 /// Configures a new [`Session`].
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -126,6 +183,19 @@ impl<T: TimestampManipulation> Session<T> {
     pub(crate) fn new(build_info: &'static BuildInfo, config: SessionConfig) -> Session<T> {
         assert_ne!(config.conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(build_info, config)
+    }
+
+    /// Returns a reference-less collection of data usable by other tasks that don't have ownership
+    /// of the Session.
+    pub fn meta(&self) -> SessionMeta {
+        SessionMeta {
+            conn_id: self.conn_id().clone(),
+            pcx: self.pcx().clone(),
+            role_metadata: self.role_metadata().clone(),
+            vars: self.vars.clone(),
+        }
+
+        // TODO: soft_assert that these are the same as Session.
     }
 
     /// Creates new statement logging metadata for a one-off
@@ -224,24 +294,9 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns the connection ID associated with the session.
-    pub fn conn_id(&self) -> &ConnectionId {
-        &self.conn_id
-    }
-
     /// Returns the secret key associated with the session.
     pub fn secret_key(&self) -> u32 {
         self.secret_key
-    }
-
-    /// Returns the current transaction's PlanContext. Panics if there is not a
-    /// current transaction.
-    pub fn pcx(&self) -> &PlanContext {
-        &self
-            .transaction()
-            .inner()
-            .expect("no active transaction")
-            .pcx
     }
 
     fn new_pcx(&self, mut wall_time: DateTime<Utc>) -> PlanContext {
@@ -693,11 +748,6 @@ impl<T: TimestampManipulation> Session<T> {
         self.vars.reset_all();
     }
 
-    /// Returns the user who owns this session.
-    pub fn user(&self) -> &User {
-        self.vars.user()
-    }
-
     /// Returns the [application_name] that created this session.
     ///
     /// [application_name]: (https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
@@ -733,11 +783,6 @@ impl<T: TimestampManipulation> Session<T> {
         }
     }
 
-    /// Returns whether the current session is a superuser.
-    pub fn is_superuser(&self) -> bool {
-        self.vars.is_superuser()
-    }
-
     /// Drains any external metadata updates and applies the changes from the latest update.
     pub fn apply_external_metadata_updates(&mut self) {
         // If no sender is registered then there isn't anything to do.
@@ -763,40 +808,6 @@ impl<T: TimestampManipulation> Session<T> {
             session_role: role_id,
             current_role: role_id,
         });
-    }
-
-    /// Returns the session's role metadata.
-    ///
-    /// # Panics
-    /// If the session has not connected successfully.
-    pub fn role_metadata(&self) -> &RoleMetadata {
-        self.role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-    }
-
-    /// Returns the session's session role ID.
-    ///
-    /// # Panics
-    /// If the session has not connected successfully.
-    pub fn session_role_id(&self) -> &RoleId {
-        &self
-            .role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-            .session_role
-    }
-
-    /// Returns the session's current role ID.
-    ///
-    /// # Panics
-    /// If the session has not connected successfully.
-    pub fn current_role_id(&self) -> &RoleId {
-        &self
-            .role_metadata
-            .as_ref()
-            .expect("role_metadata invariant violated")
-            .current_role
     }
 
     /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to

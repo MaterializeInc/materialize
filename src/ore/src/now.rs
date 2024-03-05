@@ -111,7 +111,7 @@ mod tests {
 
     use super::to_datetime;
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn test_to_datetime() {
         let test_cases = [
             (

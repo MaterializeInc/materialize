@@ -23,23 +23,19 @@
 //! enforcing the use of skip_all, users must use the `fields` argument of the `tracing::instrument`
 //! macro to manually select their desired fields.
 
-extern crate proc_macro;
-
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro::TokenStream;
+use proc_macro2::{TokenStream as TokenStream2, TokenTree};
 use quote::quote;
 
-#[proc_macro_attribute]
-pub fn instrument(
-    attr: proc_macro::TokenStream,
-    item: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
-    let attr = TokenStream::from(attr);
-    let item = TokenStream::from(item);
+/// Implementation for the `#[instrument]` macro.
+pub fn instrument_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = TokenStream2::from(attr);
+    let item = TokenStream2::from(item);
 
     // syn appears to not be able to parse the `%` part of things like `#[instrument(fields(shard =
     // %id))]`, so we use the more naive proc_macro crate and look for strings.
     let mut iter = attr.into_iter();
-    let mut args: TokenStream = quote! { skip_all }.into();
+    let mut args: TokenStream2 = quote! { skip_all }.into();
     while let Some(tok) = iter.next() {
         match &tok {
             TokenTree::Ident(ident) => match ident.to_string().as_str() {

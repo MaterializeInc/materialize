@@ -31,12 +31,12 @@ impl MetricsConfig {
 #[derive(Clone, Debug)]
 pub struct Metrics {
     inner: MetricsConfig,
-    internal: bool,
+    label: &'static str,
 }
 
 impl Metrics {
-    pub fn new(inner: MetricsConfig, internal: bool) -> Self {
-        let self_ = Self { inner, internal };
+    pub fn new(inner: MetricsConfig, label: &'static str) -> Self {
+        let self_ = Self { inner, label };
 
         // pre-initialize labels we are planning to use to ensure they are all
         // always emitted as time series
@@ -61,10 +61,6 @@ impl Metrics {
     }
 
     fn source_label(&self) -> &'static str {
-        if self.internal {
-            "internal_pgwire"
-        } else {
-            "external_pgwire"
-        }
+        self.label
     }
 }

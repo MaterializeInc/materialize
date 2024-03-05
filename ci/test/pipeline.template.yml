@@ -351,6 +351,19 @@ steps:
         agents:
           queue: linux-aarch64-small
 
+      - id: mysql-cdc-resumption
+        label: MySQL CDC resumption tests
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs: [test/mysql-cdc-resumption]
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-resumption
+        agents:
+          queue: linux-aarch64-small
+
   - group: "Postgres tests"
     key: postgres-tests
     steps:
@@ -490,7 +503,7 @@ steps:
   - id: cloudtest
     label: Cloudtest %N
     depends_on: build-aarch64
-    parallelism: 6
+    parallelism: 8
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     inputs:
