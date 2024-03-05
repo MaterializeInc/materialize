@@ -69,6 +69,10 @@ pub(super) enum DataflowCreationError {
     MissingAsOf,
     #[error("dataflow has an as_of not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
+    #[error("subscribe dataflow has an empty as_of")]
+    EmptyAsOfForSubscribe,
+    #[error("copy to dataflow has an empty as_of")]
+    EmptyAsOfForCopyTo,
 }
 
 impl From<CollectionMissing> for DataflowCreationError {
@@ -887,12 +891,20 @@ where
         &mut self,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
-        // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
-        // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
+        // Simple sanity checks around `as_of`
         let as_of = dataflow
             .as_of
             .as_ref()
             .ok_or(DataflowCreationError::MissingAsOf)?;
+        if as_of.is_empty() && dataflow.subscribe_ids().next().is_some() {
+            return Err(DataflowCreationError::EmptyAsOfForSubscribe);
+        }
+        if as_of.is_empty() && dataflow.copy_to_ids().next().is_some() {
+            return Err(DataflowCreationError::EmptyAsOfForCopyTo);
+        }
+
+        // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
+        // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
 
         // When we initialize per-replica write frontiers (and thereby the per-replica read
         // capabilities), we cannot use the `as_of` because of reconciliation: Existing
@@ -933,6 +945,12 @@ where
 
             compute_dependencies.push(*index_id);
             replica_write_frontier.join_assign(&since.to_owned());
+        }
+
+        // If the `as_of` is empty, we are not going to create a dataflow, so don't install any read
+        // holds.
+        if as_of.is_empty() {
+            replica_write_frontier = Antichain::new();
         }
 
         // Canonicalize dependencies.
@@ -995,7 +1013,7 @@ where
             self.compute.copy_tos.insert(copy_to_id);
         }
 
-        // Here we augment all imported sources and all exported sinks with with the appropriate
+        // Here we augment all imported sources and all exported sinks with the appropriate
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
         for (id, (si, monotonic)) in dataflow.source_imports {
@@ -1051,7 +1069,7 @@ where
             index_imports: dataflow.index_imports,
             objects_to_build: dataflow.objects_to_build,
             index_exports: dataflow.index_exports,
-            as_of: dataflow.as_of,
+            as_of: dataflow.as_of.clone(),
             until: dataflow.until,
             debug_name: dataflow.debug_name,
         };
@@ -1076,8 +1094,17 @@ where
             );
         }
 
-        self.compute
-            .send(ComputeCommand::CreateDataflow(augmented_dataflow));
+        // Skip the actual dataflow creation for an empty `as_of`. (Happens e.g. for the
+        // bootstrapping of a REFRESH AT mat view that is past its last refresh.)
+        if as_of.is_empty() {
+            tracing::info!(
+                name = %augmented_dataflow.debug_name,
+                "not sending `CreateDataflow`, because of empty `as_of`",
+            );
+        } else {
+            self.compute
+                .send(ComputeCommand::CreateDataflow(augmented_dataflow));
+        }
 
         Ok(())
     }

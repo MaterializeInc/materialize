@@ -131,6 +131,14 @@ pub enum DataflowCreationError {
     /// TODO(#25239): Add documentation.
     #[error("dataflow has an as_of not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
+    /// We skip dataflow creation for empty `as_of`s, which would be a problem for a SUBSCRIBE,
+    /// because an initial response is expected.
+    #[error("subscribe dataflow has an empty as_of")]
+    EmptyAsOfForSubscribe,
+    /// We skip dataflow creation for empty `as_of`s, which would be a problem for a COPY TO,
+    /// because it should always have an external side effect.
+    #[error("copy to dataflow has an empty as_of")]
+    EmptyAsOfForCopyTo,
 }
 
 impl From<InstanceMissing> for DataflowCreationError {
@@ -146,6 +154,8 @@ impl From<instance::DataflowCreationError> for DataflowCreationError {
             CollectionMissing(id) => Self::CollectionMissing(id),
             MissingAsOf => Self::MissingAsOf,
             SinceViolation(id) => Self::SinceViolation(id),
+            EmptyAsOfForSubscribe => Self::EmptyAsOfForSubscribe,
+            EmptyAsOfForCopyTo => Self::EmptyAsOfForCopyTo,
         }
     }
 }

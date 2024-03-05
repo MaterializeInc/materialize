@@ -2214,7 +2214,9 @@ impl Coordinator {
 
         let write_frontier = self.least_valid_write(&id_bundle);
 
-        // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
+        // We wouldn't be able to calculate a `max_compaction_frontier` if `write_frontier` is
+        // empty. (This can happen for constant collections, and for an index on a REFRESH MV that
+        // is past its last refresh.)
         if write_frontier.is_empty() {
             tracing::info!(
                 export_ids = %dataflow.display_export_ids(),
@@ -2324,15 +2326,14 @@ impl Coordinator {
         // `upper`, because then we'd skip times in the MV output.
         let warmup_frontier = self.greatest_available_read(&id_bundle);
         let max_as_of = self.storage_write_frontier(*sink_id);
-        let candidate_as_of = warmup_frontier.meet(max_as_of);
-
-        // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        // (See https://github.com/MaterializeInc/materialize/pull/25353)
-        let as_of = if candidate_as_of.is_empty() {
-            min_as_of.clone()
+        let candidate_as_of = if max_as_of.is_empty() {
+            // If the storage collection is already sealed, there is no need for warmup.
+            max_as_of.clone()
         } else {
-            min_as_of.join(&candidate_as_of)
+            warmup_frontier.meet(max_as_of)
         };
+
+        let as_of = min_as_of.join(&candidate_as_of);
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
