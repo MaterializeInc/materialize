@@ -68,7 +68,6 @@ steps:
 
     - id: zippy-mysql-cdc-large
       label: "Large Zippy MySqlCdc"
-      skip: "TODO: #25582 (invalid data in source)"
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
