@@ -37,7 +37,7 @@ use crate::{ApiTokenArgs, AppPassword, Client, Error, FronteggCliArgs};
 pub const DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE: NonZeroUsize =
     unsafe { NonZeroUsize::new_unchecked(1024) };
 
-/// If a session is dropped within `DEFAULT_REFRESH_DROP_WINDOW * valid_for` seconds of an
+/// If a session is dropped within [`DEFAULT_REFRESH_DROP_FACTOR`] `* valid_for` seconds of an
 /// authentication token expiring, then we'll continue to refresh the auth token, with the
 /// assumption that a new instance of this session will be started soon.
 pub const DEFAULT_REFRESH_DROP_FACTOR: f64 = 0.05;
