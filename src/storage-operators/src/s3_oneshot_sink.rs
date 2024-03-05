@@ -20,6 +20,7 @@ use http::Uri;
 use mz_aws_util::s3_uploader::{
     CompletedUpload, S3MultiPartUploadError, S3MultiPartUploader, S3MultiPartUploaderConfig,
 };
+use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;
 use mz_pgcopy::{encode_copy_format, CopyFormatParams};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
@@ -79,7 +80,7 @@ pub fn copy_to<G, F>(
         }
 
         let sdk_config = match aws_connection
-            .load_sdk_config(&connection_context, connection_id)
+            .load_sdk_config(&connection_context, connection_id, InTask::Yes)
             .await
         {
             Ok(sdk_config) => sdk_config,

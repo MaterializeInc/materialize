@@ -2649,9 +2649,9 @@ impl Coordinator {
         self.controller.connection_context()
     }
 
-    /// Obtain a reference to the coordinator's secret reader.
-    fn secrets_reader(&self) -> &dyn SecretsReader {
-        &*self.connection_context().secrets_reader
+    /// Obtain a reference to the coordinator's secret reader, in an `Arc`.
+    fn secrets_reader(&self) -> &Arc<dyn SecretsReader> {
+        &self.connection_context().secrets_reader
     }
 
     /// Publishes a notice message to all sessions.
