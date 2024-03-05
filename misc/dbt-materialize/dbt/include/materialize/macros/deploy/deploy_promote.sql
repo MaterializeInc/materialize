@@ -56,15 +56,6 @@
     {% if not schema_exists(deploy_schema) %}
         {{ exceptions.raise_compiler_error("Deployment schema " ~ deploy_schema ~ " does not exist") }}
     {% endif %}
-
-    {% if schema_contains_sources_or_sinks(schema) %}
-        {{ exceptions.raise_compiler_error("""
-        Production schema " ~ schema ~ " contains sources or sinks. This is not currently
-        supported by dbt run-operation deploy_promote.
-
-        If this feature is important to you, please reach out!
-        """) }}
-    {% endif %}
     {% if schema_contains_sources_or_sinks(deploy_schema) %}
         {{ exceptions.raise_compiler_error("""
         Deployment schema " ~ deploy_schema ~ " contains sources or sinks. This is not currently
@@ -82,15 +73,6 @@
     {% endif %}
     {% if not cluster_exists(deploy_cluster) %}
         {{ exceptions.raise_compiler_error("Deployment cluster " ~ deploy_cluster ~ " does not exist") }}
-    {% endif %}
-
-    {% if cluster_contains_sources_or_sinks(cluster) %}
-        {{ exceptions.raise_compiler_error("""
-        Production cluster " ~ cluster ~ " contains sources or sinks. This is not currently
-        supported by dbt run-operation deploy_promote.
-
-        If this feature is important to you, please reach out!
-        """) }}
     {% endif %}
     {% if cluster_contains_sources_or_sinks(deploy_cluster) %}
         {{ exceptions.raise_compiler_error("""

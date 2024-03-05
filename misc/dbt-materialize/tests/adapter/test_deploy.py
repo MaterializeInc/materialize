@@ -24,6 +24,85 @@ from fixtures import (
 )
 
 
+class TestCIFixture:
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("COMMENT ON CLUSTER quickstart IS NULL")
+        project.run_sql("COMMENT ON SCHEMA public IS NULL")
+
+    def test_ci_tags_match(self, project):
+        run_dbt(
+            [
+                "run-operation",
+                "set_cluster_ci_tag",
+                "--args",
+                "{cluster: quickstart, ci_tag: test}",
+            ]
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "set_schema_ci_tag",
+                "--args",
+                "{schema: public, ci_tag: test}",
+            ]
+        )
+
+        run_dbt(
+            [
+                "run-operation",
+                "check_cluster_ci_tag",
+                "--args",
+                "{cluster: quickstart, ci_tag: test}",
+            ]
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "check_schema_ci_tag",
+                "--args",
+                "{schema: public, ci_tag: test}",
+            ]
+        )
+
+    def test_ci_tags_mismatch(self, project):
+        run_dbt(
+            [
+                "run-operation",
+                "set_cluster_ci_tag",
+                "--args",
+                "{cluster: quickstart, ci_tag: test}",
+            ]
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "set_schema_ci_tag",
+                "--args",
+                "{schema: public, ci_tag: test}",
+            ]
+        )
+
+        run_dbt(
+            [
+                "run-operation",
+                "check_cluster_ci_tag",
+                "--args",
+                "{cluster: quickstart, ci_tag: different}",
+            ],
+            expect_pass=False,
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "check_schema_ci_tag",
+                "--args",
+                "{schema: public, ci_tag: different}",
+            ],
+            expect_pass=False,
+        )
+
+
 class TestRunWithDeploy:
     @pytest.fixture(scope="class")
     def project_config_update(self):
