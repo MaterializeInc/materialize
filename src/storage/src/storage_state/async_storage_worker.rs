@@ -32,10 +32,10 @@ use mz_storage_types::sources::{
     SourceConnection, SourceData, SourceEnvelope, SourceTimestamp,
 };
 use timely::order::PartialOrder;
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
 
-use crate::source::reclock::{ReclockBatch, ReclockFollower};
 use crate::source::types::SourceRender;
 
 /// A worker that can execute commands that come in on a channel and returns
@@ -167,20 +167,24 @@ where
         }
     }
 
-    // This cannot be instantiated earlier because `AsyncStorageWorker` then needs to be `+ Send +
-    // Sync` and capturing the timestamper in the Future makes it non-Send since it contains an Rc.
-    let mut timestamper = ReclockFollower::new(as_of);
-    timestamper.push_trace_batch(ReclockBatch {
-        updates: remap_updates,
-        upper: remap_upper.clone(),
-    });
+    remap_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
 
+    let mut source_upper = MutableAntichain::new();
     let mut source_resume_uppers = BTreeMap::new();
     for (id, upper) in resume_uppers {
-        let source_upper = timestamper
-            .source_upper_at_frontier(upper.borrow())
-            .expect("enough data is loaded");
-        source_resume_uppers.insert(*id, source_upper);
+        let resume_upper = if PartialOrder::less_equal(upper, &as_of) {
+            Antichain::from_elem(Timestamp::minimum())
+        } else {
+            let idx = remap_updates.partition_point(|(_, t, _)| !upper.less_than(t));
+            source_upper.clear();
+            source_upper.update_iter(
+                remap_updates[0..idx]
+                    .iter()
+                    .map(|(from_time, _, diff)| (from_time.clone(), *diff)),
+            );
+            source_upper.frontier().to_owned()
+        };
+        source_resume_uppers.insert(*id, resume_upper);
     }
     source_resume_uppers
 }
