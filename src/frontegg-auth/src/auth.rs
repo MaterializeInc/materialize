@@ -486,6 +486,10 @@ impl AuthenticatorInner {
                     let mut sessions = inner.active_sessions.lock().expect("lock poisoned");
                     sessions.remove(&password);
                 }
+                {
+                    let mut dropped_session = inner.dropped_sessions.lock().expect("lock poisoned");
+                    dropped_session.pop(&password);
+                }
 
                 tracing::debug!(?password.client_id, "shutting down refresh task");
                 gauge.dec();
