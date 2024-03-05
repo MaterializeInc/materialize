@@ -171,6 +171,7 @@ pub enum EventDetails {
     SchemaV2(SchemaV2),
     UpdateItemV1(UpdateItemV1),
     RenameSchemaV1(RenameSchemaV1),
+    AlterRetainHistoryV1(AlterRetainHistoryV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -360,6 +361,13 @@ pub struct RenameSchemaV1 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct AlterRetainHistoryV1 {
+    pub id: String,
+    pub old_history: Option<String>,
+    pub new_history: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct UpdateItemV1 {
     pub id: String,
     #[serde(flatten)]
@@ -400,6 +408,9 @@ impl EventDetails {
             }
             EventDetails::UpdateOwnerV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::UpdateItemV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::AlterRetainHistoryV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
         }
     }
 }

@@ -2616,10 +2616,18 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_retain_history(
         &mut self,
-        _session: &mut Session,
-        _plan: plan::AlterRetainHistoryPlan,
+        session: &mut Session,
+        plan: plan::AlterRetainHistoryPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        unreachable!("should be unsupported during planning");
+        let ops = vec![catalog::Op::AlterRetainHistory {
+            id: plan.id,
+            value: plan.value,
+        }];
+        self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            coord.update_storage_base_read_policies(vec![(plan.id, plan.window.into())]);
+        })
+        .await?;
+        Ok(ExecuteResponse::AlteredObject(plan.object_type))
     }
 
     #[instrument]

@@ -46,7 +46,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterScheduleOptionValue, ConnectionOptionName,
-    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode,
+    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode, Value,
     WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -973,7 +973,9 @@ pub struct AlterSetClusterPlan {
 #[derive(Debug)]
 pub struct AlterRetainHistoryPlan {
     pub id: GlobalId,
-    pub history: CompactionWindow,
+    pub value: Option<Value>,
+    pub window: CompactionWindow,
+    pub object_type: ObjectType,
 }
 
 #[derive(Debug)]

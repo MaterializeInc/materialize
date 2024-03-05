@@ -68,7 +68,7 @@ use mz_sql_parser::ast::{
     RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
     TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -122,11 +122,11 @@ use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
-    AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
-    AlterSecretPlan, AlterSetClusterPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
-    CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
+    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
+    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSourcePlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
@@ -4585,15 +4585,22 @@ fn plan_retain_history_option(
     retain_history: Option<OptionalDuration>,
 ) -> Result<Option<CompactionWindow>, PlanError> {
     if let Some(OptionalDuration(lcw)) = retain_history {
-        scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-        let cw = match lcw {
-            Some(duration) => duration.try_into()?,
-            None => CompactionWindow::DisableCompaction,
-        };
-        Ok(Some(cw))
+        Ok(Some(plan_retain_history(scx, lcw)?))
     } else {
         Ok(None)
     }
+}
+
+fn plan_retain_history(
+    scx: &StatementContext,
+    lcw: Option<Duration>,
+) -> Result<CompactionWindow, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
+    let cw = match lcw {
+        Some(duration) => duration.try_into()?,
+        None => CompactionWindow::DisableCompaction,
+    };
+    Ok(cw)
 }
 
 generate_extracted_config!(IndexOption, (RetainHistory, OptionalDuration));
@@ -5286,10 +5293,77 @@ pub fn describe_alter_retain_history(
 }
 
 pub fn plan_alter_retain_history(
-    _: &StatementContext,
-    _: AlterRetainHistoryStatement<Aug>,
+    scx: &StatementContext,
+    AlterRetainHistoryStatement {
+        object_type,
+        if_exists,
+        name,
+        history,
+    }: AlterRetainHistoryStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    bail_unsupported!("ALTER RETAIN HISTORY");
+    let object_type = object_type.into();
+    let name = match (object_type, name) {
+        (
+            // View gets a special error below.
+            ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Table
+            | ObjectType::Source
+            | ObjectType::Index,
+            UnresolvedObjectName::Item(name),
+        ) => name,
+        (object_type, _) => {
+            sql_bail!("{object_type} does not support RETAIN HISTORY")
+        }
+    };
+    match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
+        Some(entry) => {
+            let full_name = scx.catalog.resolve_full_name(entry.name());
+            let item_type = entry.item_type();
+
+            // Return a more helpful error on `ALTER VIEW <materialized-view>`.
+            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
+                return Err(PlanError::AlterViewOnMaterializedView(
+                    full_name.to_string(),
+                ));
+            } else if object_type == ObjectType::View {
+                sql_bail!("{object_type} does not support RETAIN HISTORY")
+            } else if object_type != item_type {
+                sql_bail!(
+                    "\"{}\" is a {} not a {}",
+                    full_name,
+                    entry.item_type(),
+                    format!("{object_type}").to_lowercase()
+                )
+            }
+
+            // Save the original value so we can write it back down in the create_sql catalog item.
+            let (value, lcw) = match &history {
+                Some(WithOptionValue::RetainHistoryFor(value)) => {
+                    let window = OptionalDuration::try_from_value(value.clone())?;
+                    (Some(value.clone()), window.0)
+                }
+                None => (None, None),
+                _ => sql_bail!("unexpected value type for RETAIN HISTORY"),
+            };
+            let window = plan_retain_history(scx, lcw)?;
+
+            Ok(Plan::AlterRetainHistory(AlterRetainHistoryPlan {
+                id: entry.id(),
+                value,
+                window,
+                object_type,
+            }))
+        }
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
+    }
 }
 
 pub fn describe_alter_secret_options(
