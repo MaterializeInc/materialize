@@ -7,14 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
 use uuid::Uuid;
 
 use crate::metrics::Metrics;
 use crate::{Client, Error};
 
+/// Frontegg includes a trace id in the headers of a response to aid in debugging.
+const FRONTEGG_TRACE_ID_HEADER: &str = "frontegg-trace-id";
+
 impl Client {
     /// Exchanges a client id and secret for a jwt token.
+    #[instrument]
     pub async fn exchange_client_secret_for_token(
         &self,
         request: ApiTokenArgs,
@@ -35,41 +40,27 @@ impl Client {
 
         let status = response.status().to_string();
         metrics
-            .request_count
+            .http_request_count
             .with_label_values(&[name, &status])
             .inc();
 
-        let result = response.error_for_status()?.json().await?;
-        Ok(result)
-    }
+        let frontegg_trace_id = response
+            .headers()
+            .get(FRONTEGG_TRACE_ID_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
 
-    /// Exchanges a client id and secret for a jwt token.
-    pub async fn refresh_token(
-        &self,
-        refresh_url: &str,
-        refresh_token: &str,
-        metrics: &Metrics,
-    ) -> Result<ApiTokenResponse, Error> {
-        let name = "refresh_token";
-        let histogram = metrics.request_duration_seconds.with_label_values(&[name]);
-
-        let response = self
-            .client
-            .post(refresh_url)
-            .json(&RefreshToken { refresh_token })
-            .send()
-            .wall_time()
-            .observe(histogram)
-            .await?;
-
-        let status = response.status().to_string();
-        metrics
-            .request_count
-            .with_label_values(&[name, &status])
-            .inc();
-
-        let result = response.error_for_status()?.json().await?;
-        Ok(result)
+        match response.error_for_status_ref() {
+            Ok(_) => Ok(response.json().await?),
+            Err(e) => {
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or("failed to deserialize body".to_string());
+                tracing::warn!(frontegg_trace_id, body, "request failed");
+                return Err(e.into());
+            }
+        }
     }
 }
 
@@ -87,12 +78,6 @@ pub struct ApiTokenResponse {
     pub expires_in: i64,
     pub access_token: String,
     pub refresh_token: String,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RefreshToken<'a> {
-    pub refresh_token: &'a str,
 }
 
 #[cfg(test)]
@@ -176,16 +161,6 @@ mod tests {
             let expected_count = should_retry.then_some(3).unwrap_or(1);
             assert_eq!(prev_count, expected_count);
 
-            let refresh_result = client
-                .refresh_token(&format!("http://{addr}/{code}"), "test", &metrics)
-                .await
-                .map(|_| ())
-                .map_err(|e| e.to_string());
-            let prev_count = count.swap(0, Ordering::Relaxed);
-            let expected_count = should_retry.then_some(3).unwrap_or(1);
-            assert_eq!(prev_count, expected_count);
-
-            assert_eq!(exchange_result, refresh_result);
             exchange_result
         }
 

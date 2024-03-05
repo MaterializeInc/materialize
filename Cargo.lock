@@ -3261,9 +3261,9 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.12.0"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1efa59af2ddfad1854ae27d75009d538d0998b4b2fd47083e743ac1a10e46c60"
+checksum = "d3262e75e648fce39813cb56ac41f3c3e3f65217ebf3844d818d1f9398cfb0dc"
 dependencies = [
  "hashbrown 0.14.0",
 ]
@@ -4519,6 +4519,7 @@ dependencies = [
  "derivative",
  "futures",
  "jsonwebtoken",
+ "lru",
  "mz-ore",
  "mz-repr",
  "prometheus",

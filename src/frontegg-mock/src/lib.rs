@@ -41,7 +41,7 @@ const USERS_API_TOKENS_PATH: &str = "/identity/resources/users/api-tokens/v1";
 pub struct FronteggMockServer {
     pub base_url: String,
     pub refreshes: Arc<Mutex<u64>>,
-    pub enable_refresh: Arc<AtomicBool>,
+    pub enable_auth: Arc<AtomicBool>,
     pub auth_requests: Arc<Mutex<u64>>,
     pub role_updates_tx: UnboundedSender<(String, Vec<String>)>,
     pub handle: JoinHandle<Result<(), hyper::Error>>,
@@ -62,8 +62,8 @@ impl FronteggMockServer {
     ) -> Result<FronteggMockServer, anyhow::Error> {
         let (role_updates_tx, role_updates_rx) = unbounded_channel();
 
+        let enable_auth = Arc::new(AtomicBool::new(true));
         let refreshes = Arc::new(Mutex::new(0u64));
-        let enable_refresh = Arc::new(AtomicBool::new(true));
         let auth_requests = Arc::new(Mutex::new(0u64));
 
         let user_api_tokens: BTreeMap<UserApiToken, String> = users
@@ -104,7 +104,7 @@ impl FronteggMockServer {
             latency,
             refresh_tokens: Mutex::new(BTreeMap::new()),
             refreshes: Arc::clone(&refreshes),
-            enable_refresh: Arc::clone(&enable_refresh),
+            enable_auth: Arc::clone(&enable_auth),
             auth_requests: Arc::clone(&auth_requests),
         });
 
@@ -136,20 +136,20 @@ impl FronteggMockServer {
         Ok(FronteggMockServer {
             base_url,
             refreshes,
-            enable_refresh,
+            enable_auth,
             auth_requests,
             role_updates_tx,
             handle,
         })
     }
 
-    pub fn wait_for_refresh(&self, expires_in_secs: u64) {
-        let expected = *self.refreshes.lock().unwrap() + 1;
+    pub fn wait_for_auth(&self, expires_in_secs: u64) {
+        let expected = *self.auth_requests.lock().unwrap() + 1;
         Retry::default()
             .factor(1.0)
             .max_duration(Duration::from_secs(expires_in_secs + 20))
             .retry(|_| {
-                let refreshes = *self.refreshes.lock().unwrap();
+                let refreshes = *self.auth_requests.lock().unwrap();
                 if refreshes >= expected {
                     Ok(())
                 } else {
@@ -251,6 +251,11 @@ async fn handle_post_auth_api_token(
     Json(request): Json<UserApiToken>,
 ) -> Result<Json<ApiTokenResponse>, StatusCode> {
     *context.auth_requests.lock().unwrap() += 1;
+
+    if !context.enable_auth.load(Ordering::Relaxed) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     let user_api_tokens = context.user_api_tokens.lock().unwrap();
     let (email, user) = match user_api_tokens.get(&request) {
         Some(email) => {
@@ -282,6 +287,11 @@ async fn handle_post_auth_user(
     Json(request): Json<AuthUserRequest>,
 ) -> Result<Json<ApiTokenResponse>, StatusCode> {
     *context.auth_requests.lock().unwrap() += 1;
+
+    if !context.enable_auth.load(Ordering::Relaxed) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     let users = context.users.lock().unwrap();
     let user = match users.get(&request.email) {
         Some(user) if request.password == user.password => user.to_owned(),
@@ -304,17 +314,20 @@ async fn handle_post_token_refresh(
 ) -> Result<Json<ApiTokenResponse>, StatusCode> {
     // Always count refresh attempts, even if enable_refresh is false.
     *context.refreshes.lock().unwrap() += 1;
-    let email = match (
-        context
-            .refresh_tokens
-            .lock()
-            .unwrap()
-            .remove(&previous_refresh_token.refresh_token),
-        context.enable_refresh.load(Ordering::Relaxed),
-    ) {
-        (Some(email), true) => email.to_string(),
-        _ => return Err(StatusCode::UNAUTHORIZED),
+
+    if !context.enable_auth.load(Ordering::Relaxed) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let maybe_email = context
+        .refresh_tokens
+        .lock()
+        .unwrap()
+        .remove(&previous_refresh_token.refresh_token);
+    let Some(email) = maybe_email else {
+        return Err(StatusCode::UNAUTHORIZED);
     };
+
     let users = context.users.lock().unwrap();
     let user = match users.get(&email) {
         Some(user) => user.to_owned(),
@@ -322,6 +335,7 @@ async fn handle_post_token_refresh(
     };
     let refresh_token = generate_refresh_token(&context, email.clone());
     let access_token = generate_access_token(&context, email, user.tenant_id, user.roles.clone());
+
     Ok(Json(ApiTokenResponse {
         expires: "".to_string(),
         expires_in: context.expires_in_secs,
@@ -440,6 +454,12 @@ struct Context {
     // Uuid -> email
     refresh_tokens: Mutex<BTreeMap<String, String>>,
     refreshes: Arc<Mutex<u64>>,
-    enable_refresh: Arc<AtomicBool>,
+    enable_auth: Arc<AtomicBool>,
     auth_requests: Arc<Mutex<u64>>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RefreshToken<'a> {
+    refresh_token: &'a str,
 }

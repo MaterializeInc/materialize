@@ -661,6 +661,12 @@ user-id = 6825 # Dan Gohman (sunfishcode)
 start = "2021-06-12"
 end = "2024-11-16"
 
+[[trusted.lru]]
+criteria = "safe-to-deploy"
+user-id = 4747 # Jerome Froelich (jeromefroe)
+start = "2019-03-04"
+end = "2025-03-04"
+
 [[trusted.memchr]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)

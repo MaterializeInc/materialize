@@ -17,17 +17,21 @@ use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
 #[derive(Debug, Clone)]
 pub struct Metrics {
     /// Total number of requests since process start.
-    pub request_count: IntCounterVec,
+    pub http_request_count: IntCounterVec,
     /// How long it takes for a request to Frontegg to complete.
     pub request_duration_seconds: HistogramVec,
     /// The number of active refresh tasks we have running.
     pub refresh_tasks_active: IntGaugeVec,
+    /// Number of sessions that have requested to start.
+    pub session_request_count: IntCounterVec,
+    /// Number of sessions that get refreshed.
+    pub session_refresh_count: IntCounterVec,
 }
 
 impl Metrics {
     pub(crate) fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
-            request_count: registry.register(metric!(
+            http_request_count: registry.register(metric!(
                 name: "mz_auth_request_count",
                 help: "Total number of HTTP requests made to Frontegg for authentication",
                 var_labels: ["path", "status"],
@@ -41,6 +45,16 @@ impl Metrics {
             refresh_tasks_active: registry.register(metric!(
                 name: "mz_auth_refresh_tasks_active",
                 help: "The number of active refresh tasks we have running.",
+            )),
+            session_request_count: registry.register(metric!(
+                name: "mz_auth_session_request_count",
+                help: "Total number of session start requests the Authenticator has received.",
+                var_labels: ["existing_session"],
+            )),
+            session_refresh_count: registry.register(metric!(
+                name: "mz_auth_session_refresh_count",
+                help: "Total number of authentication sessions that get refreshed.",
+                var_labels: ["outstanding_receivers", "recent_drop"],
             )),
         }
     }

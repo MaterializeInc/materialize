@@ -448,6 +448,13 @@ user-id = 6825
 user-login = "sunfishcode"
 user-name = "Dan Gohman"
 
+[[publisher.lru]]
+version = "0.12.3"
+when = "2024-02-24"
+user-id = 4747
+user-login = "jeromefroe"
+user-name = "Jerome Froelich"
+
 [[publisher.memchr]]
 version = "2.5.0"
 when = "2022-04-30"

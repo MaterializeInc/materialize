@@ -32,7 +32,7 @@ use futures::stream::BoxStream;
 use futures::TryFutureExt;
 use hyper::StatusCode;
 use mz_build_info::{build_info, BuildInfo};
-use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
@@ -743,11 +743,9 @@ impl Resolver {
                     _ => anyhow::bail!("expected Password message"),
                 };
 
-                let auth_response = auth
-                    .exchange_password_for_token(&password, user.to_string())
-                    .await;
-                let claims = match auth_response {
-                    Ok(result) => result.claims,
+                let auth_response = auth.authenticate(user.into(), &password).await;
+                let auth_session = match auth_response {
+                    Ok(auth_session) => auth_session,
                     Err(e) => {
                         warn!("pgwire connection failed authentication: {}", e);
                         // TODO: fix error codes.
@@ -755,7 +753,7 @@ impl Resolver {
                     }
                 };
 
-                let addr = addr_template.replace("{}", &claims.tenant_id.to_string());
+                let addr = addr_template.replace("{}", &auth_session.tenant_id().to_string());
                 let addr = lookup(&addr).await?;
                 Ok(ResolvedAddr {
                     addr,
