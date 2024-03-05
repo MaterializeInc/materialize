@@ -70,7 +70,7 @@ With
       Get materialize.public.accounts
   cte l0 =
     Join on=(#2 = integer_to_bigint(#0))
-      Filter (#0) IS NOT NULL AND (#1 = 100)
+      Filter (#1 = 100) AND (#0) IS NOT NULL
         Get materialize.public.accounts
       Filter (#0) IS NOT NULL
         Get materialize.public.account_details
@@ -102,7 +102,7 @@ With
       Get materialize.public.accounts
   cte l0 =
     Join on=(#2 = integer_to_bigint(#0))
-      Filter (#0) IS NOT NULL AND (#1 = 100)
+      Filter (#1 = 100) AND (#0) IS NOT NULL
         Get materialize.public.accounts
       Filter (#0) IS NOT NULL
         Get materialize.public.account_details
@@ -216,7 +216,7 @@ With
       Get materialize.public.accounts
   cte l0 =
     Join on=(#2 = integer_to_bigint(#0))
-      Filter (#0) IS NOT NULL AND (#1 = 100)
+      Filter (#1 = 100) AND (#0) IS NOT NULL
         Get materialize.public.accounts
       Filter (#0) IS NOT NULL
         Get materialize.public.account_details

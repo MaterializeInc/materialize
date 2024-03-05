@@ -360,25 +360,22 @@ ORDER BY r.id;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
-    Project (#0..=#3, #5, #14)
-      Join on=(#0 = #13 AND #2 = #4) type=delta
-        ArrangeBy keys=[[#0], [#2]]
-          Project (#0..=#3)
-            ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
-        ArrangeBy keys=[[#0]]
-          ReadIndex on=mz_clusters mz_clusters_ind=[delta join lookup]
-        ArrangeBy keys=[[#0]]
-          Project (#0, #14)
-            Map (((uint8_to_double(#12) / uint8_to_double(#6)) * 100))
-              Join on=(#0 = #9 AND #1 = #2) type=delta
-                ArrangeBy keys=[[#0], [#1]]
-                  Project (#0, #3)
-                    Filter (#3) IS NOT NULL
-                      ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
-                ArrangeBy keys=[[#0]]
-                  ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[delta join lookup]
-                ArrangeBy keys=[[#0]]
-                  ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[delta join lookup]
+    Project (#0..=#3, #5, #27)
+      Map (((uint8_to_double(#25) / uint8_to_double(#19)) * 100))
+        Join on=(#0 = #13 = #22 AND #2 = #4 AND #14 = #15) type=delta
+          ArrangeBy keys=[[#0], [#2]]
+            Project (#0..=#3)
+              ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
+          ArrangeBy keys=[[#0]]
+            ReadIndex on=mz_clusters mz_clusters_ind=[delta join lookup]
+          ArrangeBy keys=[[#0], [#1]]
+            Project (#0, #3)
+              Filter (#3) IS NOT NULL
+                ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
+          ArrangeBy keys=[[#0]]
+            ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[delta join lookup]
+          ArrangeBy keys=[[#0]]
+            ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[delta join lookup]
 
 Used Indexes:
   - mz_internal.mz_clusters_ind (delta join lookup)

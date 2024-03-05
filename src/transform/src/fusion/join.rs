@@ -21,10 +21,14 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
-use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, MirScalarExpr};
-use mz_repr::RelationType;
+use std::collections::BTreeMap;
 
+use mz_expr::visit::Visit;
+use mz_expr::{BinaryFunc, VariadicFunc};
+use mz_expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
+
+use crate::canonicalize_mfp::CanonicalizeMfp;
+use crate::predicate_pushdown::PredicatePushdown;
 use crate::{TransformCtx, TransformError};
 
 /// Fuses multiple `Join` operators into one `Join` operator.
@@ -48,7 +52,24 @@ impl crate::Transform for Join {
         // We need to stick with post-order here because `action` only fuses a
         // Join with its direct children. This means that we can only fuse a
         // tree of Join nodes in a single pass if we work bottom-up.
-        relation.try_visit_mut_post(&mut Self::action)?;
+        let mut transformed = false;
+        relation.try_visit_mut_post(&mut |relation| {
+            transformed |= Self::action(relation)?;
+            Ok::<_, TransformError>(())
+        })?;
+        // If the action applied in the non-trivial case, run PredicatePushdown
+        // and CanonicalizeMfp in order to re-construct an equi-Join which would
+        // be de-constructed as a Filter + CrossJoin by the action application.
+        //
+        // TODO(#24155): This is a temporary solution which fixes the "Product
+        // limits" issue observed in a failed Nightly run when the PR was first
+        // tested (https://buildkite.com/materialize/nightlies/builds/6670). We
+        // should re-evaluate if we need this ad-hoc re-normalization step when
+        // LiteralLifting is removed in favor of EquivalencePropagation.
+        if transformed {
+            PredicatePushdown::default().action(relation, &mut BTreeMap::new())?;
+            CanonicalizeMfp.action(relation)?
+        }
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
@@ -56,148 +77,189 @@ impl crate::Transform for Join {
 
 impl Join {
     /// Fuses multiple `Join` operators into one `Join` operator.
-    pub fn action(relation: &mut MirRelationExpr) -> Result<(), TransformError> {
+    ///
+    /// Return Ok(true) iff the action manipulated the tree after detecting the
+    /// most general pattern.
+    pub fn action(relation: &mut MirRelationExpr) -> Result<bool, TransformError> {
         if let MirRelationExpr::Join {
             inputs,
             equivalences,
             ..
         } = relation
         {
-            let mut join_builder = JoinBuilder::new(equivalences);
+            // Local non-fusion tidying.
+            inputs.retain(|e| !e.is_constant_singleton());
+            if inputs.len() == 0 {
+                *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty());
+                return Ok(false);
+            }
+            if inputs.len() == 1 && equivalences.is_empty() {
+                *relation = inputs.pop().unwrap();
+                return Ok(false);
+            }
 
-            // We scan through each input, digesting any joins that we find and updating their equivalence classes.
-            // We retain any existing equivalence classes, as they are already with respect to the cross product.
-            for input in inputs.drain(..) {
-                match input {
-                    MirRelationExpr::Join {
-                        inputs,
-                        equivalences,
-                        ..
-                    } => {
-                        // Merge the inputs into the new join being built.
-                        join_builder.add_subjoin(inputs, equivalences, None)?;
+            // Bail early if no children are MFPs around a Join
+            if inputs.iter().any(|mut expr| {
+                let mut result = None;
+                while result.is_none() {
+                    match expr {
+                        MirRelationExpr::Map { input, .. }
+                        | MirRelationExpr::Filter { input, .. }
+                        | MirRelationExpr::Project { input, .. } => {
+                            expr = &**input;
+                        }
+                        MirRelationExpr::Join { .. } => {
+                            result = Some(true);
+                        }
+                        _ => {
+                            result = Some(false);
+                        }
                     }
-                    MirRelationExpr::Filter { input, predicates } => {
+                }
+                result.unwrap()
+            }) {
+                // Each input is either an MFP around a Join, or just an expression.
+                let children = inputs
+                    .iter()
+                    .map(|expr| {
+                        let (mfp, inner) = MapFilterProject::extract_from_expression(expr);
                         if let MirRelationExpr::Join {
                             inputs,
                             equivalences,
                             ..
-                        } = *input
+                        } = inner
                         {
-                            // Merge the inputs and the predicates into the new join being built.
-                            join_builder.add_subjoin(inputs, equivalences, Some(predicates))?;
+                            Ok((mfp, (inputs, equivalences)))
                         } else {
-                            // Retain the input.
-                            let input = input.filter(predicates);
-                            join_builder.add_input(input);
+                            Err((mfp.projection.len(), expr))
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                // Our plan is to append all subjoin inputs, and non-join expressions.
+                // Each join will lift its MFP to act on the whole product (via arity).
+                // The final join will also be wrapped with `equivalences` as predicates.
+
+                let mut outer_arity = children
+                    .iter()
+                    .map(|child| match child {
+                        Ok((mfp, _)) => mfp.input_arity,
+                        Err((arity, _)) => *arity,
+                    })
+                    .sum();
+
+                // We will accumulate the lifted transformations here.
+                let mut outer_mfp = MapFilterProject::new(outer_arity);
+
+                let mut arity_so_far = 0;
+
+                let mut new_inputs = Vec::new();
+                for child in children.into_iter() {
+                    match child {
+                        Ok((mut mfp, (inputs, equivalences))) => {
+                            // Add the join inputs to the new join inputs.
+                            new_inputs.extend(inputs.iter().cloned());
+
+                            mfp.optimize();
+                            let (mut map, mut filter, mut project) = mfp.as_map_filter_project();
+                            filter.extend(unpack_equivalences(equivalences));
+                            // We need to rewrite column references in map and filter.
+                            // the applied map elements will be at the end, starting at `outer_arity`.
+                            for expr in map.iter_mut() {
+                                expr.visit_pre_mut(|e| {
+                                    if let MirScalarExpr::Column(c) = e {
+                                        if *c >= mfp.input_arity {
+                                            *c -= mfp.input_arity;
+                                            *c += outer_arity;
+                                        } else {
+                                            *c += arity_so_far;
+                                        }
+                                    }
+                                });
+                            }
+                            for expr in filter.iter_mut() {
+                                expr.visit_pre_mut(|e| {
+                                    if let MirScalarExpr::Column(c) = e {
+                                        if *c >= mfp.input_arity {
+                                            *c -= mfp.input_arity;
+                                            *c += outer_arity;
+                                        } else {
+                                            *c += arity_so_far;
+                                        }
+                                    }
+                                });
+                            }
+                            for c in project.iter_mut() {
+                                if *c >= mfp.input_arity {
+                                    *c -= mfp.input_arity;
+                                    *c += outer_arity;
+                                } else {
+                                    *c += arity_so_far;
+                                }
+                            }
+
+                            outer_mfp = outer_mfp.map(map.clone());
+                            outer_mfp = outer_mfp.filter(filter);
+                            let projection = (0..arity_so_far)
+                                .chain(project.clone())
+                                .chain(arity_so_far + mfp.input_arity..outer_arity)
+                                .collect::<Vec<_>>();
+                            outer_mfp = outer_mfp.project(projection);
+
+                            outer_arity += project.len();
+                            outer_arity -= mfp.input_arity;
+                            arity_so_far += project.len();
+                        }
+                        Err((arity, expr)) => {
+                            new_inputs.push((*expr).clone());
+                            arity_so_far += arity;
                         }
                     }
-                    _ => {
-                        // Retain the input.
-                        join_builder.add_input(input);
-                    }
                 }
-            }
 
-            *relation = join_builder.build();
+                new_inputs.retain(|e| !e.is_constant_singleton());
+
+                outer_mfp = outer_mfp.filter(unpack_equivalences(equivalences));
+                outer_mfp.optimize();
+                let (map, filter, project) = outer_mfp.as_map_filter_project();
+
+                *relation = match new_inputs.len() {
+                    0 => MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty()),
+                    1 => new_inputs.pop().unwrap(),
+                    _ => MirRelationExpr::join(new_inputs, Vec::new()),
+                }
+                .map(map)
+                .filter(filter)
+                .project(project);
+
+                return Ok(true);
+            }
         }
-        Ok(())
+
+        Ok(false)
     }
 }
 
-/// Helper builder for fusing the inputs of nested joins into a single Join expression.
-struct JoinBuilder {
-    inputs: Vec<MirRelationExpr>,
-    equivalences: Vec<Vec<MirScalarExpr>>,
-    num_columns: usize,
-    /// Predicates that will be evaluated on top of the join, if any.
-    predicates: Vec<MirScalarExpr>,
-}
-
-impl JoinBuilder {
-    fn new(equivalences: &mut Vec<Vec<MirScalarExpr>>) -> Self {
-        Self {
-            inputs: Vec::new(),
-            equivalences: equivalences.drain(..).collect(),
-            num_columns: 0,
-            predicates: Vec::new(),
+/// Unpacks multiple equivalence classes into conjuncts that should be equivalent.
+fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarExpr> {
+    let mut result = Vec::new();
+    for class in equivalences.iter() {
+        for expr in class[1..].iter() {
+            result.push(MirScalarExpr::CallVariadic {
+                func: VariadicFunc::Or,
+                exprs: vec![
+                    MirScalarExpr::CallBinary {
+                        func: BinaryFunc::Eq,
+                        expr1: Box::new(class[0].clone()),
+                        expr2: Box::new(expr.clone()),
+                    },
+                    MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::And,
+                        exprs: vec![class[0].clone().call_is_null(), expr.clone().call_is_null()],
+                    },
+                ],
+            });
         }
     }
-
-    fn add_input(&mut self, input: MirRelationExpr) {
-        // Filter join identities out of the inputs.
-        // The join identity is a single 0-ary row constant expression.
-        if !input.is_constant_singleton() {
-            self.num_columns += input.arity();
-            self.inputs.push(input);
-        }
-    }
-
-    fn add_subjoin<I>(
-        &mut self,
-        inputs: I,
-        mut equivalences: Vec<Vec<MirScalarExpr>>,
-        predicates: Option<Vec<MirScalarExpr>>,
-    ) -> Result<(), TransformError>
-    where
-        I: IntoIterator<Item = MirRelationExpr>,
-    {
-        // Update and push all of the variables.
-        for mut equivalence in equivalences.drain(..) {
-            for expr in equivalence.iter_mut() {
-                expr.visit_pre_mut(|e| {
-                    if let MirScalarExpr::Column(c) = e {
-                        *c += self.num_columns;
-                    }
-                });
-            }
-            self.equivalences.push(equivalence);
-        }
-
-        if let Some(mut predicates) = predicates {
-            for mut expr in predicates.drain(..) {
-                expr.visit_pre_mut(|e| {
-                    if let MirScalarExpr::Column(c) = e {
-                        *c += self.num_columns;
-                    }
-                });
-                self.predicates.push(expr);
-            }
-        }
-
-        // Add all of the inputs.
-        for input in inputs {
-            self.add_input(input);
-        }
-        Ok(())
-    }
-
-    fn build(mut self) -> MirRelationExpr {
-        mz_expr::canonicalize::canonicalize_equivalence_classes(&mut self.equivalences);
-
-        // If `inputs` is now empty or a singleton (without constraints),
-        // we can remove the join.
-        let mut join = match self.inputs.len() {
-            0 => {
-                // The identity for join is the collection containing a single 0-ary row.
-                MirRelationExpr::constant(vec![vec![]], RelationType::empty())
-            }
-            1 if self.equivalences.is_empty() => {
-                // if there are constraints, they probably should have
-                // been pushed down by predicate pushdown, but .. let's
-                // not re-write that code here.
-                self.inputs.pop().unwrap()
-            }
-            _ => MirRelationExpr::Join {
-                inputs: self.inputs,
-                equivalences: self.equivalences,
-                implementation: mz_expr::JoinImplementation::Unimplemented,
-            },
-        };
-
-        if !self.predicates.is_empty() {
-            join = join.filter(self.predicates);
-        }
-        join
-    }
+    result
 }
