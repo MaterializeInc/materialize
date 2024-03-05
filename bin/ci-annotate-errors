@@ -9,6 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# ci-failure-also-on-main - Detect whether this job also fails on main branch
+# ci-annotate-errors - Detect errors in junit xml as well as log files during
+# CI and find associated open GitHub issues in Materialize repository.
 
-exec "$(dirname "$0")"/pyactivate -m materialize.cli.ci_failure_also_on_main "$@"
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.ci_annotate_errors "$@"

@@ -40,7 +40,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -52,7 +51,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -63,7 +61,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -86,7 +83,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -98,7 +94,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -109,7 +104,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -120,7 +114,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -132,7 +125,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -154,7 +146,6 @@ steps:
     steps:
     - id: sqlsmith-long
       label: "Longer SQLsmith"
-      artifact_paths: junit_*.xml
       timeout_in_minutes: 120
       agents:
         queue: linux-aarch64
@@ -165,7 +156,6 @@ steps:
 
     - id: sqlsmith-explain-long
       label: "Longer SQLsmith explain"
-      artifact_paths: junit_*.xml
       timeout_in_minutes: 120
       agents:
         queue: linux-aarch64
@@ -191,17 +181,3 @@ steps:
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
-
-  - wait: ~
-    continue_on_failure: true
-
-  - id: analyze
-    label: Analyze tests
-    timeout_in_minutes: 15
-    plugins:
-      - junit-annotate#v2.0.2:
-          artifacts: "*junit_*.xml"
-          job-uuid-file-pattern: _([^_]*).xml
-    priority: 1
-    agents:
-      queue: linux-aarch64-small

@@ -12,12 +12,11 @@
 import argparse
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
 import yaml
 
-from materialize import MZ_ROOT, buildkite, spawn
+from materialize import MZ_ROOT, spawn
 
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
@@ -79,11 +78,6 @@ def main() -> int:
         ["buildkite-agent", "pipeline", "upload", "--replace"],
         stdin=yaml.dump(new_steps).encode(),
     )
-
-    # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
-    # if we trim away all the JUnit report-generating steps.
-    Path("junit_dummy.xml").write_text("")
-    buildkite.upload_artifact("junit_dummy.xml")
 
     return 0
 

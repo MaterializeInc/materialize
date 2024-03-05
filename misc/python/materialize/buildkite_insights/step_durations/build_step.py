@@ -18,17 +18,25 @@ from typing import Any
 class BuildStepOutcome:
     id: str
     step_key: str
+    parallel_job: int | None
     build_number: int
     created_at: datetime
     duration_in_min: float | None
     passed: bool
     exit_status: int | None
     retry_count: int
+    web_url: str
+
+
+@dataclass
+class BuildStep:
+    step_key: str
+    parallel_job: int | None
 
 
 def extract_build_step_data(
     builds_data: list[Any],
-    selected_build_steps: list[str],
+    selected_build_steps: list[BuildStep],
 ) -> list[BuildStepOutcome]:
     result = []
     for build in builds_data:
@@ -39,7 +47,7 @@ def extract_build_step_data(
 
 
 def _extract_build_step_data_from_build(
-    build_data: Any, selected_build_steps: list[str]
+    build_data: Any, selected_build_steps: list[BuildStep]
 ) -> list[BuildStepOutcome]:
     collected_steps = []
 
@@ -49,7 +57,8 @@ def _extract_build_step_data_from_build(
 
         if (
             len(selected_build_steps) > 0
-            and job["step_key"] not in selected_build_steps
+            and BuildStep(job["step_key"], job.get("parallel_group_index"))
+            not in selected_build_steps
         ):
             continue
 
@@ -79,12 +88,14 @@ def _extract_build_step_data_from_build(
         step_data = BuildStepOutcome(
             id,
             build_step_key,
+            None,  # TODO: The parallel_job number
             build_number,
             created_at,
             duration_in_min,
             job_passed,
             exit_status=exit_status,
             retry_count=retry_count,
+            web_url=f"{build_data['web_url']}#{job['id']}",
         )
         collected_steps.append(step_data)
 

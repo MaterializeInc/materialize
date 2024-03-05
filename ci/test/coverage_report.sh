@@ -21,6 +21,7 @@ find coverage -name '*.zst' -exec zstd -d {} \;
 ci_uncollapsed_heading "Uncovered Lines in Pull Request"
 find coverage -name '*.lcov' -not -name 'cargotest.lcov' -exec bin/ci-coverage-pr-report --unittests=coverage/cargotest.lcov {} +
 buildkite-agent artifact upload junit_coverage*.xml
+bin/ci-annotate-errors junit_coverage*.xml
 
 ci_unimportant_heading "Create coverage report"
 REPORT=coverage_without_unittests_"$BUILDKITE_BUILD_ID"

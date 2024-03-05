@@ -60,10 +60,10 @@ rm -rf cores
 
 bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
 
-artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log docker-inspect.log)
+mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-ps-a.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml')
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
-bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"
+bin/ci-builder run stable bin/ci-annotate-errors "${artifacts[@]}"
 
 if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist-txn" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ]; then
     echo "+++ services.log is empty, failing"

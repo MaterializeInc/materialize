@@ -17,9 +17,7 @@ import requests
 BUILDKITE_API_URL = "https://api.buildkite.com/v2"
 
 
-def get(
-    request_path: str, params: dict[str, str], max_fetches: int | None
-) -> list[Any]:
+def fetch(request_path: str, params: dict[str, str]) -> Any:
     headers = {}
     token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
 
@@ -29,14 +27,20 @@ def get(
         print("Authentication token is not specified or empty!")
 
     url = f"{BUILDKITE_API_URL}/{request_path}"
+    r = requests.get(headers=headers, url=url, params=params)
+    return r.json()
+
+
+def get(
+    request_path: str, params: dict[str, str], max_fetches: int | None
+) -> list[Any]:
     results = []
 
-    print(f"Starting to fetch data from Buildkite: {url}")
+    print(f"Starting to fetch data from Buildkite: {request_path}")
 
     fetch_count = 0
     while True:
-        r = requests.get(headers=headers, url=url, params=params)
-        result = r.json()
+        result = fetch(request_path, params)
         fetch_count += 1
 
         if not result:

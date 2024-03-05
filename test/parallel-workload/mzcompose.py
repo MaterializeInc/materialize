@@ -124,7 +124,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     print("--- Execution of parallel-workload failed")
         #     print_exc()
         #     # Don't fail the entire run. We ran into a crash,
-        #     # ci-logged-errors-detect will handle this if it's an unknown failure.
+        #     # ci-annotate-errors will handle this if it's an unknown failure.
         #     return
 
 

@@ -19,7 +19,6 @@ steps:
 
   - id: qa-canary-load
     label: "QA Canary Environment Base Load"
-    artifact_paths: junit_*.xml
     timeout_in_minutes: 1440 # 24 hours
     concurrency: 1
     concurrency_group: 'qa-canary-load'
