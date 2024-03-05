@@ -8,19 +8,24 @@
 # by the Apache License, Version 2.0.
 
 import contextlib
+import json
 import os
 import sys
 import tempfile
+import uuid
 from textwrap import dedent
+from urllib.parse import quote
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
@@ -42,14 +47,12 @@ class Generator:
     def header(cls) -> None:
         print(f"\n#\n# {cls}\n#\n")
         print(
-            "$ postgres-execute connection=postgres://mz_system@materialized:6877/materialize"
+            "$ postgres-connect name=mz_system url=postgres://mz_system@materialized:6877/materialize"
         )
+        print("$ postgres-execute connection=mz_system")
         print("DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"CREATE SCHEMA public /* {cls} */;")
         print("GRANT ALL PRIVILEGES ON SCHEMA public TO materialize")
-        print(
-            "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}"
-        )
 
     @classmethod
     def body(cls) -> None:
@@ -88,7 +91,7 @@ class Connections(Generator):
 
         for i in cls.all():
             print(
-                f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}"
+                f"$ postgres-connect name=conn{i} url=postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require"
             )
         for i in cls.all():
             print(f"$ postgres-execute connection=conn{i}\nSELECT 1;\n")
@@ -125,7 +128,7 @@ class Subscribe(Generator):
 
         for i in cls.all():
             print(
-                f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}"
+                f"$ postgres-connect name=conn{i} url=postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require"
             )
 
         for i in cls.all():
@@ -1511,14 +1514,41 @@ class WebhookSources(Generator):
                 f"> CREATE SOURCE w{i} IN CLUSTER single_replica_cluster FROM WEBHOOK BODY FORMAT TEXT;"
             )
 
-        # TODO(def-): Figure out how to use webhooks with balancerd
-        # for i in cls.all():
-        #     print(f"$ webhook-append database=materialize schema=public name=w{i}")
-        #     print(f"text{i}")
+        for i in cls.all():
+            print(f"$ webhook-append database=materialize schema=public name=w{i}")
+            print(f"text{i}")
 
         for i in cls.all():
             print(f"> SELECT * FROM w{i}")
-            # print(f"text{i}")
+            print(f"text{i}")
+
+
+TENANT_ID = str(uuid.uuid4())
+ADMIN_USER = "u1@example.com"
+OTHER_USER = "u2@example.com"
+ADMIN_ROLE = "MaterializePlatformAdmin"
+OTHER_ROLE = "MaterializePlatform"
+USERS = {
+    ADMIN_USER: {
+        "email": ADMIN_USER,
+        "password": str(uuid.uuid4()),
+        "tenant_id": TENANT_ID,
+        "initial_api_tokens": [
+            {
+                "client_id": str(uuid.uuid4()),
+                "secret": str(uuid.uuid4()),
+            }
+        ],
+        "roles": [OTHER_ROLE, ADMIN_ROLE],
+    }
+}
+FRONTEGG_URL = "http://frontegg-mock:6880"
+
+
+def app_password(email: str) -> str:
+    api_token = USERS[email]["initial_api_tokens"][0]
+    password = f"mzp_{api_token['client_id']}{api_token['secret']}".replace("-", "")
+    return password
 
 
 SERVICES = [
@@ -1529,11 +1559,61 @@ SERVICES = [
     SchemaRegistry(),
     # We create all sources, sinks and dataflows by default with SIZE '1'
     # The workflow_instance_size workflow is testing multi-process clusters
-    Materialized(memory="8G", default_size=1),
     Testdrive(
-        default_timeout="120s", materialize_url="postgres://materialize@balancerd:6875"
+        default_timeout="120s",
+        materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
+        materialize_use_https=True,
+        no_reset=True,
     ),
-    Balancerd(),
+    TestCerts(),
+    FronteggMock(
+        issuer=FRONTEGG_URL,
+        encoding_key_file="/secrets/frontegg-mock.key",
+        decoding_key_file="/secrets/frontegg-mock.crt",
+        users=json.dumps(list(USERS.values())),
+        depends_on=["test-certs"],
+        volumes=[
+            "secrets:/secrets",
+        ],
+    ),
+    Balancerd(
+        command=[
+            "service",
+            "--pgwire-listen-addr=0.0.0.0:6875",
+            "--https-listen-addr=0.0.0.0:6876",
+            "--internal-http-listen-addr=0.0.0.0:6878",
+            "--frontegg-resolver-template=materialized:6880",
+            "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+            f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+            f"--frontegg-admin-role={ADMIN_ROLE}",
+            "--https-resolver-template=materialized:6881",
+            "--tls-key=/secrets/balancerd.key",
+            "--tls-cert=/secrets/balancerd.crt",
+        ],
+        depends_on=["test-certs"],
+        volumes=[
+            "secrets:/secrets",
+        ],
+    ),
+    Materialized(
+        memory="8G",
+        default_size=1,
+        options=[
+            # Enable TLS on the public port to verify that balancerd is connecting to the balancerd port.
+            "--tls-mode=require",
+            "--tls-key=/secrets/materialized.key",
+            "--tls-cert=/secrets/materialized.crt",
+            f"--frontegg-tenant={TENANT_ID}",
+            "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+            f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+            f"--frontegg-admin-role={ADMIN_ROLE}",
+        ],
+        depends_on=["test-certs"],
+        volumes_extra=[
+            "secrets:/secrets",
+        ],
+        sanity_restart=False,
+    ),
 ]
 
 
@@ -1570,6 +1650,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
         "mysql",
         "materialized",
         "balancerd",
+        "frontegg-mock",
     )
 
     nodes = [
@@ -1699,10 +1780,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             # Increase resource limits
             c.testdrive(
                 dedent(
-                    """
-                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
-                    """
                     f"""
                     $ postgres-execute connection=mz_system
                     ALTER SYSTEM SET max_clusters = {args.clusters * 10}
