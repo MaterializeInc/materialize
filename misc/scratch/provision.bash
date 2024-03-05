@@ -17,9 +17,11 @@ set -euo pipefail
 # Install APT dependencies.
 apt-get update
 apt-get install -y \
+    build-essential \
     cmake \
     g++ \
     libclang-dev \
+    lld \
     postgresql-client \
     python3-venv \
     unzip
