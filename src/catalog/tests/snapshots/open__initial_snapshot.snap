@@ -1,6 +1,6 @@
 ---
 source: src/catalog/tests/open.rs
-expression: snapshot
+expression: test_snapshot
 ---
 Snapshot {
     databases: {
@@ -102,6 +102,7 @@ Snapshot {
                     ),
                 },
             ],
+            oid: 20000,
         },
     },
     schemas: {
@@ -204,6 +205,7 @@ Snapshot {
                     ),
                 },
             ],
+            oid: 16656,
         },
         SchemaKey {
             id: Some(
@@ -304,6 +306,7 @@ Snapshot {
                     ),
                 },
             ],
+            oid: 16657,
         },
         SchemaKey {
             id: Some(
@@ -404,6 +407,7 @@ Snapshot {
                     ),
                 },
             ],
+            oid: 16658,
         },
         SchemaKey {
             id: Some(
@@ -504,6 +508,7 @@ Snapshot {
                     ),
                 },
             ],
+            oid: 16659,
         },
         SchemaKey {
             id: Some(
@@ -604,6 +609,7 @@ Snapshot {
                     ),
                 },
             ],
+            oid: 16660,
         },
         SchemaKey {
             id: Some(
@@ -712,6 +718,7 @@ Snapshot {
                     ),
                 },
             ],
+            oid: 20001,
         },
     },
     roles: {
@@ -742,6 +749,7 @@ Snapshot {
                     entries: [],
                 },
             ),
+            oid: 16661,
         },
         RoleKey {
             id: Some(
@@ -770,6 +778,7 @@ Snapshot {
                     entries: [],
                 },
             ),
+            oid: 16662,
         },
         RoleKey {
             id: Some(
@@ -798,6 +807,7 @@ Snapshot {
                     entries: [],
                 },
             ),
+            oid: 16663,
         },
         RoleKey {
             id: Some(
@@ -826,6 +836,7 @@ Snapshot {
                     entries: [],
                 },
             ),
+            oid: 16664,
         },
         RoleKey {
             id: Some(
@@ -854,6 +865,7 @@ Snapshot {
                     entries: [],
                 },
             ),
+            oid: 16944,
         },
     },
     items: {},
@@ -1057,6 +1069,11 @@ Snapshot {
             name: "database",
         }: IdAllocValue {
             next_id: 2,
+        },
+        IdAllocKey {
+            name: "oid",
+        }: IdAllocValue {
+            next_id: 20002,
         },
         IdAllocKey {
             name: "replica",

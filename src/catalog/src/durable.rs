@@ -24,6 +24,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
@@ -59,6 +60,7 @@ pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
+pub const OID_ALLOC_KEY: &str = "oid";
 pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
 
 #[derive(Clone, Debug)]
@@ -264,6 +266,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ReplicaId::User(id))
+    }
+
+    /// Allocates and returns an OID.
+    async fn allocate_oid(&mut self) -> Result<u32, CatalogError> {
+        let oid = self.allocate_id(OID_ALLOC_KEY, 1).await?.into_element();
+        oid.try_into()
+            .map_err(|_| CatalogError::Catalog(SqlCatalogError::OidExhaustion))
     }
 }
 

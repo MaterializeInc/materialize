@@ -38,8 +38,6 @@ fn bench_transact(c: &mut Criterion) {
                 id += 1;
                 let ops = vec![Op::CreateDatabase {
                     name: id.to_string(),
-                    oid: id,
-                    public_schema_oid: id,
                     owner_id: MZ_SYSTEM_ROLE_ID,
                 }];
                 catalog

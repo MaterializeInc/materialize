@@ -407,7 +407,6 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let ops = vec![catalog::Op::CreateItem {
             id: exported_index_id,
-            oid: self.catalog_mut().allocate_oid()?,
             name: name.clone(),
             item: CatalogItem::Index(Index {
                 create_sql,

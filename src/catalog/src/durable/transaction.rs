@@ -15,6 +15,7 @@ use itertools::Itertools;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::CollectionExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
 use mz_proto::{RustType, TryFromProtoError};
@@ -47,7 +48,7 @@ use crate::durable::objects::{
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
-    SystemConfiguration, TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,
+    SystemConfiguration, TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
@@ -178,12 +179,12 @@ impl<'a> Transaction<'a> {
         database_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-    ) -> Result<DatabaseId, CatalogError> {
+    ) -> Result<(DatabaseId, u32), CatalogError> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
-        // TODO(parkertimmerman): Support creating databases in the System namespace.
         let id = DatabaseId::User(id);
-        self.insert_database(id, database_name, owner_id, privileges)?;
-        Ok(id)
+        let oid = self.allocate_oid()?;
+        self.insert_database(id, database_name, owner_id, privileges, oid)?;
+        Ok((id, oid))
     }
 
     pub(crate) fn insert_database(
@@ -192,30 +193,20 @@ impl<'a> Transaction<'a> {
         database_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-    ) -> Result<(), CatalogError> {
+        oid: u32,
+    ) -> Result<u32, CatalogError> {
         match self.databases.insert(
             DatabaseKey { id },
             DatabaseValue {
                 name: database_name.to_string(),
                 owner_id,
                 privileges,
+                oid,
             },
         ) {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(oid),
             Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
         }
-    }
-
-    pub fn insert_system_schema(
-        &mut self,
-        id: SchemaId,
-        schema_name: &str,
-        owner_id: RoleId,
-        privileges: Vec<MzAclItem>,
-    ) -> Result<SchemaId, CatalogError> {
-        soft_assert_or_log!(id.is_system(), "ID {id:?} is not system variant");
-        self.insert_schema(id, None, schema_name.to_string(), owner_id, privileges)?;
-        Ok(id)
     }
 
     pub fn insert_user_schema(
@@ -224,18 +215,19 @@ impl<'a> Transaction<'a> {
         schema_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-    ) -> Result<SchemaId, CatalogError> {
+    ) -> Result<(SchemaId, u32), CatalogError> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
-        // TODO(parkertimmerman): Support creating schemas in the System namespace.
         let id = SchemaId::User(id);
+        let oid = self.allocate_oid()?;
         self.insert_schema(
             id,
             Some(database_id),
             schema_name.to_string(),
             owner_id,
             privileges,
+            oid,
         )?;
-        Ok(id)
+        Ok((id, oid))
     }
 
     pub(crate) fn insert_schema(
@@ -245,6 +237,7 @@ impl<'a> Transaction<'a> {
         schema_name: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        oid: u32,
     ) -> Result<(), CatalogError> {
         match self.schemas.insert(
             SchemaKey { id: schema_id },
@@ -253,11 +246,29 @@ impl<'a> Transaction<'a> {
                 name: schema_name.clone(),
                 owner_id,
                 privileges,
+                oid,
             },
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name).into()),
         }
+    }
+
+    pub fn insert_system_role(
+        &mut self,
+        id: RoleId,
+        name: String,
+        attributes: RoleAttributes,
+        membership: RoleMembership,
+        vars: RoleVars,
+        oid: u32,
+    ) -> Result<RoleId, CatalogError> {
+        soft_assert_or_log!(
+            id.is_system() || id.is_public(),
+            "ID {id:?} is not system or public variant"
+        );
+        self.insert_role(id, name, attributes, membership, vars, oid)?;
+        Ok(id)
     }
 
     pub fn insert_user_role(
@@ -266,20 +277,22 @@ impl<'a> Transaction<'a> {
         attributes: RoleAttributes,
         membership: RoleMembership,
         vars: RoleVars,
-    ) -> Result<RoleId, CatalogError> {
+    ) -> Result<(RoleId, u32), CatalogError> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
-        self.insert_role(id, name, attributes, membership, vars)?;
-        Ok(id)
+        let oid = self.allocate_oid()?;
+        self.insert_role(id, name, attributes, membership, vars, oid)?;
+        Ok((id, oid))
     }
 
-    pub fn insert_role(
+    fn insert_role(
         &mut self,
         id: RoleId,
         name: String,
         attributes: RoleAttributes,
         membership: RoleMembership,
         vars: RoleVars,
+        oid: u32,
     ) -> Result<(), CatalogError> {
         match self.roles.insert(
             RoleKey { id },
@@ -288,6 +301,7 @@ impl<'a> Transaction<'a> {
                 attributes,
                 membership,
                 vars,
+                oid,
             },
         ) {
             Ok(_) => Ok(()),
@@ -304,7 +318,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -323,7 +337,7 @@ impl<'a> Transaction<'a> {
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -342,7 +356,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<Vec<(&'static BuiltinLog, GlobalId, u32)>, CatalogError> {
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
             ClusterValue {
@@ -355,11 +369,18 @@ impl<'a> Transaction<'a> {
             return Err(SqlCatalogError::ClusterAlreadyExists(cluster_name.to_owned()).into());
         };
 
-        for (builtin, index_id) in introspection_source_indexes {
+        let oids = self.allocate_oids(usize_to_u64(introspection_source_indexes.len()))?;
+        let introspection_source_indexes: Vec<_> = introspection_source_indexes
+            .into_iter()
+            .zip(oids.into_iter())
+            .map(|((builtin, index_id), oid)| (builtin, index_id, oid))
+            .collect();
+        for (builtin, index_id, oid) in &introspection_source_indexes {
             let introspection_source_index = IntrospectionSourceIndex {
                 cluster_id,
                 name: builtin.name.to_string(),
-                index_id,
+                index_id: *index_id,
+                oid: *oid,
             };
             let (key, value) = introspection_source_index.into_key_value();
             self.introspection_sources
@@ -367,7 +388,7 @@ impl<'a> Transaction<'a> {
                 .expect("no uniqueness violation");
         }
 
-        Ok(())
+        Ok(introspection_source_indexes)
     }
 
     pub fn rename_cluster(
@@ -474,14 +495,15 @@ impl<'a> Transaction<'a> {
     /// Panics if provided id is not a system id.
     pub fn update_introspection_source_index_gids(
         &mut self,
-        mappings: impl Iterator<Item = (ClusterId, impl Iterator<Item = (String, GlobalId)>)>,
+        mappings: impl Iterator<Item = (ClusterId, impl Iterator<Item = (String, GlobalId, u32)>)>,
     ) -> Result<(), CatalogError> {
         for (cluster_id, updates) in mappings {
-            for (name, index_id) in updates {
+            for (name, index_id, oid) in updates {
                 let introspection_source_index = IntrospectionSourceIndex {
                     cluster_id,
                     name,
                     index_id,
+                    oid,
                 };
                 let (key, value) = introspection_source_index.into_key_value();
 
@@ -497,9 +519,26 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub fn insert_user_item(
+        &mut self,
+        id: GlobalId,
+        schema_id: SchemaId,
+        item_name: &str,
+        create_sql: String,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<u32, CatalogError> {
+        let oid = self.allocate_oid()?;
+        self.insert_item(
+            id, oid, schema_id, item_name, create_sql, owner_id, privileges,
+        )?;
+        Ok(oid)
+    }
+
     pub fn insert_item(
         &mut self,
         id: GlobalId,
+        oid: u32,
         schema_id: SchemaId,
         item_name: &str,
         create_sql: String,
@@ -514,6 +553,7 @@ impl<'a> Transaction<'a> {
                 create_sql,
                 owner_id,
                 privileges,
+                oid,
             },
         ) {
             Ok(_) => Ok(()),
@@ -581,6 +621,21 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .map(GlobalId::User)
             .collect())
+    }
+
+    fn allocate_oids(&mut self, amount: u64) -> Result<Vec<u32>, CatalogError> {
+        let oids = self.get_and_increment_id_by(OID_ALLOC_KEY.to_string(), amount)?;
+        Ok(oids
+            .into_iter()
+            .map(|oid| {
+                oid.try_into()
+                    .map_err(|_| CatalogError::Catalog(SqlCatalogError::OidExhaustion))
+            })
+            .collect::<Result<Vec<_>, CatalogError>>()?)
+    }
+
+    pub fn allocate_oid(&mut self) -> Result<u32, CatalogError> {
+        self.allocate_oids(1).map(|oids| oids.into_element())
     }
 
     pub(crate) fn insert_id_allocator(
@@ -1002,19 +1057,31 @@ impl<'a> Transaction<'a> {
         self.set_setting(CATALOG_CONTENT_VERSION_KEY.to_string(), Some(version))
     }
 
-    /// Set persisted introspection source index.
-    pub fn set_introspection_source_indexes(
+    /// Insert persisted introspection source index.
+    pub fn insert_introspection_source_indexes(
         &mut self,
-        introspection_source_indexes: Vec<IntrospectionSourceIndex>,
-    ) -> Result<(), CatalogError> {
-        let introspection_source_indexes = introspection_source_indexes
+        introspection_source_indexes: Vec<(ClusterId, String, GlobalId)>,
+    ) -> Result<Vec<IntrospectionSourceIndex>, CatalogError> {
+        let oids = self.allocate_oids(usize_to_u64(introspection_source_indexes.len()))?;
+        let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
-            .map(DurableType::into_key_value)
-            .map(|(k, v)| (k, Some(v)))
+            .zip(oids.into_iter())
+            .map(
+                |((cluster_id, name, index_id), oid)| IntrospectionSourceIndex {
+                    cluster_id,
+                    name,
+                    index_id,
+                    oid,
+                },
+            )
             .collect();
-        self.introspection_sources
-            .set_many(introspection_source_indexes)?;
-        Ok(())
+
+        for introspection_source_index in &introspection_source_indexes {
+            let (key, value) = introspection_source_index.clone().into_key_value();
+            self.introspection_sources.insert(key, value)?;
+        }
+
+        Ok(introspection_source_indexes)
     }
 
     /// Set persisted system object mappings.
@@ -1245,12 +1312,12 @@ impl<'a> Transaction<'a> {
     pub fn get_introspection_source_indexes(
         &mut self,
         cluster_id: ClusterId,
-    ) -> BTreeMap<String, GlobalId> {
+    ) -> BTreeMap<String, (GlobalId, u32)> {
         self.introspection_sources
             .items()
             .into_iter()
             .filter(|(k, _v)| k.cluster_id == cluster_id)
-            .map(|(k, v)| (k.name, GlobalId::System(v.index_id)))
+            .map(|(k, v)| (k.name, (GlobalId::System(v.index_id), v.oid)))
             .collect()
     }
 

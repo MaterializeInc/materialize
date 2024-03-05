@@ -78,6 +78,7 @@ impl From<Database> for durable::Database {
     fn from(database: Database) -> durable::Database {
         durable::Database {
             id: database.id,
+            oid: database.oid,
             name: database.name,
             owner_id: database.owner_id,
             privileges: database.privileges.into_all_values().collect(),
@@ -102,6 +103,7 @@ impl Schema {
     pub fn into_durable_schema(self, database_id: Option<DatabaseId>) -> durable::Schema {
         durable::Schema {
             id: self.id.into(),
+            oid: self.oid,
             name: self.name.schema,
             database_id,
             owner_id: self.owner_id,
@@ -135,6 +137,7 @@ impl From<Role> for durable::Role {
     fn from(role: Role) -> durable::Role {
         durable::Role {
             id: role.id,
+            oid: role.oid,
             name: role.name,
             attributes: role.attributes,
             membership: role.membership,
@@ -347,6 +350,7 @@ impl From<CatalogEntry> for durable::Item {
     fn from(entry: CatalogEntry) -> durable::Item {
         durable::Item {
             id: entry.id,
+            oid: entry.oid,
             schema_id: entry.name.qualifiers.schema_spec.into(),
             name: entry.name.item,
             create_sql: entry.item.into_serialized(),

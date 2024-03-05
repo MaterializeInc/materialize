@@ -337,7 +337,8 @@ impl Coordinator {
             .expect("created above")
             .id;
         self.catalog_mut()
-            .create_temporary_schema(conn_id, role_id)?;
+            .create_temporary_schema(conn_id, role_id)
+            .await?;
         Ok(role_id)
     }
 

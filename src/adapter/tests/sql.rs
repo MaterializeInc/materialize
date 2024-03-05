@@ -61,7 +61,6 @@ async fn datadriven() {
                     match test_case.directive.as_str() {
                         "add-table" => {
                             let id = catalog.allocate_user_id().await.unwrap();
-                            let oid = catalog.allocate_oid().unwrap();
                             let database_id = catalog
                                 .resolve_database(DEFAULT_DATABASE_NAME)
                                 .unwrap()
@@ -82,7 +81,6 @@ async fn datadriven() {
                                     None,
                                     vec![Op::CreateItem {
                                         id,
-                                        oid,
                                         name: QualifiedItemName {
                                             qualifiers: ItemQualifiers {
                                                 database_spec,
