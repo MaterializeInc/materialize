@@ -20,15 +20,14 @@ use futures::future::Shared;
 use futures::FutureExt;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use lru::LruCache;
-use mz_ore::cast::CastLossy;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
+use mz_ore::time::DurationExt;
 use mz_repr::user::ExternalUserMetadata;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::time;
-use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::metrics::Metrics;
@@ -407,24 +406,32 @@ impl AuthenticatorInner {
                 gauge.inc();
 
                 loop {
-                    let valid_for = f64::cast_lossy(claims.exp - inner.now.as_secs());
+                    let valid_for = Duration::try_from_secs_i64(claims.exp - inner.now.as_secs())
+                        .unwrap_or(Duration::from_secs(60));
+
                     // If we have no outstanding handling to this session, but a handle was dropped
                     // within this window, then we'll still refresh.
-                    let drop_window = u64::cast_lossy(valid_for * inner.refresh_drop_factor).max(1);
+                    let drop_window = valid_for
+                        .saturating_mul_f64(inner.refresh_drop_factor)
+                        .max(Duration::from_secs(1));
                     // Scale the validity duration by 0.8. The Frontegg Python
                     // SDK scales the expires_in this way.
                     //
                     // <https://github.com/frontegg/python-sdk/blob/840f8318aced35cea6a41d83270597edfceb4019/frontegg/common/frontegg_authenticator.py#L45>
-                    let valid_for = u64::cast_lossy(valid_for * 0.8);
+                    let valid_for = valid_for.saturating_mul_f64(0.8);
 
-                    if valid_for < 60 {
-                        warn!(%valid_for, "unexpectedly low token validity");
+                    if valid_for < Duration::from_secs(60) {
+                        tracing::warn!(?valid_for, "unexpectedly low token validity");
                     }
 
-                    tracing::debug!(%valid_for, %drop_window, "waiting for token validity period");
+                    tracing::debug!(
+                        ?valid_for,
+                        ?drop_window,
+                        "waiting for token validity period"
+                    );
 
                     // Wait out validity duration.
-                    time::sleep(Duration::from_secs(valid_for)).await;
+                    time::sleep(valid_for).await;
 
                     // Check to see if all external metadata receivers have gone away, or if a
                     // session created with this password was recently dropped. If no one is
@@ -432,7 +439,7 @@ impl AuthenticatorInner {
                     let receiver_count = external_metadata_tx.receiver_count();
                     let last_drop = inner.last_dropped_session(&password);
                     let recent_drop = last_drop
-                        .map(|dropped_at| dropped_at.elapsed() <= Duration::from_secs(drop_window))
+                        .map(|dropped_at| dropped_at.elapsed() <= drop_window)
                         .unwrap_or(false);
                     if receiver_count == 0 && !recent_drop {
                         tracing::debug!(
@@ -443,11 +450,11 @@ impl AuthenticatorInner {
                         break;
                     }
 
-                    // TODO(parkmycar): Allocating the labels here feels bad.
+                    let outstanding_receivers = bool_as_str(receiver_count > 0);
                     inner
                         .metrics
                         .session_refresh_count
-                        .with_label_values(&[&receiver_count.to_string(), &recent_drop.to_string()])
+                        .with_label_values(&[outstanding_receivers, bool_as_str(recent_drop)])
                         .inc();
                     tracing::debug!(
                         receiver_count,
@@ -483,7 +490,6 @@ impl AuthenticatorInner {
                 tracing::debug!(?password.client_id, "shutting down refresh task");
                 gauge.dec();
             }
-            .instrument(debug_span!("frontegg_auth_refresh_task", client_id = %password.client_id))
         });
 
         // Return handle to session.
@@ -495,6 +501,7 @@ impl AuthenticatorInner {
         })
     }
 
+    #[instrument]
     async fn exchange_app_password(
         &self,
         expected_email: &str,
@@ -644,4 +651,12 @@ fn validate_email(email: &str, expected_email: &str) -> Result<(), Error> {
         return Err(Error::WrongEmail);
     }
     Ok(())
+}
+
+const fn bool_as_str(x: bool) -> &'static str {
+    if x {
+        "true"
+    } else {
+        "false"
+    }
 }

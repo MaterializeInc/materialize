@@ -90,6 +90,7 @@ pub mod task;
 #[cfg(any(test, feature = "test"))]
 pub mod test;
 pub mod thread;
+pub mod time;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
 #[cfg(feature = "tracing_")]
 pub mod tracing;

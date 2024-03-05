@@ -2253,7 +2253,7 @@ async fn test_refresh_dropped_session() {
     let labels = metric.get_label();
     assert_eq!(
         (labels[0].get_name(), labels[0].get_value()),
-        ("receiver_count", "0")
+        ("outstanding_receivers", "false")
     );
     assert_eq!(
         (labels[1].get_name(), labels[1].get_value()),

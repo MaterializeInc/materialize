@@ -54,7 +54,7 @@ impl Metrics {
             session_refresh_count: registry.register(metric!(
                 name: "mz_auth_session_refresh_count",
                 help: "Total number of authentication sessions that get refreshed.",
-                var_labels: ["receiver_count", "recent_drop"],
+                var_labels: ["outstanding_receivers", "recent_drop"],
             )),
         }
     }
