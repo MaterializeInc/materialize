@@ -18,6 +18,7 @@ use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
 use aws_types::region::Region;
 use aws_types::SdkConfig;
 use mz_ore::error::ErrorExt;
+use mz_ore::future::OreFutureExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use proptest_derive::Arbitrary;
@@ -108,12 +109,12 @@ impl AwsCredentials {
     async fn load_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
-        from_timely: bool,
     ) -> Result<impl ProvideCredentials, anyhow::Error> {
         let secrets_reader = &connection_context.secrets_reader;
         Ok(Credentials::from_keys(
             self.access_key_id
-                .get_string(secrets_reader, from_timely)
+                // We will already be contained within a tokio task when being called from timely.
+                .get_string(secrets_reader, false)
                 .await
                 .map_err(|_| {
                     anyhow!("internal error: failed to read access key ID from secret store")
@@ -128,7 +129,8 @@ impl AwsCredentials {
             match &self.session_token {
                 Some(t) => {
                     let t = t
-                        .get_string(secrets_reader, from_timely)
+                        // We will already be contained within a tokio task when being called from timely.
+                        .get_string(secrets_reader, false)
                         .await
                         .map_err(|_| {
                             anyhow!(
@@ -315,21 +317,29 @@ impl AwsConnection {
         &self,
         connection_context: &ConnectionContext,
         connection_id: GlobalId,
+        // Whether or not we are connecting from timely threads. If we are, IO will
+        // occur on Tokio tasks.
         from_timely: bool,
     ) -> Result<SdkConfig, anyhow::Error> {
-        let credentials = match &self.auth {
-            AwsAuth::Credentials(credentials) => SharedCredentialsProvider::new(
-                credentials
-                    .load_credentials_provider(connection_context, from_timely)
-                    .await?,
-            ),
-            AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
-                assume_role
-                    .load_credentials_provider(connection_context, connection_id)
-                    .await?,
-            ),
-        };
-        self.load_sdk_config_from_credentials(credentials).await
+        let connection_context = connection_context.clone();
+        let this = self.clone();
+        async move {
+            let credentials = match &this.auth {
+                AwsAuth::Credentials(credentials) => SharedCredentialsProvider::new(
+                    credentials
+                        .load_credentials_provider(&connection_context)
+                        .await?,
+                ),
+                AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
+                    assume_role
+                        .load_credentials_provider(&connection_context, connection_id)
+                        .await?,
+                ),
+            };
+            this.load_sdk_config_from_credentials(credentials).await
+        }
+        .optionally_run_in_task(|| "load_sdk_config".to_string(), from_timely)
+        .await
     }
 
     async fn load_sdk_config_from_credentials(
