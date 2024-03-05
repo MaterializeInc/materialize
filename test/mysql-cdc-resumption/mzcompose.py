@@ -94,6 +94,17 @@ def workflow_backup_restore(c: Composition) -> None:
         # No end confirmation here, since we expect the source to be in a bad state
 
 
+def workflow_reset_gtid(c: Composition) -> None:
+    with c.override(
+        Materialized(sanity_restart=False),
+    ):
+        scenario = reset_master_gtid
+        print(f"--- Running scenario {scenario.__name__}")
+        initialize(c)
+        scenario(c)
+        # No end confirmation here, since we expect the source to be in a bad state
+
+
 def initialize(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized", "mysql", "toxiproxy")
@@ -221,6 +232,17 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
         "delete-rows-t2.td",
         "alter-table.td",
         "alter-mz.td",
+    )
+
+
+def reset_master_gtid(c: Composition) -> None:
+    """Confirm behavior after resetting GTID in MySQL"""
+    run_testdrive_files(c, "reset-master.td")
+
+    run_testdrive_files(
+        c,
+        "delete-rows-t1.td",
+        "verify-source-stalled.td",
     )
 
 
