@@ -126,8 +126,12 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
             let mut resume_uppers = std::pin::pin!(resume_uppers);
 
-            let mut offset_known = 0;
-            let mut offset_committed = 0;
+            // If we are just starting up, report 0 as our `offset_committed`.
+            let mut offset_committed = if resume_offset.offset == 0 {
+                Some(0)
+            } else {
+                None
+            };
 
             while let Some((output, event)) = rows.next() {
                 match event {
@@ -146,10 +150,6 @@ impl SourceRender for LoadGeneratorSourceConnection {
                         // Since those are not required downstream we eagerly ignore them here.
                         if resume_offset <= offset {
                             data_output.give(&cap, (message, offset, diff)).await;
-                        }
-
-                        if offset.offset > offset_known {
-                            offset_known = offset.offset;
                         }
                     }
                     Event::Progress(Some(offset)) => {
@@ -170,12 +170,9 @@ impl SourceRender for LoadGeneratorSourceConnection {
                                     }
                                     Some(frontier) = resume_uppers.next() => {
                                         if let Some(offset) = frontier.as_option() {
-                                            let total = offset.offset.saturating_sub(1);
-                                            if total > offset_committed {
-                                                // Note we don't subtract from the upper, as we
-                                                // want to report total number of offsets we have processed.
-                                                offset_committed = total;
-                                            }
+                                            // Offset N means we have committed N offsets (offsets are
+                                            // 0-indexed)
+                                            offset_committed = Some(offset.offset);
                                         }
                                     }
                                 }
@@ -184,15 +181,21 @@ impl SourceRender for LoadGeneratorSourceConnection {
                             // TODO(guswynn): generators have various definitions of "snapshot", so
                             // we are not going to implement snapshot progress statistics for them
                             // right now, but will come back to it.
-                            stats_output
-                                .give(
-                                    &stats_cap,
-                                    ProgressStatisticsUpdate::SteadyState {
-                                        offset_known,
-                                        offset_committed,
-                                    },
-                                )
-                                .await;
+                            if let Some(offset_committed) = offset_committed {
+                                stats_output
+                                    .give(
+                                        &stats_cap,
+                                        ProgressStatisticsUpdate::SteadyState {
+                                            // technically we could have _known_ a larger offset
+                                            // than the one that has been committed, but we can
+                                            // never recover that known amount on restart, so we
+                                            // just advance these in lock step.
+                                            offset_known: offset_committed,
+                                            offset_committed,
+                                        },
+                                    )
+                                    .await;
+                            }
                         }
                     }
                     Event::Progress(None) => return,
