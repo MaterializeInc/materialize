@@ -760,9 +760,9 @@ fn encode_collection<G: Scope>(
                     let ccsr = csr_connection.connect(&storage_configuration, true).await?;
                     let (key_schema_id, value_schema_id) =
                         mz_storage_client::sink::publish_kafka_schemas(
-                            &ccsr,
-                            &connection.topic,
-                            key_schema.as_deref(),
+                            ccsr,
+                            connection.topic.clone(),
+                            key_schema,
                             Some(mz_ccsr::SchemaType::Avro),
                             &value_schema,
                             mz_ccsr::SchemaType::Avro,
