@@ -1239,9 +1239,7 @@ pub mod datadriven {
         BLOB_TARGET_SIZE,
     };
     use crate::fetch::{fetch_batch_part, Cursor};
-    use crate::internal::compact::{
-        CompactConfig, CompactReq, Compactor, STREAMING_COMPACTION_ENABLED,
-    };
+    use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
@@ -1277,7 +1275,6 @@ pub mod datadriven {
             client
                 .cfg
                 .set_config(&BLOB_TARGET_SIZE, *BLOB_TARGET_SIZE.default());
-            client.cfg.set_config(&STREAMING_COMPACTION_ENABLED, true);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),

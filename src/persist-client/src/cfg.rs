@@ -26,7 +26,6 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use crate::internal::compact::STREAMING_COMPACTION_ENABLED;
 use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_CLAMP, NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
     NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
@@ -262,7 +261,6 @@ impl PersistConfig {
 
         let mut cfg = Self::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
-        cfg.set_config(&STREAMING_COMPACTION_ENABLED, true);
         cfg
     }
 }
@@ -285,7 +283,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
-        .add(&crate::internal::compact::STREAMING_COMPACTION_ENABLED)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_CLAMP)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
