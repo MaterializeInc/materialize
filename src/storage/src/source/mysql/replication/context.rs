@@ -18,10 +18,11 @@ use tracing::trace;
 
 use mz_mysql_util::{Config, MySqlTableDesc};
 use mz_repr::Row;
-use mz_storage_types::sources::mysql::GtidPartition;
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 use mz_timely_util::builder_async::AsyncOutputHandle;
 
-use super::super::{DefiniteError, MySqlTableName, RewindRequest};
+use crate::metrics::source::mysql::MySqlSourceMetrics;
+use crate::source::mysql::{DefiniteError, MySqlTableName, RewindRequest};
 use crate::source::RawSourceCreationConfig;
 
 /// A container to hold various context information for the replication process, used when
@@ -31,6 +32,7 @@ pub(super) struct ReplContext<'a> {
     pub(super) connection_config: &'a Config,
     pub(super) stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
     pub(super) table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+    pub(super) metrics: &'a MySqlSourceMetrics,
     pub(super) data_output: &'a mut AsyncOutputHandle<
         GtidPartition,
         Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
@@ -49,6 +51,7 @@ impl<'a> ReplContext<'a> {
         connection_config: &'a Config,
         stream: Pin<&'a mut futures::stream::Peekable<BinlogStream>>,
         table_info: &'a BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
+        metrics: &'a MySqlSourceMetrics,
         data_output: &'a mut AsyncOutputHandle<
             GtidPartition,
             Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
@@ -63,6 +66,7 @@ impl<'a> ReplContext<'a> {
             connection_config,
             stream,
             table_info,
+            metrics,
             data_output,
             data_cap_set,
             upper_cap_set,
@@ -80,6 +84,16 @@ impl<'a> ReplContext<'a> {
 
         self.data_cap_set.downgrade(&*new_upper);
         self.upper_cap_set.downgrade(&*new_upper);
+
+        self.metrics.gtid_txids.set(
+            new_upper
+                .iter()
+                .filter_map(|part| match part.timestamp() {
+                    GtidState::Absent => None,
+                    GtidState::Active(tx_id) => Some(tx_id.get()),
+                })
+                .sum(),
+        );
 
         self.rewinds.retain(|_, (_, req)| {
             // We need to retain the rewind requests whose snapshot_upper

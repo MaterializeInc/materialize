@@ -129,13 +129,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         .map(|(output_index, _)| *output_index)
         .collect_vec();
 
-    // TODO: Add additional metrics
+    metrics.tables.set(u64::cast_from(table_info.len()));
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
-            // Keep the metrics alive during replication.
-            let _metrics = metrics;
-
             let (id, worker_id) = (config.id, config.worker_id);
             let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
                 caps.try_into().unwrap();
@@ -293,6 +290,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 &connection_config,
                 stream.as_mut(),
                 &table_info,
+                &metrics,
                 &mut data_output,
                 data_cap_set,
                 upper_cap_set,
@@ -305,6 +303,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 use mysql_async::binlog::events::*;
                 let event = event?;
                 let event_data = event.read_data()?;
+                metrics.total.inc();
 
                 match event_data {
                     Some(EventData::HeartbeatEvent) => {
@@ -379,6 +378,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     }
                     _ => {
                         // TODO: Handle other event types
+                        metrics.ignored.inc();
                     }
                 }
             }
