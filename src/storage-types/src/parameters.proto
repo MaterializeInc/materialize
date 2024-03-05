@@ -42,8 +42,8 @@ message ProtoStorageParameters {
     ProtoPgSourceSnapshotConfig pg_snapshot_config = 24;
     bool enable_dependency_read_hold_asserts = 27;
     mz_proto.ProtoDuration user_storage_managed_collections_batch_duration = 28;
+    ProtoMySqlSourceTimeouts mysql_source_timeouts = 29;
 }
-
 
 message ProtoPgSourceTcpTimeouts {
     optional mz_proto.ProtoDuration connect_timeout = 1;
@@ -57,6 +57,12 @@ message ProtoPgSourceSnapshotConfig {
     bool collect_strict_count = 1;
     bool fallback_to_strict_count = 2;
     bool wait_for_count = 3;
+}
+
+message ProtoMySqlSourceTimeouts {
+    optional mz_proto.ProtoDuration tcp_keepalive = 1;
+    optional mz_proto.ProtoDuration snapshot_max_execution_time = 2;
+    optional mz_proto.ProtoDuration snapshot_lock_wait_timeout = 3;
 }
 
 message ProtoKafkaTimeouts {

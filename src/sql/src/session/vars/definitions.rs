@@ -1003,6 +1003,32 @@ pub static PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: VarDefinition = VarDefinition::new
     true,
 );
 
+/// Sets the time between TCP keepalive probes when connecting to MySQL via `mz_mysql_util`.
+pub static MYSQL_SOURCE_TCP_KEEPALIVE: VarDefinition = VarDefinition::new(
+    "mysql_source_tcp_keepalive",
+    value!(Duration; mz_mysql_util::DEFAULT_TCP_KEEPALIVE),
+    "Sets the time between TCP keepalive probes when connecting to MySQL",
+    true,
+);
+
+/// Sets the `max_execution_time` value to use during the snapshotting phase of
+/// MySQL sources.
+pub static MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME: VarDefinition = VarDefinition::new(
+    "mysql_source_snapshot_max_execution_time",
+    value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME),
+    "Sets the `max_execution_time` value to use during the snapshotting phase of MySQL sources (Materialize)",
+    true,
+);
+
+/// Sets the `lock_wait_timeout` value to use during the snapshotting phase of
+/// MySQL sources.
+pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_snapshot_lock_wait_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT),
+    "Sets the `lock_wait_timeout` value to use during the snapshotting phase of MySQL sources (Materialize)",
+    true,
+);
+
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     "ssh_check_interval",

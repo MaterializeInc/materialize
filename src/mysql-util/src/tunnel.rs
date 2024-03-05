@@ -8,14 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use std::ops::{Deref, DerefMut};
+use std::time::Duration;
 
 use mysql_async::{Conn, Opts, OptsBuilder};
-use tracing::{info, warn};
-
 use mz_ore::option::OptionExt;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
+use serde::{Deserialize, Serialize};
+use tracing::{error, info, warn};
 
 use crate::MySqlError;
 
@@ -37,6 +38,100 @@ pub enum TunnelConfig {
         /// The ID of the AWS PrivateLink service.
         connection_id: GlobalId,
     },
+}
+
+pub const DEFAULT_TCP_KEEPALIVE: Duration = Duration::from_secs(60);
+pub const DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME: Duration = Duration::ZERO;
+pub const DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(3600);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeoutConfig {
+    // Snapshot-related configs
+    pub snapshot_max_execution_time: Option<Duration>,
+    pub snapshot_lock_wait_timeout: Option<Duration>,
+
+    // Socket-related configs
+    pub tcp_keepalive: Option<Duration>,
+    // There are other timeout options on `mysql_async::OptsBuilder`
+    // (e.g. `conn_ttl` and `wait_timeout`) that could be exposed
+    // but they only apply to connection pools, which we are not currently using.
+}
+
+impl Default for TimeoutConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_max_execution_time: Some(DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME),
+            snapshot_lock_wait_timeout: Some(DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT),
+            tcp_keepalive: Some(DEFAULT_TCP_KEEPALIVE),
+        }
+    }
+}
+
+impl TimeoutConfig {
+    pub fn build(
+        snapshot_max_execution_time: Duration,
+        snapshot_lock_wait_timeout: Duration,
+        tcp_keepalive: Duration,
+    ) -> Self {
+        // Verify values are within valid ranges
+        // Note we error log but do not fail as this is called in a non-fallible
+        // LD-sync in the adapter.
+
+        // https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_lock_wait_timeout
+        let snapshot_lock_wait_timeout = if snapshot_lock_wait_timeout.as_secs() > 31536000 {
+            error!(
+                "snapshot_lock_wait_timeout is too large: {}. Maximum is 31536000.",
+                snapshot_lock_wait_timeout.as_secs()
+            );
+            Some(DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT)
+        } else {
+            Some(snapshot_lock_wait_timeout)
+        };
+
+        // https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_max_execution_time
+        let snapshot_max_execution_time = if snapshot_max_execution_time.as_millis() > 4294967295 {
+            error!(
+                "snapshot_max_execution_time is too large: {}. Maximum is 4294967295.",
+                snapshot_max_execution_time.as_secs()
+            );
+            Some(DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME)
+        } else {
+            Some(snapshot_max_execution_time)
+        };
+
+        let tcp_keepalive = match u32::try_from(tcp_keepalive.as_millis()) {
+            Err(_) => {
+                error!(
+                    "tcp_keepalive is too large: {}. Maximum is {}.",
+                    tcp_keepalive.as_millis(),
+                    u32::MAX,
+                );
+                Some(DEFAULT_TCP_KEEPALIVE)
+            }
+            Ok(_) => Some(tcp_keepalive),
+        };
+
+        Self {
+            snapshot_max_execution_time,
+            snapshot_lock_wait_timeout,
+            tcp_keepalive,
+        }
+    }
+
+    /// Apply relevant timeout configurations to a `mysql_async::OptsBuilder`.
+    pub fn apply_to_opts(&self, mut opts_builder: OptsBuilder) -> Result<OptsBuilder, MySqlError> {
+        if let Some(tcp_keepalive) = self.tcp_keepalive {
+            opts_builder = opts_builder.tcp_keepalive(Some(
+                u32::try_from(tcp_keepalive.as_millis()).map_err(|e| {
+                    MySqlError::InvalidClientConfig(format!(
+                        "invalid tcp_keepalive duration: {}",
+                        e
+                    ))
+                })?,
+            ));
+        }
+        Ok(opts_builder)
+    }
 }
 
 /// A MySQL connection with an optional SSH tunnel handle.

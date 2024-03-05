@@ -3602,6 +3602,7 @@ dependencies = [
  "mz-controller-types",
  "mz-expr",
  "mz-kafka-util",
+ "mz-mysql-util",
  "mz-orchestrator",
  "mz-ore",
  "mz-persist-client",

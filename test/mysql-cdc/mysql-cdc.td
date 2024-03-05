@@ -133,12 +133,10 @@ CREATE SCHEMA another_schema;
 CREATE TABLE another_schema.another_table (f1 TEXT);
 INSERT INTO another_schema.another_table VALUES ('123');
 
-
-# TODO: #25120 (statement timeout)
-# Sneak in a test for pg_source_snapshot_statement_timeout
+# Sneak in a test for mysql_source_snapshot_max_execution_time
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
-# ALTER SYSTEM SET mysql_source_snapshot_statement_timeout = 1000
+ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 1000
 
 > CREATE SOURCE "test_slot_source"
   IN CLUSTER cdc_cluster
@@ -152,7 +150,37 @@ test_slot_source_progress progress
 > DROP SOURCE test_slot_source
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 0
+ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 0
+
+# Validate mysql_source_snapshot_lock_wait_timeout
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 1
+
+$ mysql-execute name=mysql
+USE public;
+BEGIN;
+INSERT INTO pk_table VALUES (4, 'four');
+
+> CREATE SOURCE "test_slot_source"
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.pk_table);
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'test_slot_source';
+stalled
+
+$ mysql-execute name=mysql
+ROLLBACK;
+
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'test_slot_source';
+running
+
+> DROP SOURCE test_slot_source
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 3600
+
 
 #
 # Error checking

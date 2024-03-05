@@ -229,6 +229,19 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
+                if let Some(timeout) = config
+                    .config
+                    .parameters
+                    .mysql_source_timeouts
+                    .snapshot_lock_wait_timeout
+                {
+                    lock_conn
+                        .query_drop(format!(
+                            "SET @@session.lock_wait_timeout = {}",
+                            timeout.as_secs()
+                        ))
+                        .await?;
+                }
 
                 trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
                 match lock_conn
@@ -241,7 +254,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         message,
                         ..
                     })) if code == ER_NO_SUCH_TABLE => {
-                        trace!(%id, "timely-{worker_id} received unknown table error from lock query");
+                        trace!(%id, "timely-{worker_id} received unknown table error from \
+                                     lock query");
                         let err = DefiniteError::TableDropped(message);
                         return Ok(return_definite_error(
                             err,
@@ -323,6 +337,22 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // for retrieval. (This does not occur for other types such as DATETIME.)"
                 tx.query_drop("set @@session.time_zone = '+00:00'").await?;
 
+                // Configure query execution time based on param. We want to be able to
+                // override the server value here in case it's set too low,
+                // respective to the size of the data we need to copy.
+                if let Some(timeout) = config
+                    .config
+                    .parameters
+                    .mysql_source_timeouts
+                    .snapshot_max_execution_time
+                {
+                    tx.query_drop(format!(
+                        "SET @@session.max_execution_time = {}",
+                        timeout.as_millis()
+                    ))
+                    .await?;
+                }
+
                 // We have started our transaction so we can unlock the tables.
                 lock_conn.query_drop("UNLOCK TABLES").await?;
                 lock_conn.disconnect().await?;
@@ -364,9 +394,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     &mut tx,
                     reader_snapshot_table_info
                         .values()
-                        .map(|(_, table_desc)| {
-                            Into::<MySqlTableName>::into(table_desc)
-                        })
+                        .map(|(_, table_desc)| Into::<MySqlTableName>::into(table_desc))
                         .collect(),
                     metrics,
                 )

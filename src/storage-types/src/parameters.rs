@@ -31,6 +31,7 @@ pub struct StorageParameters {
     pub persist: PersistParameters,
     pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
     pub pg_source_snapshot_statement_timeout: Duration,
+    pub mysql_source_timeouts: mz_mysql_util::TimeoutConfig,
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
     pub keep_n_privatelink_status_history_entries: usize,
@@ -89,6 +90,7 @@ impl Default for StorageParameters {
             persist: Default::default(),
             pg_source_tcp_timeouts: Default::default(),
             pg_source_snapshot_statement_timeout: Default::default(),
+            mysql_source_timeouts: Default::default(),
             keep_n_source_status_history_entries: Default::default(),
             keep_n_sink_status_history_entries: Default::default(),
             keep_n_privatelink_status_history_entries: Default::default(),
@@ -188,6 +190,7 @@ impl StorageParameters {
             persist,
             pg_source_tcp_timeouts,
             pg_source_snapshot_statement_timeout,
+            mysql_source_timeouts,
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
             keep_n_privatelink_status_history_entries,
@@ -212,6 +215,7 @@ impl StorageParameters {
         self.persist.update(persist);
         self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
+        self.mysql_source_timeouts = mysql_source_timeouts;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.keep_n_privatelink_status_history_entries = keep_n_privatelink_status_history_entries;
@@ -246,6 +250,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             pg_source_snapshot_statement_timeout: Some(
                 self.pg_source_snapshot_statement_timeout.into_proto(),
             ),
+            mysql_source_timeouts: Some(self.mysql_source_timeouts.into_proto()),
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
             ),
@@ -294,6 +299,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .into_rust_if_some(
                     "ProtoStorageParameters::pg_source_snapshot_statement_timeout",
                 )?,
+            mysql_source_timeouts: proto
+                .mysql_source_timeouts
+                .into_rust_if_some("ProtoStorageParameters::mysql_source_timeouts")?,
             keep_n_source_status_history_entries: usize::cast_from(
                 proto.keep_n_source_status_history_entries,
             ),
@@ -467,6 +475,24 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
                 .into_rust_if_some(
                     "ProtoKafkaSourceTcpTimeouts::default_metadata_fetch_interval",
                 )?,
+        })
+    }
+}
+
+impl RustType<ProtoMySqlSourceTimeouts> for mz_mysql_util::TimeoutConfig {
+    fn into_proto(&self) -> ProtoMySqlSourceTimeouts {
+        ProtoMySqlSourceTimeouts {
+            tcp_keepalive: self.tcp_keepalive.into_proto(),
+            snapshot_max_execution_time: self.snapshot_max_execution_time.into_proto(),
+            snapshot_lock_wait_timeout: self.snapshot_lock_wait_timeout.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoMySqlSourceTimeouts) -> Result<Self, TryFromProtoError> {
+        Ok(mz_mysql_util::TimeoutConfig {
+            tcp_keepalive: proto.tcp_keepalive.into_rust()?,
+            snapshot_max_execution_time: proto.snapshot_max_execution_time.into_rust()?,
+            snapshot_lock_wait_timeout: proto.snapshot_lock_wait_timeout.into_rust()?,
         })
     }
 }
