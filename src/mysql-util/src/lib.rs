@@ -10,7 +10,7 @@
 //! MySQL utility library.
 
 mod tunnel;
-pub use tunnel::{Config, MySqlConn, TunnelConfig};
+pub use tunnel::{Config, MySqlConn, TimeoutConfig, TunnelConfig, DEFAULT_TCP_KEEPALIVE};
 
 mod desc;
 pub use desc::{
@@ -32,6 +32,8 @@ pub use decoding::pack_mysql_row;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
+    #[error("error creating mysql connection with config: {0}")]
+    InvalidClientConfig(String),
     #[error("error setting up ssh: {0}")]
     Ssh(#[source] anyhow::Error),
     #[error("decode error: {0}")]

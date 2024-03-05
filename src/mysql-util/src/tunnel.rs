@@ -8,14 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use std::ops::{Deref, DerefMut};
+use std::time::Duration;
 
 use mysql_async::{Conn, Opts, OptsBuilder};
-use tracing::{info, warn};
-
 use mz_ore::option::OptionExt;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 
 use crate::MySqlError;
 
@@ -37,6 +38,40 @@ pub enum TunnelConfig {
         /// The ID of the AWS PrivateLink service.
         connection_id: GlobalId,
     },
+}
+
+pub const DEFAULT_TCP_KEEPALIVE: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeoutConfig {
+    pub tcp_keepalive: Option<Duration>,
+    // There are other timeout options on `mysql_async::OptsBuilder`
+    // (e.g. `conn_ttl` and `wait_timeout`) that could be exposed
+    // but they only apply to connection pools, which we are not currently using.
+}
+
+impl Default for TimeoutConfig {
+    fn default() -> Self {
+        Self {
+            tcp_keepalive: Some(DEFAULT_TCP_KEEPALIVE),
+        }
+    }
+}
+
+impl TimeoutConfig {
+    pub fn apply(&self, mut opts_builder: OptsBuilder) -> Result<OptsBuilder, MySqlError> {
+        if let Some(tcp_keepalive) = self.tcp_keepalive {
+            opts_builder = opts_builder.tcp_keepalive(Some(
+                u32::try_from(tcp_keepalive.as_millis()).map_err(|e| {
+                    MySqlError::InvalidClientConfig(format!(
+                        "invalid tcp_keepalive duration: {}",
+                        e
+                    ))
+                })?,
+            ));
+        }
+        Ok(opts_builder)
+    }
 }
 
 /// A MySQL connection with an optional SSH tunnel handle.

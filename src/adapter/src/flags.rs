@@ -88,6 +88,9 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             tcp_user_timeout: Some(config.pg_source_tcp_user_timeout()),
         },
         pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
+        mysql_source_timeouts: mz_mysql_util::TimeoutConfig {
+            tcp_keepalive: Some(config.mysql_source_tcp_keepalive()),
+        },
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_sink_status_history_entries(),
         keep_n_privatelink_status_history_entries: config

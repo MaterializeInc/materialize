@@ -1003,6 +1003,14 @@ pub static PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: VarDefinition = VarDefinition::new
     true,
 );
 
+/// Sets the time between TCP keepalive probes when connecting to MySQL via `mz_mysql_util`.
+pub static MYSQL_SOURCE_TCP_KEEPALIVE: VarDefinition = VarDefinition::new(
+    "mysql_source_tcp_keepalive",
+    value!(Duration; mz_mysql_util::DEFAULT_TCP_KEEPALIVE),
+    "Sets the time between TCP keepalive probes when connecting to MySQL",
+    true,
+);
+
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     "ssh_check_interval",
