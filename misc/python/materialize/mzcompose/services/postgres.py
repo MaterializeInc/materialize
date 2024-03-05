@@ -24,15 +24,17 @@ class Postgres(Service):
         extra_command: list[str] = [],
         environment: list[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
         volumes: list[str] = [],
+        max_wal_senders: int = 100,
+        max_replication_slots: int = 100,
     ) -> None:
         command: list[str] = [
             "postgres",
             "-c",
             "wal_level=logical",
             "-c",
-            "max_wal_senders=100",
+            f"max_wal_senders={max_wal_senders}",
             "-c",
-            "max_replication_slots=100",
+            f"max_replication_slots={max_replication_slots}",
             "-c",
             "max_connections=5000",
         ] + extra_command
