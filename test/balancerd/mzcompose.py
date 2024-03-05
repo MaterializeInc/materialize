@@ -10,6 +10,8 @@
 import json
 import ssl
 import uuid
+from textwrap import dedent
+from urllib.parse import quote
 
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
@@ -20,6 +22,7 @@ from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
 
 TENANT_ID = str(uuid.uuid4())
 ADMIN_USER = "u1@example.com"
@@ -54,8 +57,20 @@ USERS = {
 }
 FRONTEGG_URL = "http://frontegg-mock:6880"
 
+
+def app_password(email: str) -> str:
+    api_token = USERS[email]["initial_api_tokens"][0]
+    password = f"mzp_{api_token['client_id']}{api_token['secret']}".replace("-", "")
+    return password
+
+
 SERVICES = [
     TestCerts(),
+    Testdrive(
+        materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
+        materialize_use_https=True,
+        no_reset=True,
+    ),
     Balancerd(
         command=[
             "service",
@@ -106,12 +121,6 @@ SERVICES = [
         ],
     ),
 ]
-
-
-def app_password(email: str) -> str:
-    api_token = USERS[email]["initial_api_tokens"][0]
-    password = f"mzp_{api_token['client_id']}{api_token['secret']}".replace("-", "")
-    return password
 
 
 # Assert that contains is present in balancer metrics.
@@ -360,3 +369,20 @@ def workflow_many_connections(c: Composition) -> None:
         assert len(row) == 1
         col = row[0]
         assert col == "abc"
+
+
+def workflow_webhook(c: Composition) -> None:
+    c.up("balancerd", "frontegg-mock", "materialized")
+    c.up("testdrive", persistent=True)
+
+    c.testdrive(
+        dedent(
+            """
+        > CREATE SOURCE wh FROM WEBHOOK BODY FORMAT TEXT
+        $ webhook-append database=materialize schema=public name=wh
+        a
+        > SELECT * FROM wh
+        a
+    """
+        )
+    )

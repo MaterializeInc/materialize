@@ -115,6 +115,8 @@ pub struct Config {
     /// The internal pgwire connection parameters for the Materialize instance that
     /// testdrive will connect to.
     pub materialize_internal_pgconfig: tokio_postgres::Config,
+    /// Whether to use HTTPS instead of plain HTTP for the HTTP(S) connections.
+    pub materialize_use_https: bool,
     /// The port for the public endpoints of the materialize instance that
     /// testdrive will connect to via HTTP.
     pub materialize_http_port: u16,
@@ -186,6 +188,7 @@ pub struct State {
     materialize_catalog_config: Option<CatalogConfig>,
 
     materialize_sql_addr: String,
+    materialize_use_https: bool,
     materialize_http_addr: String,
     materialize_internal_sql_addr: String,
     materialize_internal_http_addr: String,
@@ -845,6 +848,7 @@ pub async fn create_state(
 
     let (
         materialize_sql_addr,
+        materialize_use_https,
         materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
@@ -905,6 +909,7 @@ pub async fn create_state(
         );
         (
             materialize_sql_addr,
+            config.materialize_use_https,
             materialize_http_addr,
             materialize_internal_sql_addr,
             materialize_internal_http_addr,
@@ -1005,6 +1010,7 @@ pub async fn create_state(
         // === Materialize state. ===
         materialize_catalog_config,
         materialize_sql_addr,
+        materialize_use_https,
         materialize_http_addr,
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
