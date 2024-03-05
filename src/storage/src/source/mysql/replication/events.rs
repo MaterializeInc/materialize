@@ -14,22 +14,20 @@ use tracing::trace;
 
 use mz_mysql_util::pack_mysql_row;
 use mz_repr::Row;
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::mysql::GtidPartition;
 
 use super::super::schemas::verify_schemas;
-use super::super::{table_name, DefiniteError, TransientError};
+use super::super::{DefiniteError, MySqlTableName, TransientError};
 use super::context::ReplContext;
 
-/// Returns the UnresolvedItemName for the given table name referenced in a
+/// Returns the MySqlTableName for the given table name referenced in a
 /// SQL statement, using the current schema if the table name is unqualified.
-fn table_ident(name: &str, current_schema: &str) -> Result<UnresolvedItemName, TransientError> {
+fn table_ident(name: &str, current_schema: &str) -> Result<MySqlTableName, TransientError> {
     let stripped = name.replace('`', "");
     let mut name_iter = stripped.split('.');
     match (name_iter.next(), name_iter.next()) {
-        (Some(t_name), None) => table_name(current_schema, t_name),
-        (Some(schema_name), Some(t_name)) => table_name(schema_name, t_name),
+        (Some(t_name), None) => Ok(MySqlTableName::new(current_schema, t_name)),
+        (Some(schema_name), Some(t_name)) => Ok(MySqlTableName::new(schema_name, t_name)),
         _ => Err(TransientError::Generic(anyhow::anyhow!(
             "Invalid table name from QueryEvent: {}",
             name
@@ -153,7 +151,7 @@ pub(super) async fn handle_query_event(
                         (
                             (
                                 *output_index,
-                                Err(DefiniteError::TableTruncated(table.to_ast_string())),
+                                Err(DefiniteError::TableTruncated(table.to_string())),
                             ),
                             new_gtid.clone(),
                             1,
@@ -197,10 +195,10 @@ pub(super) async fn handle_rows_event(
             return Ok(());
         }
         (None, None) => {
-            let table = table_name(
+            let table = MySqlTableName::new(
                 &*table_map_event.database_name(),
                 &*table_map_event.table_name(),
-            )?;
+            );
             if ctx.table_info.contains_key(&table) {
                 ctx.table_id_map.insert(binlog_table_id, table);
                 &ctx.table_id_map[&binlog_table_id]

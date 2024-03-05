@@ -81,8 +81,8 @@ class Connections(Generator):
     def body(cls) -> None:
         print("$ postgres-execute connection=mz_system")
         # three extra connections for mz_system, default connection, and one
-        # since sqlparse 0.4.4
-        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+3};")
+        # since sqlparse 0.4.4. 3 reserved superuser connections since #25666
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+4};")
 
         for i in cls.all():
             print(
@@ -1429,7 +1429,16 @@ SERVICES = [
 ]
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run all the limits tests against a multi-node, multi-replica cluster"""
 
     parser.add_argument(

@@ -39,13 +39,14 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
-use std::time::Duration;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::future::OreFutureExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
@@ -383,14 +384,14 @@ impl fmt::Debug for ConfluentAvroResolver {
 #[derive(Debug)]
 struct SchemaCache {
     cache: BTreeMap<i32, Result<Schema, AvroError>>,
-    ccsr_client: mz_ccsr::Client,
+    ccsr_client: Arc<mz_ccsr::Client>,
 }
 
 impl SchemaCache {
     fn new(ccsr_client: mz_ccsr::Client) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: BTreeMap::new(),
-            ccsr_client,
+            ccsr_client: Arc::new(ccsr_client),
         })
     }
 
@@ -410,21 +411,31 @@ impl SchemaCache {
                 // An issue with _fetching_ the schema should be returned
                 // immediately, and not cached, since it might get better on the
                 // next retry.
-                let ccsr_client = &self.ccsr_client;
+                let ccsr_client = Arc::clone(&self.ccsr_client);
                 let response = Retry::default()
-                    .max_duration(Duration::from_secs(30))
-                    .retry_async(|state| async move {
-                        let res = ccsr_client.get_schema_by_id(id).await;
-                        match res {
-                            Err(e) => {
-                                if let Some(timeout) = state.next_backoff {
-                                    warn!("transient failure fetching schema id {}: {:?}, retrying in {:?}", id, e, timeout);
+                    // Twice the timeout of the ccsr client so we can attempt 2 requests.
+                    .max_duration(ccsr_client.timeout() * 2)
+                    // Canceling because ultimately it's just non-mutating HTTP requests.
+                    .retry_async_canceling(move |state| {
+                        let ccsr_client = Arc::clone(&ccsr_client);
+                        async move {
+                            let res = ccsr_client.get_schema_by_id(id).await;
+                            match res {
+                                Err(e) => {
+                                    if let Some(timeout) = state.next_backoff {
+                                        warn!(
+                                            "transient failure fetching \
+                                                schema id {}: {:?}, retrying in {:?}",
+                                            id, e, timeout
+                                        );
+                                    }
+                                    Err(anyhow::Error::from(e))
                                 }
-                                Err(e)
+                                _ => Ok(res?),
                             }
-                            _ => res,
                         }
                     })
+                    .run_in_task(|| format!("fetch_avro_schema:{}", id))
                     .await?;
                 // Now, we've gotten some json back, so we want to cache it (regardless of whether it's a valid
                 // avro schema, it won't change).

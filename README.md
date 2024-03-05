@@ -4,24 +4,33 @@
 
 [<img src="https://github.com/MaterializeInc/materialize/assets/23521087/39270ecb-7ac4-4829-b98b-c5b5699a16b8" width=35%>](https://materialize.com)
 
-Materialize is a **data warehouse** purpose-built for **operational workloads**
-where an analytical data warehouse would be too slow, and a stream processor
-would be too complicated.
+Materialize is a cloud-native **data warehouse** purpose-built for **operational
+workloads** where an analytical data warehouse would be too slow, and a stream
+processor would be too complicated.
 
 Using SQL and common tools in the wider data ecosystem, Materialize allows you
 to build real-time automation, engaging customer experiences, and interactive
 data products that drive value for your business while reducing the cost of
 [data freshness](https://materialize.com/blog/decouple-cost-and-freshness/).
 
-## Sign up
+## Get started
 
 Ready to try out Materialize? [Sign up](https://materialize.com/register/) to get started! 🚀
+
+Have questions? We'd love to hear from you:
+  * [Join our Slack](https://materialize.com/s/chat)
+  * [Send us mail](https://materialize.com/contact/)
 
 ## About
 
 Materialize is designed to help you interactively explore your streaming data, perform analytics against live relational data, or increase data freshness while reducing the load of your dashboard and monitoring tasks. The moment you need a refreshed answer, you can get it in milliseconds.
 
 It focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL queries as *dataflows*, which can react efficiently to changes in your data as they happen.
+
+Our fully managed service is cloud native, featuring **high availability**, via
+multi-active replication, **horizontal scalability**, by seamlessly scaling
+dataflows across multiple machines, and **near infinite storage**, by
+leveraging cloud object storage (e.g., Amazon S3).
 
 We support a large fraction of PostgreSQL, and are actively working on supporting more built-in PostgreSQL functions. Please file an issue if something doesn't work as expected!
 
@@ -35,11 +44,12 @@ Once you've got the data in, define views and perform reads via the PostgreSQL p
 
 Materialize supports a comprehensive variety of SQL features, all using the PostgreSQL dialect and protocol:
 
--   Joins, Joins, Joins! Materialize supports multi-column join conditions, multi-way joins, self-joins, cross-joins, inner joins, outer joins, etc.
+-   Joins, joins, joins! Materialize supports multi-column join conditions, multi-way joins, self-joins, cross-joins, inner joins, outer joins, etc.
 -   Delta-joins avoid intermediate state blowup compared to systems that can only plan nested binary joins - tested on joins of up to 64 relations.
 -   Support for subqueries. Materialize's SQL optimizer performs subquery decorrelation out-of-the-box, avoiding the need to manually rewrite subqueries into joins.
--   Materialize supports streams that contain CDC data (currently supporting the [Debezium](https://debezium.io/blog/2017/09/25/streaming-to-another-database/) format). Materialize can incrementally maintain views in the presence of arbitrary inserts, updates, and deletes. No asterisks.
--   All the aggregations. `GROUP BY` , `MIN`, `MAX`, `COUNT`, `SUM`, `STDDEV`, `HAVING`, etc.
+-   Materialize can incrementally maintain views in the presence of arbitrary inserts, updates, and deletes. No asterisks.
+-   All the aggregations: `min`, `max`, `count`, `sum`, `stddev`, etc.
+-   `HAVING`
 -   `ORDER BY`
 -   `LIMIT`
 -   `DISTINCT`
@@ -103,17 +113,24 @@ Stream inserts, updates, and deletes on the underlying tables (`lineitem` and `s
 
 **Push based**: Listen to changes directly using `SUBSCRIBE` or configure Materialize to stream results to a Kafka topic as soon as the views change.
 
-If you want to use an ORM, [chat with us](https://github.com/MaterializeInc/materialize/issues/new/choose). They're surprisingly tricky.
-
 ## Documentation
 
 Check out [our documentation](https://materialize.com/docs/).
 
 ## License
 
-Materialize is source-available and [licensed](LICENSE) under the BSL 1.1, converting to the open-source Apache 2.0 license after 4 years. As stated in the BSL, Materialize is free forever on a single node.
+Materialize is provided primarily as a fully managed cloud service with
+[credit-based pricing](https://materialize.com/pricing/). Included in the price
+are proprietary cloud-native features like horizontal scalability, high
+availability, and a web management console.
 
-Materialize is also available as [a paid cloud service](https://materialize.com/pricing/) with additional features such as high availability via multi-active replication.
+However, we're big believers in advancing the frontier of human knowledge. To
+that end, the source code of the standalone database engine is publicly
+available, in this repository, and [licensed](LICENSE) under the BSL 1.1,
+converting to the open-source Apache 2.0 license after 4 years. As stated in the
+BSL, use of the standalone database engine on a single node is free forever.
+Please be warned that this deployment model is *not* suitable for production use
+and we cannot offer support for it.
 
 Materialize depends upon many open source Rust crates. We maintain a [list of
 these crates and their licenses](https://dev.materialize.com/licenses.html),
@@ -125,7 +142,12 @@ Materialize is primarily written in Rust.
 
 Developers can find docs at [doc/developer](doc/developer), and Rust API documentation is hosted at <https://dev.materialize.com/api/rust/>. The Materialize development roadmap is divided up into roughly month-long milestones, and [managed in GitHub](https://github.com/MaterializeInc/materialize/milestones?direction=asc&sort=due_date&state=open).
 
-Contributions are welcome. Prospective code contributors might find the [good first issue tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3A%22D-good+first+issue%22) useful. We value all contributions equally, but bug reports are more equal.
+Contributions are welcome. Prospective code contributors might find the [D-good
+for external
+contributors](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue+label%3A%22D-good+for+external+contributors%22+)
+label useful. See
+[CONTRIBUTING.md](https://github.com/MaterializeInc/materialize/blob/main/CONTRIBUTING.md)
+for additional guidance.
 
 ## Credits
 

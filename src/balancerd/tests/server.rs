@@ -77,6 +77,7 @@ async fn test_balancer() {
         encoding_key,
         decoding_key,
         users,
+        None,
         SYSTEM_TIME.clone(),
         EXPIRES_IN_SECS,
         // Add a bit of delay so we can test connection de-duplication.

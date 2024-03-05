@@ -389,9 +389,8 @@ contains:incompatible schema change
 $ mysql-execute name=mysql
 TRUNCATE truncate_table;
 
-# TODO: #25051 (truncate not applied; this is also the case for Postgres)
-> SELECT * FROM truncate_table;
-1 1
+! SELECT * FROM truncate_table;
+contains: table was truncated
 
 #
 # Drop table

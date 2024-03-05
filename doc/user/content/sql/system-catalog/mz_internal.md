@@ -752,31 +752,18 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `grantee`        | [`text`] | The role that the privilege was granted to. |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_sink_statistics_raw`
-
-The `mz_sink_statistics_raw` table contains statistics for each worker thread of
-each sink in the system.
-
-Materialize does not make any guarantees about the exactness or freshness of
-these statistics. They are occasionally reset to zero as internal components of
-the system are restarted.
-
-<!-- RELATION_SPEC mz_internal.mz_sink_statistics_raw -->
-| Field                | Type      | Meaning                                                                                                             |
-|----------------------|-----------| --------                                                                                                            |
-| `id`                 | [`text`]  | The ID of the source. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                            |
-| `messages_staged`    | [`uint8`] | The number of messages staged but possibly not committed to the sink.                                               |
-| `messages_committed` | [`uint8`] | The number of messages committed to the sink.                                                                       |
-| `bytes_staged`       | [`uint8`] | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
-| `bytes_committed`    | [`uint8`] | The number of bytes committed to the sink. This counts both keys and values, if applicable.                         |
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_sink_statistics_raw -->
 
 ### `mz_sink_statistics`
 
-The `mz_sink_statistics` view contains statistics about each sink. It is an aggregated form of `mz_sink_statistics_raw`.
+The `mz_sink_statistics` view contains statistics about each sink.
 
-Materialize does not make any guarantees about the exactness or freshness of
-these statistics. They are occasionally reset to zero as internal components of
-the system are restarted.
+#### Counters
+`messages_staged`, `messages_committed`, `bytes_staged`, and `bytes_committed` are all counters that monotonically increase. They are _only
+useful for calculating rates_ to understand the general performance of your sink.
+
+Note that:
+- The non-rate values themselves are not directly comparable, because they are collected and aggregated across multiple threads/processes.
 
 <!-- RELATION_SPEC mz_internal.mz_sink_statistics -->
 | Field                | Type      | Meaning                                                                                                             |
@@ -819,45 +806,11 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
-### `mz_source_statistics_raw`
-
-The `mz_source_statistics_raw` table contains statistics for each worker thread of
-each source in the system.
-
-Materialize does not make any guarantees about the exactness or freshness of
-these statistics. They are occasionally reset to zero as internal components of
-the system are restarted.
-
-<!-- RELATION_SPEC mz_internal.mz_source_statistics_raw -->
-| Field                     | Type         | Meaning                                                                                                                                                                                                                                                                             |
-| --------------------------|------------- | --------                                                                                                                                                                                                                                                                            |
-| `id`                      | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
-| `messages_received`       | [`uint8`]    | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
-| `bytes_received`          | [`uint8`]    | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
-| `updates_staged`          | [`uint8`]    | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
-| `updates_committed`       | [`uint8`]    | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
-| `records_indexed`         | [`uint8`]    | The number of individual records indexed in the source envelope state.                                                                                                                                                                                                              |
-| `bytes_indexed`           | [`uint8`]    | The number of bytes indexed in the source envelope state.                                                                                                                                                                                                                           |
-| `rehydration_latency`     | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state.                                                                                                                                                                                                   |
-| `snapshot_records_known`  | [`uint8`]    | Not yet populated. {{< warn-if-unreleased v0.87 >}}                                                                                                                                                                                                                                 |
-| `snapshot_records_staged` | [`uint8`]    | Not yet populated. {{< warn-if-unreleased v0.87 >}}                                                                                                                                                                                                                                 |
-| `snapshot_committed`      | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
-| `offset_known`            | [`uint8`]    | Not yet populated. {{< warn-if-unreleased v0.87 >}}                                                                                                                                                                                                                                 |
-| `offset_committed`        | [`uint8`]    | Not yet populated. {{< warn-if-unreleased v0.87 >}}                                                                                                                                                                                                                                 |
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_raw -->
 
 ### `mz_source_statistics`
 
-The `mz_source_statistics` view contains statistics about each source. It is an aggregated form of `mz_source_statistics_raw`.
-
-Materialize does not make any guarantees about the exactness or freshness of
-these statistics. They are occasionally reset to zero as internal components of
-the system are restarted.
-
-Note that:
-- `updates_staged` can be slightly different than `updates_committed` in steady state, as different threads may be staging and committed updates, while reporting statistics at different times.
-- `messages_received` can be significantly different than `updates_staged/updates_committed`, for multiple reasons:
-    - Different threads may be reading messages and staging and committed updates, while reporting statistics at different times.
-    - messages can be skipped (e.g. a key is updated multiple times in 1 second) or result in multiple updates (for `UPSERT` source, a single message can cause a delete and insert for an updated key).
+The `mz_source_statistics` view contains statistics about each source.
 
 <!-- RELATION_SPEC mz_internal.mz_source_statistics -->
 | Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
@@ -870,11 +823,66 @@ Note that:
 | `records_indexed`         | [`uint8`]    | The number of individual records indexed in the source envelope state.                                                                                                                                                                                                              |
 | `bytes_indexed`           | [`uint8`]    | The number of bytes indexed in the source envelope state.                                                                                                                                                                                                                           |
 | `rehydration_latency`     | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state.                                                                                                                                                                                                   |
-| `snapshot_records_known`  | [`uint8`]    | Not yet populated. {{< warn-if-unreleased v0.87 >}}                                                                                                                                                                                                                                 |
-| `snapshot_records_staged` | [`uint8`]    | Not yet populated. {{< warn-if-unreleased v0.87 >}}                                                                                                                                                                                                                                 |
+| `snapshot_records_known`  | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The size of the source's snapshot. See above for its unit. |
+| `snapshot_records_staged` | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The amount of the source's snapshot Materialize has read. See above for its unit. |
 | `snapshot_committed`      | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
-| `offset_known`            | [`uint8`]    | Not yet populated. {{< warn-if-unreleased v0.87 >}}                                                                                                                                                                                                                                 |
-| `offset_committed`        | [`uint8`]    | Not yet populated. {{< warn-if-unreleased v0.87 >}}                                                                                                                                                                                                                                 |
+| `offset_known`            | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The offset of the most recent data in the source's upstream service that Materialize knows about. See above for its unit. |
+| `offset_committed`        | [`uint8`]    | {{< warn-if-unreleased v0.87 >}} The offset of the source's upstream service Materialize has fully committed. See above for its unit. |
+
+#### Counters
+`messages_received`, `messages_staged`, `updates_staged`, and `updates_committed` are all counters that monotonically increase. They are _only
+useful for calculating rates_, to understand the general performance of your source.
+
+Note that:
+- For Postgres and MySQL sources, currently, the former 2 are collected on the top-level source, and the latter 2 on the source's tables.
+- The non-rate values themselves are not directly comparable, because they are collected and aggregated across multiple threads/processes.
+
+#### Resetting gauges
+Resetting Gauges generally increase, but can periodically be reset to 0 or other numbers.
+
+---
+**Indexed records**
+
+`records_indexed` and `bytes_indexed` are the size (in records and bytes respectively) of the data the given source _indexes_. Currently, this is only
+`UPSERT` and `DEBEZIUM` sources. These reset to 0 when sources are restarted and must re-index their data.
+
+---
+**Rehydration latency**
+
+`rehydration_latency` is reset to `NULL` when sources are restarted, and is populated with a duration after rehydration finishes. This is typically
+the time it takes `UPSERT` and `DEBEZIUM` sources to re-index their data.
+
+---
+**Snapshot progress**
+
+When a source is first created, it must process and initial snapshot of data. `snapshot_records_known` is the full size of that snapshot, and `snapshot_records_staged`
+is how much of that snapshot the source has read so far.
+
+The _size_ of the snapshot has a source-defined unit:
+- For Kafka sources, its the total number of offsets in the snapshot.
+- For Postgres and MySQL sources, its the number of rows in the snapshot.
+
+Note that when tables are added to Postgres or MySQL sources, this statistics will reset as we snapshot those new tables.
+
+#### Gauges
+Gauges never decrease/reset.
+
+---
+**Snapshot Completion**
+`snapshot_committed` becomes true when we have fully _committed_ the snapshot for the given source.
+
+---
+**Steady-state progress**
+
+`offset_known` and `offset_committed` are used to represent the _progress_ a source is making,
+in comparison to its upstream source. They are designed to be turned into _rates_, and compared.
+
+`offset_known` is the maximum offset of upstream data knows about. `offset_committed` is the offset that Materialize has committed data up to.
+
+These statistics have a source-defined unit:
+- For Kafka sources, its the number of offsets.
+- For MySQL sources, its the number of transactions.
+- For Postgres sources, its the number of bytes in its replication stream.
 
 ### `mz_source_statuses`
 

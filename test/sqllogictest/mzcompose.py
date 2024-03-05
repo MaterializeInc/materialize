@@ -22,12 +22,21 @@ SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
 COCKROACH_DEFAULT_PORT = 26257
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(c: Composition) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_fast_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run fast SQL logic tests"""
     run_sqllogictest(c, parser, compileFastSltConfig())
 
 
-def workflow_sqllogictest(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_slow_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run slow SQL logic tests"""
     run_sqllogictest(
         c,

@@ -20,6 +20,11 @@ who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.26.0"
 
+[[audits.bitmaps]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.1.0"
+
 [[audits.bitvec]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -74,6 +79,11 @@ version = "0.6.0"
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.6.4"
+
+[[audits.im]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "15.1.0"
 
 [[audits.jsonwebtoken]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -135,6 +145,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.7.0"
 
+[[audits.rand_xoshiro]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.0"
+
 [[audits.raw-cpuid]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -174,6 +189,11 @@ delta = "0.16.20 -> 0.17.7"
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "1.0.4"
+
+[[audits.sized-chunks]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.5"
 
 [[audits.spin]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

@@ -29,7 +29,6 @@ use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
 use crate::error::{CodecMismatch, CodecMismatchT};
@@ -1091,26 +1090,19 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         // bounds using the lattice operations.
         fn overall_desc<'a, T: Timestamp + Lattice>(
             iter: impl Iterator<Item = &'a Description<T>>,
-        ) -> (Antichain<T>, Antichain<T>, Antichain<T>) {
+        ) -> (Antichain<T>, Antichain<T>) {
             let mut lower = Antichain::new();
             let mut upper = Antichain::from_elem(T::minimum());
-            let mut since = Antichain::from_elem(T::minimum());
             for desc in iter {
                 lower.meet_assign(desc.lower());
                 upper.join_assign(desc.upper());
-                since.join_assign(desc.since());
             }
-            (lower, upper, since)
+            (lower, upper)
         }
-        let (inc_lower, inc_upper, inc_since) =
-            overall_desc(self.inc_batches.iter().map(|a| &a.desc));
-        let (full_lower, full_upper, full_since) =
-            overall_desc(self.full_batches.iter().map(|a| &a.desc));
+        let (inc_lower, inc_upper) = overall_desc(self.inc_batches.iter().map(|a| &a.desc));
+        let (full_lower, full_upper) = overall_desc(self.full_batches.iter().map(|a| &a.desc));
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
-        // Unsure if we can strengthen this to an equality check; sticking with the
-        // inequality from the original code for now.
-        assert!(PartialOrder::less_equal(&full_since, &inc_since));
 
         // Check that the overall set of parts contained in both representations is the same.
         let inc_parts: HashSet<_> = self

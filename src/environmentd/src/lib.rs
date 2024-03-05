@@ -207,14 +207,6 @@ pub enum CatalogConfig {
         /// Persist catalog metrics.
         metrics: Arc<mz_catalog::durable::Metrics>,
     },
-    /// The catalog contents are stored in both persist and the stash and their contents are
-    /// compared. This is mostly used for testing purposes.
-    Shadow {
-        /// The PostgreSQL URL for the adapter stash.
-        url: String,
-        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
-        persist_clients: Arc<PersistClientCache>,
-    },
 }
 
 impl CatalogConfig {
@@ -222,7 +214,6 @@ impl CatalogConfig {
         match self {
             CatalogConfig::Stash { .. } => CatalogKind::Stash,
             CatalogConfig::Persist { .. } => CatalogKind::Persist,
-            CatalogConfig::Shadow { .. } => CatalogKind::Shadow,
             CatalogConfig::EmergencyStash { .. } => CatalogKind::EmergencyStash,
         }
     }
@@ -621,6 +612,7 @@ impl Listeners {
         // Launch SQL server.
         task::spawn(|| "sql_server", {
             let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                label: "external_pgwire",
                 tls: pgwire_tls.clone(),
                 adapter_client: adapter_client.clone(),
                 frontegg: config.frontegg.clone(),
@@ -634,6 +626,7 @@ impl Listeners {
         // Launch internal SQL server.
         task::spawn(|| "internal_sql_server", {
             let internal_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                label: "internal_pgwire",
                 tls: pgwire_tls.map(|mut pgwire_tls| {
                     // Allow, but do not require, TLS connections on the internal
                     // port. Some users of the internal SQL server do not support
@@ -686,6 +679,7 @@ impl Listeners {
         // Launch SQL server exposed to balancers
         task::spawn(|| "balancer_sql_server", {
             let balancer_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                label: "balancer_pgwire",
                 tls: None,
                 adapter_client: adapter_client.clone(),
                 frontegg: config.frontegg.clone(),
@@ -822,30 +816,6 @@ async fn catalog_opener(
                     Arc::clone(metrics),
                 )
                 .await?,
-            )
-        }
-        CatalogConfig::Shadow {
-            url,
-            persist_clients,
-        } => {
-            let stash_factory =
-                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
-            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
-            let persist_client = persist_clients
-                .open(controller_config.persist_location.clone())
-                .await?;
-            Box::new(
-                mz_catalog::durable::shadow_catalog_state(
-                    StashConfig {
-                        stash_factory,
-                        stash_url: url.clone(),
-                        schema: None,
-                        tls,
-                    },
-                    persist_client,
-                    environment_id.organization_id(),
-                )
-                .await,
             )
         }
     })

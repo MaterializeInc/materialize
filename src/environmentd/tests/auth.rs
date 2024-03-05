@@ -448,6 +448,7 @@ async fn test_auth_expiry() {
         encoding_key,
         decoding_key,
         users,
+        None,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -620,6 +621,7 @@ async fn test_auth_base_require_tls_frontegg() {
         encoding_key,
         decoding_key,
         users,
+        None,
         now.clone(),
         1_000,
         None,
@@ -1387,6 +1389,7 @@ async fn test_auth_admin_non_superuser() {
         encoding_key,
         decoding_key,
         users,
+        None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1510,6 +1513,7 @@ async fn test_auth_admin_superuser() {
         encoding_key,
         decoding_key,
         users,
+        None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1633,6 +1637,7 @@ async fn test_auth_admin_superuser_revoked() {
         encoding_key,
         decoding_key,
         users,
+        None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1712,6 +1717,7 @@ async fn test_auth_admin_superuser_revoked() {
     );
 }
 
+#[ignore] // TODO: Reenable when #25705 is fixed
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_deduplication() {
@@ -1750,6 +1756,7 @@ async fn test_auth_deduplication() {
         encoding_key,
         decoding_key,
         users,
+        None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1879,6 +1886,7 @@ async fn test_refresh_task_metrics() {
         encoding_key,
         decoding_key,
         users,
+        None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -2029,6 +2037,7 @@ async fn test_superuser_can_alter_cluster() {
         encoding_key,
         decoding_key,
         users,
+        None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,

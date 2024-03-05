@@ -212,13 +212,14 @@ def workflow_inspect_shard(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    for workflow in [
-        "inspect-shard",
-        "kafka-sources",
-        "user-tables",
-        # Legacy tests, not currently operational
-        # "failpoints",
-        # "compaction"
-    ]:
-        c.down(destroy_volumes=True)
-        c.workflow(workflow)
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        if name in ["failpoints", "compaction"]:
+            # Legacy tests, not currently operational
+            continue
+
+        with c.test_case(name):
+            c.down(destroy_volumes=True)
+            c.workflow(name)

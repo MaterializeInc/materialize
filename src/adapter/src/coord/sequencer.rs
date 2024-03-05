@@ -27,6 +27,7 @@ use mz_sql::plan::{
     FetchPlan, MutationKind, Params, Plan, PlanKind, QueryWhen, RaisePlan,
 };
 use mz_sql::rbac;
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use std::sync::Arc;
@@ -120,8 +121,7 @@ impl Coordinator {
                         (conn_id.unhandled(), *conn_meta.authenticated_role_id())
                     })
                     .collect(),
-                ctx.session().role_metadata(),
-                ctx.session().vars(),
+                ctx.session(),
                 &plan,
                 target_cluster_id,
                 &resolved_ids,
@@ -711,7 +711,7 @@ impl Coordinator {
     }
 
     fn should_emit_rbac_notice(&self, session: &Session) -> Option<AdapterNotice> {
-        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session.vars()) {
+        if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session) {
             Some(AdapterNotice::RbacUserDisabled)
         } else {
             None
