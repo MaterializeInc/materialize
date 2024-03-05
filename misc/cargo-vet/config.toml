@@ -767,7 +767,7 @@ version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.libc]]
-version = "0.2.148"
+version = "0.2.153"
 criteria = "safe-to-deploy"
 
 [[exemptions.libloading]]
@@ -839,7 +839,7 @@ version = "0.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.mio]]
-version = "0.8.8"
+version = "0.8.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.moka]]
