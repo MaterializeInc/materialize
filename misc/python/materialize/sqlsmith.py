@@ -131,4 +131,5 @@ known_errors = [
     "nested aggregate functions are not allowed",
     "function map_build(text list) does not exist",
     "timestamp cannot be NaN",
+    "exceeded recursion limit of 2048",
 ]
