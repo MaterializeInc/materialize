@@ -713,6 +713,13 @@ impl Listeners {
             );
         }
 
+        sentry::with_scope(
+            |scope| scope.set_tag("id", "persist_foo"),
+            || {
+                panic!("WIP testing");
+            },
+        );
+
         Ok(Server {
             sql_listener,
             http_listener,
