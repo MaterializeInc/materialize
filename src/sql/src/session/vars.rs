@@ -2113,6 +2113,7 @@ impl SystemVars {
             || name == LINEAR_JOIN_YIELDING.name()
             || name == ENABLE_MZ_JOIN_CORE.name()
             || name == ENABLE_COLUMNATION_LGALLOC.name()
+            || name == ENABLE_COMPUTE_CHUNKED_STACK.name()
             || name == ENABLE_COMPUTE_OPERATOR_HYDRATION_STATUS_LOGGING.name()
             || name == ENABLE_LGALLOC_EAGER_RECLAMATION.name()
             || self.is_persist_config_var(name)
