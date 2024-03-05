@@ -427,12 +427,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             (*output_index, event.err_into())
         })
         .inner
-        .map_in_place(move |&mut ((_, ref data), _, ref mut diff)| {
-            // Ensure errors are never retracted.
-            if data.is_err() {
-                *diff = diff.abs();
-            }
-        })
         .as_collection();
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
