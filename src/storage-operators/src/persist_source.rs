@@ -546,9 +546,23 @@ impl PendingWork {
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
-                            if let Some(_stats) = is_filter_pushdown_audit {
-                                // TODO: include more (redacted) information here.
-                                panic!("persist filter pushdown correctness violation! {}", name);
+                            if let Some(_stats) = &is_filter_pushdown_audit {
+                                // NB: The tag added by this scope is used for alerting. The panic
+                                // message may be changed arbitrarily, but the tag key and val must
+                                // stay the same.
+                                sentry::with_scope(
+                                    |scope| {
+                                        scope
+                                            .set_tag("alert_id", "persist_pushdown_audit_violation")
+                                    },
+                                    || {
+                                        // TODO: include more (redacted) information here.
+                                        panic!(
+                                            "persist filter pushdown correctness violation! {}",
+                                            name
+                                        );
+                                    },
+                                );
                             }
                             match result {
                                 Ok((row, time, diff)) => {

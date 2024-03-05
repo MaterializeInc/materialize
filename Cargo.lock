@@ -6044,6 +6044,7 @@ dependencies = [
  "mz-timely-util",
  "prometheus",
  "proptest",
+ "sentry",
  "serde",
  "timely",
  "tokio",
