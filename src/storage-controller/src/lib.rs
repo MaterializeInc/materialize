@@ -601,23 +601,17 @@ where
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
                         table_registers.push((id, write, collection_state));
                     }
-                    DataSource::Ingestion(_)
-                    | DataSource::Progress
-                    | DataSource::Other(DataSourceOther::Compute)
-                    | DataSource::Other(DataSourceOther::Source) => {
+                    DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
                         debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
                         self.collections.insert(id, collection_state);
                     }
-                }
-                self.persist_read_handles.register(id, since_handle);
-
-                if let DataSource::Ingestion(i) = &description.data_source {
-                    source_statistics.insert(id, None);
-                    // Note that `source_exports` contains the subsources as well.
-                    for (id, _) in i.source_exports.iter() {
-                        source_statistics.insert(*id, None);
+                    DataSource::Ingestion(_) | DataSource::Other(DataSourceOther::Source) => {
+                        debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                        self.collections.insert(id, collection_state);
+                        source_statistics.insert(id, None);
                     }
                 }
+                self.persist_read_handles.register(id, since_handle);
 
                 to_create.push((id, description));
             }
