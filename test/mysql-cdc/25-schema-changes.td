@@ -102,6 +102,69 @@ contains:incompatible schema change
 > DROP SOURCE mz_source;
 
 #
+# ALTER TABLE reorder column
+#
+
+$ mysql-execute name=mysql
+CREATE TABLE reorder_column (f1 INTEGER, f2 INTEGER);
+INSERT INTO reorder_column VALUES (1, 2);
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.reorder_column);
+
+$ mysql-execute name=mysql
+ALTER TABLE reorder_column MODIFY f1 INT AFTER f2;
+INSERT INTO reorder_column VALUES (20, 10);
+
+! SELECT * from reorder_column;
+contains:incompatible schema change
+
+> DROP SOURCE mz_source;
+
+
+#
+# ALTER TABLE rename column
+#
+
+$ mysql-execute name=mysql
+CREATE TABLE rename_column (f1 INTEGER, f2 INTEGER);
+INSERT INTO rename_column VALUES (1, 2);
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.rename_column);
+
+$ mysql-execute name=mysql
+ALTER TABLE rename_column CHANGE f1 f3 INT;
+INSERT INTO rename_column VALUES (10, 20);
+
+! SELECT * from rename_column;
+contains:incompatible schema change
+
+> DROP SOURCE mz_source;
+
+
+#
+# ALTER TABLE no column change
+#
+
+$ mysql-execute name=mysql
+CREATE TABLE no_column_change (f1 INT);
+INSERT INTO no_column_change VALUES (1);
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (public.no_column_change);
+
+$ mysql-execute name=mysql
+ALTER TABLE no_column_change CHANGE f1 f1 INT;
+INSERT INTO no_column_change VALUES (10);
+
+> SELECT * from no_column_change;
+1
+10
+
+> DROP SOURCE mz_source;
+
+#
 # Alter a column type using a fully-qualified name
 # to validate our detection of ALTER TABLE <schema>.<table>
 #
