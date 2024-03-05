@@ -2790,7 +2790,7 @@ async fn smoketest_webhook_source() {
     let path_label = &total_requests_metric.get_label()[0];
     assert_eq!(path_label.get_value(), "/api/webhook/:database/:schema/:id");
 
-    let status_label = &total_requests_metric.get_label()[1];
+    let status_label = &total_requests_metric.get_label()[2];
     assert_eq!(status_label.get_value(), "200");
 
     // Wait for the events to be persisted.
@@ -3136,12 +3136,12 @@ async fn test_http_metrics() {
     let success_metric = &request_metric.get_metric()[0];
     assert_eq!(success_metric.get_counter().get_value(), 1.0);
     assert_eq!(success_metric.get_label()[0].get_value(), "/api/sql");
-    assert_eq!(success_metric.get_label()[1].get_value(), "200");
+    assert_eq!(success_metric.get_label()[2].get_value(), "200");
 
     let failure_metric = &request_metric.get_metric()[1];
     assert_eq!(failure_metric.get_counter().get_value(), 1.0);
     assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
-    assert_eq!(failure_metric.get_label()[1].get_value(), "400");
+    assert_eq!(failure_metric.get_label()[2].get_value(), "400");
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]

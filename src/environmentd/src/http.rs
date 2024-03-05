@@ -84,6 +84,7 @@ pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
 
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
+    pub source: &'static str,
     pub tls: Option<TlsConfig>,
     pub frontegg: Option<FronteggAuthentication>,
     pub adapter_client: mz_adapter::Client,
@@ -127,6 +128,7 @@ pub struct HttpServer {
 impl HttpServer {
     pub fn new(
         HttpConfig {
+            source,
             tls,
             frontegg,
             adapter_client,
@@ -202,7 +204,7 @@ impl HttpServer {
             .merge(base_router)
             .merge(ws_router)
             .merge(webhook_router)
-            .apply_default_layers(metrics);
+            .apply_default_layers(source, metrics);
 
         HttpServer { tls, router }
     }
@@ -482,7 +484,7 @@ impl InternalHttpServer {
         let router = router
             .merge(ws_router)
             .merge(leader_router)
-            .apply_default_layers(metrics);
+            .apply_default_layers("internal", metrics);
 
         InternalHttpServer { router }
     }
@@ -933,13 +935,13 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
 /// Default layers that should be applied to all routes, and should get applied to both the
 /// internal http and external http routers.
 trait DefaultLayers {
-    fn apply_default_layers(self, metrics: Metrics) -> Self;
+    fn apply_default_layers(self, source: &'static str, metrics: Metrics) -> Self;
 }
 
 impl DefaultLayers for Router {
-    fn apply_default_layers(self, metrics: Metrics) -> Self {
+    fn apply_default_layers(self, source: &'static str, metrics: Metrics) -> Self {
         self.layer(DefaultBodyLimit::max(MAX_REQUEST_SIZE))
-            .layer(metrics::PrometheusLayer::new(metrics))
+            .layer(metrics::PrometheusLayer::new(source, metrics))
     }
 }
 
