@@ -386,6 +386,15 @@ impl Transform for FuseAndCollapse {
     }
 }
 
+/// Run the [`FuseAndCollapse`] transforms in a fixpoint.
+pub fn fuse_and_collapse() -> crate::Fixpoint {
+    crate::Fixpoint {
+        name: "fuse_and_collapse",
+        limit: 100,
+        transforms: FuseAndCollapse::default().transforms,
+    }
+}
+
 /// Construct a normalizing transform that runs transforms that normalize the
 /// structure of the tree until a fixpoint.
 ///
@@ -430,17 +439,13 @@ impl Optimizer {
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
-            Box::new(crate::Fixpoint {
-                name: "fixpoint",
-                limit: 100,
-                transforms: vec![Box::new(crate::FuseAndCollapse::default())],
-            }),
+            Box::new(fuse_and_collapse()),
             // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
             Box::new(crate::threshold_elision::ThresholdElision),
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "fixpoint01",
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
@@ -459,7 +464,7 @@ impl Optimizer {
             }),
             // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "fixpoint02",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::semijoin_idempotence::SemijoinIdempotence::default()),
@@ -531,7 +536,7 @@ impl Optimizer {
             //           Constant
             //             - ()
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "fixpoint01",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
@@ -593,7 +598,7 @@ impl Optimizer {
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "fixpoint01",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
