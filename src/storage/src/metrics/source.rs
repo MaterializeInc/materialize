@@ -35,7 +35,6 @@ pub(crate) struct GeneralSourceMetricDefs {
     // Source metrics
     pub(crate) capability: UIntGaugeVec,
     pub(crate) resume_upper: IntGaugeVec,
-    pub(crate) inmemory_remap_bindings: UIntGaugeVec,
     pub(crate) commit_upper_ready_times: UIntGaugeVec,
     pub(crate) commit_upper_accepted_times: UIntGaugeVec,
 
@@ -68,11 +67,6 @@ impl GeneralSourceMetricDefs {
                 // TODO(guswynn): should this also track the resumption frontier operator?
                 help: "The timestamp-domain resumption frontier chosen for a source's ingestion",
                 var_labels: ["source_id"],
-            )),
-            inmemory_remap_bindings: registry.register(metric!(
-                name: "mz_source_inmemory_remap_bindings",
-                help: "The number of in-memory remap bindings that reclocking a time needs to iterate over.",
-                var_labels: ["source_id", "worker_id"],
             )),
             commit_upper_ready_times: registry.register(metric!(
                 name: "mz_source_commit_upper_ready_times",
@@ -130,8 +124,6 @@ pub(crate) struct SourceMetrics {
     pub(crate) capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// The resume_upper for a source.
     pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    /// The number of in-memory remap bindings that reclocking a time needs to iterate over.
-    pub(crate) inmemory_remap_bindings: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// The number of ready remap bindings that are held in the reclock commit upper operator.
     pub(crate) commit_upper_ready_times: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// The number of accepted remap bindings that are held in the reclock commit upper operator.
@@ -156,9 +148,6 @@ impl SourceMetrics {
             resume_upper: defs
                 .resume_upper
                 .get_delete_on_drop_gauge(vec![source_id.to_string()]),
-            inmemory_remap_bindings: defs
-                .inmemory_remap_bindings
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
             commit_upper_ready_times: defs
                 .commit_upper_ready_times
                 .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),

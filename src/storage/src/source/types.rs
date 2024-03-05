@@ -103,7 +103,7 @@ pub struct SourceMessage {
 }
 
 /// A record produced by a source
-#[derive(Clone, Serialize, Debug, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct SourceOutput<FromTime> {
     /// The record's key (or some empty/default value for sources without the concept of key)
     pub key: Row,
