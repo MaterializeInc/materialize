@@ -24,6 +24,115 @@ from fixtures import (
 )
 
 
+class TestApplyGrantsAndPrivileges:
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP ROLE my_role")
+        project.run_sql("DROP SCHEMA IF EXISTS blue CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS green CASCADE")
+
+    def apply_schema_default_privileges(self, project):
+        project.run_sql("CREATE ROLE my_role")
+        project.run_sql("CREATE SCHEMA blue")
+        project.run_sql("CREATE SCHEMA green")
+
+        project.run_sql(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA green GRANT SELECT ON SOURCES TO my_role"
+        )
+        project.run_sql(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA blue GRANT SELECT ON TABLES TO my_role"
+        )
+
+        run_dbt(
+            [
+                "run-operation",
+                "internal_copy_schema_grants",
+                "--args",
+                "{from: blue, to: green}",
+            ]
+        )
+
+        result = project.run_sql(
+            """SELECT count(*) = 0
+             FROM mz_internal.mz_show_default_privileges
+             WHERE database = current_database()
+                AND schema = 'green'
+                AND grantee = 'my_role'
+                AND object_type = 'source'
+                AND privilege_type = 'SELECT'""",
+            fetch="one",
+        )
+
+        assert bool(result[0])
+
+        result = project.run_sql(
+            """SELECT count(*) = 1
+             FROM mz_internal.mz_show_default_privileges
+             WHERE database = current_database()
+                AND schema = 'green'
+                AND grantee = 'my_role'
+                AND object_type = 'table'
+                AND privilege_type = 'SELECT'""",
+            fetch="one",
+        )
+
+        assert bool(result[0])
+
+    def apply_schema_grants(self, project):
+        project.run_sql("CREATE ROLE my_role")
+        project.run_sql("CREATE SCHEMA blue")
+        project.run_sql("CREATE SCHEMA green")
+
+        project.run_sql("GRANT USAGE ON SCHEMA blue TO my_role")
+        run_dbt(
+            [
+                "run-operation",
+                "internal_copy_schema_grants",
+                "--args",
+                "{from: blue, to: green}",
+            ]
+        )
+
+        result = project.run_sql(
+            """
+            SELECT count(*) = 1
+            FROM mz_internal.mz_show_schema_privileges
+            WHERE grantee = 'my_role'
+                AND name = 'green'
+                AND privilege_type = 'USAGE'""",
+            fetch="one",
+        )
+
+        assert bool(result[0])
+
+    def apply_cluster_grants(self, project):
+        project.run_sql("CREATE ROLE my_role")
+        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
+        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+
+        project.run_sql("GRANT USAGE ON CLUSTER blue TO my_role")
+        run_dbt(
+            [
+                "run-operation",
+                "internal_copy_schema_grants",
+                "--args",
+                "{from: blue, to: green}",
+            ]
+        )
+
+        result = project.run_sql(
+            """
+            SELECT count(*) = 1
+            FROM mz_internal.mz_show_cluster_privileges
+            WHERE grantee = 'my_role'
+                AND name = 'green'
+                AND privilege_type = 'USAGE'""",
+            fetch="one",
+        )
+
+        assert bool(result[0])
+
+
 class TestCIFixture:
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
@@ -162,7 +271,7 @@ class TestRunWithDeploy:
     def test_deployment_run(self, project):
         # the test runner overrides schemas
         # so we can only validate the cluster
-        # configuration is overriden.
+        # configuration is overridden.
 
         run_dbt(["run-operation", "deploy_init"])
         run_dbt(["run", "--vars", "deploy: True"])

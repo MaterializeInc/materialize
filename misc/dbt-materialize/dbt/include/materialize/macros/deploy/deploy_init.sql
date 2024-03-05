@@ -89,6 +89,8 @@
         {% endset %}
         {{ run_query(create_schema) }}
         {{ set_schema_ci_tag() }}
+        {{ internal_copy_schema_default_privs(schema, deploy_schema) }}
+        {{ internal_copy_schema_grants(schema, deploy_schema) }}
     {% endif %}
 {% endfor %}
 
@@ -183,7 +185,140 @@
             {% endset %}
             {{ run_query(create_cluster) }}
             {{ set_cluster_ci_tag() }}
+            {{ internal_copy_cluster_grants(schema, deploy_schema) }}
         {% endif %}
     {% endif %}
 {% endfor %}
+{% endmacro %}
+
+{% macro internal_copy_schema_default_privs(from, to) %}
+{% set revoke_initial_defaults %}
+SELECT
+  'ALTER DEFAULT PRIVILEGES ' ||
+  CASE
+    WHEN object_owner = 'PUBLIC' THEN 'FOR ALL ROLES '
+    ELSE 'FOR ROLE ' || object_owner
+  END ||
+  'IN SCHEMA quote_ident({{ to }}) ' ||
+  'REVOKE '    || privilege_type || ' ' ||
+  'ON ' || object_type || 's ' ||
+  'TO ' || grantee || ';'
+FROM mz_internal.mz_show_default_privileges
+WHERE database = current_database() AND schema = lower(trim('{{ from }}'))
+    AND object_owner <> 'none' AND grantee <> 'none'
+{% endset %}
+
+{% set revoke_defaults = run_query(revoke_initial_defaults) %}
+{% if execute %}
+    {% for alter in revoke_defaults.rows %}
+        {{ run_query(alter) }}
+    {% endfor %}
+{% endif %}
+
+{% set find_default_privs %}
+SELECT
+  'ALTER DEFAULT PRIVILEGES ' ||
+  CASE
+    WHEN object_owner = 'PUBLIC' THEN 'FOR ALL ROLES '
+    ELSE 'FOR ROLE ' || object_owner
+  END ||
+  'IN SCHEMA quote_ident({{ to }}) ' ||
+  'GRANT '    || privilege_type || ' ' ||
+  'ON ' || object_type || 's ' ||
+  'TO ' || grantee || ';'
+FROM mz_internal.mz_show_default_privileges
+WHERE database = current_database() AND schema = lower(trim('{{ from }}'))
+    AND object_owner <> 'none' AND grantee <> 'none'
+{% endset %}
+
+{% set alter_defaults = run_query(find_default_privs) %}
+{% if execute %}
+    {% for alter in alter_defaults.rows %}
+        {{ run_query(alter) }}
+    {% endfor %}
+{% endif %}
+{% endmacro %}
+
+{% macro internal_copy_schema_grants(from, to) %}
+{% set find_grants %}
+WITH schema_privledges_from AS (
+    SELECT mz_internal.mz_aclexplode(s.privileges).*
+    FROM mz_schemas s
+    JOIN mz_databases d ON s.database_id = d.id
+    WHERE d.name = current_database()
+        AND s.name = trim(lower('{{ from }}'))
+),
+
+schema_privledges_to AS (
+    SELECT mz_internal.mz_aclexplode(s.privileges).*
+    FROM mz_schemas s
+    JOIN mz_databases d ON s.database_id = d.id
+    WHERE d.name = current_database()
+        AND s.name = trim(lower('{{ to }}'))
+),
+
+schema_privledges AS (
+  SELECT privilege_type, grantee FROM schema_privledges_from
+
+  EXCEPT
+
+  SELECT privilege_type, grantee FROM schema_privledges_to
+)
+
+SELECT s.privilege_type, quote_ident(grantee.name) AS grantee
+FROM schema_privledges AS s
+LEFT JOIN mz_roles AS grantee ON s.grantee = grantee.id
+WHERE grantee.name <> 'none' AND grantee.name <> 'mz_system'
+{% endset %}
+
+{% set grants = run_query(find_grants) %}
+{% if execute %}
+    {% for grant in grants.rows %}
+        {% set new_grant %}
+            GRANT {{ grant[0] }} ON SCHEMA {{ to }} TO {{ grant[1] }}
+        {% endset %}
+        {{ run_query(new_grant) }}
+    {% endfor %}
+{% endif %}
+
+{% endmacro %}
+
+{% macro internal_copy_cluster_grants(from, to) %}
+{% set find_grants %}
+WITH cluster_privledges_from AS (
+    SELECT mz_internal.mz_aclexplode(privileges).*
+    FROM mz_clusters
+    WHERE name = trim(lower('{{ from }}'))
+),
+
+cluster_privledges_to AS (
+    SELECT mz_internal.mz_aclexplode(privileges).*
+    FROM mz_clusters
+    WHERE name = trim(lower('{{ to }}'))
+),
+
+cluster_privledges AS (
+  SELECT privilege_type, grantee FROM cluster_privledges_from
+
+  EXCEPT
+
+  SELECT privilege_type, grantee FROM cluster_privledges_to
+)
+
+SELECT c.privilege_type, quote_ident(grantee.name) AS grantee
+FROM cluster_privledges AS c
+LEFT JOIN mz_roles AS grantee ON c.grantee = grantee.id
+WHERE grantee.name <> 'none' AND grantee.name <> 'mz_system'
+{% endset %}
+
+{% set grants = run_query(find_grants) %}
+{% if execute %}
+    {% for grant in grants.rows %}
+        {% set new_grant %}
+            GRANT {{ grant[0] }} ON SCHEMA {{ to }} TO {{ grant[1] }}
+        {% endset %}
+        {{ run_query(new_grant) }}
+    {% endfor %}
+{% endif %}
+
 {% endmacro %}
