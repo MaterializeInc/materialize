@@ -1756,7 +1756,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     args = parser.parse_args()
 
     c.up("testdrive", persistent=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized", "balancerd")
+    c.up(
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "materialized",
+        "balancerd",
+        "frontegg-mock",
+    )
 
     # Construct the requied Clusterd instances and peer them into clusters
     cluster_replicas = []
@@ -1785,7 +1792,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             c.testdrive(
                 dedent(
                     f"""
-                    $ postgres-execute connection=mz_system
+                    $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                     ALTER SYSTEM SET max_clusters = {args.clusters * 10}
                     ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
 
@@ -1848,7 +1855,14 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 c.sql(
                     f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)
-                    + ")"
+                    + ")",
+                    port=6877,
+                    user="mz_system",
+                )
+                c.sql(
+                    f"GRANT ALL PRIVILEGES ON CLUSTER cluster_u{cluster_id} TO materialize",
+                    port=6877,
+                    user="mz_system",
                 )
 
             # Construct some dataflows in each cluster
