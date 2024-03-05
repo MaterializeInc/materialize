@@ -129,6 +129,8 @@ struct Args {
         value_name = "INTERNAL_URL"
     )]
     materialize_internal_url: tokio_postgres::Config,
+    #[clap(long)]
+    materialize_use_https: bool,
     /// The port on which Materialize is listening for untrusted HTTP
     /// connections.
     ///
@@ -357,6 +359,7 @@ async fn main() {
         materialize_internal_pgconfig: args.materialize_internal_url,
         materialize_http_port: args.materialize_http_port,
         materialize_internal_http_port: args.materialize_internal_http_port,
+        materialize_use_https: args.materialize_use_https,
         materialize_params: args.materialize_param,
         materialize_catalog_config,
         build_info: &BUILD_INFO,
