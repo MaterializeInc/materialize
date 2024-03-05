@@ -135,3 +135,25 @@ true
   GROUP BY s.name
   ORDER BY s.name
 mz_source 1 1
+
+# Ensure subsource stats show up, and then are removed when we drop subsources.
+> SELECT
+    s.name,
+    SUM(u.updates_committed) > 0
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('alt')
+  GROUP BY s.name
+  ORDER BY s.name
+alt true
+
+> ALTER SOURCE mz_source DROP SUBSOURCE alt;
+
+> SELECT
+    count(*)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('alt')
+0
+
+# TODO(guswynn): consider adding an envd restart test for pg statistics, not just kafka ones like in test/cluster.
