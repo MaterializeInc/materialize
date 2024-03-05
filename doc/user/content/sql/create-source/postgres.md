@@ -152,7 +152,46 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ##### Supported types
 
-Replicating tables that contain [data types](/sql/types/) unsupported in Materialize is possible via the `TEXT COLUMNS` option. The specified columns will be treated as `text`, and will thus not offer the expected PostgreSQL type features. For example:
+Materialize natively supports the following PostgreSQL types:
+
+<ul style="column-count: 3">
+<li><code>bool</code></li>
+<li><code>bpchar</code></li>
+<li><code>bytea</code></li>
+<li><code>char</code></li>
+<li><code>date</code></li>
+<li><code>daterange</code></li>
+<li><code>float4</code></li>
+<li><code>float8</code></li>
+<li><code>int2</code></li>
+<li><code>int2vector</code></li>
+<li><code>int4</code></li>
+<li><code>int4range</code></li>
+<li><code>int8</code></li>
+<li><code>int8range</code></li>
+<li><code>interval</code></li>
+<li><code>json</code></li>
+<li><code>jsonb</code></li>
+<li><code>numeric</code></li>
+<li><code>numrange</code></li>
+<li><code>oid</code></li>
+<li><code>regclass</code></li>
+<li><code>regproc</code></li>
+<li><code>regtype</code></li>
+<li><code>text</code></li>
+<li><code>time</code></li>
+<li><code>timestamp</code></li>
+<li><code>timestamptz</code></li>
+<li><code>timetz</code></li>
+<li><code>tsrange</code></li>
+<li><code>tstzrange</code></li>
+<li><code>uuid</code></li>
+<li><code>varchar</code></li>
+</ul>
+
+Materialize also supports the array type for each of the above types.
+
+Replicating tables that contain unsupported [data types](/sql/types/) is possible via the `TEXT COLUMNS` option. The specified columns will be treated as `text`, and will thus not offer the expected PostgreSQL type features. For example:
 
 * [`enum`]: the implicit ordering of the original PostgreSQL `enum` type is not preserved, as Materialize will sort values as `text`.
 * [`money`]: the resulting `text` value cannot be cast back to e.g. `numeric`, since PostgreSQL adds typical currency formatting to the output.
