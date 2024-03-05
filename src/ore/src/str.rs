@@ -376,7 +376,7 @@ impl<'a, const MAX: usize> TryFrom<&'a str> for MaxLenString<MAX> {
 mod tests {
     use super::*;
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn test_indent() {
         let mut indent = Indent::new('~', 3);
         indent += 1;

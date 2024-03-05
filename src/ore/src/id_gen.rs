@@ -359,7 +359,7 @@ mod tests {
 
     use super::*;
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn test_conn_org() {
         let uuid = Uuid::parse_str("9e37ec59-56f4-450a-acbd-18ff14f10ca8").unwrap();
         let lower = org_id_conn_bits(&uuid);
@@ -367,13 +367,13 @@ mod tests {
         assert_eq!(org_lower_uuid, "CA8");
     }
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn test_id_gen() {
         test_ad_allocator::<IdAllocatorInnerBitSet>();
     }
 
     // Test masks and maxs that intersect panic.
-    #[mz_test_macro::test]
+    #[crate::test]
     #[should_panic]
     fn test_mask_intersect<A: IdAllocatorInner>() {
         let env_lower = org_id_conn_bits(&uuid::Uuid::from_u128(u128::MAX));

@@ -4891,8 +4891,7 @@ dependencies = [
  "hyper-tls",
  "lgalloc",
  "mz-ore",
- "mz-ore-instrument-macro",
- "mz-test-macro",
+ "mz-ore-proc",
  "native-tls",
  "num",
  "once_cell",
@@ -4926,11 +4925,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-ore-instrument-macro"
-version = "0.0.0"
+name = "mz-ore-proc"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "syn 1.0.107",
  "tracing",
  "workspace-hack",
 ]
@@ -6117,16 +6117,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "workspace-hack",
-]
-
-[[package]]
-name = "mz-test-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.107",
  "workspace-hack",
 ]
 

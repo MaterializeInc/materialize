@@ -49,7 +49,7 @@ impl<I> IteratorExt for I where I: Iterator {}
 mod tests {
     use crate::iter::IteratorExt;
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn test_all_equal() {
         let empty: [i64; 0] = [];
         assert!(empty.iter().all_equal());

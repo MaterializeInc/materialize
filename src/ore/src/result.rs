@@ -98,7 +98,7 @@ mod test {
 
     use super::*;
 
-    #[mz_test_macro::test]
+    #[crate::test]
     fn prints_error_chain() {
         let error = anyhow!("root");
         let error = error.context("context");

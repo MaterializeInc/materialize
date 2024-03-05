@@ -15,25 +15,17 @@
 
 //! test macro with auto-initialized logging
 
-extern crate proc_macro;
-
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as Tokens;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse_macro_input;
-use syn::parse_quote;
-use syn::AttributeArgs;
-use syn::ItemFn;
-use syn::Meta;
-use syn::NestedMeta;
-use syn::ReturnType;
+use syn::{parse_macro_input, parse_quote, AttributeArgs, ItemFn, Meta, NestedMeta, ReturnType};
 
 /// Based on <https://github.com/d-e-s-o/test-log>
 /// Copyright (C) 2019-2022 Daniel Mueller <deso@posteo.net>
 /// SPDX-License-Identifier: (Apache-2.0 OR MIT)
 
-#[proc_macro_attribute]
-pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
+/// Implementation for the `test` macro.
+pub fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as AttributeArgs);
     let input = parse_macro_input!(item as ItemFn);
 
@@ -47,7 +39,7 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_wrapper(&inner_test, &input)
 }
 
-fn expand_logging_init() -> Tokens {
+fn expand_logging_init() -> TokenStream2 {
     let crate_name = std::env::var("CARGO_PKG_NAME").unwrap();
     if crate_name == "mz-ore" {
         quote! {
@@ -66,7 +58,7 @@ fn expand_logging_init() -> Tokens {
 }
 
 /// Emit code for a wrapper function around a test function.
-fn expand_wrapper(inner_test: &Tokens, wrappee: &ItemFn) -> TokenStream {
+fn expand_wrapper(inner_test: &TokenStream2, wrappee: &ItemFn) -> TokenStream {
     let attrs = &wrappee.attrs;
     let async_ = &wrappee.sig.asyncness;
     let await_ = if async_.is_some() {
