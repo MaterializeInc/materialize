@@ -5,10 +5,10 @@ menu:
   main:
     parent: "postgresql"
     name: "AlloyDB"
-    weight: 25
+    weight: 1
 ---
 
-This page shows you how to stream data from [AlloyDB](https://cloud.google.com/alloydb)
+This page shows you how to stream data from [AlloyDB for PostgreSQL](https://cloud.google.com/alloydb)
 to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 ## Before you begin
