@@ -21,6 +21,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#25502 (JoinFusion across MFPs) increased number of messages
+    "67dbc308e53a90df7a9ed520db54468ed98541ee": MzVersion.parse_mz("v0.91.0"),
     # PR#24906 (Compute operator hydration status logging) increased number of messages against v0.88.1
     "067ae870eef724f7eb5851b5745b9ff52b881481": MzVersion.parse_mz("v0.89.0"),
     # PR#24918 (persist-txn: switch to a new operator protocol for lazy) increased number of messages against v0.86.1 (but got reverted in 0.87.1)
