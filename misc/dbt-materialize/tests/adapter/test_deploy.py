@@ -103,6 +103,28 @@ class TestCIFixture:
         )
 
 
+class TestPermissionValidation:
+    """Tests for database permissions. We run against the internal
+    macros because the materialize user is a superuser and we'd short
+    circuit these checks if executing deploy_permission_validation"""
+
+    def test_createcluster_permissions(self, project):
+        run_dbt(["run-operation", "internal_ensure_createcluster_permission"])
+
+    def test_database_create_permissions(self, project):
+        run_dbt(["run-operation", "internal_ensure_database_create_permission"])
+
+    def test_cluster_owner_permissions(self, project):
+        run_dbt(
+            [
+                "run-operation",
+                "internal_ensure_cluster_ownership",
+                "--args",
+                "{clusters: ['quickstart']}",
+            ]
+        )
+
+
 class TestRunWithDeploy:
     @pytest.fixture(scope="class")
     def project_config_update(self):
