@@ -294,6 +294,8 @@ pub enum Status {
     Running,
     Paused,
     Stalled,
+    /// This status is currently unused.
+    // re-design the ceased status
     Ceased,
     Dropped,
 }
@@ -333,8 +335,6 @@ impl Status {
         match (self, new) {
             (_, Status::Dropped) => true,
             (Status::Dropped, _) => false,
-            (_, Status::Ceased) => true,
-            (Status::Ceased, _) => false,
             // Don't re-mark that object as paused.
             (Status::Paused, Status::Paused) => false,
             // De-duplication of other statuses is currently managed by the

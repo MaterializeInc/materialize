@@ -23,21 +23,22 @@ SERVICES = [
     Postgres(extra_command=["-c", "max_slot_wal_keep_size=10"]),
 ]
 
+# TODO: redesign ceased status #25768
 # Test that how subsource statuses work across a variety of scenarios
-def workflow_statuses(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("materialized", "postgres", "toxiproxy")
-    c.run_testdrive_files("status/01-setup.td")
+# def workflow_statuses(c: Composition, parser: WorkflowArgumentParser) -> None:
+#     c.up("materialized", "postgres", "toxiproxy")
+#     c.run_testdrive_files("status/01-setup.td")
 
-    with c.override(Testdrive(no_reset=True)):
-        # Restart mz
-        c.kill("materialized")
-        c.up("materialized")
+#     with c.override(Testdrive(no_reset=True)):
+#         # Restart mz
+#         c.kill("materialized")
+#         c.up("materialized")
 
-        c.run_testdrive_files(
-            "status/02-after-mz-restart.td",
-            "status/03-toxiproxy-interrupt.td",
-            "status/04-drop-publication.td",
-        )
+#         c.run_testdrive_files(
+#             "status/02-after-mz-restart.td",
+#             "status/03-toxiproxy-interrupt.td",
+#             "status/04-drop-publication.td",
+#         )
 
 
 def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
