@@ -1020,6 +1020,15 @@ pub static MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME: VarDefinition = VarDefiniti
     true,
 );
 
+/// Sets the `lock_wait_timeout` value to use during the snapshotting phase of
+/// MySQL sources.
+pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_snapshot_lock_wait_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT),
+    "Sets the `lock_wait_timeout` value to use during the snapshotting phase of MySQL sources (Materialize)",
+    true,
+);
+
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     "ssh_check_interval",

@@ -33,6 +33,7 @@ pub struct StorageParameters {
     pub pg_source_snapshot_statement_timeout: Duration,
     pub mysql_source_timeouts: mz_mysql_util::TimeoutConfig,
     pub mysql_source_snapshot_max_execution_time: Duration,
+    pub mysql_source_snapshot_lock_wait_timeout: Duration,
     pub keep_n_source_status_history_entries: usize,
     pub keep_n_sink_status_history_entries: usize,
     pub keep_n_privatelink_status_history_entries: usize,
@@ -93,6 +94,7 @@ impl Default for StorageParameters {
             pg_source_snapshot_statement_timeout: Default::default(),
             mysql_source_timeouts: Default::default(),
             mysql_source_snapshot_max_execution_time: Default::default(),
+            mysql_source_snapshot_lock_wait_timeout: Default::default(),
             keep_n_source_status_history_entries: Default::default(),
             keep_n_sink_status_history_entries: Default::default(),
             keep_n_privatelink_status_history_entries: Default::default(),
@@ -194,6 +196,7 @@ impl StorageParameters {
             pg_source_snapshot_statement_timeout,
             mysql_source_timeouts,
             mysql_source_snapshot_max_execution_time,
+            mysql_source_snapshot_lock_wait_timeout,
             keep_n_source_status_history_entries,
             keep_n_sink_status_history_entries,
             keep_n_privatelink_status_history_entries,
@@ -220,6 +223,7 @@ impl StorageParameters {
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
         self.mysql_source_timeouts = mysql_source_timeouts;
         self.mysql_source_snapshot_max_execution_time = mysql_source_snapshot_max_execution_time;
+        self.mysql_source_snapshot_lock_wait_timeout = mysql_source_snapshot_lock_wait_timeout;
         self.keep_n_source_status_history_entries = keep_n_source_status_history_entries;
         self.keep_n_sink_status_history_entries = keep_n_sink_status_history_entries;
         self.keep_n_privatelink_status_history_entries = keep_n_privatelink_status_history_entries;
@@ -257,6 +261,9 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             mysql_source_timeouts: Some(self.mysql_source_timeouts.into_proto()),
             mysql_source_snapshot_max_execution_time: Some(
                 self.mysql_source_snapshot_max_execution_time.into_proto(),
+            ),
+            mysql_source_snapshot_lock_wait_timeout: Some(
+                self.mysql_source_snapshot_lock_wait_timeout.into_proto(),
             ),
             keep_n_source_status_history_entries: u64::cast_from(
                 self.keep_n_source_status_history_entries,
@@ -313,6 +320,11 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .mysql_source_snapshot_max_execution_time
                 .into_rust_if_some(
                     "ProtoStorageParameters::mysql_source_snapshot_max_execution_time",
+                )?,
+            mysql_source_snapshot_lock_wait_timeout: proto
+                .mysql_source_snapshot_lock_wait_timeout
+                .into_rust_if_some(
+                    "ProtoStorageParameters::mysql_source_snapshot_lock_wait_timeout",
                 )?,
             keep_n_source_status_history_entries: usize::cast_from(
                 proto.keep_n_source_status_history_entries,

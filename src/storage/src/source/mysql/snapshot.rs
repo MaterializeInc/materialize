@@ -229,6 +229,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
+                lock_conn.query_drop(format!(
+                    "SET @@session.lock_wait_timeout = {}",
+                    config
+                        .config
+                        .parameters
+                        .mysql_source_snapshot_lock_wait_timeout
+                        .as_secs()
+                ))
+                .await?;
 
                 trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
                 match lock_conn

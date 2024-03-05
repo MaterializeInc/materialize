@@ -92,6 +92,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             tcp_keepalive: Some(config.mysql_source_tcp_keepalive()),
         },
         mysql_source_snapshot_max_execution_time: config.mysql_source_snapshot_max_execution_time(),
+        mysql_source_snapshot_lock_wait_timeout: config.mysql_source_snapshot_lock_wait_timeout(),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_sink_status_history_entries(),
         keep_n_privatelink_status_history_entries: config
