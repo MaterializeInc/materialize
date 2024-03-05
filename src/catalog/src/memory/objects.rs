@@ -692,6 +692,8 @@ pub struct MaterializedView {
     pub non_null_assertions: Vec<usize>,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
+    // The initial `as_of` of the storage collection associated with the materialized view.
+    // (The dataflow's initial `as_of` can be different.)
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
 }
 

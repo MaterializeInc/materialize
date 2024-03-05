@@ -529,11 +529,20 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-        let (as_of, until) = self.select_timestamps(id_bundle, refresh_schedule.as_ref())?;
+        let (dataflow_as_of, storage_as_of, until) =
+            self.select_timestamps(id_bundle, refresh_schedule.as_ref())?;
+        tracing::info!(
+            dataflow_as_of = ?dataflow_as_of,
+            storage_as_of = ?storage_as_of,
+            until = ?until,
+            "materialized view timestamp selection",
+        );
 
         // Update the `create_sql` with the selected `as_of`. This is how we make sure the `as_of`
         // is persisted to the catalog and can be relied on during bootstrapping.
-        if let Some(as_of_ts) = as_of.as_option() {
+        // This has to be the `storage_as_of`, because bootstrapping uses this in
+        // `bootstrap_storage_collections`.
+        if let Some(storage_as_of_ts) = storage_as_of.as_option() {
             let stmt = mz_sql::parse::parse(&create_sql)
                 .expect("create_sql is valid")
                 .into_element()
@@ -541,7 +550,7 @@ impl Coordinator {
             let ast::Statement::CreateMaterializedView(mut stmt) = stmt else {
                 panic!("unexpected statement type");
             };
-            stmt.as_of = Some(as_of_ts.into());
+            stmt.as_of = Some(storage_as_of_ts.into());
             create_sql = stmt.to_ast_string_stable();
         }
 
@@ -563,7 +572,7 @@ impl Coordinator {
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule,
-                    initial_as_of: Some(as_of.clone()),
+                    initial_as_of: Some(storage_as_of.clone()),
                 }),
                 owner_id: *session.current_role_id(),
             }),
@@ -588,7 +597,7 @@ impl Coordinator {
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
-                df_desc.set_as_of(as_of.clone());
+                df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.until = until;
 
                 // Emit notices.
@@ -614,7 +623,7 @@ impl Coordinator {
                             CollectionDescription {
                                 desc: output_desc,
                                 data_source: DataSource::Other(DataSourceOther::Compute),
-                                since: Some(as_of),
+                                since: Some(storage_as_of),
                                 status_collection_id: None,
                             },
                         )],
@@ -673,29 +682,41 @@ impl Coordinator {
         .map(StageResult::Response)
     }
 
-    /// Select the initial `as_of` and `until` frontiers for a materialized view.
+    /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
+    /// materialized view.
     fn select_timestamps(
         &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
-    ) -> Result<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>), AdapterError> {
-        // Normally, `as_of` should be the least_valid_read.
-        let mut as_of = self.least_valid_read(&id_bundle);
+    ) -> Result<
+        (
+            Antichain<mz_repr::Timestamp>,
+            Antichain<mz_repr::Timestamp>,
+            Antichain<mz_repr::Timestamp>,
+        ),
+        AdapterError,
+    > {
+        // The dataflow's `as_of` should always be simply `least_valid_read`.
+        let dataflow_as_of = self.least_valid_read(&id_bundle);
 
-        // But for MVs with non-trivial REFRESH schedules, it's important to set the `as_of` to the
-        // first refresh. This is because we'd like queries on the MV to block until the first
-        // refresh (rather than to show an empty MV).
+        // Normally, the Storage collection's `as_of` should also be the same.
+        let mut storage_as_of = dataflow_as_of.clone();
+
+        // But for MVs with non-trivial REFRESH schedules, it's important to set the `storage_as_of`
+        // to the first refresh. This is because we'd like queries on the MV to block until the
+        // first refresh (rather than to show an empty MV).
         if let Some(refresh_schedule) = &refresh_schedule {
-            if let Some(as_of_ts) = as_of.as_option() {
-                if let Some(rounded_up_ts) = refresh_schedule.round_up_timestamp(*as_of_ts) {
-                    as_of = Antichain::from_elem(rounded_up_ts);
+            if let Some(storage_as_of_ts) = storage_as_of.as_option() {
+                if let Some(rounded_up_ts) = refresh_schedule.round_up_timestamp(*storage_as_of_ts)
+                {
+                    storage_as_of = Antichain::from_elem(rounded_up_ts);
                 } else {
                     let last_refresh = refresh_schedule.last_refresh().expect(
                         "if round_up_timestamp returned None, then there should be a last refresh",
                     );
                     return Err(AdapterError::MaterializedViewWouldNeverRefresh(
                         last_refresh,
-                        *as_of_ts,
+                        *storage_as_of_ts,
                     ));
                 }
             } else {
@@ -712,7 +733,7 @@ impl Coordinator {
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
 
-        Ok((as_of, until))
+        Ok((dataflow_as_of, storage_as_of, until))
     }
 
     #[instrument]

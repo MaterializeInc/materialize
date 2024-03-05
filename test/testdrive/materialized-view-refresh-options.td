@@ -266,3 +266,26 @@ true
   WHERE m.name = 'mv8'
 r1 true
 r2 true
+
+## Warmup before the first refresh
+
+# MV with a first refresh in the far future
+> CREATE MATERIALIZED VIEW mv9 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
+  SELECT x*x FROM t3;
+
+# Check that all operators have hydrated. Ideally, we'd want to check `mz_hydration_statuses`, but that is
+# currently wrong for REFRESH MVs, see https://github.com/MaterializeInc/materialize/issues/25518
+> SELECT DISTINCT hydrated
+  FROM mz_internal.mz_compute_operator_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+  WHERE name = 'mv9';
+true
+
+# Try the same with a less trivial MV. (In particular, hydration behaves differently when we have a pipeline breaker,
+# such as an arrangement.)
+> CREATE MATERIALIZED VIEW mv10 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
+  SELECT DISTINCT x, y FROM t2, t3;
+
+> SELECT DISTINCT hydrated
+  FROM mz_internal.mz_compute_operator_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
+  WHERE name = 'mv10';
+true
