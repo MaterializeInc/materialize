@@ -283,6 +283,7 @@ impl SourceRender for KafkaSourceConnection {
                         // consumer.
                         "client.id" => client_id.clone(),
                     },
+                    true,
                 )
                 .await;
 

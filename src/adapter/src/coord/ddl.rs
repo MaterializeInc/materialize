@@ -227,6 +227,7 @@ impl Coordinator {
                                             .config(
                                                 self.secrets_reader(),
                                                 self.controller.storage.config(),
+                                                false,
                                             )
                                             .await
                                             .map_err(|e| {

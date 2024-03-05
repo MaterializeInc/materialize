@@ -11,6 +11,8 @@ use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use mysql_async::{Conn, Opts, OptsBuilder};
+
+use mz_ore::future::OreFutureExt;
 use mz_ore::option::OptionExt;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
@@ -179,14 +181,21 @@ impl MySqlConn {
 pub struct Config {
     inner: Opts,
     tunnel: TunnelConfig,
+    in_task: bool,
     ssh_timeout_config: SshTimeoutConfig,
 }
 
 impl Config {
-    pub fn new(inner: Opts, tunnel: TunnelConfig, ssh_timeout_config: SshTimeoutConfig) -> Self {
+    pub fn new(
+        inner: Opts,
+        tunnel: TunnelConfig,
+        ssh_timeout_config: SshTimeoutConfig,
+        in_task: bool,
+    ) -> Self {
         Self {
             inner,
             tunnel,
+            in_task,
             ssh_timeout_config,
         }
     }
@@ -234,7 +243,13 @@ impl Config {
             TunnelConfig::Ssh { config } => {
                 let (host, port) = self.address();
                 let tunnel = ssh_tunnel_manager
-                    .connect(config.clone(), host, port, self.ssh_timeout_config)
+                    .connect(
+                        config.clone(),
+                        host,
+                        port,
+                        self.ssh_timeout_config,
+                        self.in_task,
+                    )
                     .await
                     .map_err(MySqlError::Ssh)?;
 
@@ -259,7 +274,10 @@ impl Config {
                 }
 
                 Ok(MySqlConn {
-                    conn: Conn::new(opts_builder).await.map_err(MySqlError::from)?,
+                    conn: Conn::new(opts_builder)
+                        .optionally_run_in_task(|| "msyql_connect".to_string(), self.in_task)
+                        .await
+                        .map_err(MySqlError::from)?,
                     _ssh_tunnel_handle: Some(tunnel),
                 })
             }
@@ -285,7 +303,10 @@ impl Config {
                 }
 
                 Ok(MySqlConn {
-                    conn: Conn::new(opts_builder).await.map_err(MySqlError::from)?,
+                    conn: Conn::new(opts_builder)
+                        .optionally_run_in_task(|| "msyql_connect".to_string(), self.in_task)
+                        .await
+                        .map_err(MySqlError::from)?,
                     _ssh_tunnel_handle: None,
                 })
             }

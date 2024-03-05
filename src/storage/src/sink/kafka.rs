@@ -274,7 +274,7 @@ impl TransactionalProducer {
 
         let producer: BaseProducer<_> = connection
             .connection
-            .create_with_context(storage_configuration, ctx, &options)
+            .create_with_context(storage_configuration, ctx, &options, true)
             .await?;
 
         let task_name = format!("kafka_sink_producer:{sink_id}");
@@ -757,7 +757,7 @@ fn encode_collection<G: Scope>(
                     //
                     // Note that where this lies in the rendering cycle means that we will publish the
                     // schemas each time the sink is rendered.
-                    let ccsr = csr_connection.connect(&storage_configuration).await?;
+                    let ccsr = csr_connection.connect(&storage_configuration, true).await?;
                     let (key_schema_id, value_schema_id) =
                         mz_storage_client::sink::publish_kafka_schemas(
                             &ccsr,

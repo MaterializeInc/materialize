@@ -219,6 +219,8 @@ pub async fn ensure_kafka_topic(
             storage_configuration,
             MzClientContext::default(),
             &BTreeMap::new(),
+            // Only called from `mz_storage`.
+            true,
         )
         .await
         .add_context("creating admin client failed")?;
@@ -419,7 +421,13 @@ pub async fn determine_sink_resume_upper(
         let ctx = MzClientContext::default();
         connection
             .connection
-            .create_with_context(storage_configuration, ctx, &opts)
+            .create_with_context(
+                storage_configuration,
+                ctx,
+                &opts,
+                // Only called from `mz_storage`.
+                true,
+            )
             .await?
     };
 
@@ -429,7 +437,13 @@ pub async fn determine_sink_resume_upper(
         let ctx = MzClientContext::default();
         connection
             .connection
-            .create_with_context(storage_configuration, ctx, &opts)
+            .create_with_context(
+                storage_configuration,
+                ctx,
+                &opts,
+                // Only called from `mz_storage`.
+                true,
+            )
             .await?
     };
 

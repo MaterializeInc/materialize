@@ -443,6 +443,9 @@ impl KafkaConnection {
         storage_configuration: &StorageConfiguration,
         context: C,
         extra_options: &BTreeMap<&str, String>,
+        // Whether or not we are connecting from timely threads. If we are, IO will
+        // occur on Tokio tasks.
+        from_timely: bool,
     ) -> Result<T, ContextCreationError>
     where
         C: ClientContext,
@@ -524,6 +527,7 @@ impl KafkaConnection {
                 .ssh_tunnel_manager
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
+            from_timely,
         );
 
         match &self.default_tunnel {
@@ -604,6 +608,7 @@ impl KafkaConnection {
                                         .await?,
                                 )?,
                             },
+                            from_timely,
                         )
                         .await
                         .map_err(ContextCreationError::Ssh)?;
@@ -621,7 +626,7 @@ impl KafkaConnection {
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
         let consumer: BaseConsumer<_> = self
-            .create_with_context(storage_configuration, context, &BTreeMap::new())
+            .create_with_context(storage_configuration, context, &BTreeMap::new(), false)
             .await?;
         let consumer = Arc::new(consumer);
 
@@ -795,6 +800,9 @@ impl CsrConnection {
     pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
+        // Whether or not we are connecting from timely threads. If we are, IO will
+        // occur on Tokio tasks.
+        from_timely: bool,
     ) -> Result<mz_ccsr::Client, CsrConnectError> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
@@ -859,6 +867,7 @@ impl CsrConnection {
                         // Default to the default http port, but this
                         // could default to 8081...
                         self.url.port().unwrap_or(80),
+                        from_timely,
                     )
                     .await
                     .map_err(CsrConnectError::Ssh)?;
@@ -926,7 +935,7 @@ impl CsrConnection {
         _id: GlobalId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        let client = self.connect(storage_configuration).await?;
+        let client = self.connect(storage_configuration, false).await?;
         client.list_subjects().await?;
         Ok(())
     }
@@ -1075,6 +1084,9 @@ impl PostgresConnection<InlinedConnection> {
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
         storage_configuration: &StorageConfiguration,
+        // Whether or not we are connecting from timely threads. If we are, IO will
+        // occur on Tokio tasks.
+        from_timely: bool,
     ) -> Result<mz_postgres_util::Config, anyhow::Error> {
         let mut config = tokio_postgres::Config::new();
         config
@@ -1130,6 +1142,7 @@ impl PostgresConnection<InlinedConnection> {
                 .pg_source_tcp_timeouts
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
+            from_timely,
         )?)
     }
 
@@ -1142,6 +1155,7 @@ impl PostgresConnection<InlinedConnection> {
             .config(
                 &*storage_configuration.connection_context.secrets_reader,
                 storage_configuration,
+                false,
             )
             .await?;
         config
@@ -1341,6 +1355,9 @@ impl MySqlConnection<InlinedConnection> {
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
         storage_configuration: &StorageConfiguration,
+        // Whether or not we are connecting from timely threads. If we are, IO will
+        // occur on Tokio tasks.
+        from_timely: bool,
     ) -> Result<mz_mysql_util::Config, anyhow::Error> {
         // TODO(roshan): Set appropriate connection timeouts
         let mut opts = mysql_async::OptsBuilder::default()
@@ -1431,6 +1448,7 @@ impl MySqlConnection<InlinedConnection> {
             opts.into(),
             tunnel,
             storage_configuration.parameters.ssh_timeout_config,
+            from_timely,
         ))
     }
 
@@ -1443,6 +1461,7 @@ impl MySqlConnection<InlinedConnection> {
             .config(
                 &*storage_configuration.connection_context.secrets_reader,
                 storage_configuration,
+                false,
             )
             .await?;
         let conn = config
@@ -1618,6 +1637,9 @@ impl SshTunnel<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         remote_host: &str,
         remote_port: u16,
+        // Whether or not we are connecting from timely threads. If we are, IO will
+        // occur on Tokio tasks.
+        from_timely: bool,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
         storage_configuration
             .connection_context
@@ -1638,6 +1660,7 @@ impl SshTunnel<InlinedConnection> {
                 remote_host,
                 remote_port,
                 storage_configuration.parameters.ssh_timeout_config,
+                from_timely,
             )
             .await
     }

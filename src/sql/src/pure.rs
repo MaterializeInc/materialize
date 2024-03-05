@@ -400,6 +400,7 @@ async fn purify_create_sink(
                     storage_configuration,
                     MzClientContext::default(),
                     &BTreeMap::new(),
+                    false,
                 )
                 .await
                 .map_err(|e| {
@@ -451,7 +452,7 @@ async fn purify_create_sink(
                 };
 
                 let client = connection
-                    .connect(storage_configuration)
+                    .connect(storage_configuration, false)
                     .await
                     .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
@@ -570,6 +571,7 @@ async fn purify_create_source(
                     storage_configuration,
                     MzClientContext::default(),
                     &BTreeMap::new(),
+                    false,
                 )
                 .await
                 .map_err(|e| {
@@ -677,6 +679,7 @@ async fn purify_create_source(
                 .config(
                     &*storage_configuration.connection_context.secrets_reader,
                     storage_configuration,
+                    false,
                 )
                 .await?;
 
@@ -905,6 +908,7 @@ async fn purify_create_source(
                 .config(
                     &*storage_configuration.connection_context.secrets_reader,
                     storage_configuration,
+                    false,
                 )
                 .await?;
 
@@ -1383,6 +1387,7 @@ async fn purify_alter_source(
         .config(
             &*storage_configuration.connection_context.secrets_reader,
             storage_configuration,
+            false,
         )
         .await?;
 
@@ -1662,7 +1667,7 @@ async fn purify_csr_connection_proto(
             };
 
             let ccsr_client = ccsr_connection
-                .connect(storage_configuration)
+                .connect(storage_configuration, false)
                 .await
                 .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
@@ -1713,7 +1718,7 @@ async fn purify_csr_connection_avro(
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
         let ccsr_client = csr_connection
-            .connect(storage_configuration)
+            .connect(storage_configuration, false)
             .await
             .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 

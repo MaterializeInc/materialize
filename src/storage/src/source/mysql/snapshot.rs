@@ -214,6 +214,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .config(
                         &*config.config.connection_context.secrets_reader,
                         &config.config,
+                        true
                     )
                     .await?;
                 let task_name = format!("timely-{worker_id} MySQL snapshotter");

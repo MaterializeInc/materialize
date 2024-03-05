@@ -203,6 +203,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .config(
                     &*config.config.connection_context.secrets_reader,
                     &config.config,
+                    true,
                 )
                 .await?;
 
