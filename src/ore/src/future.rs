@@ -62,6 +62,26 @@ pub trait OreFutureExt {
         Self: Future + Send + 'static,
         Self::Output: Send + 'static;
 
+    /// The same as `run_in_task`, but allows the callee to dynamically choose whether or
+    /// not the future is polled into a Tokio task.
+    async fn optionally_run_in_task<Name, NameClosure>(
+        self,
+        nc: NameClosure,
+        in_task: bool,
+    ) -> Self::Output
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name + Unpin + Send,
+        Self: Sized + Future + Send + 'static,
+        Self::Output: Send + 'static,
+    {
+        if in_task {
+            self.run_in_task(nc).await
+        } else {
+            self.await
+        }
+    }
+
     /// Like [`FutureExt::catch_unwind`], but can unwind panics even if
     /// [`set_abort_on_panic`] has been called.
     ///

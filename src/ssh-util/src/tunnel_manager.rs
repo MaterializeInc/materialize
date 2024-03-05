@@ -54,6 +54,9 @@ impl SshTunnelManager {
         // requiring all configuration at connection time is more consistent with how other
         // connections work within the workspace.
         timeout_config: SshTimeoutConfig,
+        // Whether or not to connect to ssh from a Tokio task (to ensure futures are
+        // polled promptly).
+        in_task: bool,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
         // An SSH tunnel connection is uniquely identified by the SSH tunnel
         // configuration and the remote address.
@@ -145,9 +148,17 @@ impl SshTunnelManager {
                         "initiating new ssh tunnel ({}:{} via {}@{}:{})",
                         remote_host, remote_port, config.user, config.host, config.port,
                     );
-                    let handle = config
-                        .connect(remote_host, remote_port, timeout_config)
-                        .await?;
+
+                    use mz_ore::future::OreFutureExt;
+                    let config = config.clone();
+                    let remote_host = remote_host.to_string();
+                    let handle = async move {
+                        config
+                            .connect(&remote_host, remote_port, timeout_config)
+                            .await
+                    }
+                    .optionally_run_in_task(|| "ssh_connect".to_string(), in_task)
+                    .await?;
 
                     // Successful connection, so defuse the scope guard.
                     let _ = ScopeGuard::into_inner(guard);
