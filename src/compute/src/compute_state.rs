@@ -102,7 +102,7 @@ pub struct ComputeState {
     /// Max size in bytes of any result.
     max_result_size: u64,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: Option<usize>,
+    dataflow_max_inflight_bytes: Option<usize>,
     /// Specification for rendering linear joins.
     pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
@@ -221,6 +221,16 @@ impl ComputeState {
         let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
         info!("using chunked stack: {chunked_stack}");
         crate::containers::stack::use_chunked_stack(chunked_stack);
+    }
+
+    /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as
+    /// appropriate to this replica.
+    pub fn dataflow_max_inflight_bytes(&self) -> Option<usize> {
+        if self.persist_clients.cfg.is_cc_active {
+            mz_compute_types::dyncfgs::DATAFLOW_MAX_INFLIGHT_BYTES_CC.get(&self.worker_config)
+        } else {
+            self.dataflow_max_inflight_bytes
+        }
     }
 }
 
