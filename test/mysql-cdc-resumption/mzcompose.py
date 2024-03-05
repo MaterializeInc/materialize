@@ -13,24 +13,27 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Alpine(),
     Materialized(),
-    Postgres(),
+    MySql(),
     Toxiproxy(),
-    Testdrive(no_reset=True, default_timeout="300s"),
+    Testdrive(
+        no_reset=True,
+        default_timeout="300s",
+    ),
 ]
 
 
 def workflow_default(c: Composition) -> None:
     for name in c.workflows:
         # clear to avoid issues
-        c.kill("postgres")
-        c.rm("postgres")
+        c.kill("mysql")
+        c.rm("mysql")
 
         if name == "default":
             continue
@@ -40,21 +43,19 @@ def workflow_default(c: Composition) -> None:
 
 
 def workflow_disruptions(c: Composition) -> None:
-    """Test Postgres direct replication's failure handling by
+    """Test MySQL direct replication's failure handling by
     disrupting replication at various stages using Toxiproxy or service restarts
     """
 
-    # TODO: most of these should likely be converted to cluster tests
-
     scenarios = [
-        pg_out_of_disk_space,
-        disconnect_pg_during_snapshot,
-        disconnect_pg_during_replication,
-        restart_pg_during_snapshot,
+        mysql_out_of_disk_space,
+        disconnect_mysql_during_snapshot,
+        disconnect_mysql_during_replication,
+        restart_mysql_during_snapshot,
         restart_mz_during_snapshot,
-        restart_pg_during_replication,
+        restart_mysql_during_replication,
         restart_mz_during_replication,
-        fix_pg_schema_while_mz_restarts,
+        fix_mysql_schema_while_mz_restarts,
         verify_no_snapshot_reingestion,
     ]
 
@@ -69,8 +70,8 @@ def workflow_disruptions(c: Composition) -> None:
 
     for scenario in scenarios:
         overrides = (
-            [Postgres(volumes=["sourcedata_512Mb:/var/lib/postgresql/data"])]
-            if scenario == pg_out_of_disk_space
+            [MySql(volumes=["sourcedata_512Mb:/var/lib/mysql"])]
+            if scenario == mysql_out_of_disk_space
             else []
         )
         with c.override(*overrides):
@@ -85,33 +86,41 @@ def workflow_disruptions(c: Composition) -> None:
 def workflow_backup_restore(c: Composition) -> None:
     with c.override(
         Materialized(sanity_restart=False),
-        Alpine(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
-        Postgres(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
     ):
-        for scenario in [
-            backup_restore_pg,
-        ]:
-            print(f"--- Running scenario {scenario.__name__}")
-            initialize(c)
-            scenario(c)
-            # No end confirmation here, since we expect the source to be in a bad state
+        scenario = backup_restore_mysql
+        print(f"--- Running scenario {scenario.__name__}")
+        initialize(c)
+        scenario(c)
+        # No end confirmation here, since we expect the source to be in a bad state
+
+
+def workflow_reset_gtid(c: Composition) -> None:
+    with c.override(
+        Materialized(sanity_restart=False),
+    ):
+        scenario = reset_master_gtid
+        print(f"--- Running scenario {scenario.__name__}")
+        initialize(c)
+        scenario(c)
+        # No end confirmation here, since we expect the source to be in a bad state
 
 
 def initialize(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("materialized", "postgres", "toxiproxy")
+    c.up("materialized", "mysql", "toxiproxy")
 
-    c.run_testdrive_files(
+    run_testdrive_files(
+        c,
         "configure-toxiproxy.td",
+        "configure-mysql.td",
         "populate-tables.td",
-        "configure-postgres.td",
         "configure-materialize.td",
     )
 
 
-def restart_pg(c: Composition) -> None:
-    c.kill("postgres")
-    c.up("postgres")
+def restart_mysql(c: Composition) -> None:
+    c.kill("mysql")
+    c.up("mysql")
 
 
 def restart_mz(c: Composition) -> None:
@@ -121,11 +130,12 @@ def restart_mz(c: Composition) -> None:
 
 def end(c: Composition) -> None:
     """Validate the data at the end."""
-    c.run_testdrive_files("verify-data.td", "cleanup.td")
+    run_testdrive_files(c, "verify-data.td", "cleanup.td")
 
 
-def disconnect_pg_during_snapshot(c: Composition) -> None:
-    c.run_testdrive_files(
+def disconnect_mysql_during_snapshot(c: Composition) -> None:
+    run_testdrive_files(
+        c,
         "toxiproxy-close-connection.td",
         "toxiproxy-restore-connection.td",
         "delete-rows-t1.td",
@@ -135,10 +145,11 @@ def disconnect_pg_during_snapshot(c: Composition) -> None:
     )
 
 
-def restart_pg_during_snapshot(c: Composition) -> None:
-    restart_pg(c)
+def restart_mysql_during_snapshot(c: Composition) -> None:
+    restart_mysql(c)
 
-    c.run_testdrive_files(
+    run_testdrive_files(
+        c,
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -147,14 +158,15 @@ def restart_pg_during_snapshot(c: Composition) -> None:
 
 
 def restart_mz_during_snapshot(c: Composition) -> None:
-    c.run_testdrive_files("alter-mz.td")
+    run_testdrive_files(c, "alter-mz.td")
     restart_mz(c)
 
-    c.run_testdrive_files("delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
+    run_testdrive_files(c, "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
 
 
-def disconnect_pg_during_replication(c: Composition) -> None:
-    c.run_testdrive_files(
+def disconnect_mysql_during_replication(c: Composition) -> None:
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "delete-rows-t2.td",
@@ -165,21 +177,23 @@ def disconnect_pg_during_replication(c: Composition) -> None:
     )
 
 
-def restart_pg_during_replication(c: Composition) -> None:
-    c.run_testdrive_files(
+def restart_mysql_during_replication(c: Composition) -> None:
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "alter-table.td",
         "alter-mz.td",
     )
 
-    restart_pg(c)
+    restart_mysql(c)
 
-    c.run_testdrive_files("delete-rows-t2.td")
+    run_testdrive_files(c, "delete-rows-t2.td")
 
 
 def restart_mz_during_replication(c: Composition) -> None:
-    c.run_testdrive_files(
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "alter-table.td",
@@ -188,11 +202,12 @@ def restart_mz_during_replication(c: Composition) -> None:
 
     restart_mz(c)
 
-    c.run_testdrive_files("delete-rows-t2.td")
+    run_testdrive_files(c, "delete-rows-t2.td")
 
 
-def fix_pg_schema_while_mz_restarts(c: Composition) -> None:
-    c.run_testdrive_files(
+def fix_mysql_schema_while_mz_restarts(c: Composition) -> None:
+    run_testdrive_files(
+        c,
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -207,13 +222,12 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
     """Confirm that Mz does not reingest the entire snapshot on restart by
     revoking its SELECT privileges
     """
-    c.run_testdrive_files(
-        "wait-for-snapshot.td", "postgres-disable-select-permission.td"
-    )
+    run_testdrive_files(c, "wait-for-snapshot.td", "mysql-disable-select-permission.td")
 
     restart_mz(c)
 
-    c.run_testdrive_files(
+    run_testdrive_files(
+        c,
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -221,75 +235,73 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
     )
 
 
-def pg_out_of_disk_space(c: Composition) -> None:
-    c.run_testdrive_files(
+def reset_master_gtid(c: Composition) -> None:
+    """Confirm behavior after resetting GTID in MySQL"""
+    run_testdrive_files(c, "reset-master.td")
+
+    run_testdrive_files(
+        c,
+        "delete-rows-t1.td",
+        "verify-source-stalled.td",
+    )
+
+
+def mysql_out_of_disk_space(c: Composition) -> None:
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
     )
 
-    fill_file = "/var/lib/postgresql/data/fill_file"
+    fill_file = "/var/lib/mysql/fill_file"
     c.exec(
-        "postgres",
+        "mysql",
         "bash",
         "-c",
         f"dd if=/dev/zero of={fill_file} bs=1024 count=$[1024*512] || true",
     )
     print("Sleeping for 30 seconds ...")
     time.sleep(30)
-    c.exec("postgres", "bash", "-c", f"rm {fill_file}")
+    c.exec("mysql", "bash", "-c", f"rm {fill_file}")
 
-    c.run_testdrive_files("delete-rows-t2.td", "alter-table.td", "alter-mz.td")
+    run_testdrive_files(c, "delete-rows-t2.td", "alter-table.td", "alter-mz.td")
 
 
-def backup_restore_pg(c: Composition) -> None:
+def backup_restore_mysql(c: Composition) -> None:
+    # Backup MySQL, wait for completion
+    backup_file = "backup.sql"
     c.exec(
-        "postgres",
+        "mysql",
         "bash",
         "-c",
-        "echo 'local replication all trust\n' >> /share/conf/pg_hba.conf",
+        f"export MYSQL_PWD={MySql.DEFAULT_ROOT_PASSWORD} && mysqldump --all-databases -u root --set-gtid-purged=OFF > {backup_file}",
     )
-    # Tell postgres to reload config
-    c.kill("postgres", signal="HUP", wait=False)
+    run_testdrive_files(c, "delete-rows-t1.td")
 
-    # Backup postgres, wait for completion
-    backup_dir = "/scratch/backup"
+    run_testdrive_files(c, "verify-rows-deleted-t1.td")
+
+    # Restart MySQL service
+    c.stop("mysql")
+    c.up("mysql")
+
     c.exec(
-        "postgres",
+        "mysql",
         "bash",
         "-c",
-        f"mkdir {backup_dir} && chown -R postgres:postgres {backup_dir}",
-    )
-    c.exec(
-        "postgres",
-        "pg_basebackup",
-        "-U",
-        "postgres",
-        "-X",
-        "stream",
-        "-c",
-        "fast",
-        "-D",
-        backup_dir,
-    )
-    c.run_testdrive_files("delete-rows-t1.td")
-
-    # Stop postgres service
-    c.stop("postgres")
-
-    # Perform a point-in-time recovery from the backup to postgres
-    c.run("alpine", "/bin/sh", "-c", "rm -rf /var/lib/postgresql/data/*")
-    c.run("alpine", "/bin/sh", "-c", f"cp -r {backup_dir}/* /var/lib/postgresql/data/")
-    c.run("alpine", "/bin/sh", "-c", "touch /var/lib/postgresql/data/recovery.signal")
-    c.run(
-        "alpine",
-        "/bin/sh",
-        "-c",
-        "echo \"restore_command 'cp /var/lib/postgresql/data/pg_wal/%f %p'\n\" >> /var/lib/postgresql/data/postgresql.conf",
+        f"export MYSQL_PWD={MySql.DEFAULT_ROOT_PASSWORD} && mysql -u root < {backup_file}",
     )
 
-    # Wait for postgres to become usable again
-    c.up("postgres")
-    c.run_testdrive_files("verify-postgres-select.td")
+    run_testdrive_files(c, "verify-mysql-select.td")
 
-    # Check state of the postgres source
-    c.run_testdrive_files("verify-source-failed.td")
+    # TODO: #25760: one of the two following commands must succeed
+    # run_testdrive_files(c, "verify-rows-after-restore-t1.td")
+    # run_testdrive_files(c, "verify-source-failed.td")
+
+
+def run_testdrive_files(
+    c: Composition,
+    *files: str,
+) -> None:
+    c.run_testdrive_files(
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}", *files
+    )
