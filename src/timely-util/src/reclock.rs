@@ -225,10 +225,10 @@ impl<FromTime: Timestamp, IntoTime: Timestamp + TotalOrder> BindingReplay<FromTi
             "capability not the initial capability"
         );
         BindingReplay {
-            upper_capability: Some(cap),
+            upper_capability: Some(cap.clone()),
             bindings: VecDeque::new(),
             frontier: MutableAntichain::new(),
-            active_binding: None,
+            active_binding: Some(cap),
         }
     }
 
@@ -259,30 +259,30 @@ impl<FromTime: Timestamp, IntoTime: Timestamp + TotalOrder> BindingReplay<FromTi
         }
     }
 
-    /// Reveals the currently active bindings and its accosiated `FromTime` frontier.
-    fn active_binding(&self) -> Option<(AntichainRef<FromTime>, &Capability<IntoTime>)> {
+    /// Reveals the currently active binding and its accosiated `FromTime` frontier.
+    fn active_binding(&mut self) -> Option<(AntichainRef<FromTime>, &Capability<IntoTime>)> {
         match self.active_binding.as_ref() {
-            Some(cap) => Some((self.frontier.frontier(), cap)),
+            Some(cap) if self.upper().less_equal(cap.time()) => None,
+            Some(cap) => {
+                let idx = self
+                    .bindings
+                    .iter()
+                    .position(|b| &b.1 != cap.time())
+                    .unwrap_or(self.bindings.len());
+                let updates = self.bindings.drain(0..idx).map(|(from, _, r)| (from, r));
+                self.frontier.update_iter(updates);
+
+                Some((self.frontier.frontier(), cap))
+            }
             None => None,
         }
     }
 
-    /// Steps to the next active binding, dropping the capability of the current one if one exists.
+    /// Steps the replayer to the next binding if one exists.
     fn step(&mut self) {
         match self.bindings.front().cloned() {
-            Some((_, into, _)) => {
-                let idx = self
-                    .bindings
-                    .iter()
-                    .position(|b| &b.1 != &into)
-                    .unwrap_or(self.bindings.len());
-                let updates = self.bindings.drain(0..idx).map(|(from, _, r)| (from, r));
-                self.frontier.update_iter(updates);
-                self.active_binding.as_mut().unwrap().downgrade(&into);
-            }
-            None => {
-                self.active_binding = None;
-            }
+            Some((_, into, _)) => self.active_binding.as_mut().unwrap().downgrade(&into),
+            None => self.active_binding = None,
         }
     }
 }
@@ -363,16 +363,14 @@ mod test {
 
     #[mz_ore::test]
     fn basic_reclocking() {
-        harness(|worker, mut bindings, (mut data, data_cap), reclocked| {
-            // TODO: handle case where the bindings are completely empty
-            bindings.update_at(Partitioned::minimum(), 0, 1);
-            bindings.update_at(Partitioned::minimum(), 1, -1);
+        harness(|worker, bindings, (mut data, data_cap), reclocked| {
+            // Reclock everything at the minimum IntoTime
             bindings.close();
             data.session(data_cap)
                 .give(("a", Partitioned::minimum(), 1));
             step(worker);
             let extracted = reclocked.extract();
-            let expected = vec![(1, vec![("a", 1, 1)])];
+            let expected = vec![(0, vec![("a", 0, 1)])];
             assert_eq!(extracted, expected);
         })
     }
