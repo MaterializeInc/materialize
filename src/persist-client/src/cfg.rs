@@ -36,7 +36,7 @@ use crate::operators::{
     PERSIST_SINK_MINIMUM_BATCH_UPDATES, STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES,
     STORAGE_SOURCE_DECODE_FUEL,
 };
-use crate::read::{READER_LEASE_DURATION, STREAMING_SNAPSHOT_AND_FETCH_ENABLED};
+use crate::read::READER_LEASE_DURATION;
 
 /// The tunable knobs for persist.
 ///
@@ -263,7 +263,6 @@ impl PersistConfig {
         let mut cfg = Self::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
         cfg.set_config(&STREAMING_COMPACTION_ENABLED, true);
-        cfg.set_config(&STREAMING_SNAPSHOT_AND_FETCH_ENABLED, true);
         cfg
     }
 }
@@ -296,7 +295,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::operators::STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
         .add(&crate::read::READER_LEASE_DURATION)
-        .add(&crate::read::STREAMING_SNAPSHOT_AND_FETCH_ENABLED)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)
         .add(&crate::stats::STATS_AUDIT_PERCENT)
