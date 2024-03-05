@@ -13,6 +13,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! An operator that transforms a `source` collection that evolves with some timestamp `FromTime`
+//! into a collection that evolve with some other timestamp `IntoTime`.
+//!
+//! The operator processes a `remap` collection, which is a map from a target timestamp `IntoTime`
+//! to a set of `FromTime` times which form an antichain. The `remap` collection must maintain the
+//! property of monotonicity: if `into1 <= into2` then `remap[into1] <= remap[into2]` where the
+//! second inequality is the partial order on antichains.
+//!
+//! The operator produces the `reclocked` collection which is defined as a differential dataflow
+//! collection that that contains at `into` all messages from `source` whose timestamp is not
+//! greater than or equal to some element of `remap[into]`. The `reclocked` collection is created
+//! in the same scope as the `remap` collection and therefore evolves according to `IntoTime`.
+//!
+//! The `source` collection is not possible to be connected to the reclock operator as a normal
+//! timely input since that collection exists in a different scope whose timestamp is `FromTime`.
+//! Instead, the `source` collection must be captured (e.g using timely's capture facilities) and
+//! the raw data be sent into the `Pusher` constructed and returned by the reclock operator.
+
 use std::collections::VecDeque;
 use std::fmt::{self, Debug};
 use std::iter::FromIterator;
@@ -58,16 +76,21 @@ impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for Batch<D, T, R> {
     }
 }
 
-/// Reclocks a collection varying over a partial order `T` into the scope `G` according to the
-/// remap bindings provided in the `bindings` collection.
+/// Constructs an operator that reclocks a `source` collection varying with some time `FromTime`
+/// into the corresponding `reclocked` collection varying over some time `IntoTime` using the
+/// provided `remap` collection.
 ///
-/// This function returns a `Pusher` that can be used in a foreign timely scope to send the updates
-/// to be reclocked into the scope of this operator and the resulting reclocked collection.
-pub fn reclock<G, D1, D2, T, R, L>(
-    bindings: &Collection<G, T, i64>,
+/// Each record and its original `FromTime` timestamp are transformed through `logic` before being
+/// produced in the `reclocked` collection.
+///
+/// In order for the operator to read the `source` collection a `Pusher` is returned which can be
+/// used with timely's capture facilities to connect a collection from a foreign scope to this
+/// operator.
+pub fn reclock<G, D1, D2, FromTime, R, L>(
+    remap_collection: &Collection<G, FromTime, i64>,
     mut logic: L,
 ) -> (
-    Box<dyn Push<Message<Event<T, (D1, T, R)>>>>,
+    Box<dyn Push<Message<Event<FromTime, (D1, FromTime, R)>>>>,
     Collection<G, D2, R>,
 )
 where
@@ -75,17 +98,18 @@ where
     G::Timestamp: TotalOrder,
     D1: timely::Data,
     D2: timely::Data,
-    T: Timestamp,
+    FromTime: Timestamp,
     R: Semigroup,
-    L: FnMut(D1, T) -> D2 + 'static,
+    L: FnMut(D1, FromTime) -> D2 + 'static,
 {
-    let mut scope = bindings.scope();
+    let mut scope = remap_collection.scope();
     let mut builder = OperatorBuilder::new("Reclock".into(), scope.clone());
     let info = builder.operator_info();
     let channel_id = scope.new_identifier();
-    let (pusher, mut puller) = scope.pipeline::<Event<T, (D1, T, R)>>(channel_id, &info.address);
+    let (pusher, mut puller) =
+        scope.pipeline::<Event<FromTime, (D1, FromTime, R)>>(channel_id, &info.address);
 
-    let mut remap_input = builder.new_input(&bindings.inner, Pipeline);
+    let mut remap_input = builder.new_input(&remap_collection.inner, Pipeline);
     let (mut output, reclocked) = builder.new_output();
 
     builder.build(move |caps| {
@@ -101,7 +125,6 @@ where
         let mut source_batches = VecDeque::new();
 
         let mut vector = Vec::new();
-        let mut container = Vec::new();
         move |frontiers| {
             // Accept new bindings
             while let Some((_, data)) = remap_input.next() {
@@ -125,7 +148,7 @@ where
                         source_upper.update_iter(changes.drain(..));
                     }
                     Event::Messages(_, data) => {
-                        data.sort_unstable_by(|a: &(D1, T, R), b| a.1.cmp(&b.1));
+                        data.sort_unstable_by(|a: &(D1, FromTime, R), b| a.1.cmp(&b.1));
                         let batch = Batch::from_iter(data.drain(..));
                         source_batches.push_back(batch);
                     }
@@ -135,25 +158,24 @@ where
             // Reclock accepted data
             let mut output = output.activate();
             while let Some((frontier, cap)) = replayer.active_binding() {
+                let mut session = output.session(cap);
                 let into_t = cap.time();
                 source_batches.retain_mut(|batch| {
                     batch.chains.retain_mut(|chain| {
                         // A chain is a set of mutually comparable elements so we can binary search
                         // to find the prefix that is not beyond the frontier and extract it.
                         let idx = chain.partition_point(|(_, t, _)| !frontier.less_equal(t));
-                        let data = chain
-                            .drain(0..idx)
-                            .map(|(d, t, r)| (logic(d, t), into_t.clone(), r));
-                        container.extend(data);
+                        session.give_iterator(
+                            chain
+                                .drain(0..idx)
+                                .map(|(d, t, r)| (logic(d, t), into_t.clone(), r)),
+                        );
                         // Retain non-empty chains
                         !chain.is_empty()
                     });
                     // Retain non-empty batches
                     !batch.chains.is_empty()
                 });
-                if !container.is_empty() {
-                    output.session(cap).give_container(&mut container);
-                }
                 // If we won't receive any more data for this binding we can go to the next one
                 if PartialOrder::less_equal(&frontier, &source_upper.frontier()) {
                     replayer.step();
@@ -168,9 +190,10 @@ where
     (Box::new(pusher), reclocked.as_collection())
 }
 
-/// A struct that reveals the frontiers encoded in a remap binding collection in time order.
-struct BindingReplay<FromTime, IntoTime: Timestamp> {
-    /// The upper frontier of bindings received so far
+/// A struct that reveals the frontiers encoded in a remap collection in time order.
+struct BindingReplay<FromTime, IntoTime: Timestamp + TotalOrder> {
+    /// The upper frontier of bindings received so far. An `Option<Capability>` is sufficient to
+    /// describe a frontier because `IntoTime` is required to be totally ordered.
     upper_capability: Option<Capability<IntoTime>>,
     /// A queue of bindings sorted by time
     bindings: VecDeque<(FromTime, IntoTime, i64)>,
@@ -181,7 +204,9 @@ struct BindingReplay<FromTime, IntoTime: Timestamp> {
     frontier: MutableAntichain<FromTime>,
 }
 
-impl<FromTime: Debug, IntoTime: Timestamp> Debug for BindingReplay<FromTime, IntoTime> {
+impl<FromTime: Debug, IntoTime: Timestamp + TotalOrder> Debug
+    for BindingReplay<FromTime, IntoTime>
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BindingReplay")
             .field("upper", &self.upper_capability.as_deref())
