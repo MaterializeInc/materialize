@@ -916,8 +916,9 @@ impl PersistPeek {
                 let row = data.map_err(|e| e.to_string())?;
                 let count: usize = d.try_into().map_err(|_| {
                     format!(
-                        "Invalid data in source, saw retractions ({}) for row that does not exist",
+                        "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
                         d * -1,
+                        row,
                     )
                 })?;
                 let Some(count) = NonZeroUsize::new(count) else {

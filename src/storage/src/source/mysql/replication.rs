@@ -333,7 +333,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 .await);
                             }
                             let new_upper = repl_partitions.frontier();
-                            repl_context.advance(new_upper);
+                            repl_context.advance("heartbeat", new_upper);
                         }
                     }
                     // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
@@ -352,15 +352,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                         events::handle_rows_event(data, &mut repl_context, new_gtid).await?;
 
-                        // Advance the frontier up to the point right before this GTID
-                        // We are being careful here and not advancing beyond this GTID since we aren't
-                        // sure that other mysql event-types may need to be supported that present other
-                        // data to commit at this timestamp. In the future if we are sure that this RowsEvent
-                        // represents all the data that we need to commit at this timestamp and that there is no
-                        // then we can do so (like we currently do when handling Heartbeat Events).
-                        // This is still useful to allow data committed at previous timestamps to become available
-                        // without waiting for the next break in data at which point we should receive a Heartbeat
-                        // Event.
+                        // Advance the frontier up to the point right before this GTID, since we
+                        // might still see other events that are part of this same GTID, such as
+                        // row events for multiple tables or large row events split into multiple.
                         if let Err(err) = repl_partitions.update(new_gtid.clone()) {
                             return Ok(return_definite_error(
                                 err,
@@ -374,7 +368,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         }
                         let new_upper = repl_partitions.frontier();
 
-                        repl_context.advance(new_upper);
+                        repl_context.advance("rows_event", new_upper);
                     }
                     Some(EventData::QueryEvent(event)) => {
                         let new_gtid = next_gtid
