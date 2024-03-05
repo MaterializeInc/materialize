@@ -511,6 +511,9 @@ baz-after
 $ set-from-sql var=webhook-source-id
 SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 
+$ set-from-sql var=webhook-source-shard-id
+SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
+
 > SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 1
 
@@ -518,6 +521,11 @@ SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 
 > SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 0
+
+$ check-shard-tombstone shard-id=${webhook-source-shard-id}
+
+# Cleanup.
+> DROP CLUSTER webhook_cluster CASCADE;
 
 # Creating a webhook source without specifying the cluster.
 $ skip-if

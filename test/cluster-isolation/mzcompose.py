@@ -202,6 +202,9 @@ A
 > SELECT * FROM source1
 A
 
+# TODO: This should be made reliable without sleeping, #25479
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
+
 # Sinks
 > CREATE SINK sink1 FROM v1mat
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink1')
