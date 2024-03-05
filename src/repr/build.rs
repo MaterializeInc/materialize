@@ -15,6 +15,7 @@ fn main() {
     prost_build::Config::new()
         .btree_map(["."])
         .extern_path(".mz_proto", "::mz_proto")
+        .bytes([".mz_repr.row.ProtoDatum.bytes"])
         .compile_protos(
             &[
                 "repr/src/antichain.proto",
