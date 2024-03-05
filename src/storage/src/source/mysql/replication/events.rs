@@ -233,24 +233,16 @@ pub(super) async fn handle_rows_event(
         let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
-            let packed_row = match pack_mysql_row(&mut final_row, row, table_desc) {
-                Ok(row) => row,
+            let event = match pack_mysql_row(&mut final_row, row, table_desc) {
+                Ok(row) => Ok(row),
+                // Produce a DefiniteError in the stream for any rows that fail to decode
                 Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                    // If we hit an error decoding there's nothing more we can do
-                    let err = DefiniteError::ValueDecodeError(err.to_string());
-                    let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    ctx.data_output
-                        .give(&gtid_cap, ((*output_index, Err(err)), new_gtid.clone(), 1))
-                        .await;
-                    ctx.errored_tables.insert(table.clone());
-                    trace!(%id, "timely-{worker_id} stopping replication of table {table} \
-                                 due to decode error");
-                    return Ok(());
+                    Err(DefiniteError::ValueDecodeError(err.to_string()))
                 }
                 Err(err) => Err(err)?,
             };
 
-            let data = (*output_index, Ok(packed_row));
+            let data = (*output_index, event);
 
             // Rewind this update if it was already present in the snapshot
             if let Some(([data_cap, _upper_cap], rewind_req)) = ctx.rewinds.get(&table) {
