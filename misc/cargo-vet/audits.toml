@@ -613,6 +613,12 @@ user-id = 539 # Josh Stone (cuviper)
 start = "2020-01-15"
 end = "2024-11-16"
 
+[[trusted.insta]]
+criteria = "safe-to-deploy"
+user-id = 39 # Armin Ronacher (mitsuhiko)
+start = "2019-03-05"
+end = "2025-03-04"
+
 [[trusted.itoa]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)

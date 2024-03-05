@@ -50,6 +50,11 @@ pub enum AdapterNotice {
     ClusterDoesNotExist {
         name: String,
     },
+    DefaultClusterDoesNotExist {
+        name: String,
+        kind: Option<&'static str>,
+        suggested_action: String,
+    },
     NoResolvableSearchPathSchema {
         search_path: Vec<String>,
     },
@@ -151,6 +156,7 @@ impl AdapterNotice {
             AdapterNotice::ObjectAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::DatabaseDoesNotExist { .. } => Severity::Notice,
             AdapterNotice::ClusterDoesNotExist { .. } => Severity::Notice,
+            AdapterNotice::DefaultClusterDoesNotExist { .. } => Severity::Notice,
             AdapterNotice::NoResolvableSearchPathSchema { .. } => Severity::Notice,
             AdapterNotice::ExistingTransactionInProgress => Severity::Warning,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => Severity::Warning,
@@ -212,6 +218,7 @@ impl AdapterNotice {
         match self {
             AdapterNotice::DatabaseDoesNotExist { name: _ } => Some("Create the database with CREATE DATABASE or pick an extant database with SET DATABASE = name. List available databases with SHOW DATABASES.".into()),
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
+            AdapterNotice::DefaultClusterDoesNotExist { name: _, kind: _, suggested_action } => Some(suggested_action.clone()),
             AdapterNotice::NoResolvableSearchPathSchema { search_path: _ } => Some("Create a schema with CREATE SCHEMA or pick an extant schema with SET SCHEMA = name. List available schemas with SHOW SCHEMAS.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
@@ -245,6 +252,7 @@ impl AdapterNotice {
             AdapterNotice::ObjectAlreadyExists { .. } => SqlState::DUPLICATE_OBJECT,
             AdapterNotice::DatabaseDoesNotExist { .. } => SqlState::WARNING,
             AdapterNotice::ClusterDoesNotExist { .. } => SqlState::WARNING,
+            AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::WARNING,
             AdapterNotice::NoResolvableSearchPathSchema { .. } => SqlState::WARNING,
             AdapterNotice::ExistingTransactionInProgress => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterNotice::ExplicitTransactionControlInImplicitTransaction => {
@@ -306,6 +314,10 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::ClusterDoesNotExist { name } => {
                 write!(f, "cluster {} does not exist", name.quoted())
+            }
+            AdapterNotice::DefaultClusterDoesNotExist { kind, name, .. } => {
+                let kind = kind.map(|k| format!("{k} ")).unwrap_or(String::new());
+                write!(f, "{kind}default cluster {} does not exist", name.quoted())
             }
             AdapterNotice::NoResolvableSearchPathSchema { search_path } => {
                 write!(

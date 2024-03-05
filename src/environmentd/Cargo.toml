@@ -125,6 +125,7 @@ assert_cmd = "2.0.5"
 bytes = "1.3.0"
 datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
+insta = { version = "1.32", features = ["json"] }
 itertools = "0.10.5"
 jsonwebtoken = "9.2.0"
 mz-environmentd = { path = "../environmentd", features = ["test"] }
