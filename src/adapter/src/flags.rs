@@ -91,6 +91,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         mysql_source_timeouts: mz_mysql_util::TimeoutConfig {
             tcp_keepalive: Some(config.mysql_source_tcp_keepalive()),
         },
+        mysql_source_snapshot_max_execution_time: config.mysql_source_snapshot_max_execution_time(),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_sink_status_history_entries(),
         keep_n_privatelink_status_history_entries: config

@@ -1128,6 +1128,7 @@ impl SystemVars {
             &PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT,
             &PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT,
             &MYSQL_SOURCE_TCP_KEEPALIVE,
+            &MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME,
             &SSH_CHECK_INTERVAL,
             &SSH_CONNECT_TIMEOUT,
             &SSH_KEEPALIVES_IDLE,
@@ -1712,6 +1713,11 @@ impl SystemVars {
         *self.expect_value(&MYSQL_SOURCE_TCP_KEEPALIVE)
     }
 
+    /// Returns the `mysql_source_snapshot_max_execution_time` configuration parameter.
+    pub fn mysql_source_snapshot_max_execution_time(&self) -> Duration {
+        *self.expect_value(&MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME)
+    }
+
     /// Returns the `ssh_check_interval` configuration parameter.
     pub fn ssh_check_interval(&self) -> Duration {
         *self.expect_value(&SSH_CHECK_INTERVAL)
@@ -2138,6 +2144,7 @@ impl SystemVars {
             || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()
             || name == MYSQL_SOURCE_TCP_KEEPALIVE.name()
+            || name == MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME.name()
             || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
             || name == SSH_CHECK_INTERVAL.name()
             || name == SSH_CONNECT_TIMEOUT.name()

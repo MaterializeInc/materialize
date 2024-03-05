@@ -10,7 +10,10 @@
 //! MySQL utility library.
 
 mod tunnel;
-pub use tunnel::{Config, MySqlConn, TimeoutConfig, TunnelConfig, DEFAULT_TCP_KEEPALIVE};
+pub use tunnel::{
+    Config, MySqlConn, TimeoutConfig, TunnelConfig, DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME,
+    DEFAULT_TCP_KEEPALIVE,
+};
 
 mod desc;
 pub use desc::{

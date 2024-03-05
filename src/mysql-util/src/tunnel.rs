@@ -41,6 +41,7 @@ pub enum TunnelConfig {
 }
 
 pub const DEFAULT_TCP_KEEPALIVE: Duration = Duration::from_secs(60);
+pub const DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME: Duration = Duration::ZERO;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimeoutConfig {

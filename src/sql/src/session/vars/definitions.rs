@@ -1011,6 +1011,15 @@ pub static MYSQL_SOURCE_TCP_KEEPALIVE: VarDefinition = VarDefinition::new(
     true,
 );
 
+/// Sets the `max_execution_time` value to use during the snapshotting phase of
+/// MySQL sources.
+pub static MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME: VarDefinition = VarDefinition::new(
+    "mysql_source_snapshot_max_execution_time",
+    value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME),
+    "Sets the `max_execution_time` value to use during the snapshotting phase of MySQL sources (Materialize)",
+    true,
+);
+
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     "ssh_check_interval",
