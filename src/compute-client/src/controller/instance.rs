@@ -915,6 +915,9 @@ where
                 .read_capabilities
                 .frontier();
             if !(timely::order::PartialOrder::less_equal(since, &as_of.borrow())) {
+                tracing::error!(
+                    "SinceViolation for source {source_id}: as_of {as_of:?}, since {since:?}"
+                );
                 Err(DataflowCreationError::SinceViolation(*source_id))?;
             }
 
@@ -928,6 +931,9 @@ where
             let collection = self.compute.collection(*index_id)?;
             let since = collection.read_capabilities.frontier();
             if !(timely::order::PartialOrder::less_equal(&since, &as_of.borrow())) {
+                tracing::error!(
+                    "SinceViolation for index {index_id}: as_of {as_of:?}, since {since:?}"
+                );
                 Err(DataflowCreationError::SinceViolation(*index_id))?;
             }
 
