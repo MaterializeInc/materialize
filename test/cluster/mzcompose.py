@@ -3207,13 +3207,16 @@ def workflow_cluster_drop_concurrent(
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"
 
 
-def workflow_test_refresh_mv_warmup_after_restart(
+def workflow_test_refresh_mv_restart(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Regression test for https://github.com/MaterializeInc/materialize/issues/25279
-    Test that bootstrapping selects an as_of for an MV dataflow in a way that allows it to warm up before its next
-    refresh.
+    Test REFRESH materialized views with restarts:
+    1. Regression test for https://github.com/MaterializeInc/materialize/issues/25380
+       If an MV is past its last refresh, it shouldn't get rehydrated after a restart.
+    2. Regression test for https://github.com/MaterializeInc/materialize/issues/25279
+       Bootstrapping should select an `as_of` for an MV dataflow in a way that allows it to warm up before its next
+       refresh.
     """
 
     with c.override(
@@ -3236,46 +3239,79 @@ def workflow_test_refresh_mv_warmup_after_restart(
             """
         )
 
-        # Create an MV that will have its first refresh immediately, but it's next refresh is a long time away.
         c.testdrive(
             input=dedent(
                 """
                 > SET cluster = cluster1;
-                > CREATE TABLE t (a int);
-                > INSERT INTO t VALUES (100);
-                > CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '1 day') AS
-                  SELECT count(*) FROM (SELECT generate_series(1,a) FROM t);
 
-                > SELECT * FROM mv;
+                ## 1. Create a materialized view that has only one refresh, and takes at least a few seconds to hydrate.
+                ##    (Currently, it's ~2 seconds on a release build.)
+                > CREATE TABLE t1 (a int);
+                > INSERT INTO t1 VALUES (10000000);
+
+                > CREATE MATERIALIZED VIEW mv1 WITH (REFRESH AT CREATION) AS
+                  SELECT count(*) FROM (SELECT generate_series(1,a) FROM t1);
+
+                # Let's wait for its initial refresh to complete.
+                > SELECT * FROM mv1;
+                10000000
+
+                # This INSERT shouldn't be visible in mv1, because we are past its only refresh.
+                > INSERT INTO t1 VALUES (10000001);
+
+                ## 2. Create an materialized view that will have its first refresh immediately, but it's next refresh is
+                ##    a long time away.
+                > CREATE TABLE t2 (a int);
+                > INSERT INTO t2 VALUES (100);
+
+                > CREATE MATERIALIZED VIEW mv2 WITH (REFRESH EVERY '1 day') AS
+                  SELECT count(*) FROM (SELECT generate_series(1,a) FROM t2);
+
+                > SELECT * FROM mv2;
                 100
 
-                > INSERT INTO t VALUES (1000);
+                > INSERT INTO t2 VALUES (1000);
                 """
             )
         )
 
-        # Restart environmentd to trigger the MV `as_of` selection code in bootstrapping.
+        # Restart environmentd
         c.kill("materialized")
         c.up("materialized")
 
-        # Check that the dataflow hydrates, even though we are a long time away from the next refresh.
         c.testdrive(
             input=dedent(
                 """
+                ## 1. We shouldn't have a dataflow for mv1.
+                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT mz_unsafe.mz_sleep(0.5);
+                <null>
+                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT mz_unsafe.mz_sleep(0.5);
+                <null>
+                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT mz_unsafe.mz_sleep(0.5);
+                <null>
+                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT mz_unsafe.mz_sleep(0.5);
+                <null>
+                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+                > SELECT mz_unsafe.mz_sleep(0.5);
+                <null>
+                > SELECT * FROM mz_internal.mz_dataflows WHERE name = 'mv1';
+
+                > SELECT * FROM mv1;
+                10000000
+
+                ## 2. Check that mv2's dataflow hydrates, even though we are a long time away from the next refresh.
                 > SELECT hydrated
                   FROM mz_internal.mz_compute_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
-                  WHERE name = 'mv';
+                  WHERE name = 'mv2';
                 true
-                """
-            )
-        )
 
-        # Check that the next refresh hasn't happened yet.
-        c.testdrive(
-            input=dedent(
-                """
-                > INSERT INTO t VALUES (10000);
-                > SELECT * FROM mv;
+                # Check that the next refresh hasn't happened yet.
+                > INSERT INTO t2 VALUES (10000);
+                > SELECT * FROM mv2;
                 100
                 """
             )
