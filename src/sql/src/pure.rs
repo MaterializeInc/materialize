@@ -677,7 +677,7 @@ async fn purify_create_source(
             // verify that we can connect upstream and snapshot publication metadata
             let config = connection
                 .config(
-                    &*storage_configuration.connection_context.secrets_reader,
+                    &storage_configuration.connection_context.secrets_reader,
                     storage_configuration,
                     false,
                 )
@@ -906,7 +906,7 @@ async fn purify_create_source(
 
             let config = connection
                 .config(
-                    &*storage_configuration.connection_context.secrets_reader,
+                    &storage_configuration.connection_context.secrets_reader,
                     storage_configuration,
                     false,
                 )
@@ -1385,7 +1385,7 @@ async fn purify_alter_source(
 
     let config = pg_connection
         .config(
-            &*storage_configuration.connection_context.secrets_reader,
+            &storage_configuration.connection_context.secrets_reader,
             storage_configuration,
             false,
         )

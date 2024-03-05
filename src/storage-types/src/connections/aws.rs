@@ -108,11 +108,12 @@ impl AwsCredentials {
     async fn load_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
+        from_timely: bool,
     ) -> Result<impl ProvideCredentials, anyhow::Error> {
-        let secrets_reader = connection_context.secrets_reader.as_ref();
+        let secrets_reader = &connection_context.secrets_reader;
         Ok(Credentials::from_keys(
             self.access_key_id
-                .get_string(secrets_reader)
+                .get_string(secrets_reader, from_timely)
                 .await
                 .map_err(|_| {
                     anyhow!("internal error: failed to read access key ID from secret store")
@@ -126,9 +127,14 @@ impl AwsCredentials {
                 })?,
             match &self.session_token {
                 Some(t) => {
-                    let t = t.get_string(secrets_reader).await.map_err(|_| {
-                        anyhow!("internal error: failed to read session token from secret store")
-                    })?;
+                    let t = t
+                        .get_string(secrets_reader, from_timely)
+                        .await
+                        .map_err(|_| {
+                            anyhow!(
+                                "internal error: failed to read session token from secret store"
+                            )
+                        })?;
                     Some(t)
                 }
                 None => None,
@@ -309,11 +315,12 @@ impl AwsConnection {
         &self,
         connection_context: &ConnectionContext,
         connection_id: GlobalId,
+        from_timely: bool,
     ) -> Result<SdkConfig, anyhow::Error> {
         let credentials = match &self.auth {
             AwsAuth::Credentials(credentials) => SharedCredentialsProvider::new(
                 credentials
-                    .load_credentials_provider(connection_context)
+                    .load_credentials_provider(connection_context, from_timely)
                     .await?,
             ),
             AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
@@ -345,7 +352,7 @@ impl AwsConnection {
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), AwsConnectionValidationError> {
         let aws_config = self
-            .load_sdk_config(&storage_configuration.connection_context, id)
+            .load_sdk_config(&storage_configuration.connection_context, id, false)
             .await?;
         let sts_client = aws_sdk_sts::Client::new(&aws_config);
         let _ = sts_client.get_caller_identity().send().await?;

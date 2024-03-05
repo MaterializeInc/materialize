@@ -84,7 +84,7 @@ pub fn copy_to<G, F>(
         }
 
         let sdk_config = match aws_connection
-            .load_sdk_config(&connection_context, connection_id)
+            .load_sdk_config(&connection_context, connection_id, true)
             .await
         {
             Ok(sdk_config) => sdk_config,

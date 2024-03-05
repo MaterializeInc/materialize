@@ -145,7 +145,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let connection_config = connection
                 .connection
                 .config(
-                    &*config.config.connection_context.secrets_reader,
+                    &config.config.connection_context.secrets_reader,
                     &config.config,
                     true,
                 )
