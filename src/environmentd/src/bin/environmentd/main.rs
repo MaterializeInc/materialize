@@ -57,7 +57,6 @@ use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::CatalogKind;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -370,19 +369,6 @@ pub struct Args {
     persist_isolated_runtime_threads: Option<isize>,
 
     // === Adapter options. ===
-    /// The PostgreSQL URL for the adapter stash.
-    #[clap(
-        long,
-        env = "ADAPTER_STASH_URL",
-        value_name = "POSTGRES_URL",
-        required_if_eq("catalog-store", "stash"),
-        required_if_eq("catalog-store", "persist"),
-        required_if_eq("catalog-store", "emergency-stash")
-    )]
-    adapter_stash_url: Option<String>,
-    /// The backing durable store of the catalog.
-    #[clap(long, arg_enum, env = "CATALOG_STORE", default_value("persist"))]
-    catalog_store: CatalogKind,
     /// The PostgreSQL URL for the Postgres-backed timestamp oracle.
     #[clap(long, env = "TIMESTAMP_ORACLE_URL", value_name = "POSTGRES_URL")]
     timestamp_oracle_url: Option<String>,
@@ -896,24 +882,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             internal_http_listen_addr: args.internal_http_listen_addr,
         })
         .await?;
-        let catalog_config = match args.catalog_store {
-            CatalogKind::Stash => CatalogConfig::Stash {
-                url: args.adapter_stash_url.expect("required for stash catalog"),
-                persist_clients,
-                metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
-            },
-            CatalogKind::Persist => CatalogConfig::Persist {
-                url: args
-                    .adapter_stash_url
-                    .expect("required for persist catalog"),
-                persist_clients,
-                metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
-            },
-            CatalogKind::EmergencyStash => CatalogConfig::EmergencyStash {
-                url: args
-                    .adapter_stash_url
-                    .expect("required for emergency-stash catalog"),
-            },
+        let catalog_config = CatalogConfig {
+            persist_clients,
+            metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
         };
         listeners
             .serve(mz_environmentd::Config {

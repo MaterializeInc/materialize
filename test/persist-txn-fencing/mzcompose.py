@@ -79,8 +79,6 @@ WORKLOADS = [
     ),
 ]
 
-CATALOG_STORES = ["stash", "persist"]
-
 SERVICES = [
     Minio(setup_materialize=True),
     Cockroach(setup_materialize=True),
@@ -93,8 +91,7 @@ SERVICES = [
 def workflow_default(c: Composition) -> None:
     """Introduce a second Mz instance while a concurrent workload is running for the purpose of exercising fencing."""
     for workload in WORKLOADS:
-        for catalog_store in CATALOG_STORES:
-            run_workload(c, workload, catalog_store)
+        run_workload(c, workload)
 
 
 def execute_operation(
@@ -154,10 +151,8 @@ def execute_operation(
         )
 
 
-def run_workload(c: Composition, workload: Workload, catalog_store: str) -> None:
-    print(
-        f"+++ Running workload {workload.name} with {catalog_store} catalog implementation ..."
-    )
+def run_workload(c: Composition, workload: Workload) -> None:
+    print(f"+++ Running workload {workload.name} ...")
     c.silent = True
 
     c.down(destroy_volumes=True)
@@ -178,7 +173,6 @@ def run_workload(c: Composition, workload: Workload, catalog_store: str) -> None
                 additional_system_parameter_defaults={
                     "persist_txn_tables": mzs[mz_name]
                 },
-                catalog_store=catalog_store,
             )
             for mz_name in mzs
         ]

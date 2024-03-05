@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use uuid::Uuid;
+
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
@@ -22,25 +24,12 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
-use mz_sql::session::vars::CatalogKind;
-use mz_stash::DebugStashFactory;
 use mz_storage_types::controller::PersistTxnTablesImpl;
-use uuid::Uuid;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
-use crate::durable::impls::migrate::{CatalogMigrator, Direction};
 pub use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
-use crate::durable::impls::stash::{OpenableConnection, TestOpenableConnection};
-pub use crate::durable::impls::stash::{
-    StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
-    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
-    CONFIG_COLLECTION, DATABASES_COLLECTION, DEFAULT_PRIVILEGES_COLLECTION,
-    ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION,
-    SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
-    SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
-};
 use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
@@ -79,10 +68,6 @@ pub struct BootstrapArgs {
 }
 
 pub type Epoch = NonZeroI64;
-
-pub(crate) fn epoch_checked_increment(epoch: Epoch) -> Option<Epoch> {
-    epoch.get().checked_add(1).and_then(Epoch::new)
-}
 
 /// An API for opening a durable catalog state.
 ///
@@ -159,28 +144,13 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Reports if the remote configuration was synchronized at least once.
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError>;
 
-    /// Get the tombstone value of this instance.
-    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError>;
-
-    /// Get the `catalog_kind` config value of this instance.
-    ///
-    /// This mirrors the `catalog_kind` "system var" so that we can toggle
-    /// the flag with Launch Darkly, but use it in boot before Launch Darkly is
-    /// available.
-    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError>;
-
     /// Generate an unconsolidated [`Trace`] of catalog contents.
     async fn trace(&mut self) -> Result<Trace, CatalogError>;
-
-    /// Sets the kind of catalog opened to `catalog_kind` iff this `OpenableDurableCatalogState`
-    /// knows how to open a catalog of kind `catalog_kind`, otherwise does nothing.
-    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind);
 
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
 }
 
-// TODO(jkosh44) No method should take &mut self, but due to stash implementations we need it.
 /// A read only API for the durable catalog state.
 #[async_trait]
 pub trait ReadOnlyDurableCatalogState: Debug + Send {
@@ -193,7 +163,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// for their epoch.
     ///
     /// NB: We may remove this in later iterations of Pv2.
-    fn epoch(&mut self) -> Epoch;
+    fn epoch(&self) -> Epoch;
 
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
@@ -225,17 +195,8 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         &mut self,
     ) -> Result<Option<PersistTxnTablesImpl>, CatalogError>;
 
-    /// Get the tombstone value of this instance.
-    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError>;
-
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
-
-    /// Get a full snapshot of all data in the catalog. This includes all audit logs and storage
-    /// usages that isn't included in [`Self::snapshot`].
-    async fn whole_migration_snapshot(
-        &mut self,
-    ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError>;
 }
 
 /// A read-write API for the durable catalog state.
@@ -246,13 +207,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
-
-    /// Creates a new durable catalog state transaction. Also returns all the audit logs and storage
-    /// usages that exist at the start of the transaction, which isn't included in
-    /// [`Self::transaction`].
-    async fn whole_migration_transaction(
-        &mut self,
-    ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError>;
 
     /// Commits a durable catalog state transaction.
     async fn commit_transaction(&mut self, txn_batch: TransactionBatch)
@@ -313,19 +267,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     }
 }
 
-/// Creates a openable durable catalog state implemented using the stash.
-pub fn stash_backed_catalog_state(config: StashConfig) -> OpenableConnection {
-    OpenableConnection::new(config)
-}
-
-/// Creates an openable durable catalog state implemented using the stash that is meant to be
-/// used in tests.
-pub fn test_stash_backed_catalog_state(
-    debug_stash_factory: &DebugStashFactory,
-) -> TestOpenableConnection {
-    TestOpenableConnection::new(debug_stash_factory)
-}
-
 /// Creates an openable durable catalog state implemented using persist.
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
@@ -362,90 +303,9 @@ pub async fn test_persist_backed_catalog_state_with_version(
     persist_backed_catalog_state(persist_client, organization_id, version, metrics).await
 }
 
-/// Creates an openable durable catalog state that migrates the current state from the stash to
-/// persist.
-pub async fn migrate_from_stash_to_persist_state(
-    stash_config: StashConfig,
-    persist_client: PersistClient,
-    organization_id: Uuid,
-    version: semver::Version,
-    persist_metrics: Arc<Metrics>,
-) -> Result<CatalogMigrator, CatalogError> {
-    let openable_stash = stash_backed_catalog_state(stash_config);
-    let openable_persist =
-        persist_backed_catalog_state(persist_client, organization_id, version, persist_metrics)
-            .await?;
-    Ok(CatalogMigrator::new(
-        openable_stash,
-        openable_persist,
-        Direction::MigrateToPersist,
-    ))
-}
-
-/// Creates an openable durable catalog state that migrates the current state from the stash to
-/// persist that is meant to be used in tests.
-pub async fn test_migrate_from_stash_to_persist_state(
-    stash_config: StashConfig,
-    persist_client: PersistClient,
-    organization_id: Uuid,
-) -> CatalogMigrator {
-    let openable_stash = stash_backed_catalog_state(stash_config);
-    let openable_persist = test_persist_backed_catalog_state(persist_client, organization_id).await;
-    CatalogMigrator::new(
-        openable_stash,
-        openable_persist,
-        Direction::MigrateToPersist,
-    )
-}
-
-/// Creates an openable durable catalog state that rolls back the current state from persist to
-/// the stash.
-pub async fn rollback_from_persist_to_stash_state(
-    stash_config: StashConfig,
-    persist_client: PersistClient,
-    organization_id: Uuid,
-    version: semver::Version,
-    persist_metrics: Arc<Metrics>,
-) -> Result<CatalogMigrator, CatalogError> {
-    let openable_stash = stash_backed_catalog_state(stash_config);
-    let openable_persist =
-        persist_backed_catalog_state(persist_client, organization_id, version, persist_metrics)
-            .await?;
-    Ok(CatalogMigrator::new(
-        openable_stash,
-        openable_persist,
-        Direction::RollbackToStash,
-    ))
-}
-
-/// Creates an openable durable catalog state that rolls back the current state from persist to
-/// the stash that is meant to be used in tests.
-pub async fn test_rollback_from_persist_to_stash_state(
-    stash_config: StashConfig,
-    persist_client: PersistClient,
-    organization_id: Uuid,
-) -> CatalogMigrator {
-    let openable_stash = stash_backed_catalog_state(stash_config);
-    let openable_persist = test_persist_backed_catalog_state(persist_client, organization_id).await;
-    CatalogMigrator::new(openable_stash, openable_persist, Direction::RollbackToStash)
-}
-
 pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
         bootstrap_role: None,
     }
-}
-
-pub async fn test_stash_config() -> (DebugStashFactory, StashConfig) {
-    // Creating a debug stash factory does a lot of nice stuff like creating a random schema for us.
-    // Dropping the factory will drop the schema.
-    let debug_stash_factory = DebugStashFactory::new().await;
-    let config = StashConfig {
-        stash_factory: debug_stash_factory.stash_factory().clone(),
-        stash_url: debug_stash_factory.url().to_string(),
-        schema: Some(debug_stash_factory.schema().to_string()),
-        tls: debug_stash_factory.tls().clone(),
-    };
-    (debug_stash_factory, config)
 }

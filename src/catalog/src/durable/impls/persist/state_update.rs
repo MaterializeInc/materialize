@@ -92,8 +92,6 @@ impl StateUpdate {
             system_privileges,
             audit_log_updates,
             storage_usage_updates,
-            // Persist implementation does not use the connection timeout.
-            connection_timeout: _,
         } = txn_batch;
         let databases = from_batch(databases, ts, StateUpdateKind::Database);
         let schemas = from_batch(schemas, ts, StateUpdateKind::Schema);

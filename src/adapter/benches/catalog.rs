@@ -13,40 +13,19 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use mz_adapter::catalog::{Catalog, Op};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::spawn;
+use mz_persist_client::PersistClient;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use tokio::runtime::Runtime;
+use uuid::Uuid;
 
 fn bench_transact(c: &mut Criterion) {
     c.bench_function("transact", |b| {
         let runtime = Runtime::new().unwrap();
 
-        let postgres_url = std::env::var("CATALOG_POSTGRES_BENCH").unwrap();
-        let tls = mz_tls_util::make_tls(
-            &tokio_postgres::config::Config::from_str(&postgres_url)
-                .expect("invalid postgres url for storage stash"),
-        )
-        .unwrap();
         let mut catalog = runtime.block_on(async {
-            let schema = "catalog_bench";
-
-            let (client, connection) = tokio_postgres::connect(&postgres_url, tls.clone())
-                .await
-                .unwrap();
-            spawn(|| "postgres connection".to_string(), async move {
-                connection.await.unwrap();
-            });
-            client
-                .batch_execute(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-                .await
-                .unwrap();
-            client
-                .batch_execute(&format!("CREATE SCHEMA {schema}"))
-                .await
-                .unwrap();
-
-            Catalog::open_debug_stash_catalog_url(
-                postgres_url,
-                schema.into(),
+            Catalog::open_debug_catalog(
+                PersistClient::new_for_tests().await,
+                Uuid::new_v4(),
                 SYSTEM_TIME.clone(),
                 None,
             )

@@ -13,10 +13,9 @@ use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
-    stash_backed_catalog_state, test_bootstrap_args, test_persist_backed_catalog_state,
-    test_persist_backed_catalog_state_with_version, test_stash_backed_catalog_state,
-    test_stash_config, CatalogError, Database, DurableCatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, Schema, CATALOG_VERSION,
+    test_bootstrap_args, test_persist_backed_catalog_state,
+    test_persist_backed_catalog_state_with_version, CatalogError, Database, DurableCatalogError,
+    Epoch, OpenableDurableCatalogState, Schema, CATALOG_VERSION,
 };
 use mz_ore::cast::usize_to_u64;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
@@ -25,7 +24,6 @@ use mz_persist_client::{PersistClient, PersistLocation};
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
-use mz_stash::DebugStashFactory;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
@@ -92,27 +90,6 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_is_initialized() {
-    let (debug_factory, stash_config) = test_stash_config().await;
-    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 = std::future::ready(stash_backed_catalog_state(stash_config)).boxed();
-    test_is_initialized(openable_state1, openable_state2).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_debug_stash_is_initialized() {
-    let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 =
-        std::future::ready(test_stash_backed_catalog_state(&debug_factory)).boxed();
-    test_is_initialized(debug_openable_state1, debug_openable_state2).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_is_initialized() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
@@ -148,27 +125,6 @@ async fn test_is_initialized(
         openable_state2.is_initialized().await.unwrap(),
         "catalog has been opened"
     );
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_get_deployment_generation() {
-    let (debug_factory, stash_config) = test_stash_config().await;
-    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 = std::future::ready(stash_backed_catalog_state(stash_config)).boxed();
-    test_get_deployment_generation(openable_state1, openable_state2).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_debug_stash_get_deployment_generation() {
-    let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 =
-        std::future::ready(test_stash_backed_catalog_state(&debug_factory)).boxed();
-    test_get_deployment_generation(debug_openable_state1, debug_openable_state2).await;
-    debug_factory.drop().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -215,42 +171,6 @@ async fn test_get_deployment_generation(
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_open_savepoint() {
-    let (debug_factory, stash_config) = test_stash_config().await;
-    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state3 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state4 = stash_backed_catalog_state(stash_config);
-    test_open_savepoint(
-        openable_state1,
-        openable_state2,
-        openable_state3,
-        openable_state4,
-    )
-    .await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_debug_stash_open_savepoint() {
-    let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state4 = test_stash_backed_catalog_state(&debug_factory);
-    test_open_savepoint(
-        debug_openable_state1,
-        debug_openable_state2,
-        debug_openable_state3,
-        debug_openable_state4,
-    )
-    .await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open_savepoint() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
@@ -291,7 +211,7 @@ async fn test_open_savepoint(
 
     // Initialize the catalog.
     {
-        let mut state = Box::new(openable_state2)
+        let state = Box::new(openable_state2)
             .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
@@ -398,33 +318,6 @@ async fn test_open_savepoint(
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_open_read_only() {
-    let (debug_factory, stash_config) = test_stash_config().await;
-    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state3 = stash_backed_catalog_state(stash_config);
-    test_open_read_only(openable_state1, openable_state2, openable_state3).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_debug_stash_open_read_only() {
-    let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
-    test_open_read_only(
-        debug_openable_state1,
-        debug_openable_state2,
-        debug_openable_state3,
-    )
-    .await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open_read_only() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
@@ -476,13 +369,7 @@ async fn test_open_read_only(
     let err = read_only_state.allocate_user_id().await.unwrap_err();
     match err {
         CatalogError::Catalog(_) => panic!("unexpected catalog error"),
-        CatalogError::Durable(e) => assert!(
-            e.can_recover_with_write_mode()
-                // Stash returns an opaque Postgres error here and doesn't realize that that the
-                // above should be true.
-                || e.to_string()
-                    .contains("cannot execute UPDATE in a read-only transaction")
-        ),
+        CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
     }
 
     // Read-only catalog should survive writes from a write-able catalog.
@@ -505,33 +392,6 @@ async fn test_open_read_only(
 
     Box::new(read_only_state).expire().await;
     Box::new(state).expire().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_open() {
-    let (debug_factory, stash_config) = test_stash_config().await;
-    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state3 = stash_backed_catalog_state(stash_config);
-    test_open(openable_state1, openable_state2, openable_state3).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_debug_stash_open() {
-    let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
-    test_open(
-        debug_openable_state1,
-        debug_openable_state2,
-        debug_openable_state3,
-    )
-    .await;
-    debug_factory.drop().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -603,35 +463,6 @@ async fn test_open(
         assert_eq!(state.get_audit_logs().await.unwrap(), audit_log);
         Box::new(state).expire().await;
     }
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_unopened_fencing() {
-    let (debug_factory, stash_config) = test_stash_config().await;
-    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 =
-        std::future::ready(stash_backed_catalog_state(stash_config.clone())).boxed();
-    let openable_state3 = stash_backed_catalog_state(stash_config);
-    test_unopened_fencing(openable_state1, openable_state2, openable_state3).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_debug_stash_unopened_fencing() {
-    let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 =
-        std::future::ready(test_stash_backed_catalog_state(&debug_factory)).boxed();
-    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
-    test_unopened_fencing(
-        debug_openable_state1,
-        debug_openable_state2,
-        debug_openable_state3,
-    )
-    .await;
-    debug_factory.drop().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -708,72 +539,6 @@ async fn test_unopened_fencing(
         matches!(err, CatalogError::Durable(DurableCatalogError::Fence(_))),
         "unexpected err: {err:?}"
     );
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_tombstone() {
-    let (debug_factory, stash_config) = test_stash_config().await;
-    let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 =
-        std::future::ready(stash_backed_catalog_state(stash_config.clone())).boxed();
-    test_tombstone(openable_state1, openable_state2).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_debug_stash_tombstone() {
-    let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 =
-        std::future::ready(test_stash_backed_catalog_state(&debug_factory)).boxed();
-    test_tombstone(debug_openable_state1, debug_openable_state2).await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[should_panic]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_tombstone() {
-    let persist_client = PersistClient::new_for_tests().await;
-    let organization_id = Uuid::new_v4();
-    let persist_openable_state1 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
-    let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed();
-    test_tombstone(persist_openable_state1, persist_openable_state2).await;
-}
-
-async fn test_tombstone(
-    mut openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
-) {
-    async fn set_tombstone(state: &mut Box<dyn DurableCatalogState>, value: bool) {
-        let mut txn = state.transaction().await.unwrap();
-        txn.set_tombstone(value).unwrap();
-        txn.commit().await.unwrap();
-    }
-
-    assert_eq!(openable_state1.get_tombstone().await.unwrap(), None);
-
-    let mut state = Box::new(openable_state1)
-        // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
-        .await
-        .unwrap();
-    assert_eq!(state.get_tombstone().await.unwrap(), None);
-
-    set_tombstone(&mut state, false).await;
-    assert_eq!(state.get_tombstone().await.unwrap(), Some(false));
-
-    let mut openable_state2 = openable_state2.await;
-    assert_eq!(openable_state2.get_tombstone().await.unwrap(), Some(false));
-
-    set_tombstone(&mut state, true).await;
-    assert_eq!(state.get_tombstone().await.unwrap(), Some(true));
-
-    assert_eq!(openable_state2.get_tombstone().await.unwrap(), Some(true));
 }
 
 #[mz_ore::test(tokio::test)]

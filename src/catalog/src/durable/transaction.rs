@@ -7,13 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
+
 use derivative::Derivative;
 use itertools::Itertools;
+
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
@@ -23,18 +27,12 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::CatalogKind;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
-use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{
-    CATALOG_KIND_KEY, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY,
-};
+use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -81,7 +79,6 @@ pub struct Transaction<'a> {
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
     storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
-    connection_timeout: Option<Duration>,
 }
 
 impl<'a> Transaction<'a> {
@@ -139,7 +136,6 @@ impl<'a> Transaction<'a> {
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
-            connection_timeout: None,
         })
     }
 
@@ -1090,26 +1086,9 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Updates the catalog `catalog_kind` "config" value to
-    /// match the `catalog_kind` "system var" value.
-    ///
-    /// These are mirrored so that we can toggle the flag with Launch Darkly,
-    /// but use it in boot before Launch Darkly is available.
-    pub fn set_catalog_kind(&mut self, value: Option<CatalogKind>) -> Result<(), CatalogError> {
-        let value = value.map(u64::from);
-        self.set_config(CATALOG_KIND_KEY.into(), value)?;
-        Ok(())
-    }
-
     /// Updates the catalog `system_config_synced` "config" value to true.
     pub fn set_system_config_synced_once(&mut self) -> Result<(), CatalogError> {
         self.set_config(SYSTEM_CONFIG_SYNCED_KEY.into(), Some(1))
-    }
-
-    /// Updates the catalog `tombstone` "config" value.
-    pub fn set_tombstone(&mut self, value: bool) -> Result<(), CatalogError> {
-        self.set_config(TOMBSTONE_KEY.into(), Some(if value { 1 } else { 0 }))?;
-        Ok(())
     }
 
     pub fn update_comment(
@@ -1283,139 +1262,26 @@ impl<'a> Transaction<'a> {
             .map(|value| value.value.clone())
     }
 
-    pub fn set_connection_timeout(&mut self, timeout: Duration) {
-        self.connection_timeout = Some(timeout);
-    }
-
-    /// Delete all values in the catalog.
-    fn clear(
-        &mut self,
-        audit_logs: Vec<VersionedEvent>,
-        storage_usages: Vec<VersionedStorageUsage>,
-    ) {
-        let Transaction {
-            durable_catalog: _,
-            databases,
-            schemas,
-            items,
-            comments,
-            roles,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            timestamps,
-            system_gid_mapping,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-            audit_log_updates,
-            storage_usage_updates,
-            connection_timeout: _,
-        } = self;
-        databases.clear();
-        schemas.clear();
-        items.clear();
-        comments.clear();
-        roles.clear();
-        clusters.clear();
-        cluster_replicas.clear();
-        introspection_sources.clear();
-        id_allocator.clear();
-        configs.clear();
-        settings.clear();
-        timestamps.clear();
-        system_gid_mapping.clear();
-        system_configurations.clear();
-        default_privileges.clear();
-        system_privileges.clear();
-
-        let audit_log_retractions = audit_logs.into_iter().map(|event| {
-            let key = AuditLogKey { event }.into_proto();
-            (key, (), -1)
-        });
-        audit_log_updates.extend(audit_log_retractions);
-
-        let storage_usage_retractions = storage_usages.into_iter().map(|metric| {
-            let key = StorageUsageKey { metric }.into_proto();
-            (key, (), -1)
-        });
-        storage_usage_updates.extend(storage_usage_retractions);
-    }
-
-    /// Clears out the entire contents of the catalog and replaces it with the provided snapshot,
-    /// `new_audit_logs` and `new_storage_usages`. Existing audit logs and storage usages are
-    /// assumed to be equal to `old_audit_logs` and `new_storage_usages`.
-    pub fn set_catalog(
-        &mut self,
-        Snapshot {
-            databases,
-            schemas,
-            roles,
-            items,
-            comments,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            timestamps,
-            system_object_mappings,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-        }: Snapshot,
-        old_audit_logs: Vec<VersionedEvent>,
-        old_storage_usages: Vec<VersionedStorageUsage>,
-        new_audit_logs: Vec<VersionedEvent>,
-        new_storage_usages: Vec<VersionedStorageUsage>,
-    ) -> Result<(), CatalogError> {
-        fn set_collection<K, V, PK, PV>(
-            table_txn: &mut TableTransaction<K, V>,
-            values: BTreeMap<PK, PV>,
-        ) -> Result<(), CatalogError>
-        where
-            K: Ord + Eq + Clone,
-            V: Ord + Clone,
-            PK: ProtoType<K>,
-            PV: ProtoType<V>,
-        {
-            let mut value_options = BTreeMap::new();
-            for (key, value) in values.into_iter() {
-                let key = key.into_rust()?;
-                let value = value.into_rust()?;
-                value_options.insert(key, Some(value));
-            }
-            table_txn.set_many(value_options)?;
-
-            Ok(())
-        }
-
-        self.clear(old_audit_logs, old_storage_usages);
-
-        set_collection(&mut self.databases, databases)?;
-        set_collection(&mut self.schemas, schemas)?;
-        set_collection(&mut self.roles, roles)?;
-        set_collection(&mut self.items, items)?;
-        set_collection(&mut self.comments, comments)?;
-        set_collection(&mut self.clusters, clusters)?;
-        set_collection(&mut self.cluster_replicas, cluster_replicas)?;
-        set_collection(&mut self.introspection_sources, introspection_sources)?;
-        set_collection(&mut self.id_allocator, id_allocator)?;
-        set_collection(&mut self.configs, configs)?;
-        set_collection(&mut self.settings, settings)?;
-        set_collection(&mut self.timestamps, timestamps)?;
-        set_collection(&mut self.system_gid_mapping, system_object_mappings)?;
-        set_collection(&mut self.system_configurations, system_configurations)?;
-        set_collection(&mut self.default_privileges, default_privileges)?;
-        set_collection(&mut self.system_privileges, system_privileges)?;
-
-        self.insert_audit_log_events(new_audit_logs);
-        self.insert_storage_usage_events(new_storage_usages);
-
+    // TODO(jkosh44) Can be removed after v0.92.X
+    pub fn clean_up_stash_catalog(&mut self) -> Result<(), CatalogError> {
+        self.configs.set(
+            ConfigKey {
+                key: "tombstone".to_string(),
+            },
+            None,
+        )?;
+        self.configs.set(
+            ConfigKey {
+                key: "catalog_kind".to_string(),
+            },
+            None,
+        )?;
+        self.system_configurations.set(
+            ServerConfigurationKey {
+                name: "catalog_kind".to_string(),
+            },
+            None,
+        )?;
         Ok(())
     }
 
@@ -1439,7 +1305,6 @@ impl<'a> Transaction<'a> {
             system_privileges: self.system_privileges.pending(),
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
-            connection_timeout: self.connection_timeout,
         };
         (txn_batch, self.durable_catalog)
     }
@@ -1470,7 +1335,6 @@ impl<'a> Transaction<'a> {
             system_privileges,
             audit_log_updates,
             storage_usage_updates,
-            connection_timeout: _,
         } = &mut txn_batch;
         // Consolidate in memory becuase it will likely be faster than consolidating after the
         // transaction has been made durable.
@@ -1533,7 +1397,6 @@ pub struct TransactionBatch {
     )>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
-    pub(crate) connection_timeout: Option<Duration>,
 }
 
 impl TransactionBatch {
@@ -1557,8 +1420,6 @@ impl TransactionBatch {
             system_privileges,
             audit_log_updates,
             storage_usage_updates,
-            // This doesn't get written down anywhere.
-            connection_timeout: _,
         } = self;
 
         databases.is_empty()
@@ -1884,14 +1745,6 @@ where
         });
         soft_assert_no_log!(self.verify().is_ok());
         deleted
-    }
-
-    /// Deletes all items.
-    fn clear(&mut self) {
-        self.for_values_mut(|p, k, _v| {
-            p.insert(k.clone(), None);
-        });
-        soft_assert_no_log!(self.verify().is_ok());
     }
 }
 

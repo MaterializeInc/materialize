@@ -110,10 +110,8 @@ IGNORE_RE = re.compile(
     | platform-checks-clusterd.* \| .* received\ persist\ state\ from\ the\ future
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
-    # For persist-catalog-migration ignore failpoint panics
-    | persist-catalog-migration-materialized.* \| .* failpoint\ .* panic
     # For tests we purposely trigger this error
-    | persist-catalog-migration-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ at\ a\ time
+    | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ at\ a\ time
     )
     """,
     re.VERBOSE | re.MULTILINE,

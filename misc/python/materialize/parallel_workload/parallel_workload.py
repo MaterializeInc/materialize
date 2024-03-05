@@ -66,7 +66,6 @@ def run(
     naughty_identifiers: bool,
     fast_startup: bool,
     composition: Composition | None,
-    catalog_store: str,
     sanity_restart: bool,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
@@ -219,7 +218,7 @@ def run(
         assert composition, "Kill scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [KillAction(worker_rng, composition, catalog_store, sanity_restart)],
+            [KillAction(worker_rng, composition, sanity_restart)],
             [1],
             end_time,
             autocommit=False,
@@ -248,7 +247,6 @@ def run(
                 KillAction(
                     worker_rng,
                     composition,
-                    catalog_store,
                     sanity_restart,
                     toggle_persist_txn,
                 )
@@ -481,7 +479,6 @@ def main() -> int:
         args.naughty_identifiers,
         args.fast_startup,
         composition=None,  # only works in mzcompose
-        catalog_store="",  # only works in mzcompose
         sanity_restart=False,  # only works in mzcompose
     )
     return 0

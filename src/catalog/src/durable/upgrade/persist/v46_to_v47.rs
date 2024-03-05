@@ -8,9 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use mz_stash::upgrade::WireCompatible;
+use mz_stash::wire_compatible;
 
 use crate::durable::upgrade::persist::MigrationAction;
 use crate::durable::upgrade::{objects_v46 as v46, objects_v47 as v47};
+
+wire_compatible!(v46::ClusterKey with v47::ClusterKey);
+wire_compatible!(v46::MzAclItem with v47::MzAclItem);
+wire_compatible!(v46::RoleId with v47::RoleId);
+wire_compatible!(v46::ReplicaLogging with v47::ReplicaLogging);
+wire_compatible!(v46::ReplicaMergeEffort with v47::ReplicaMergeEffort);
 
 /// Introduce empty `optimizer_feature_overrides` in `ManagedCluster`'s.
 pub fn upgrade(

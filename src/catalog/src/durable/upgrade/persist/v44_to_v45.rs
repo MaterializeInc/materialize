@@ -9,8 +9,15 @@
 
 use std::string::ToString;
 
+use mz_stash::wire_compatible;
+
 use crate::durable::upgrade::persist::MigrationAction;
 use crate::durable::upgrade::{objects_v44 as v44, objects_v45 as v45};
+
+wire_compatible!(v44::ServerConfigurationKey with v45::ServerConfigurationKey);
+wire_compatible!(v44::ServerConfigurationValue with v45::ServerConfigurationValue);
+wire_compatible!(v44::ConfigKey with v45::ConfigKey);
+wire_compatible!(v44::ConfigValue with v45::ConfigValue);
 
 const SYSTEM_CONFIG_KEY: &str = "config_has_synced_once";
 const CONFIG_KEY: &str = "system_config_synced";

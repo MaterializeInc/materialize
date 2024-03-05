@@ -40,7 +40,6 @@ class StartMz(MzcomposeAction):
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] = {},
         mz_service: str | None = None,
-        catalog_store: str | None = None,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
     ) -> None:
@@ -50,11 +49,6 @@ class StartMz(MzcomposeAction):
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
-        self.catalog_store = catalog_store or (
-            "persist"
-            if scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev")
-            else "stash"
-        )
         self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
@@ -74,7 +68,6 @@ class StartMz(MzcomposeAction):
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,
             sanity_restart=False,
-            catalog_store=self.catalog_store,
             platform=self.platform,
             healthcheck=self.healthcheck,
         )

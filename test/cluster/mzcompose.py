@@ -51,7 +51,6 @@ SERVICES = [
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
         external_cockroach=True,
-        catalog_store="persist",
     ),
     Redpanda(),
     Toxiproxy(),

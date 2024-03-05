@@ -15,7 +15,6 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -33,8 +32,7 @@ use mz_catalog::durable::debug::{
     SystemPrivilegeCollection, TimestampCollection, Trace,
 };
 use mz_catalog::durable::{
-    persist_backed_catalog_state, stash_backed_catalog_state, BootstrapArgs,
-    OpenableDurableCatalogState, StashConfig,
+    persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
 };
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -46,13 +44,13 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
+use mz_repr::Diff;
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{CatalogKind, ConnectionCounter};
-use mz_stash::StashFactory;
+use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
@@ -62,28 +60,16 @@ pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
 #[derive(Parser, Debug)]
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
-    #[clap(long, arg_enum)]
-    store: CatalogKind,
-
-    // === Stash options. ===
-    /// The PostgreSQL URL for the adapter stash.
-    #[clap(long, env = "ADAPTER_STASH_URL", required_if_eq("store", "stash"))]
-    postgres_url: Option<String>,
-
     // === Persist options. ===
     /// The organization ID of the environment.
-    #[clap(long, env = "ORG_ID", required_if_eq("store", "persist"))]
-    organization_id: Option<Uuid>,
+    #[clap(long, env = "ORG_ID")]
+    organization_id: Uuid,
     /// Where the persist library should store its blob data.
-    #[clap(long, env = "PERSIST_BLOB_URL", required_if_eq("store", "persist"))]
-    persist_blob_url: Option<Url>,
+    #[clap(long, env = "PERSIST_BLOB_URL")]
+    persist_blob_url: Url,
     /// Where the persist library should perform consensus.
-    #[clap(
-        long,
-        env = "PERSIST_CONSENSUS_URL",
-        required_if_eq("store", "persist")
-    )]
-    persist_consensus_url: Option<Url>,
+    #[clap(long, env = "PERSIST_CONSENSUS_URL")]
+    persist_consensus_url: Url,
 
     #[clap(subcommand)]
     action: Action,
@@ -172,56 +158,28 @@ async fn main() {
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     let start = Instant::now();
-    let openable_state: Box<dyn OpenableDurableCatalogState> = match args.store {
-        CatalogKind::Stash => {
-            let postgres_url = args.postgres_url.expect("required for stash");
-            let tls =
-                mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(&postgres_url)?)?;
-            let factory = StashFactory::new(&metrics_registry);
-            let stash_config = StashConfig {
-                stash_factory: factory,
-                stash_url: postgres_url,
-                schema: None,
-                tls,
-            };
-            Box::new(stash_backed_catalog_state(stash_config))
-        }
-        CatalogKind::Persist => {
-            // It's important that the version in this `BUILD_INFO` is kept in sync with the build
-            // info used to write data to the persist catalog.
-            let persist_config =
-                PersistConfig::new_default_configs(&BUILD_INFO, SYSTEM_TIME.clone());
-            let persist_clients =
-                PersistClientCache::new(persist_config, &metrics_registry, |_, _| {
-                    PubSubClientConnection::noop()
-                });
-            let persist_location = PersistLocation {
-                blob_uri: args
-                    .persist_blob_url
-                    .expect("required for persist")
-                    .to_string(),
-                consensus_uri: args
-                    .persist_consensus_url
-                    .expect("required for persist")
-                    .to_string(),
-            };
-            let persist_client = persist_clients.open(persist_location).await?;
-            let organization_id = args.organization_id.expect("required for persist");
-            let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
-            Box::new(
-                persist_backed_catalog_state(
-                    persist_client,
-                    organization_id,
-                    BUILD_INFO.semver_version(),
-                    metrics,
-                )
-                .await?,
-            )
-        }
-        CatalogKind::EmergencyStash => {
-            panic!("cannot use emergency stash variant with catalog-debug tool, use stash instead")
-        }
+    // It's important that the version in this `BUILD_INFO` is kept in sync with the build
+    // info used to write data to the persist catalog.
+    let persist_config = PersistConfig::new_default_configs(&BUILD_INFO, SYSTEM_TIME.clone());
+    let persist_clients = PersistClientCache::new(persist_config, &metrics_registry, |_, _| {
+        PubSubClientConnection::noop()
+    });
+    let persist_location = PersistLocation {
+        blob_uri: args.persist_blob_url.to_string(),
+        consensus_uri: args.persist_consensus_url.to_string(),
     };
+    let persist_client = persist_clients.open(persist_location).await?;
+    let organization_id = args.organization_id;
+    let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
+    let openable_state: Box<dyn OpenableDurableCatalogState> = Box::new(
+        persist_backed_catalog_state(
+            persist_client,
+            organization_id,
+            BUILD_INFO.semver_version(),
+            metrics,
+        )
+        .await?,
+    );
 
     match args.action {
         Action::Dump {
@@ -302,8 +260,8 @@ async fn edit(
         value: serde_json::Value,
     ) -> Result<serde_json::Value, anyhow::Error>
     where
-        T::Key: mz_stash::Data + Clone + 'static,
-        T::Value: mz_stash::Data + Clone + 'static,
+        T::Key: PartialEq + Eq + Debug + Clone + for<'a> Deserialize<'a>,
+        T::Value: Debug + Clone + Serialize + for<'a> Deserialize<'a>,
     {
         let key: T::Key = serde_json::from_value(key)?;
         let value: T::Value = serde_json::from_value(value)?;
@@ -328,8 +286,8 @@ async fn delete(
         key: serde_json::Value,
     ) -> Result<(), anyhow::Error>
     where
-        T::Key: mz_stash::Data + Clone + 'static,
-        T::Value: mz_stash::Data + Clone,
+        T::Key: PartialEq + Eq + Debug + Clone + for<'a> Deserialize<'a>,
+        T::Value: Debug,
     {
         let key: T::Key = serde_json::from_value(key)?;
         debug_state.delete::<T>(key.clone()).await?;
@@ -508,7 +466,7 @@ struct Dumped {
     key_json: UnescapedDebug,
     value_json: UnescapedDebug,
     timestamp: String,
-    diff: mz_stash::Diff,
+    diff: Diff,
 }
 
 impl std::fmt::Debug for Dumped {

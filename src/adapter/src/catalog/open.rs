@@ -343,10 +343,6 @@ impl Catalog {
                 config.remote_system_parameters.as_ref(),
             )?;
 
-            // Now that LD is loaded, set the intended catalog timeout.
-            // TODO: Move this into the catalog constructor.
-            txn.set_connection_timeout(state.system_config().crdb_connect_timeout());
-
             // Add any new builtin Clusters, Cluster Replicas, or Roles that may be newly defined.
             if !is_read_only {
                 add_new_builtin_clusters_migration(&mut txn)?;

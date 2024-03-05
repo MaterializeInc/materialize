@@ -42,9 +42,8 @@ SERVICES = [
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
-        catalog_store="persist",
     ),
-    # N.B.: we need to use `validate_catalog_store=None` because testdrive uses
+    # N.B.: we need to use `validate_catalog_store=False` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
     # is no guarantee that HEAD can load an old catalog without running
     # migrations.
@@ -57,7 +56,7 @@ SERVICES = [
     # testdrive commands.
     Testdrive(
         external_cockroach=True,
-        validate_catalog_store=None,
+        validate_catalog_store=False,
         volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
     ),
 ]
@@ -132,13 +131,6 @@ def test_upgrade_from_version(
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "postgres")
 
-    catalog_store = (
-        "persist"
-        if from_version == "current_source"
-        or MzVersion.parse_mz(from_version) >= MzVersion.parse_mz("v0.82.0-dev")
-        else "stash"
-    )
-
     if from_version != "current_source":
         mz_from = Materialized(
             image=f"materialize/materialized:{from_version}",
@@ -149,7 +141,6 @@ def test_upgrade_from_version(
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
-            catalog_store=catalog_store,
         )
         with c.override(mz_from):
             c.up("materialized")
@@ -197,7 +188,6 @@ def test_upgrade_from_version(
                     ],
                     volumes_extra=["secrets:/share/secrets"],
                     external_cockroach=True,
-                    catalog_store=catalog_store,
                 )
             ):
                 c.up("materialized")
@@ -209,7 +199,6 @@ def test_upgrade_from_version(
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
-        catalog_store=catalog_store,
     )
     with c.override(mz_to):
         c.up("materialized")
@@ -219,20 +208,19 @@ def test_upgrade_from_version(
         c.rm("materialized")
         c.up("materialized")
 
-        with c.override(
-            Testdrive(
-                postgres_stash="cockroach",
-                external_cockroach=True,
-                validate_catalog_store=catalog_store,
-                volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
-            )
-        ):
-            c.run_testdrive_files(
-                "--no-reset",
-                f"--var=upgrade-from-version={from_version}",
-                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-                f"--var=created-cluster={created_cluster}",
-                temp_dir,
-                seed,
-                f"check-from-{version_glob}-{filter}.td",
-            )
+    with c.override(
+        Testdrive(
+            external_cockroach=True,
+            validate_catalog_store=True,
+            volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
+        )
+    ):
+        c.run_testdrive_files(
+            "--no-reset",
+            f"--var=upgrade-from-version={from_version}",
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            f"--var=created-cluster={created_cluster}",
+            temp_dir,
+            seed,
+            f"check-from-{version_glob}-{filter}.td",
+        )

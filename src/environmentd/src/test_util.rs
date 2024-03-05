@@ -298,7 +298,7 @@ impl Listeners {
             Some(data_directory) => (data_directory, None),
         };
         let scratch_dir = tempfile::tempdir()?;
-        let (consensus_uri, adapter_stash_url, storage_stash_url, timestamp_oracle_url) = {
+        let (consensus_uri, storage_stash_url, timestamp_oracle_url) = {
             let seed = config.seed;
             let cockroach_url = env::var("COCKROACH_URL")
                 .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
@@ -311,14 +311,12 @@ impl Listeners {
             client
                 .batch_execute(&format!(
                     "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
-                    CREATE SCHEMA IF NOT EXISTS adapter_{seed};
                     CREATE SCHEMA IF NOT EXISTS storage_{seed};
                     CREATE SCHEMA IF NOT EXISTS tsoracle_{seed};"
                 ))
                 .await?;
             (
                 format!("{cockroach_url}?options=--search_path=consensus_{seed}"),
-                format!("{cockroach_url}?options=--search_path=adapter_{seed}"),
                 format!("{cockroach_url}?options=--search_path=storage_{seed}"),
                 format!("{cockroach_url}?options=--search_path=tsoracle_{seed}"),
             )
@@ -411,8 +409,7 @@ impl Listeners {
             (TracingHandle::disabled(), None)
         };
         let host_name = format!("localhost:{}", self.inner.http_local_addr().port());
-        let catalog_config = CatalogConfig::Persist {
-            url: adapter_stash_url,
+        let catalog_config = CatalogConfig {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
         };

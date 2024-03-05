@@ -10,6 +10,9 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
+use semver::Version;
+use tracing::info;
+
 use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -17,8 +20,6 @@ use mz_repr::GlobalId;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::ConnectionContext;
-use semver::Version;
-use tracing::info;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{Catalog, CatalogState, ConnCatalog};
@@ -95,7 +96,7 @@ pub(crate) async fn migrate(
     //
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
-
+    catalog_clean_up_stash_state_v_0_92_0(tx)?;
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
@@ -112,6 +113,12 @@ pub(crate) async fn migrate(
 //
 // Please include the adapter team on any code reviews that add or edit
 // migrations.
+
+// Removes any stash specific state from the catalog.
+fn catalog_clean_up_stash_state_v_0_92_0(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+    tx.clean_up_stash_catalog()?;
+    Ok(())
+}
 
 fn _add_to_audit_log(
     tx: &mut Transaction,

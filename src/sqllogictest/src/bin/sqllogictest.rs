@@ -46,8 +46,7 @@ struct Args {
     /// Generate a JUnit-compatible XML report to the specified file.
     #[clap(long, value_name = "FILE")]
     junit_report: Option<PathBuf>,
-    /// PostgreSQL connection URL to use for `persist` consensus and the catalog
-    /// stash.
+    /// PostgreSQL connection URL to use for `persist` consensus.
     #[clap(long)]
     postgres_url: String,
     /// Path to sqllogictest script to run.

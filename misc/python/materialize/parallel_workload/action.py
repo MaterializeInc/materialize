@@ -1184,14 +1184,12 @@ class KillAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
-        catalog_store: str,
         sanity_restart: bool,
         system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
     ):
         super().__init__(rng, composition)
         self.system_param_fn = system_param_fn
         self.system_parameters = {}
-        self.catalog_store = catalog_store
         self.sanity_restart = sanity_restart
 
     def run(self, exe: Executor) -> bool:
@@ -1206,7 +1204,6 @@ class KillAction(Action):
                 external_minio="toxiproxy",
                 external_cockroach="toxiproxy",
                 ports=["6975:6875", "6976:6876", "6977:6877"],
-                catalog_store=self.catalog_store,
                 sanity_restart=self.sanity_restart,
                 additional_system_parameter_defaults=self.system_parameters,
             )

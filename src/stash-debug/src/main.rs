@@ -13,35 +13,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::pin;
 use std::process;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use anyhow::Context;
 use clap::Parser;
-use futures::StreamExt;
 use once_cell::sync::Lazy;
 use tracing_subscriber::filter::EnvFilter;
 
-use mz_adapter::catalog::Catalog;
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
-use mz_catalog::durable::{
-    self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig,
-};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
-use mz_ore::retry::Retry;
-use mz_secrets::InMemorySecretsController;
-use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_controller as storage;
-use mz_storage_types::connections::ConnectionContext;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
@@ -86,15 +70,6 @@ enum Action {
         collection: String,
         /// The JSON-encoded key that identifies the item to delete.
         key: serde_json::Value,
-    },
-    /// Checks if the specified stash could be upgraded from its state to the
-    /// adapter catalog at the version of this binary. Prints a success message
-    /// or error message. Exits with 0 if the upgrade would succeed, otherwise
-    /// non-zero. Can be used on a running environmentd. Operates without
-    /// interfering with it or committing any data to that stash.
-    UpgradeCheck {
-        /// Map of cluster name to resource specification. Check the README for latest values.
-        cluster_replica_sizes: Option<String>,
     },
 }
 
@@ -149,25 +124,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             let stash = factory.open(args.postgres_url, schema, tls, None).await?;
             delete(stash, usage, collection, key).await
         }
-        Action::UpgradeCheck {
-            cluster_replica_sizes,
-        } => {
-            let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
-                None => Default::default(),
-                Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
-            };
-            upgrade_check(
-                StashConfig {
-                    stash_factory: factory,
-                    stash_url: args.postgres_url,
-                    schema,
-                    tls,
-                },
-                usage,
-                cluster_replica_sizes,
-            )
-            .await
-        }
     }
 }
 
@@ -198,41 +154,10 @@ async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<
     writeln!(&mut target, "{data:#?}")?;
     Ok(())
 }
-async fn upgrade_check(
-    stash_config: StashConfig,
-    usage: Usage,
-    cluster_replica_sizes: ClusterReplicaSizeMap,
-) -> Result<(), anyhow::Error> {
-    let msg = usage
-        .upgrade_check(stash_config, cluster_replica_sizes)
-        .await?;
-    println!("{msg}");
-    Ok(())
-}
 
 macro_rules! for_collections {
     ($usage:expr, $macro:ident) => {
         match $usage {
-            Usage::Catalog => {
-                $macro!(catalog::AUDIT_LOG_COLLECTION);
-                $macro!(catalog::CLUSTER_COLLECTION);
-                $macro!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
-                $macro!(catalog::CLUSTER_REPLICA_COLLECTION);
-                $macro!(catalog::COMMENTS_COLLECTION);
-                $macro!(catalog::CONFIG_COLLECTION);
-                $macro!(catalog::DATABASES_COLLECTION);
-                $macro!(catalog::DEFAULT_PRIVILEGES_COLLECTION);
-                $macro!(catalog::ID_ALLOCATOR_COLLECTION);
-                $macro!(catalog::ITEM_COLLECTION);
-                $macro!(catalog::ROLES_COLLECTION);
-                $macro!(catalog::SCHEMAS_COLLECTION);
-                $macro!(catalog::SETTING_COLLECTION);
-                $macro!(catalog::STORAGE_USAGE_COLLECTION);
-                $macro!(catalog::SYSTEM_CONFIGURATION_COLLECTION);
-                $macro!(catalog::SYSTEM_GID_MAPPING_COLLECTION);
-                $macro!(catalog::SYSTEM_PRIVILEGES_COLLECTION);
-                $macro!(catalog::TIMESTAMP_COLLECTION);
-            }
             Usage::Storage => {
                 $macro!(storage::METADATA_COLLECTION);
             }
@@ -274,13 +199,12 @@ impl std::fmt::Debug for UnescapedDebug {
 
 #[derive(Debug)]
 enum Usage {
-    Catalog,
     Storage,
 }
 
 impl Usage {
     fn all_usages() -> Vec<Usage> {
-        vec![Self::Catalog, Self::Storage]
+        vec![Self::Storage]
     }
 
     /// Returns an error if there is any overlap of collection names from all
@@ -321,7 +245,6 @@ impl Usage {
     fn names(&self) -> BTreeSet<String> {
         BTreeSet::from_iter(
             match self {
-                Self::Catalog => mz_catalog::durable::ALL_COLLECTIONS,
                 Self::Storage => storage::ALL_COLLECTIONS,
             }
             .iter()
@@ -418,83 +341,6 @@ impl Usage {
         }
         for_collections!(self, delete_col);
         anyhow::bail!("unknown collection {} for stash {:?}", collection, self)
-    }
-
-    async fn upgrade_check(
-        &self,
-        stash_config: StashConfig,
-        cluster_replica_sizes: ClusterReplicaSizeMap,
-    ) -> Result<String, anyhow::Error> {
-        if !matches!(self, Self::Catalog) {
-            anyhow::bail!("upgrade_check expected Catalog stash, found {:?}", self);
-        }
-
-        let retry = Retry::default()
-            .clamp_backoff(Duration::from_secs(1))
-            .max_duration(Duration::from_secs(30))
-            .into_retry_stream();
-        let mut retry = pin::pin!(retry);
-
-        loop {
-            let now = SYSTEM_TIME.clone();
-            let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
-                stash_config.clone(),
-            ));
-            let mut storage = openable_storage
-                .open_savepoint(
-                    now(),
-                    &BootstrapArgs {
-                        default_cluster_replica_size: "1".into(),
-                        bootstrap_role: None,
-                    },
-                    None,
-                    None,
-                )
-                .await?;
-
-            match Catalog::initialize_state(
-                StateConfig {
-                    unsafe_mode: true,
-                    all_features: false,
-                    build_info: &BUILD_INFO,
-                    environment_id: EnvironmentId::for_tests(),
-                    now,
-                    skip_migrations: false,
-                    cluster_replica_sizes: cluster_replica_sizes.clone(),
-                    builtin_cluster_replica_size: "1".into(),
-                    system_parameter_defaults: Default::default(),
-                    remote_system_parameters: None,
-                    availability_zones: vec![],
-                    egress_ips: vec![],
-                    aws_principal_context: None,
-                    aws_privatelink_availability_zones: None,
-                    http_host_name: None,
-                    connection_context: ConnectionContext::for_tests(Arc::new(
-                        InMemorySecretsController::new(),
-                    )),
-                    active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
-                },
-                &mut storage,
-            )
-            .await
-            {
-                Ok((_, _, last_catalog_version)) => {
-                    storage.expire().await;
-                    return Ok(format!(
-                        "catalog upgrade from {} to {} would succeed",
-                        last_catalog_version,
-                        BUILD_INFO.human_version(),
-                    ));
-                }
-                Err(e) => {
-                    if retry.next().await.is_none() {
-                        tracing::error!(?e, "Could not open catalog, and out of retries.");
-                        return Err(e.into());
-                    }
-                    tracing::warn!(?e, "Could not open catalog. Retrying...");
-                }
-            }
-        }
     }
 }
 
