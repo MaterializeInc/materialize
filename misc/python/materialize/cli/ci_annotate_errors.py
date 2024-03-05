@@ -523,7 +523,9 @@ def get_failures_on_main() -> str | None:
         )
 
     last_build_step_outcomes = extract_build_step_data(
-        builds_data, selected_build_steps=[BuildStep(step_key, parallel_job)]
+        builds_data,
+        selected_build_steps=[BuildStep(step_key, parallel_job)],
+        merge_sharded_executions=False,
     )
 
     if not last_build_step_outcomes:

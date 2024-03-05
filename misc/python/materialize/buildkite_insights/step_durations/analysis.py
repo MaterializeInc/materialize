@@ -181,7 +181,9 @@ def main(
 ) -> None:
     builds_data = get_data(pipeline_slug, fetch_mode, max_fetches, branch, build_state)
     step_infos = extract_build_step_data(
-        builds_data=builds_data, selected_build_steps=build_steps
+        builds_data=builds_data,
+        selected_build_steps=build_steps,
+        merge_sharded_executions=True,
     )
     print_data(step_infos, pipeline_slug, build_steps, output_type)
 

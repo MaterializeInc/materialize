@@ -16,7 +16,7 @@ from typing import Any
 
 @dataclass
 class BuildStepOutcome:
-    id: str
+    ids: list[str]
     step_key: str
     parallel_job: int | None
     build_number: int
@@ -26,6 +26,8 @@ class BuildStepOutcome:
     exit_status: int | None
     retry_count: int
     web_url: str
+    # number of merged shards, 1 otherwise
+    count_items: int
 
 
 @dataclass
@@ -37,10 +39,15 @@ class BuildStep:
 def extract_build_step_data(
     builds_data: list[Any],
     selected_build_steps: list[BuildStep],
+    merge_sharded_executions: bool,
 ) -> list[BuildStepOutcome]:
     result = []
     for build in builds_data:
         step_infos = _extract_build_step_data_from_build(build, selected_build_steps)
+
+        if merge_sharded_executions:
+            step_infos = _merge_sharded_steps(step_infos)
+
         result.extend(step_infos)
 
     return result
@@ -86,7 +93,7 @@ def _extract_build_step_data_from_build(
         ), "Duration must be available for passed step"
 
         step_data = BuildStepOutcome(
-            id,
+            [id],
             build_step_key,
             None,  # TODO: The parallel_job number
             build_number,
@@ -96,7 +103,68 @@ def _extract_build_step_data_from_build(
             exit_status=exit_status,
             retry_count=retry_count,
             web_url=f"{build_data['web_url']}#{job['id']}",
+            count_items=1,
         )
         collected_steps.append(step_data)
 
     return collected_steps
+
+
+def _merge_sharded_steps(step_infos: list[BuildStepOutcome]) -> list[BuildStepOutcome]:
+    step_info_by_key: dict[str, list[BuildStepOutcome]] = dict()
+
+    for step_info in step_infos:
+        executions = step_info_by_key.get(step_info.step_key) or []
+        executions.append(step_info)
+        step_info_by_key[step_info.step_key] = executions
+
+    result = []
+
+    for step_key, executions in step_info_by_key.items():
+        if len(executions) == 1:
+            result.append(executions[0])
+        else:
+            result.append(_merge_executions(executions))
+
+    return result
+
+
+def _merge_executions(
+    executions_of_same_step: list[BuildStepOutcome],
+) -> BuildStepOutcome:
+    any_execution = executions_of_same_step[0]
+
+    ids = [s.ids[0] for s in executions_of_same_step]
+    min_created_at = min([s.created_at for s in executions_of_same_step])
+    durations = [
+        s.duration_in_min
+        for s in executions_of_same_step
+        if s.duration_in_min is not None
+    ]
+    sum_duration_in_min = sum(durations) if len(durations) > 0 else None
+    all_passed = len([False for s in executions_of_same_step if not s.passed]) == 0
+    exit_status_values = [
+        s.exit_status for s in executions_of_same_step if s.exit_status is not None
+    ]
+    max_exit_status = max(exit_status_values) if len(exit_status_values) > 0 else None
+    max_retry_count = max([s.retry_count for s in executions_of_same_step])
+    count_shards = len(executions_of_same_step)
+    web_url_without_job_id = any_execution.web_url
+    if "#" in web_url_without_job_id:
+        web_url_without_job_id = web_url_without_job_id[
+            : web_url_without_job_id.index("#")
+        ]
+
+    return BuildStepOutcome(
+        ids=ids,
+        step_key=any_execution.step_key,
+        parallel_job=None,
+        build_number=any_execution.build_number,
+        created_at=min_created_at,
+        duration_in_min=sum_duration_in_min,
+        passed=all_passed,
+        exit_status=max_exit_status,
+        retry_count=max_retry_count,
+        web_url=web_url_without_job_id,
+        count_items=count_shards,
+    )
