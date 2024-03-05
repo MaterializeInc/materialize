@@ -322,6 +322,17 @@ impl Coordinator {
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
+        // Add metadata for the new SUBSCRIBE.
+        let write_notify_fut = self
+            .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+            .await;
+        // Ship dataflow.
+        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
+
+        // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
+        // requests to external services, which can take time, so we run them concurrently.
+        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
+
         // Release the pre-optimization read holds because the controller is now handling those.
         let mut txn_reads = self
             .txn_read_holds
@@ -333,17 +344,6 @@ impl Coordinator {
             self.txn_read_holds
                 .insert(ctx.session().conn_id().clone(), txn_reads);
         }
-
-        // Add metadata for the new SUBSCRIBE.
-        let write_notify_fut = self
-            .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
-            .await;
-        // Ship dataflow.
-        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
-
-        // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
-        // requests to external services, which can take time, so we run them concurrently.
-        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
 
         if let Some(target) = validity.replica_id {
             self.controller
