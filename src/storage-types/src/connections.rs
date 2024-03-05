@@ -1425,7 +1425,7 @@ impl MySqlConnection<InlinedConnection> {
         opts = storage_configuration
             .parameters
             .mysql_source_timeouts
-            .apply(opts)?;
+            .apply_to_opts(opts)?;
 
         Ok(mz_mysql_util::Config::new(
             opts.into(),

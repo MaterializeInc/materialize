@@ -229,15 +229,19 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
-                lock_conn.query_drop(format!(
-                    "SET @@session.lock_wait_timeout = {}",
-                    config
-                        .config
-                        .parameters
-                        .mysql_source_snapshot_lock_wait_timeout
-                        .as_secs()
-                ))
-                .await?;
+                if let Some(timeout) = config
+                    .config
+                    .parameters
+                    .mysql_source_timeouts
+                    .snapshot_lock_wait_timeout
+                {
+                    lock_conn
+                        .query_drop(format!(
+                            "SET @@session.lock_wait_timeout = {}",
+                            timeout.as_secs()
+                        ))
+                        .await?;
+                }
 
                 trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
                 match lock_conn
@@ -336,15 +340,18 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // Configure query execution time based on param. We want to be able to
                 // override the server value here in case it's set too low,
                 // respective to the size of the data we need to copy.
-                tx.query_drop(format!(
-                    "SET @@session.max_execution_time = {}",
-                    config
-                        .config
-                        .parameters
-                        .mysql_source_snapshot_max_execution_time
-                        .as_millis()
-                ))
-                .await?;
+                if let Some(timeout) = config
+                    .config
+                    .parameters
+                    .mysql_source_timeouts
+                    .snapshot_max_execution_time
+                {
+                    tx.query_drop(format!(
+                        "SET @@session.max_execution_time = {}",
+                        timeout.as_millis()
+                    ))
+                    .await?;
+                }
 
                 // We have started our transaction so we can unlock the tables.
                 lock_conn.query_drop("UNLOCK TABLES").await?;
