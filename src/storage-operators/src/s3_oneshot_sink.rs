@@ -9,6 +9,7 @@
 
 //! A sink operator that writes to s3.
 
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use anyhow::anyhow;
@@ -34,14 +35,13 @@ use timely::PartialOrder;
 use tracing::info;
 
 pub fn copy_to<G, F>(
-    input_collection: Collection<G, (Row, ()), Diff>,
-    err_collection: Collection<G, (DataflowError, ()), Diff>,
+    input_collection: Collection<G, ((Row, u64), ()), Diff>,
+    err_collection: Collection<G, ((DataflowError, u64), ()), Diff>,
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
     connection_id: GlobalId,
-    active_worker: usize,
     onetime_callback: F,
 ) where
     G: Scope<Timestamp = Timestamp>,
@@ -56,19 +56,11 @@ pub fn copy_to<G, F>(
     let mut error_handle = builder.new_disconnected_input(&err_collection.inner, Pipeline);
 
     builder.build(move |_caps| async move {
-        if worker_id != active_worker {
-            // Returning 0 count for non-active workers.
-            // If nothing is returned, then a `CopyToResponse::Dropped` message
-            // will be sent instead upon drop, making the accumulated response a `Dropped` as well.
-            onetime_callback(Ok(0));
-            return;
-        }
-
         while let Some(event) = error_handle.next().await {
             match event {
                 AsyncEvent::Data(_ts, data) => {
-                    if let Some(((error, _), ts, _)) = data.first() {
-                        if !up_to.less_equal(ts) {
+                    for (((error, _), _), ts, _) in data {
+                        if !up_to.less_equal(&ts) {
                             onetime_callback(Err(error.to_string()));
                             return;
                         }
@@ -94,13 +86,13 @@ pub fn copy_to<G, F>(
             }
         };
 
-        let mut uploader = CopyToS3Uploader::new(sdk_config, connection_details, "part".into());
-
+        // Map of an uploader per bucket.
+        let mut s3_uploaders: BTreeMap<u64, CopyToS3Uploader> = BTreeMap::new();
         let mut row_count = 0;
         while let Some(event) = input_handle.next().await {
             match event {
                 AsyncEvent::Data(_ts, data) => {
-                    for ((row, ()), ts, diff) in data {
+                    for (((row, bucket), ()), ts, diff) in data {
                         if !up_to.less_equal(&ts) {
                             if diff < 0 {
                                 onetime_callback(Err(format!(
@@ -109,6 +101,13 @@ pub fn copy_to<G, F>(
                                 return;
                             }
                             row_count += u64::try_from(diff).unwrap();
+                            let uploader = s3_uploaders
+                                .entry(bucket)
+                                .or_insert_with(|| {
+                                    info!("worker_id: {} will be handling bucket: {}", worker_id, bucket);
+                                    let file_name_prefix = format!("part-bucket-{:04}", bucket);
+                                    CopyToS3Uploader::new(sdk_config.clone(), connection_details.clone(), file_name_prefix)
+                                });
                             for _ in 0..diff {
                                 match uploader.append_row(&row).await {
                                     Ok(()) => {}
@@ -123,17 +122,18 @@ pub fn copy_to<G, F>(
                 }
                 AsyncEvent::Progress(frontier) => {
                     if PartialOrder::less_equal(&up_to, &frontier) {
-                        match uploader.flush().await {
-                            Ok(()) => {
-                                // We are done, send the final count.
-                                onetime_callback(Ok(row_count));
-                                return;
-                            }
-                            Err(e) => {
-                                onetime_callback(Err(e.to_string()));
-                                return;
+                        for uploader in s3_uploaders.values_mut() {
+                            match uploader.flush().await {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    onetime_callback(Err(e.to_string()));
+                                    return;
+                                }
                             }
                         }
+                        // We are done, send the final count.
+                        onetime_callback(Ok(row_count));
+                        return;
                     }
                 }
             }
