@@ -4217,7 +4217,6 @@ mod tests {
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::{CatalogKind, OwnedVarInput, Var, VarInput, CATALOG_KIND_IMPL};
-    use mz_stash::DebugStashFactory;
 
     use crate::catalog::{Catalog, CatalogItem, Op, PrivilegeMap, SYSTEM_CONN_ID};
     use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
