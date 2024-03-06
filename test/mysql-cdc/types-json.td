@@ -36,21 +36,24 @@ CREATE TABLE t1 (f1 JSON);
 
 INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false}' AS JSON));
 
-# TODO: #24796 (JSON support)
-# > CREATE SOURCE mz_source
-#   FROM MYSQL CONNECTION mysql_conn
-#   FOR ALL TABLES;
-#
-# > SELECT COUNT(*) > 0 FROM t1;
-# true
-#
-# # Insert the same data post-snapshot
-# $ mysql-execute name=mysql
-# INSERT INTO t1 SELECT * FROM t1;
-#
-# > SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-# jsonb
-#
-# > SELECT * FROM t1;
-# "{\"active\":false,\"balance\":7.77,\"bar\":\"baz\"}"
-# "{\"active\":false,\"balance\":7.77,\"bar\":\"baz\"}"
+> CREATE SOURCE mz_source
+  FROM MYSQL CONNECTION mysql_conn
+  FOR ALL TABLES;
+
+> SELECT COUNT(*) > 0 FROM t1;
+true
+
+# Insert the same data post-snapshot
+$ mysql-execute name=mysql
+INSERT INTO t1 SELECT * FROM t1;
+
+> SELECT pg_typeof(f1) FROM t1 LIMIT 1;
+jsonb
+
+> SELECT * FROM t1;
+"{\"active\":false,\"balance\":7.77,\"bar\":\"baz\"}"
+"{\"active\":false,\"balance\":7.77,\"bar\":\"baz\"}"
+
+> SELECT f1->>'balance' FROM t1;
+7.77
+7.77

@@ -363,6 +363,7 @@ fn parse_data_type(
         "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => {
             Ok(ScalarType::Bytes)
         }
+        "json" => Ok(ScalarType::Jsonb),
         _ => Err(UnsupportedDataType {
             column_type: info.column_type.clone(),
             qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
