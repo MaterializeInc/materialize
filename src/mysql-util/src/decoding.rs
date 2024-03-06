@@ -150,7 +150,7 @@ fn val_to_datum<'a>(
                             ))?
                         }
                     }
-                    _ => {
+                    None => {
                         temp_strs.push(from_value_opt::<String>(value)?);
                         Datum::from(temp_strs.last().unwrap().as_str())
                     }

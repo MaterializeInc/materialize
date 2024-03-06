@@ -13,7 +13,7 @@ use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
@@ -139,7 +139,7 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
             connection: Some(self.connection.into_proto()),
             connection_id: Some(self.connection_id.into_proto()),
             details: Some(self.details.into_proto()),
-            text_columns: self.text_columns.iter().map(|c| c.into_proto()).collect(),
+            text_columns: self.text_columns.into_proto(),
         }
     }
 
@@ -154,11 +154,7 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
             details: proto
                 .details
                 .into_rust_if_some("ProtoMySqlSourceConnection::details")?,
-            text_columns: proto
-                .text_columns
-                .into_iter()
-                .map(MySqlColumnRef::from_proto)
-                .collect::<Result<_, _>>()?,
+            text_columns: proto.text_columns.into_rust()?,
         })
     }
 }

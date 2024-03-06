@@ -421,7 +421,7 @@ fn enum_vals_from_column_type(s: &str) -> Result<Vec<String>, anyhow::Error> {
 
     Ok(ENUM_VAL_REGEX
         .captures_iter(vals_str)
-        .map(|s| s[1].to_string())
+        .map(|s| s[1].replace("''", "'"))
         .collect())
 }
 
@@ -433,6 +433,6 @@ mod tests {
     fn test_enum_value_parsing() {
         let vals =
             enum_vals_from_column_type("enum('apple','banana','cher,ry','ora''nge')").unwrap();
-        assert_eq!(vals, vec!["apple", "banana", "cher,ry", "ora''nge"]);
+        assert_eq!(vals, vec!["apple", "banana", "cher,ry", "ora'nge"]);
     }
 }
