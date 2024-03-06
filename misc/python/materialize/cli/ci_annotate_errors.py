@@ -24,8 +24,8 @@ from junitparser.junitparser import Error, Failure, JUnitXml
 from materialize import ci_util, ui
 from materialize.buildkite import add_annotation_raw, get_artifact_url, truncate_str
 from materialize.buildkite_insights.step_durations.build_step import (
-    BuildStep,
-    extract_build_step_data,
+    BuildStepMatcher,
+    extract_build_step_outcomes,
 )
 from materialize.buildkite_insights.util.buildkite_api import fetch, fetch_builds
 
@@ -522,8 +522,9 @@ def get_failures_on_main() -> str | None:
             f"Fetched {len(builds_data)} finished builds of pipeline {pipeline_slug} and step {step_key}"
         )
 
-    last_build_step_outcomes = extract_build_step_data(
-        builds_data, selected_build_steps=[BuildStep(step_key, parallel_job)]
+    last_build_step_outcomes = extract_build_step_outcomes(
+        builds_data,
+        selected_build_steps=[BuildStepMatcher(step_key, parallel_job)],
     )
 
     if not last_build_step_outcomes:
@@ -533,7 +534,7 @@ def get_failures_on_main() -> str | None:
         f"<a href=\"/materialize/{os.getenv('BUILDKITE_PIPELINE_SLUG')}/builds?branch=main\">main</a> history: "
         + "".join(
             [
-                f"<a href=\"{outcome.web_url}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
+                f"<a href=\"{outcome.web_url_to_job}\">{':bk-status-passed:' if outcome.passed else ':bk-status-failed:'}</a>"
                 for outcome in last_build_step_outcomes
             ]
         )
