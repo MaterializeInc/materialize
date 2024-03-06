@@ -42,7 +42,7 @@ SERVICES = [
 
 
 def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
-    with c.override(Postgres(extra_command=["-c", "max_replication_slots=2"])):
+    with c.override(Postgres(extra_command=["-c", "max_replication_slots=3"])):
         c.up("materialized", "postgres")
         c.run_testdrive_files("override/replication-slots.td")
 
