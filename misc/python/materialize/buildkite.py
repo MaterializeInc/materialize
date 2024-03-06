@@ -171,9 +171,23 @@ def _validate_parallelism_configuration() -> None:
     job_index = os.environ.get("BUILDKITE_PARALLEL_JOB")
     job_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
 
-    assert (job_index is None) == (
-        job_count is None
-    ), f"$BUILDKITE_PARALLEL_JOB (= '{job_index}') and $BUILDKITE_PARALLEL_JOB_COUNT (= '{job_count}') need to be either both specified or not specified"
+    if job_index is None and job_count is None:
+        # OK
+        return
+
+    job_index_desc = f"$BUILDKITE_PARALLEL_JOB (= '{job_index}')"
+    job_count_desc = f"$BUILDKITE_PARALLEL_JOB_COUNT (= '{job_count}')"
+    assert (
+        job_index is not None and job_count is not None
+    ), f"{job_index_desc} and {job_count_desc} need to be either both specified or not specified"
+
+    job_index = int(job_index)
+    job_count = int(job_count)
+
+    assert job_count > 0, f"{job_count_desc} not valid"
+    assert (
+        0 <= job_index < job_count
+    ), f"{job_index_desc} out of valid range with {job_count_desc}"
 
 
 def truncate_str(text: str, length: int = 900_000) -> str:
