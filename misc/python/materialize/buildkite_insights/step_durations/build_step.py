@@ -18,7 +18,7 @@ from typing import Any
 class BuildStepOutcome:
     ids: list[str]
     step_key: str
-    parallel_job: int | None
+    parallel_job_index: int | None
     build_number: int
     created_at: datetime
     duration_in_min: float | None
@@ -33,7 +33,7 @@ class BuildStepOutcome:
 @dataclass
 class BuildStep:
     step_key: str
-    parallel_job: int | None
+    parallel_job_index: int | None
 
 
 def extract_build_step_data(
@@ -158,7 +158,7 @@ def _merge_executions(
     return BuildStepOutcome(
         ids=ids,
         step_key=any_execution.step_key,
-        parallel_job=None,
+        parallel_job_index=None,
         build_number=any_execution.build_number,
         created_at=min_created_at,
         duration_in_min=sum_duration_in_min,
