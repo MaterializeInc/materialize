@@ -76,6 +76,7 @@ def _extract_build_step_data_from_build(
         build_number = build_data["number"]
         created_at = datetime.fromisoformat(job["created_at"])
         build_step_key = job["step_key"]
+        parallel_job_index = job.get("parallel_group_index")
 
         if job.get("started_at") and job.get("finished_at"):
             started_at = datetime.fromisoformat(job["started_at"])
@@ -95,7 +96,7 @@ def _extract_build_step_data_from_build(
         step_data = BuildStepOutcome(
             [id],
             build_step_key,
-            None,  # TODO: The parallel_job number
+            parallel_job_index,
             build_number,
             created_at,
             duration_in_min,
