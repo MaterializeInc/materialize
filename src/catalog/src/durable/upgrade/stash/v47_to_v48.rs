@@ -15,6 +15,35 @@ use std::collections::BTreeMap;
 
 use crate::durable::upgrade::{objects_v47 as v47, objects_v48 as v48};
 
+const FIRST_USER_OID: u32 = 20_000;
+
+// SCHEMAS
+
+const MZ_CATALOG_OID: u32 = 16_656;
+const PG_CATALOG_OID: u32 = 16_657;
+const MZ_INTERNAL_OID: u32 = 16_658;
+const INFORMATION_SCHEMA_OID: u32 = 16_659;
+const MZ_UNSAFE_OID: u32 = 16_660;
+
+const MZ_CATALOG_ID: u64 = 1;
+const PG_CATALOG_ID: u64 = 2;
+const MZ_INTERNAL_ID: u64 = 4;
+const INFORMATION_SCHEMA_ID: u64 = 5;
+const MZ_UNSAFE_ID: u64 = 6;
+
+// ROLES
+
+const MZ_SYSTEM_OID: u32 = 16_661;
+const MZ_SUPPORT_OID: u32 = 16_662;
+const MZ_MONITOR_OID: u32 = 16_663;
+const MZ_MONITOR_REDACTED_OID: u32 = 16_664;
+const PUBLIC_ROLE_OID: u32 = 16_944;
+
+const MZ_SYSTEM_ID: u64 = 1;
+const MZ_SUPPORT_ID: u64 = 2;
+const MZ_MONITOR_ID: u64 = 3;
+const MZ_MONITOR_REDACTED_ID: u64 = 4;
+
 const DATABASES_COLLECTION: TypedCollection<v47::DatabaseKey, v47::DatabaseValue> =
     TypedCollection::new("database");
 const SCHEMAS_COLLECTION: TypedCollection<v47::SchemaKey, v47::SchemaValue> =
@@ -31,7 +60,7 @@ const ID_ALLOCATOR_COLLECTION: TypedCollection<v47::IdAllocKey, v47::IdAllocValu
 
 /// Persist OIDs in the catalog.
 pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
-    let mut cur_user_oid: u32 = 20_000;
+    let mut cur_user_oid: u32 = FIRST_USER_OID;
     // Sorting everything by ID isn't strictly necessary, but it would be nice if the OIDs and the
     // IDs had the same order.
     let mut user_database_oids: BTreeMap<u64, u32> = tx
@@ -118,16 +147,11 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
         })
         .collect();
     let mut system_schema_oids: BTreeMap<u64, u32> = [
-        // mz_catalog
-        (1, 16_656),
-        // pg_catalog
-        (2, 16_657),
-        // mz_internal
-        (4, 16_658),
-        // information_schema
-        (5, 16_659),
-        // mz_unsafe
-        (6, 16_660),
+        (MZ_CATALOG_ID, MZ_CATALOG_OID),
+        (PG_CATALOG_ID, PG_CATALOG_OID),
+        (MZ_INTERNAL_ID, MZ_INTERNAL_OID),
+        (INFORMATION_SCHEMA_ID, INFORMATION_SCHEMA_OID),
+        (MZ_UNSAFE_ID, MZ_UNSAFE_OID),
     ]
     .into_iter()
     .collect();
@@ -194,18 +218,13 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
         })
         .collect();
     let mut system_role_oids: BTreeMap<u64, u32> = [
-        // mz_system
-        (1, 16_661),
-        // mz_support
-        (2, 16_662),
-        // mz_monitor
-        (3, 16_663),
-        // mz_monitor_redacted
-        (4, 16_664),
+        (MZ_SYSTEM_ID, MZ_SYSTEM_OID),
+        (MZ_SUPPORT_ID, MZ_SUPPORT_OID),
+        (MZ_MONITOR_ID, MZ_MONITOR_OID),
+        (MZ_MONITOR_REDACTED_ID, MZ_MONITOR_REDACTED_OID),
     ]
     .into_iter()
     .collect();
-    let public_role_oid: u32 = 16_944;
     ROLES_COLLECTION
         .migrate_to::<v48::RoleKey, v48::RoleValue>(tx, |entries| {
             entries
@@ -223,7 +242,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
                         v47::role_id::Value::System(id) => {
                             system_role_oids.remove(id).expect("missing id")
                         }
-                        v47::role_id::Value::Public(_) => public_role_oid,
+                        v47::role_id::Value::Public(_) => PUBLIC_ROLE_OID,
                         v47::role_id::Value::User(id) => {
                             user_role_oids.remove(id).expect("missing id")
                         }
