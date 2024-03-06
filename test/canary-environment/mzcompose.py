@@ -63,7 +63,10 @@ SERVICES = [
             "MATERIALIZE_PROD_SANDBOX_APP_PASSWORD",
         ]
     ),
-    Testdrive(no_reset=True),
+    Testdrive(
+        no_reset=True,
+        no_consistency_checks=True,  # No access to HTTP for coordinator check
+    ),
 ]
 
 POSTGRES_RANGE = 1024
@@ -85,6 +88,7 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             default_timeout="1200s",
             materialize_url=materialize_url,
             no_reset=True,  # Required so that admin port 6877 is not used
+            no_consistency_checks=True,  # No access to HTTP for coordinator check
         )
     ):
         c.testdrive(
