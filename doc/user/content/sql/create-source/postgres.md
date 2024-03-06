@@ -14,8 +14,8 @@ aliases:
 
 {{% create-source/intro %}}
 Materialize supports PostgreSQL (11+) as a data source. To connect to a
-PostgreSQL instance, you first need to [create a connection]
-(#creating-a-connection) that specifies access and authentication parameters.
+PostgreSQL instance, you first need to [create a connection](#creating-a-connection)
+that specifies access and authentication parameters.
 Once created, a connection is **reusable** across multiple `CREATE SOURCE`
 statements.
 {{% /create-source/intro %}}
