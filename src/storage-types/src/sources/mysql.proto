@@ -15,10 +15,18 @@ import "mysql-util/src/desc.proto";
 
 package mz_storage_types.sources.mysql;
 
+message ProtoMySqlColumnRef {
+    string schema_name = 1;
+    string table_name = 2;
+    string column_name = 3;
+}
+
 message ProtoMySqlSourceConnection {
     mz_repr.global_id.ProtoGlobalId connection_id = 1;
     mz_storage_types.connections.ProtoMySqlConnection connection = 2;
     ProtoMySqlSourceDetails details = 3;
+
+    repeated ProtoMySqlColumnRef text_columns = 4;
 }
 
 message ProtoMySqlSourceDetails {

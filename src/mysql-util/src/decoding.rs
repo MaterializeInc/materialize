@@ -19,6 +19,7 @@ use mz_repr::adt::numeric::{get_precision, get_scale, Numeric, NUMERIC_DATUM_MAX
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, ScalarType};
 
+use crate::desc::MySqlColumnMeta;
 use crate::{MySqlColumnDesc, MySqlError, MySqlTableDesc};
 
 pub fn pack_mysql_row(
@@ -103,8 +104,58 @@ fn val_to_datum<'a>(
                 Datum::from(temp_strs.last().unwrap().as_str())
             }
             ScalarType::String => {
-                temp_strs.push(from_value_opt::<String>(value)?);
-                Datum::from(temp_strs.last().unwrap().as_str())
+                // Special case for string types, since this is the scalar type used for a column
+                // specified as a 'TEXT COLUMN'. In some cases we need to check the column
+                // metadata to know if the upstream value needs special handling
+                match &col_desc.meta {
+                    Some(MySqlColumnMeta::Enum(e)) => {
+                        match value {
+                            Value::Bytes(data) => {
+                                let data = std::str::from_utf8(&data)?;
+                                temp_strs.push(data.to_string());
+                                Datum::from(temp_strs.last().unwrap().as_str())
+                            }
+                            Value::Int(val) => {
+                                // Enum types are provided as 1-indexed integers in the replication
+                                // stream, so we need to find the string value from the enum meta
+                                let enum_val = e
+                                    .values
+                                    .get(usize::try_from(val)? - 1)
+                                    .ok_or(anyhow::anyhow!(
+                                        "received invalid enum value: {} for column {}",
+                                        val,
+                                        col_desc.name
+                                    ))?
+                                    .clone();
+                                temp_strs.push(enum_val);
+                                Datum::from(temp_strs.last().unwrap().as_str())
+                            }
+                            _ => Err(anyhow::anyhow!(
+                                "received unexpected value for enum type: {:?}",
+                                value
+                            ))?,
+                        }
+                    }
+                    Some(MySqlColumnMeta::Json) => {
+                        // JSON types in a query response are encoded as a string with whitespace,
+                        // but when parsed from the binlog event by mysql-common they are provided
+                        // as an encoded string sans-whitespace.
+                        if let Value::Bytes(data) = value {
+                            let json = serde_json::from_slice::<serde_json::Value>(&data)?;
+                            temp_strs.push(json.to_string());
+                            Datum::from(temp_strs.last().unwrap().as_str())
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "received unexpected value for json type: {:?}",
+                                value
+                            ))?
+                        }
+                    }
+                    None => {
+                        temp_strs.push(from_value_opt::<String>(value)?);
+                        Datum::from(temp_strs.last().unwrap().as_str())
+                    }
+                }
             }
             ScalarType::Bytes => {
                 let data = from_value_opt::<Vec<u8>>(value)?;

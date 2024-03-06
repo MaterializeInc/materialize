@@ -10,6 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
+use once_cell::sync::Lazy;
+use regex::Regex;
 
 use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{FromRowError, Row};
@@ -20,8 +22,10 @@ use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{ColumnType, ScalarType};
 
-use crate::desc::{MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc};
-use crate::MySqlError;
+use crate::desc::{
+    MySqlColumnDesc, MySqlColumnMeta, MySqlColumnMetaEnum, MySqlKeyDesc, MySqlTableDesc,
+};
+use crate::{MySqlError, UnsupportedDataType};
 
 /// Helper for querying information_schema.columns
 // NOTE: The order of these names *must* match the order of fields of the [`InfoSchema`] struct.
@@ -77,10 +81,18 @@ pub enum SchemaRequest<'a> {
     Tables(Vec<(&'a str, &'a str)>),
 }
 
+/// A reference to a table in a schema/database
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+pub struct QualifiedTableRef<'a> {
+    pub schema_name: &'a str,
+    pub table_name: &'a str,
+}
+
 /// Retrieve the tables and column descriptions for tables in the given schemas.
 pub async fn schema_info<'a, Q>(
     conn: &mut Q,
     schema_request: &SchemaRequest<'a>,
+    text_columns: Option<&BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>>,
 ) -> Result<Vec<MySqlTableDesc>, MySqlError>
 where
     Q: Queryable,
@@ -135,7 +147,15 @@ where
     };
 
     let mut tables = vec![];
+    let mut error_cols = vec![];
     for (table_name, schema_name) in table_rows {
+        let table_text_cols = text_columns.and_then(|m| {
+            m.get(&QualifiedTableRef {
+                schema_name: &schema_name,
+                table_name: &table_name,
+            })
+        });
+
         // NOTE: It's important that we order by ordinal_position ASC since we rely on this as
         // the ordering in which columns are returned in a row.
         let column_q = format!(
@@ -154,112 +174,37 @@ where
 
         let mut columns = Vec::with_capacity(column_rows.len());
         for info in column_rows {
-            let unsigned = info.column_type.contains("unsigned");
+            // If this column is designated as a text column and of a supported text-column type
+            // treat it as a string and skip type parsing.
+            if let Some(text_columns) = table_text_cols {
+                if text_columns.contains(&info.column_name.as_str()) {
+                    match parse_as_text_column(&info, &schema_name, &table_name) {
+                        Err(err) => error_cols.push(err),
+                        Ok((scalar_type, meta)) => columns.push(MySqlColumnDesc {
+                            name: info.column_name,
+                            column_type: ColumnType {
+                                scalar_type,
+                                nullable: &info.is_nullable == "YES",
+                            },
+                            meta,
+                        }),
+                    }
+                    continue;
+                }
+            }
 
-            let scalar_type = match info.data_type.as_str() {
-                "tinyint" | "smallint" => {
-                    if unsigned {
-                        ScalarType::UInt16
-                    } else {
-                        ScalarType::Int16
-                    }
-                }
-                "mediumint" | "int" => {
-                    if unsigned {
-                        ScalarType::UInt32
-                    } else {
-                        ScalarType::Int32
-                    }
-                }
-                "bigint" => {
-                    if unsigned {
-                        ScalarType::UInt64
-                    } else {
-                        ScalarType::Int64
-                    }
-                }
-                "float" => ScalarType::Float32,
-                "double" => ScalarType::Float64,
-                "date" => ScalarType::Date,
-                "datetime" | "timestamp" => ScalarType::Timestamp {
-                    // both mysql and our scalar type use a max six-digit fractional-second precision
-                    // this is bounds-checked in the TryFrom impl
-                    precision: info
-                        .datetime_precision
-                        .map(TimestampPrecision::try_from)
-                        .transpose()
-                        .map_err(|_| MySqlError::UnsupportedDataType {
-                            column_type: info.column_type,
-                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-                            column_name: info.column_name.clone(),
-                        })?,
-                },
-                "time" => ScalarType::Time,
-                "decimal" | "numeric" => {
-                    // validate the precision is within the bounds of our numeric type
-                    // here since we don't use this precision on the ScalarType itself
-                    // whereas the scale will be bounds-checked in the TryFrom impl
-                    if info.numeric_precision.unwrap_or_default()
-                        > NUMERIC_DATUM_MAX_PRECISION.into()
-                    {
-                        Err(MySqlError::UnsupportedDataType {
-                            column_type: info.column_type.clone(),
-                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-                            column_name: info.column_name.clone(),
-                        })?
-                    }
-                    ScalarType::Numeric {
-                        max_scale: info
-                            .numeric_scale
-                            .map(NumericMaxScale::try_from)
-                            .transpose()
-                            .map_err(|_| MySqlError::UnsupportedDataType {
-                                column_type: info.column_type,
-                                qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-                                column_name: info.column_name.clone(),
-                            })?,
-                    }
-                }
-                "char" => ScalarType::Char {
-                    length: info
-                        .character_maximum_length
-                        .and_then(|f| Some(CharLength::try_from(f)))
-                        .transpose()
-                        .map_err(|_| MySqlError::UnsupportedDataType {
-                            column_type: info.column_type,
-                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-                            column_name: info.column_name.clone(),
-                        })?,
-                },
-                "varchar" => ScalarType::VarChar {
-                    max_length: info
-                        .character_maximum_length
-                        .and_then(|f| Some(VarCharMaxLength::try_from(f)))
-                        .transpose()
-                        .map_err(|_| MySqlError::UnsupportedDataType {
-                            column_type: info.column_type,
-                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-                            column_name: info.column_name.clone(),
-                        })?,
-                },
-                "text" | "mediumtext" | "longtext" => ScalarType::String,
-                "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => {
-                    ScalarType::Bytes
-                }
-                // TODO: Implement other types
-                _ => Err(MySqlError::UnsupportedDataType {
-                    column_type: info.column_type,
-                    qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-                    column_name: info.column_name.clone(),
-                })?,
-            };
-            columns.push(MySqlColumnDesc {
-                name: info.column_name,
-                column_type: ColumnType {
-                    scalar_type,
-                    nullable: &info.is_nullable == "YES",
-                },
-            })
+            // Collect the parsed data types or errors for later reporting.
+            match parse_data_type(&info, &schema_name, &table_name) {
+                Err(err) => error_cols.push(err),
+                Ok(scalar_type) => columns.push(MySqlColumnDesc {
+                    name: info.column_name,
+                    column_type: ColumnType {
+                        scalar_type,
+                        nullable: &info.is_nullable == "YES",
+                    },
+                    meta: None,
+                }),
+            }
         }
 
         // Query for primary key and unique constraints that do not contain expressions / functional key parts.
@@ -309,5 +254,185 @@ where
             keys,
         });
     }
+
+    if error_cols.len() > 0 {
+        Err(MySqlError::UnsupportedDataTypes {
+            columns: error_cols,
+        })?;
+    }
     Ok(tables)
+}
+
+fn parse_data_type(
+    info: &InfoSchema,
+    schema_name: &str,
+    table_name: &str,
+) -> Result<ScalarType, UnsupportedDataType> {
+    let unsigned = info.column_type.contains("unsigned");
+
+    match info.data_type.as_str() {
+        "tinyint" | "smallint" => {
+            if unsigned {
+                Ok(ScalarType::UInt16)
+            } else {
+                Ok(ScalarType::Int16)
+            }
+        }
+        "mediumint" | "int" => {
+            if unsigned {
+                Ok(ScalarType::UInt32)
+            } else {
+                Ok(ScalarType::Int32)
+            }
+        }
+        "bigint" => {
+            if unsigned {
+                Ok(ScalarType::UInt64)
+            } else {
+                Ok(ScalarType::Int64)
+            }
+        }
+        "float" => Ok(ScalarType::Float32),
+        "double" => Ok(ScalarType::Float64),
+        "date" => Ok(ScalarType::Date),
+        "datetime" | "timestamp" => Ok(ScalarType::Timestamp {
+            // both mysql and our scalar type use a max six-digit fractional-second precision
+            // this is bounds-checked in the TryFrom impl
+            precision: info
+                .datetime_precision
+                .map(TimestampPrecision::try_from)
+                .transpose()
+                .map_err(|_| UnsupportedDataType {
+                    column_type: info.column_type.clone(),
+                    qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                    column_name: info.column_name.clone(),
+                    intended_type: None,
+                })?,
+        }),
+        "time" => Ok(ScalarType::Time),
+        "decimal" | "numeric" => {
+            // validate the precision is within the bounds of our numeric type
+            // here since we don't use this precision on the ScalarType itself
+            // whereas the scale will be bounds-checked in the TryFrom impl
+            if info.numeric_precision.unwrap_or_default() > NUMERIC_DATUM_MAX_PRECISION.into() {
+                Err(UnsupportedDataType {
+                    column_type: info.column_type.clone(),
+                    qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                    column_name: info.column_name.clone(),
+                    intended_type: None,
+                })?
+            }
+            Ok(ScalarType::Numeric {
+                max_scale: info
+                    .numeric_scale
+                    .map(NumericMaxScale::try_from)
+                    .transpose()
+                    .map_err(|_| UnsupportedDataType {
+                        column_type: info.column_type.clone(),
+                        qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                        column_name: info.column_name.clone(),
+                        intended_type: None,
+                    })?,
+            })
+        }
+        "char" => Ok(ScalarType::Char {
+            length: info
+                .character_maximum_length
+                .and_then(|f| Some(CharLength::try_from(f)))
+                .transpose()
+                .map_err(|_| UnsupportedDataType {
+                    column_type: info.column_type.clone(),
+                    qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                    column_name: info.column_name.clone(),
+                    intended_type: None,
+                })?,
+        }),
+        "varchar" => Ok(ScalarType::VarChar {
+            max_length: info
+                .character_maximum_length
+                .and_then(|f| Some(VarCharMaxLength::try_from(f)))
+                .transpose()
+                .map_err(|_| UnsupportedDataType {
+                    column_type: info.column_type.clone(),
+                    qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                    column_name: info.column_name.clone(),
+                    intended_type: None,
+                })?,
+        }),
+        "text" | "mediumtext" | "longtext" => Ok(ScalarType::String),
+        "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => {
+            Ok(ScalarType::Bytes)
+        }
+        _ => Err(UnsupportedDataType {
+            column_type: info.column_type.clone(),
+            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+            column_name: info.column_name.clone(),
+            intended_type: None,
+        }),
+    }
+}
+
+/// Parse the specified column as a TEXT COLUMN. We only support the set of types that are
+/// represented as an encoded-string in both the mysql-common binary query response and binlog
+/// event representation, OR types that we've added explicit casting support for.
+fn parse_as_text_column(
+    info: &InfoSchema,
+    schema_name: &str,
+    table_name: &str,
+) -> Result<(ScalarType, Option<MySqlColumnMeta>), UnsupportedDataType> {
+    match info.data_type.as_str() {
+        "json" => Ok((ScalarType::String, Some(MySqlColumnMeta::Json))),
+        "enum" => Ok((
+            ScalarType::String,
+            Some(MySqlColumnMeta::Enum(MySqlColumnMetaEnum {
+                values: enum_vals_from_column_type(info.column_type.as_str()).map_err(|_| {
+                    UnsupportedDataType {
+                        column_type: info.column_type.clone(),
+                        qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                        column_name: info.column_name.clone(),
+                        intended_type: Some("text".to_string()),
+                    }
+                })?,
+            })),
+        )),
+        _ => Err(UnsupportedDataType {
+            column_type: info.column_type.clone(),
+            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+            column_name: info.column_name.clone(),
+            intended_type: Some("text".to_string()),
+        }),
+    }
+}
+
+static ENUM_VAL_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"'((?:[^']|'')*)'").expect("valid regex"));
+
+/// Parse the enum values from a column_type value on an enum column, which is a string like
+/// "enum('apple','banana','cher,ry','ora''nge')"
+/// We need to handle the case where the enum value itself contains a comma or a
+/// single quote (escaped with another quote), so we use a regex to do so
+fn enum_vals_from_column_type(s: &str) -> Result<Vec<String>, anyhow::Error> {
+    let vals_str = s
+        .strip_prefix("enum(")
+        .and_then(|s| s.strip_suffix(')'))
+        .ok_or(anyhow::format_err!(
+            "Unable to parse enum column type string"
+        ))?;
+
+    Ok(ENUM_VAL_REGEX
+        .captures_iter(vals_str)
+        .map(|s| s[1].replace("''", "'"))
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_enum_value_parsing() {
+        let vals =
+            enum_vals_from_column_type("enum('apple','banana','cher,ry','ora''nge')").unwrap();
+        assert_eq!(vals, vec!["apple", "banana", "cher,ry", "ora'nge"]);
+    }
 }

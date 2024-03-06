@@ -13,7 +13,7 @@ use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
@@ -39,10 +39,36 @@ include!(concat!(
 ));
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct MySqlColumnRef {
+    pub schema_name: String,
+    pub table_name: String,
+    pub column_name: String,
+}
+
+impl RustType<ProtoMySqlColumnRef> for MySqlColumnRef {
+    fn into_proto(&self) -> ProtoMySqlColumnRef {
+        ProtoMySqlColumnRef {
+            schema_name: self.schema_name.clone(),
+            table_name: self.table_name.clone(),
+            column_name: self.column_name.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoMySqlColumnRef) -> Result<Self, TryFromProtoError> {
+        Ok(MySqlColumnRef {
+            schema_name: proto.schema_name,
+            table_name: proto.table_name,
+            column_name: proto.column_name,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
     pub connection: C::MySql,
     pub details: MySqlSourceDetails,
+    pub text_columns: Vec<MySqlColumnRef>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
@@ -53,12 +79,14 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
             connection_id,
             connection,
             details,
+            text_columns,
         } = self;
 
         MySqlSourceConnection {
             connection_id,
             connection: r.resolve_connection(connection).unwrap_mysql(),
             details,
+            text_columns,
         }
     }
 }
@@ -111,6 +139,7 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
             connection: Some(self.connection.into_proto()),
             connection_id: Some(self.connection_id.into_proto()),
             details: Some(self.details.into_proto()),
+            text_columns: self.text_columns.into_proto(),
         }
     }
 
@@ -125,6 +154,7 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
             details: proto
                 .details
                 .into_rust_if_some("ProtoMySqlSourceConnection::details")?,
+            text_columns: proto.text_columns.into_rust()?,
         })
     }
 }

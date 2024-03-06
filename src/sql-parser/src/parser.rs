@@ -3130,14 +3130,34 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mysql_connection_option(&mut self) -> Result<MySqlConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[DETAILS])? {
-            DETAILS => MySqlConfigOptionName::Details,
+        match self.expect_one_of_keywords(&[DETAILS, TEXT])? {
+            DETAILS => Ok(MySqlConfigOption {
+                name: MySqlConfigOptionName::Details,
+                value: self.parse_optional_option_value()?,
+            }),
+            TEXT => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                Ok(MySqlConfigOption {
+                    name: MySqlConfigOptionName::TextColumns,
+                    value,
+                })
+            }
             _ => unreachable!(),
-        };
-        Ok(MySqlConfigOption {
-            name,
-            value: self.parse_optional_option_value()?,
-        })
+        }
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {

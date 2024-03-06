@@ -933,12 +933,15 @@ pub enum MySqlConfigOptionName {
     /// Hex encoded string of binary serialization of
     /// `mz_storage_types::sources::mysql::MySqlSourceDetails`
     Details,
+    /// Columns whose types you want to unconditionally format as text
+    TextColumns,
 }
 
 impl AstDisplay for MySqlConfigOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             MySqlConfigOptionName::Details => "DETAILS",
+            MySqlConfigOptionName::TextColumns => "TEXT COLUMNS",
         })
     }
 }
