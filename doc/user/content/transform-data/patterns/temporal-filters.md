@@ -70,7 +70,7 @@ In this case, we will filter a table to only include only records from the last 
 
 1. Next, subscribe to the results of the view.
     ```sql
-    COPY (SUBSCRIBE (SELECT event_ts, content FROM last_30_sec)) TO STDOUT;
+    SUBSCRIBE(SELECT event_ts, content FROM last_30_sec);
     ```
 
 1. In a separate session, insert a record.
