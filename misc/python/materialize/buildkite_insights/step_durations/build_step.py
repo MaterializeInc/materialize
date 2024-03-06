@@ -23,6 +23,9 @@ class BuildItemOutcomeBase:
     passed: bool
     retry_count: int
 
+    def formatted_date(self) -> str:
+        return self.created_at.strftime("%Y-%m-%d %H:%M:%S %z")
+
 
 @dataclass
 class BuildStepOutcome(BuildItemOutcomeBase):

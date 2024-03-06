@@ -126,7 +126,7 @@ def print_data(
                 else f"{entry.web_url_to_build}, "
             )
             print(
-                f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
+                f"{entry.step_key}, #{entry.build_number}, {entry.formatted_date()}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
             )
         elif output_type == OUTPUT_TYPE_CSV:
             print(
@@ -139,10 +139,11 @@ def print_data(
 
 def print_stats(
     job_outcomes: list[BuildJobOutcome],
-    build_steps: list[BuildStepMatcher],
+    build_matchers: list[BuildStepMatcher],
 ) -> None:
+    job_filter_desc = f"jobs matching {build_matchers}"
     if len(job_outcomes) == 0:
-        print(f"No data for jobs matching {build_steps}!")
+        print(f"No data for {job_filter_desc}!")
         return
 
     dfs = pd.DataFrame(job_outcomes)
@@ -153,7 +154,7 @@ def print_stats(
     success_prop = number_of_builds_with_successful_step / number_of_builds
 
     print()
-    print(f"Statistics for jobs {build_steps}:")
+    print(f"Statistics for {job_filter_desc}:")
     print(f"Number of builds: {number_of_builds}")
     print(
         f"Number of builds with job success: {number_of_builds_with_successful_step} ({100 * success_prop:.1f}%)"
