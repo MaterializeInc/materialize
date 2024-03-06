@@ -10,14 +10,16 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::anyhow;
 use derivative::Derivative;
 use itertools::Itertools;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::cast::usize_to_u64;
-use mz_ore::collections::CollectionExt;
+use mz_ore::cast::{u64_to_usize, usize_to_u64};
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
+use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -48,8 +50,9 @@ use crate::durable::objects::{
 };
 use crate::durable::{
     CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
-    SystemConfiguration, TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    SystemConfiguration, TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,
+    OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
@@ -80,6 +83,7 @@ pub struct Transaction<'a> {
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
     storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
+    oids: HashSet<u32>,
 }
 
 impl<'a> Transaction<'a> {
@@ -104,6 +108,14 @@ impl<'a> Transaction<'a> {
             system_privileges,
         }: Snapshot,
     ) -> Result<Transaction, CatalogError> {
+        let oids: HashSet<_> = databases
+            .values()
+            .map(|value| value.oid)
+            .chain(schemas.values().map(|value| value.oid))
+            .chain(roles.values().map(|value| value.oid))
+            .chain(items.values().map(|value| value.oid))
+            .chain(introspection_sources.values().map(|value| value.oid))
+            .collect();
         Ok(Transaction {
             durable_catalog,
             databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
@@ -137,6 +149,7 @@ impl<'a> Transaction<'a> {
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
+            oids,
         })
     }
 
@@ -623,17 +636,60 @@ impl<'a> Transaction<'a> {
             .collect())
     }
 
+    /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
+    /// object.
     fn allocate_oids(&mut self, amount: u64) -> Result<Vec<u32>, CatalogError> {
-        let oids = self.get_and_increment_id_by(OID_ALLOC_KEY.to_string(), amount)?;
-        Ok(oids
-            .into_iter()
-            .map(|oid| {
-                oid.try_into()
-                    .map_err(|_| CatalogError::Catalog(SqlCatalogError::OidExhaustion))
+        if amount > u32::MAX.into() {
+            return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
+        }
+        let current_id: u32 = self
+            .id_allocator
+            .items()
+            .get(&IdAllocKey {
+                name: OID_ALLOC_KEY.to_string(),
             })
-            .collect::<Result<Vec<_>, CatalogError>>()?)
+            .unwrap_or_else(|| panic!("{OID_ALLOC_KEY} id allocator missing"))
+            .next_id
+            .try_into()
+            .expect("we should never persist an oid outside of the u32 range");
+        let mut current_oid = UserOid::new(current_id)
+            .expect("we should never persist an oid outside of user OID range");
+        let mut oids = Vec::new();
+        while oids.len() < u64_to_usize(amount) {
+            if !self.oids.contains(&current_oid.0) {
+                oids.push(current_oid.0);
+            }
+            current_oid += 1;
+
+            if current_oid.0 == current_id && oids.len() < u64_to_usize(amount) {
+                // We've exhausted all possible OIDs and still don't have `amount`.
+                return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
+            }
+        }
+
+        let next_id = current_oid.0;
+        let prev = self.id_allocator.set(
+            IdAllocKey {
+                name: OID_ALLOC_KEY.to_string(),
+            },
+            Some(IdAllocValue {
+                next_id: next_id.into(),
+            }),
+        )?;
+        assert_eq!(
+            prev,
+            Some(IdAllocValue {
+                next_id: current_id.into(),
+            })
+        );
+
+        self.oids.extend(oids.clone());
+
+        return Ok(oids);
     }
 
+    /// Allocates a single OID. OIDs can be recycled if they aren't currently assigned to any
+    /// object.
     pub fn allocate_oid(&mut self) -> Result<u32, CatalogError> {
         self.allocate_oids(1).map(|oids| oids.into_element())
     }
@@ -2078,4 +2134,25 @@ fn test_table_transaction() {
         .unwrap();
     let pending = table_txn.pending::<Vec<u8>, String>();
     assert!(pending.is_empty());
+}
+
+/// Struct representing an OID for a user object. Allocated OIDs can be recycled, so when we've
+/// allocated [`u32::MAX`] we'll wrap back around to [`FIRST_USER_OID`].
+struct UserOid(u32);
+
+impl UserOid {
+    fn new(oid: u32) -> Result<UserOid, anyhow::Error> {
+        if oid < FIRST_USER_OID {
+            Err(anyhow!("invalid user OID {oid}"))
+        } else {
+            Ok(UserOid(oid))
+        }
+    }
+}
+
+impl std::ops::AddAssign<u32> for UserOid {
+    fn add_assign(&mut self, rhs: u32) {
+        let (res, overflow) = self.0.overflowing_add(rhs);
+        self.0 = if overflow { FIRST_USER_OID + res } else { res };
+    }
 }

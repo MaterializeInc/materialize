@@ -24,7 +24,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
-use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
@@ -270,9 +269,10 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Allocates and returns an OID.
     async fn allocate_oid(&mut self) -> Result<u32, CatalogError> {
-        let oid = self.allocate_id(OID_ALLOC_KEY, 1).await?.into_element();
-        oid.try_into()
-            .map_err(|_| CatalogError::Catalog(SqlCatalogError::OidExhaustion))
+        let mut txn = self.transaction().await?;
+        let oid = txn.allocate_oid()?;
+        txn.commit().await?;
+        Ok(oid)
     }
 }
 
