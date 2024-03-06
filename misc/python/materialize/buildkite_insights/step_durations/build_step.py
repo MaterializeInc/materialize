@@ -33,6 +33,7 @@ class BuildStepOutcome:
 @dataclass
 class BuildStep:
     step_key: str
+    # will be ignored if not specified
     parallel_job_index: int | None
 
 
@@ -62,11 +63,7 @@ def _extract_build_step_data_from_build(
         if not job.get("step_key"):
             continue
 
-        if (
-            len(selected_build_steps) > 0
-            and BuildStep(job["step_key"], job.get("parallel_group_index"))
-            not in selected_build_steps
-        ):
+        if not _shall_include_build_step(job, selected_build_steps):
             continue
 
         if job["state"] in ["canceled", "running"]:
@@ -109,6 +106,29 @@ def _extract_build_step_data_from_build(
         collected_steps.append(step_data)
 
     return collected_steps
+
+
+def _shall_include_build_step(job: Any, selected_build_steps: list[BuildStep]) -> bool:
+    if len(selected_build_steps) == 0:
+        return True
+
+    job_step_key = job["step_key"]
+    job_parallel_index = job.get("parallel_group_index")
+
+    for selected_step in selected_build_steps:
+        if selected_step.step_key != job_step_key:
+            continue
+
+        if (
+            selected_step.parallel_job_index is not None
+            and job_parallel_index != selected_step.parallel_job_index
+        ):
+            # parallel_job_index is specified but does not match
+            continue
+
+        return True
+
+    return False
 
 
 def _merge_sharded_steps(step_infos: list[BuildStepOutcome]) -> list[BuildStepOutcome]:

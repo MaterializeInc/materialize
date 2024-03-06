@@ -194,7 +194,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
-    # TODO: Should also take --build-parallel-job
     parser.add_argument("--build-step-key", action="append", type=str)
     parser.add_argument(
         "--fetch",
