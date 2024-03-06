@@ -106,7 +106,6 @@ def get_data(
 
 def print_data(
     step_infos: list[BuildStepOutcome],
-    pipeline_slug: str,
     build_steps: list[BuildStep],
     output_type: str,
 ) -> None:
@@ -122,7 +121,7 @@ def print_data(
                 if entry.duration_in_min is not None
                 else "None"
             )
-            url = ("" if output_type == OUTPUT_TYPE_TXT_SHORT else entry.web_url,)
+            url = "" if output_type == OUTPUT_TYPE_TXT_SHORT else f"{entry.web_url}, "
             print(
                 f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
             )
@@ -185,7 +184,7 @@ def main(
         selected_build_steps=build_steps,
         merge_sharded_executions=True,
     )
-    print_data(step_infos, pipeline_slug, build_steps, output_type)
+    print_data(step_infos, build_steps, output_type)
 
 
 if __name__ == "__main__":
