@@ -46,6 +46,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         with c.override(
             Testdrive(
                 no_reset=True,
+                no_consistency_checks=True,  # No access to HTTP for coordinator check
                 materialize_url=f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{host}:6875/materialize",
             ),
         ):
