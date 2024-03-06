@@ -225,7 +225,8 @@ if __name__ == "__main__":
     main(
         args.pipeline,
         [BuildStep(build_step_key, None) for build_step_key in args.build_step_key]
-        or [],
+        if args.build_step_key is not None
+        else [],
         args.fetch,
         args.max_fetches,
         args.branch if args.branch != "*" else None,
