@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
@@ -696,27 +697,39 @@ impl Coordinator {
         ),
         AdapterError,
     > {
-        // The dataflow's `as_of` should always be simply `least_valid_read`.
-        let dataflow_as_of = self.least_valid_read(&id_bundle);
+        // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
+        // `least_valid_read`.
+        let least_valid_read = self.least_valid_read(&id_bundle);
+        let mut dataflow_as_of = least_valid_read.clone();
+        let mut storage_as_of = least_valid_read.clone();
 
-        // Normally, the Storage collection's `as_of` should also be the same.
-        let mut storage_as_of = dataflow_as_of.clone();
-
-        // But for MVs with non-trivial REFRESH schedules, it's important to set the `storage_as_of`
-        // to the first refresh. This is because we'd like queries on the MV to block until the
-        // first refresh (rather than to show an empty MV).
+        // For MVs with non-trivial REFRESH schedules:
+        // 1. it's important to set the `storage_as_of` to the first refresh. This is because we'd
+        // like queries on the MV to block until the first refresh (rather than to show an empty
+        // MV).
+        // 2. We move the `dataflow_as_of` forward to the minimum of `greatest_available_read` and
+        // the first refresh time. There is no point in processing the times before
+        // `greatest_available_read`, because the first time for which results will be exposed is
+        // the first refresh time. Also note that simply moving the `dataflow_as_of` forward to the
+        // first refresh time would prevent warmup before the first refresh.
         if let Some(refresh_schedule) = &refresh_schedule {
-            if let Some(storage_as_of_ts) = storage_as_of.as_option() {
-                if let Some(rounded_up_ts) = refresh_schedule.round_up_timestamp(*storage_as_of_ts)
+            if let Some(least_valid_read_ts) = least_valid_read.as_option() {
+                if let Some(first_refresh_ts) =
+                    refresh_schedule.round_up_timestamp(*least_valid_read_ts)
                 {
-                    storage_as_of = Antichain::from_elem(rounded_up_ts);
+                    storage_as_of = Antichain::from_elem(first_refresh_ts);
+                    dataflow_as_of.join_assign(
+                        &self
+                            .greatest_available_read(&id_bundle)
+                            .meet(&storage_as_of),
+                    );
                 } else {
                     let last_refresh = refresh_schedule.last_refresh().expect(
                         "if round_up_timestamp returned None, then there should be a last refresh",
                     );
                     return Err(AdapterError::MaterializedViewWouldNeverRefresh(
                         last_refresh,
-                        *storage_as_of_ts,
+                        *least_valid_read_ts,
                     ));
                 }
             } else {
