@@ -24,12 +24,9 @@ use mz_expr::{
     FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
-use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 
-use crate::attribute::cardinality::{FactorizerVariable, SymExp};
-use crate::attribute::{Cardinality, DerivedAttributesBuilder};
 use crate::join_implementation::index_map::IndexMap;
 use crate::predicate_pushdown::PredicatePushdown;
 use crate::{StatisticsOracle, TransformCtx, TransformError};
@@ -128,7 +125,7 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
-        stats: &dyn StatisticsOracle,
+        _stats: &dyn StatisticsOracle,
         eager_delta_joins: bool,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
@@ -179,65 +176,6 @@ impl JoinImplementation {
 
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
-
-            // Cardinality information for each input relation
-            let mut symbolic_cardinalities: Vec<SymExp> = Vec::with_capacity(inputs.len());
-            // Symbolic terms in the cardinality estimate
-            let mut symbolics = std::collections::BTreeSet::new();
-            for input in inputs.iter() {
-                let mut builder = DerivedAttributesBuilder::default();
-                builder.require(Cardinality::default());
-                let mut attributes = builder.finish();
-
-                input.visit(&mut attributes)?;
-
-                let cardinality = attributes
-                    .get_results::<Cardinality>()
-                    .last()
-                    .expect("cardinality");
-
-                cardinality.collect_symbolics(&mut symbolics);
-                symbolic_cardinalities.push(cardinality.clone());
-            }
-
-            let mut cardinality_stats = BTreeMap::new();
-            let mut have_stats_for_all_inputs = true;
-            for s in symbolics {
-                match s {
-                    FactorizerVariable::Id(id) => {
-                        if let Some(cardinality) = stats.cardinality_estimate(id) {
-                            cardinality_stats.insert(id, cardinality);
-                        } else {
-                            have_stats_for_all_inputs = false;
-                            break;
-                        }
-                    }
-                    FactorizerVariable::Index(_) => (),
-                    FactorizerVariable::Unknown => {
-                        have_stats_for_all_inputs = false;
-                        break;
-                    }
-                }
-            }
-
-            let fill_in_estimates = |v: &FactorizerVariable| -> f64 {
-                debug_assert!(have_stats_for_all_inputs);
-
-                match v {
-                    FactorizerVariable::Id(id) => f64::cast_lossy(
-                        *cardinality_stats
-                            .get(id)
-                            .expect("have stats for all inputs"),
-                    ),
-                    // TODO(mgree): should be the # of distinct values in the index of `_col`, but we don't have those statistics (as of 2023-06-13)
-                    FactorizerVariable::Index(_col) => {
-                        crate::attribute::cardinality::WORST_CASE_SELECTIVITY
-                    }
-                    FactorizerVariable::Unknown => {
-                        unreachable!("have stats for all inputs but encounted unknown")
-                    }
-                }
-            };
 
             // The first fundamental question is whether we should employ a delta query or not.
             //
@@ -330,30 +268,10 @@ impl JoinImplementation {
                 }
                 let push_down_characteristics =
                     FilterCharacteristics::filter_characteristics(&push_downs[index])?;
-                let push_down_factor = push_down_characteristics.worst_case_scaling_factor();
+                // let push_down_factor = push_down_characteristics.worst_case_scaling_factor();
                 characteristics |= push_down_characteristics;
 
-                // Compute the actual cardinalities given our statistics. One of two cases applies:
-                //
-                //   1. `have_stats_for_all_inputs`, and we can use `fill_in_estimates` to get cardinalities for every input
-                //   2. Some inputs are missing inputs; we ignore the estimates
-                if have_stats_for_all_inputs {
-                    // evaluate and scale by the filters
-                    let estimate = symbolic_cardinalities[index].evaluate(&fill_in_estimates);
-                    // we've already accounted for the filters _in_ the term; these capture the ones above
-                    let scaled = estimate * push_down_factor;
-
-                    // round and flatten
-                    let rounded = scaled.ceil();
-                    let flattened = usize::cast_from(
-                        u64::try_cast_from(rounded)
-                            .expect("positive and representable cardinality estimate"),
-                    );
-
-                    cardinalities.push(Some(flattened));
-                } else {
-                    cardinalities.push(None);
-                }
+                cardinalities.push(None);
                 filters.push(characteristics);
 
                 // Collect available arrangements on this input.
