@@ -1919,7 +1919,7 @@ impl Coordinator {
             }
             _ => {
                 ctx.retire(Err(AdapterError::Unsupported(
-                    "EXPLAIN FILTER PUSHDOWN queries for this query type",
+                    "EXPLAIN FILTER PUSHDOWN queries for this explainee type",
                 )));
             }
         };

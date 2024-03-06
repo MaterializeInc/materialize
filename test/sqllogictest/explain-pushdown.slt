@@ -37,7 +37,7 @@ ALTER SYSTEM SET enable_explain_pushdown = true
 ----
 COMPLETE 0
 
-query error db error: ERROR: EXPLAIN FILTER PUSHDOWN queries for this query type are not supported
+query error db error: ERROR: EXPLAIN FILTER PUSHDOWN queries for this explainee type are not supported
 EXPLAIN FILTER PUSHDOWN FOR CREATE MATERIALIZED VIEW foo AS SELECT * FROM numbers where value > 10;
 
 # However, EXPLAIN FILTER PUSHDOWN FOR SELECT is now supported
