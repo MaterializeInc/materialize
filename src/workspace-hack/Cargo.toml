@@ -62,12 +62,12 @@ k8s-openapi = { version = "0.20.0", default-features = false, features = ["schem
 kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.87.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.153", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
-mio = { version = "0.8.8", features = ["net", "os-ext"] }
+mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.31.0", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
@@ -180,12 +180,12 @@ k8s-openapi = { version = "0.20.0", default-features = false, features = ["schem
 kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.87.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.153", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
-mio = { version = "0.8.8", features = ["net", "os-ext"] }
+mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git", rev = "5524ad80740334e51e49b6c0c3b06bbcc1dfe8dc", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.31.0", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
