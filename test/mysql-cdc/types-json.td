@@ -35,6 +35,8 @@ USE public;
 CREATE TABLE t1 (f1 JSON);
 
 INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false}' AS JSON));
+INSERT INTO t1 VALUES (CAST('null' AS JSON));
+INSERT INTO t1 VALUES (NULL);
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
@@ -51,9 +53,23 @@ INSERT INTO t1 SELECT * FROM t1;
 jsonb
 
 > SELECT * FROM t1;
+<null>
+<null>
+null
+null
 "{\"active\":false,\"balance\":7.77,\"bar\":\"baz\"}"
 "{\"active\":false,\"balance\":7.77,\"bar\":\"baz\"}"
 
 > SELECT f1->>'balance' FROM t1;
+<null>
+<null>
+<null>
+<null>
 7.77
 7.77
+
+> SELECT count(*) FROM t1 WHERE f1 IS NULL;
+2
+
+> SELECT count(*) FROM t1 WHERE f1 = 'null'::jsonb;
+2
