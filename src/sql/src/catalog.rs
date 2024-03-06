@@ -743,6 +743,23 @@ impl From<CatalogItemType> for ObjectType {
     }
 }
 
+impl From<CatalogItemType> for mz_audit_log::ObjectType {
+    fn from(value: CatalogItemType) -> Self {
+        match value {
+            CatalogItemType::Table => mz_audit_log::ObjectType::Table,
+            CatalogItemType::Source => mz_audit_log::ObjectType::Source,
+            CatalogItemType::View => mz_audit_log::ObjectType::View,
+            CatalogItemType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
+            CatalogItemType::Index => mz_audit_log::ObjectType::Index,
+            CatalogItemType::Type => mz_audit_log::ObjectType::Type,
+            CatalogItemType::Sink => mz_audit_log::ObjectType::Sink,
+            CatalogItemType::Func => mz_audit_log::ObjectType::Func,
+            CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
+            CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
+        }
+    }
+}
+
 /// Details about a type in the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogTypeDetails<T: TypeReference> {

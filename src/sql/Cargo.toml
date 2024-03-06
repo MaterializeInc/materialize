@@ -33,6 +33,7 @@ mysql_async = { version = "0.34.1", default-features = false, features = [
     "minimal",
 ] }
 mz-adapter-types = { path = "../adapter-types" }
+mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
