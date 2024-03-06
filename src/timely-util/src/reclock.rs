@@ -119,9 +119,11 @@ where
                         source_upper.update_iter(changes.drain(..));
                     }
                     Event::Messages(_, data) => {
+                        // Sorting by the linear extension before computing the chain decomposition
+                        // of the batch leads to an optimal chain decomposition for a number of
+                        // concrete Timestamp implementations that we are interested in.
                         data.sort_unstable_by(|a: &(D1, FromTime, R), b| a.1.cmp(&b.1));
-                        let batch = ChainBatch::from_iter(data.drain(..));
-                        source_batches.push_back(batch);
+                        source_batches.push_back(ChainBatch::from_iter(data.drain(..)));
                     }
                 }
             }
