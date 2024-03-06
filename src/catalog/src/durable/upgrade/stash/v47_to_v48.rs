@@ -58,9 +58,31 @@ const ITEM_COLLECTION: TypedCollection<v47::ItemKey, v47::ItemValue> = TypedColl
 const ID_ALLOCATOR_COLLECTION: TypedCollection<v47::IdAllocKey, v47::IdAllocValue> =
     TypedCollection::new("id_alloc");
 
+struct OidAllocator {
+    cur_oid: u32,
+}
+
+impl OidAllocator {
+    fn new() -> Self {
+        Self {
+            cur_oid: FIRST_USER_OID,
+        }
+    }
+
+    fn allocate_oid(&mut self) -> u32 {
+        let oid = self.cur_oid;
+        self.cur_oid += 1;
+        oid
+    }
+
+    fn into_cur_oid(self) -> u32 {
+        self.cur_oid
+    }
+}
+
 /// Persist OIDs in the catalog.
 pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
-    let mut cur_user_oid: u32 = FIRST_USER_OID;
+    let mut oid_allocator = OidAllocator::new();
     // Sorting everything by ID isn't strictly necessary, but it would be nice if the OIDs and the
     // IDs had the same order.
     let mut user_database_oids: BTreeMap<u64, u32> = tx
@@ -82,8 +104,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
         })
         .sorted()
         .map(|id| {
-            let oid = cur_user_oid;
-            cur_user_oid += 1;
+            let oid = oid_allocator.allocate_oid();
             (id, oid)
         })
         .collect();
@@ -141,8 +162,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
         })
         .sorted()
         .map(|id| {
-            let oid = cur_user_oid;
-            cur_user_oid += 1;
+            let oid = oid_allocator.allocate_oid();
             (id, oid)
         })
         .collect();
@@ -212,8 +232,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
         })
         .sorted()
         .map(|id| {
-            let oid = cur_user_oid;
-            cur_user_oid += 1;
+            let oid = oid_allocator.allocate_oid();
             (id, oid)
         })
         .collect();
@@ -272,8 +291,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
         .map(|value| value.index_id)
         .sorted()
         .map(|id| {
-            let oid = cur_user_oid;
-            cur_user_oid += 1;
+            let oid = oid_allocator.allocate_oid();
             (id, oid)
         })
         .collect();
@@ -317,8 +335,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
         })
         .sorted()
         .map(|id| {
-            let oid = cur_user_oid;
-            cur_user_oid += 1;
+            let oid = oid_allocator.allocate_oid();
             (id, oid)
         })
         .collect();
@@ -369,7 +386,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
                 name: "oid".to_string(),
             };
             let id_alloc_value = v48::IdAllocValue {
-                next_id: cur_user_oid.into(),
+                next_id: oid_allocator.into_cur_oid().into(),
             };
             vec![MigrationAction::Insert(id_alloc_key, id_alloc_value)]
         })

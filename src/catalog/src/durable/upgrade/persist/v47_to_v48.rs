@@ -57,11 +57,33 @@ const MZ_SUPPORT_ID: u64 = 2;
 const MZ_MONITOR_ID: u64 = 3;
 const MZ_MONITOR_REDACTED_ID: u64 = 4;
 
+struct OidAllocator {
+    cur_oid: u32,
+}
+
+impl OidAllocator {
+    fn new() -> Self {
+        Self {
+            cur_oid: FIRST_USER_OID,
+        }
+    }
+
+    fn allocate_oid(&mut self) -> u32 {
+        let oid = self.cur_oid;
+        self.cur_oid += 1;
+        oid
+    }
+
+    fn into_cur_oid(self) -> u32 {
+        self.cur_oid
+    }
+}
+
 /// Persist OIDs in the catalog.
 pub fn upgrade(
     snapshot: Vec<v47::StateUpdateKind>,
 ) -> Vec<MigrationAction<v47::StateUpdateKind, v48::StateUpdateKind>> {
-    let mut cur_user_oid: u32 = FIRST_USER_OID;
+    let mut oid_allocator = OidAllocator::new();
     let mut databases = Vec::new();
     let mut schemas = Vec::new();
     let mut roles = Vec::new();
@@ -186,8 +208,7 @@ pub fn upgrade(
         let old_key = database.key.expect("missing key field");
         let old_value = database.value.expect("missing value field");
         let new_key = WireCompatible::convert(&old_key);
-        let oid = cur_user_oid;
-        cur_user_oid += 1;
+        let oid = oid_allocator.allocate_oid();
         let new_value = v48::DatabaseValue {
             name: old_value.name.clone(),
             owner_id: old_value.owner_id.as_ref().map(WireCompatible::convert),
@@ -242,11 +263,7 @@ pub fn upgrade(
             v47::schema_id::Value::System(id) => {
                 system_schemas.remove(id).expect("unexpected system schema")
             }
-            v47::schema_id::Value::User(_) => {
-                let oid = cur_user_oid;
-                cur_user_oid += 1;
-                oid
-            }
+            v47::schema_id::Value::User(_) => oid_allocator.allocate_oid(),
         };
         let new_value = v48::SchemaValue {
             database_id: old_value.database_id.as_ref().map(WireCompatible::convert),
@@ -303,11 +320,7 @@ pub fn upgrade(
                 system_roles.remove(id).expect("unexpected system schema")
             }
             v47::role_id::Value::Public(_) => PUBLIC_ROLE_OID,
-            v47::role_id::Value::User(_) => {
-                let oid = cur_user_oid;
-                cur_user_oid += 1;
-                oid
-            }
+            v47::role_id::Value::User(_) => oid_allocator.allocate_oid(),
         };
         let new_value = v48::RoleValue {
             name: old_value.name.clone(),
@@ -342,8 +355,7 @@ pub fn upgrade(
             .value
             .expect("missing value field");
         let new_key = WireCompatible::convert(&old_key);
-        let oid = cur_user_oid;
-        cur_user_oid += 1;
+        let oid = oid_allocator.allocate_oid();
         let new_value = v48::ClusterIntrospectionSourceIndexValue {
             index_id: old_value.index_id,
             oid,
@@ -376,8 +388,7 @@ pub fn upgrade(
         let old_key = item.key.expect("missing key field");
         let old_value = item.value.expect("missing value field");
         let new_key = WireCompatible::convert(&old_key);
-        let oid = cur_user_oid;
-        cur_user_oid += 1;
+        let oid = oid_allocator.allocate_oid();
         let new_value = v48::ItemValue {
             schema_id: old_value.schema_id.as_ref().map(WireCompatible::convert),
             name: old_value.name.clone(),
@@ -414,7 +425,7 @@ pub fn upgrade(
         name: "oid".to_string(),
     };
     let id_alloc_value = v48::IdAllocValue {
-        next_id: cur_user_oid.into(),
+        next_id: oid_allocator.into_cur_oid().into(),
     };
     let id_alloc = v48::StateUpdateKind {
         kind: Some(v48::state_update_kind::Kind::IdAlloc(
