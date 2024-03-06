@@ -47,35 +47,6 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
 
-/// A batch of differential updates that vary over some partial order. This type maintains the data
-/// in a set of disjoint chains that allows for efficient extraction of batches given a frontier.
-#[derive(Debug)]
-struct Batch<D, T, R> {
-    /// A list of chains (sets of mutually comparable times) sorted by the partial order.
-    chains: Vec<Vec<(D, T, R)>>,
-}
-
-impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for Batch<D, T, R> {
-    fn from_iter<I: IntoIterator<Item = (D, T, R)>>(updates: I) -> Self {
-        let mut chains = vec![];
-        let mut updates = updates.into_iter();
-        if let Some((d, t, r)) = updates.next() {
-            let mut chain = vec![(d, t, r)];
-            for (d, t, r) in updates {
-                let prev_t = &chain[chain.len() - 1].1;
-                assert!(prev_t <= &t, "batch input was not sorted");
-                if !PartialOrder::less_equal(prev_t, &t) {
-                    chains.push(chain);
-                    chain = vec![];
-                }
-                chain.push((d, t, r));
-            }
-            chains.push(chain);
-        }
-        Self { chains }
-    }
-}
-
 /// Constructs an operator that reclocks a `source` collection varying with some time `FromTime`
 /// into the corresponding `reclocked` collection varying over some time `IntoTime` using the
 /// provided `remap` collection.
@@ -149,7 +120,7 @@ where
                     }
                     Event::Messages(_, data) => {
                         data.sort_unstable_by(|a: &(D1, FromTime, R), b| a.1.cmp(&b.1));
-                        let batch = Batch::from_iter(data.drain(..));
+                        let batch = ChainBatch::from_iter(data.drain(..));
                         source_batches.push_back(batch);
                     }
                 }
@@ -161,20 +132,13 @@ where
                 let mut session = output.session(cap);
                 let into_t = cap.time();
                 source_batches.retain_mut(|batch| {
-                    batch.chains.retain_mut(|chain| {
-                        // A chain is a set of mutually comparable elements so we can binary search
-                        // to find the prefix that is not beyond the frontier and extract it.
-                        let idx = chain.partition_point(|(_, t, _)| !frontier.less_equal(t));
-                        session.give_iterator(
-                            chain
-                                .drain(0..idx)
-                                .map(|(d, t, r)| (logic(d, t), into_t.clone(), r)),
-                        );
-                        // Retain non-empty chains
-                        !chain.is_empty()
-                    });
+                    session.give_iterator(
+                        batch
+                            .extract(frontier)
+                            .map(|(d, t, r)| (logic(d, t), into_t.clone(), r)),
+                    );
                     // Retain non-empty batches
-                    !batch.chains.is_empty()
+                    !batch.is_empty()
                 });
                 // If we won't receive any more data for this binding we can go to the next one
                 if PartialOrder::less_equal(&frontier, &source_upper.frontier()) {
@@ -188,6 +152,58 @@ where
     });
 
     (Box::new(pusher), reclocked.as_collection())
+}
+
+/// A batch of differential updates that vary over some partial order. This type maintains the data
+/// as a set of disjoint chains that allows for efficient extraction of batches given a frontier.
+#[derive(Debug)]
+struct ChainBatch<D, T, R> {
+    /// A list of chains (sets of mutually comparable times) sorted by the partial order.
+    chains: Vec<Vec<(D, T, R)>>,
+}
+
+impl<D, T: Timestamp, R> ChainBatch<D, T, R> {
+    /// Extracts all updates with time not greater or equal to any time in `upper`.
+    fn extract<'a>(
+        &'a mut self,
+        upper: AntichainRef<'a, T>,
+    ) -> impl Iterator<Item = (D, T, R)> + 'a {
+        self.chains
+            .iter_mut()
+            .map(move |chain| {
+                // A chain is a set of mutually comparable elements so we can binary search
+                // to find the prefix that is not beyond the frontier and extract it.
+                let idx = chain.partition_point(|(_, time, _)| !upper.less_equal(time));
+                chain.drain(0..idx)
+            })
+            .flatten()
+    }
+
+    /// Indicates if this batch contains any update.
+    fn is_empty(&self) -> bool {
+        self.chains.iter().all(|chain| chain.is_empty())
+    }
+}
+
+impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for ChainBatch<D, T, R> {
+    /// Computes the chain decomposition of updates according to the partial order `T`.
+    fn from_iter<I: IntoIterator<Item = (D, T, R)>>(updates: I) -> Self {
+        let mut chains = vec![];
+        let mut updates = updates.into_iter();
+        if let Some((d, t, r)) = updates.next() {
+            let mut chain = vec![(d, t, r)];
+            for (d, t, r) in updates {
+                let prev_t = &chain[chain.len() - 1].1;
+                if !PartialOrder::less_equal(prev_t, &t) {
+                    chains.push(chain);
+                    chain = vec![];
+                }
+                chain.push((d, t, r));
+            }
+            chains.push(chain);
+        }
+        Self { chains }
+    }
 }
 
 /// A struct that reveals the frontiers encoded in a remap collection in time order.
@@ -218,6 +234,8 @@ impl<FromTime: Debug, IntoTime: Timestamp + TotalOrder> Debug
 }
 
 impl<FromTime: Timestamp, IntoTime: Timestamp + TotalOrder> BindingReplay<FromTime, IntoTime> {
+    /// Constructs a new replayer with a given initial capability. The provided capability must be
+    /// at the minimum timestamp.
     fn new(cap: Capability<IntoTime>) -> Self {
         assert_eq!(
             cap.time(),
@@ -241,8 +259,9 @@ impl<FromTime: Timestamp, IntoTime: Timestamp + TotalOrder> BindingReplay<FromTi
         AntichainRef::new(times)
     }
 
-    /// Append all the bindings that are not beyond the provided upper. If there isn't an active
-    /// active binding this method also attempts to activate one.
+    /// Informs the replayer about the next batch of bindings in the `remap` collection. Each call
+    /// to `append_batch` must provide complete batches, where complete means that all future calls
+    /// to `append_batch` will contain updates that are beyond the provided `upper`.
     fn append_batch<I>(&mut self, data: I, upper: Antichain<IntoTime>)
     where
         I: IntoIterator<Item = (FromTime, IntoTime, i64)>,
@@ -262,8 +281,13 @@ impl<FromTime: Timestamp, IntoTime: Timestamp + TotalOrder> BindingReplay<FromTi
     /// Reveals the currently active binding and its accosiated `FromTime` frontier.
     fn active_binding(&mut self) -> Option<(AntichainRef<FromTime>, &Capability<IntoTime>)> {
         match self.active_binding.as_ref() {
+            // When the replayer initializes the active binding to the minimum timestamp we don't
+            // yet know the FromTime frontier that corresponds to it so we must wait for the first
+            // batch to arrive.
             Some(cap) if self.upper().less_equal(cap.time()) => None,
             Some(cap) => {
+                // Accumulate the bindings that are not beyond cap.time() into self.frontier to
+                // compute the FromTime frontier that corresponds to this IntoTime.
                 let idx = self
                     .bindings
                     .iter()
