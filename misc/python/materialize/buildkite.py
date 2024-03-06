@@ -136,10 +136,11 @@ def get_parallelism_count() -> int:
     return int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
 
 
-def accepted_by_shard(index: int) -> bool:
+def accepted_by_shard(identifier: str) -> bool:
     parallelism_index = get_parallelism_index()
     parallelism_count = get_parallelism_count()
-    return index % parallelism_count == parallelism_index
+    hash_value = hash(identifier)
+    return hash_value % parallelism_count == parallelism_index
 
 
 def _validate_parallelism_configuration() -> None:

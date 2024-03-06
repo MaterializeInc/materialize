@@ -73,7 +73,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-concurrent-connections",
         ):
             continue
-        if buildkite.accepted_by_shard(i):
+        if buildkite.accepted_by_shard(name):
             with c.test_case(name):
                 c.workflow(name)
 

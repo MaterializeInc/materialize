@@ -404,8 +404,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     scenarios_to_run = [
         scenario
-        for i, scenario in enumerate(selected_scenarios)
-        if buildkite.accepted_by_shard(i)
+        for scenario in selected_scenarios
+        if buildkite.accepted_by_shard(scenario.__name__)
     ]
 
     scenarios_with_regressions = []
