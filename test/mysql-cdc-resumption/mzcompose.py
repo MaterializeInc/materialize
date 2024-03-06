@@ -59,14 +59,10 @@ def workflow_disruptions(c: Composition) -> None:
         verify_no_snapshot_reingestion,
     ]
 
-    shard = buildkite.get_parallelism_index()
-    shard_count = buildkite.get_parallelism_count()
-
-    if shard_count > 1:
-        scenarios = scenarios[shard::shard_count]
-        print(f"Selected scenarios in job with index {shard}")
-
-    print(f"Scenarios: {[s.__name__ for s in scenarios]}")
+    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+    print(
+        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+    )
 
     for scenario in scenarios:
         overrides = (

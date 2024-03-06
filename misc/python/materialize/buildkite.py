@@ -10,10 +10,13 @@
 """Buildkite utilities."""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from materialize import git, spawn, ui
+
+T = TypeVar("T")
 
 
 def is_in_buildkite() -> bool:
@@ -136,19 +139,55 @@ def get_parallelism_count() -> int:
     return int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
 
 
-def accepted_by_shard(index: int) -> bool:
+def accepted_by_shard(
+    identifier: str,
+    parallelism_index: int | None = None,
+    parallelism_count: int | None = None,
+) -> bool:
+    if parallelism_index is None:
+        parallelism_index = get_parallelism_index()
+    if parallelism_count is None:
+        parallelism_count = get_parallelism_count()
+
+    hash_value = hash(identifier)
+    return hash_value % parallelism_count == parallelism_index
+
+
+def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
     parallelism_index = get_parallelism_index()
     parallelism_count = get_parallelism_count()
-    return index % parallelism_count == parallelism_index
+
+    if parallelism_count == 1:
+        return items
+
+    return [
+        item
+        for item in items
+        if accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
+    ]
 
 
 def _validate_parallelism_configuration() -> None:
     job_index = os.environ.get("BUILDKITE_PARALLEL_JOB")
     job_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
 
-    assert (job_index is None) == (
-        job_count is None
-    ), f"$BUILDKITE_PARALLEL_JOB (= '{job_index}') and $BUILDKITE_PARALLEL_JOB_COUNT (= '{job_count}') need to be either both specified or not specified"
+    if job_index is None and job_count is None:
+        # OK
+        return
+
+    job_index_desc = f"$BUILDKITE_PARALLEL_JOB (= '{job_index}')"
+    job_count_desc = f"$BUILDKITE_PARALLEL_JOB_COUNT (= '{job_count}')"
+    assert (
+        job_index is not None and job_count is not None
+    ), f"{job_index_desc} and {job_count_desc} need to be either both specified or not specified"
+
+    job_index = int(job_index)
+    job_count = int(job_count)
+
+    assert job_count > 0, f"{job_count_desc} not valid"
+    assert (
+        0 <= job_index < job_count
+    ), f"{job_index_desc} out of valid range with {job_count_desc}"
 
 
 def truncate_str(text: str, length: int = 900_000) -> str:
