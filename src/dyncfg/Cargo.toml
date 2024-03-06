@@ -11,7 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
-mz-ore = { path = "../ore", default-features = false, features = ["proptest"] }
+mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
 mz-proto = { path = "../proto" }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}

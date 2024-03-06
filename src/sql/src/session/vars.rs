@@ -1227,6 +1227,12 @@ impl SystemVars {
                     cfg.desc(),
                     true,
                 ),
+                ConfigVal::OptUsize(default) => VarDefinition::new_runtime(
+                    cfg.name(),
+                    <Option<usize> as ConfigType>::get(default),
+                    cfg.desc(),
+                    true,
+                ),
                 ConfigVal::String(default) => VarDefinition::new_runtime(
                     cfg.name(),
                     <String as ConfigType>::get(default),
@@ -1862,6 +1868,10 @@ impl SystemVars {
                 ConfigVal::Usize(x) => {
                     <usize as ConfigType>::set(x, *self.expect_config_value::<usize>(name))
                 }
+                ConfigVal::OptUsize(x) => <Option<usize> as ConfigType>::set(
+                    x,
+                    *self.expect_config_value::<Option<usize>>(name),
+                ),
                 ConfigVal::String(x) => {
                     <String as ConfigType>::set(x, self.expect_config_value::<String>(name).clone())
                 }

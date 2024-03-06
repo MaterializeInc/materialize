@@ -56,7 +56,7 @@
 //!   and doesn't want to instantiate a catalog impl.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -72,9 +72,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_dyncfg.rs"));
 /// registered to a set of such configs with [ConfigSet::add] and then later
 /// used to retrieve the latest value at any time with [Self::get].
 ///
-/// The supported types are [bool], [usize], and [String].
-///
-/// TODO(cfg): Add Duration in a followup.
+/// The supported types are [bool], [usize], [Duration], and [String], as well as [Option]
+/// variants of these as necessary.
 #[derive(Clone, Debug)]
 pub struct Config<T: ConfigType> {
     name: &'static str,
@@ -267,7 +266,9 @@ pub enum ConfigVal {
     /// A `u32` shared value.
     U32(Arc<AtomicU32>),
     /// A `usize` shared value.
-    Usize(Arc<AtomicU64>),
+    Usize(Arc<AtomicUsize>),
+    /// An `Option<usize>` shared value.
+    OptUsize(Arc<RwLock<Option<usize>>>),
     /// A `String` shared value.
     String(Arc<RwLock<String>>),
     /// A 'Duration' shared value.
@@ -323,6 +324,9 @@ impl ConfigUpdates {
                 (ConfigVal::Bool(src), ConfigVal::Bool(dst)) => copy::<bool>(src, dst),
                 (ConfigVal::U32(src), ConfigVal::U32(dst)) => copy::<u32>(src, dst),
                 (ConfigVal::Usize(src), ConfigVal::Usize(dst)) => copy::<usize>(src, dst),
+                (ConfigVal::OptUsize(src), ConfigVal::OptUsize(dst)) => {
+                    copy::<Option<usize>>(src, dst)
+                }
                 (ConfigVal::String(src), ConfigVal::String(dst)) => copy::<String>(src, dst),
                 (ConfigVal::Duration(src), ConfigVal::Duration(dst)) => copy::<Duration>(src, dst),
                 (src, dst) => error!(
@@ -335,14 +339,14 @@ impl ConfigUpdates {
 }
 
 mod impls {
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::SeqCst};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::SeqCst};
     use std::sync::{Arc, RwLock};
     use std::time::Duration;
 
     use mz_ore::cast::CastFrom;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-    use crate::{proto_config_val, Config, ConfigSet, ConfigType, ConfigVal};
+    use crate::{proto_config_val, Config, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64};
 
     impl ConfigType for bool {
         type Default = bool;
@@ -390,7 +394,7 @@ mod impls {
 
     impl ConfigType for usize {
         type Default = usize;
-        type Shared = AtomicU64;
+        type Shared = AtomicUsize;
 
         fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
             let entry = vals.configs.get(config.name)?;
@@ -400,13 +404,35 @@ mod impls {
             }
         }
         fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::Usize(Arc::new(u64::cast_from(*val).into()))
+            ConfigVal::Usize(Arc::new((*val).into()))
         }
         fn set(x: &Self::Shared, val: Self) {
-            x.store(u64::cast_from(val), SeqCst);
+            x.store(val, SeqCst);
         }
         fn get(x: &Self::Shared) -> Self {
-            usize::cast_from(x.load(SeqCst))
+            x.load(SeqCst)
+        }
+    }
+
+    impl ConfigType for Option<usize> {
+        type Default = Option<usize>;
+        type Shared = RwLock<Option<usize>>;
+
+        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
+            let entry = vals.configs.get(config.name)?;
+            match entry.val() {
+                ConfigVal::OptUsize(x) => Some(x),
+                x => panic!("expected usize value got {:?}", x),
+            }
+        }
+        fn to_val(val: &Self) -> ConfigVal {
+            ConfigVal::OptUsize(Arc::new(RwLock::new(*val)))
+        }
+        fn set(x: &Self::Shared, val: Self) {
+            *x.write().expect("lock poisoned") = val;
+        }
+        fn get(x: &Self::Shared) -> Self {
+            x.read().expect("lock poisoned").clone()
         }
     }
 
@@ -461,6 +487,9 @@ mod impls {
                 ConfigVal::Bool(x) => Val::Bool(bool::get(x)),
                 ConfigVal::U32(x) => Val::U32(u32::get(x)),
                 ConfigVal::Usize(x) => Val::Usize(u64::cast_from(usize::get(x))),
+                ConfigVal::OptUsize(x) => Val::OptUsize(ProtoOptionU64 {
+                    val: <Option<usize>>::get(x).map(u64::cast_from),
+                }),
                 ConfigVal::String(x) => Val::String(String::get(x)),
                 ConfigVal::Duration(x) => Val::Duration(Duration::get(x).into_proto()),
             };
@@ -471,7 +500,12 @@ mod impls {
             let val = match proto {
                 Some(proto_config_val::Val::Bool(x)) => ConfigVal::Bool(Arc::new(x.into())),
                 Some(proto_config_val::Val::U32(x)) => ConfigVal::U32(Arc::new(x.into())),
-                Some(proto_config_val::Val::Usize(x)) => ConfigVal::Usize(Arc::new(x.into())),
+                Some(proto_config_val::Val::Usize(x)) => {
+                    ConfigVal::Usize(Arc::new(usize::cast_from(x).into()))
+                }
+                Some(proto_config_val::Val::OptUsize(ProtoOptionU64 { val })) => {
+                    ConfigVal::OptUsize(Arc::new(RwLock::new(val.map(usize::cast_from))))
+                }
                 Some(proto_config_val::Val::String(x)) => {
                     ConfigVal::String(Arc::new(x.to_owned().into()))
                 }
@@ -504,21 +538,37 @@ mod tests {
 
     const BOOL: Config<bool> = Config::new("bool", true, "");
     const USIZE: Config<usize> = Config::new("usize", 1, "");
+    const OPT_USIZE: Config<Option<usize>> = Config::new("opt_usize", Some(2), "");
     const STRING: Config<String> = Config::new("string", "a", "");
+    const DURATION: Config<Duration> = Config::new("duration", Duration::from_nanos(3), "");
 
     #[mz_ore::test]
     fn all_types() {
-        let configs = ConfigSet::default().add(&BOOL).add(&USIZE).add(&STRING);
+        let configs = ConfigSet::default()
+            .add(&BOOL)
+            .add(&USIZE)
+            .add(&OPT_USIZE)
+            .add(&STRING)
+            .add(&DURATION);
         assert_eq!(BOOL.get(&configs), true);
         assert_eq!(USIZE.get(&configs), 1);
+        assert_eq!(OPT_USIZE.get(&configs), Some(2));
         assert_eq!(STRING.get(&configs), "a");
+        assert_eq!(DURATION.get(&configs), Duration::from_nanos(3));
 
         bool::set(bool::shared(&BOOL, &configs).unwrap(), false);
         usize::set(usize::shared(&USIZE, &configs).unwrap(), 2);
+        <Option<usize>>::set(<Option<usize>>::shared(&OPT_USIZE, &configs).unwrap(), None);
         String::set(String::shared(&STRING, &configs).unwrap(), "b".to_owned());
+        Duration::set(
+            Duration::shared(&DURATION, &configs).unwrap(),
+            Duration::from_nanos(4),
+        );
         assert_eq!(BOOL.get(&configs), false);
         assert_eq!(USIZE.get(&configs), 2);
+        assert_eq!(OPT_USIZE.get(&configs), None);
         assert_eq!(STRING.get(&configs), "b");
+        assert_eq!(DURATION.get(&configs), Duration::from_nanos(4));
     }
 
     #[mz_ore::test]
