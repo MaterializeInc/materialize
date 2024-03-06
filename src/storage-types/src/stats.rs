@@ -12,7 +12,7 @@
 use crate::controller::TxnsCodecRow;
 use crate::errors::DataflowError;
 use crate::sources::SourceData;
-use mz_expr::ResultSpec;
+use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, UnmaterializableFunc};
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
 use mz_persist_client::stats::PartStats;
@@ -174,6 +174,24 @@ fn downcast_stats<'a, T: Data>(
 }
 
 impl RelationPartStats<'_> {
+    pub fn may_match_mfp<'a>(&'a self, time_range: ResultSpec<'a>, mfp: &MapFilterProject) -> bool {
+        let arena = RowArena::new();
+        let mut ranges = ColumnSpecs::new(self.desc.typ(), &arena);
+        ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
+
+        if self.err_count().into_iter().any(|count| count > 0) {
+            // If the error collection is nonempty, we always keep the part.
+            return true;
+        }
+
+        for (id, _) in self.desc.typ().column_types.iter().enumerate() {
+            let result_spec = self.col_stats(id, &arena);
+            ranges.push_column(id, result_spec);
+        }
+        let result = ranges.mfp_filter(mfp).range;
+        result.may_contain(Datum::True) || result.may_fail()
+    }
+
     fn json_spec<'a>(len: usize, stats: &'a JsonStats, arena: &'a RowArena) -> ResultSpec<'a> {
         match stats {
             JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),

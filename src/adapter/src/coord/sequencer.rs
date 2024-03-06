@@ -325,10 +325,9 @@ impl Coordinator {
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }
-                Plan::ExplainPushdown(_plan) => {
-                    ctx.retire(Err(AdapterError::Unsupported(
-                        "EXPLAIN FILTER PUSHDOWN queries",
-                    )));
+                Plan::ExplainPushdown(plan) => {
+                    self.sequence_explain_pushdown(ctx, plan, target_cluster)
+                        .await;
                 }
                 Plan::ExplainSinkSchema(plan) => {
                     let result = self.sequence_explain_schema(plan);

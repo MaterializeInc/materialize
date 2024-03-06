@@ -22,6 +22,7 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::spawn;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -50,9 +51,9 @@ use mz_catalog::memory::objects::{
 };
 use mz_ore::instrument;
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, IndexOption, MutationKind,
-    Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
-    UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee,
+    ExplaineeStatement, IndexOption, MutationKind, Params, Plan, PlannedAlterRoleOption,
+    PlannedRoleVariable, QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
@@ -84,8 +85,8 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, ExecuteContext,
-    Message, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    RealTimeRecencyContext, StageResult, Staged, TargetCluster,
+    ExplainContext, Message, PeekStage, PeekStageValidate, PendingRead, PendingReadTxn, PendingTxn,
+    PendingTxnResponse, PlanValidity, RealTimeRecencyContext, StageResult, Staged, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -1888,6 +1889,38 @@ impl Coordinator {
             }
             plan::Explainee::ReplanIndex(_) => {
                 self.explain_replan_index(ctx, plan).await;
+            }
+        };
+    }
+
+    pub(super) async fn sequence_explain_pushdown(
+        &mut self,
+        ctx: ExecuteContext,
+        plan: plan::ExplainPushdownPlan,
+        target_cluster: TargetCluster,
+    ) {
+        match plan.explainee {
+            Explainee::Statement(ExplaineeStatement::Select {
+                broken: false,
+                plan,
+                desc: _,
+            }) => {
+                self.execute_peek_stage(
+                    ctx,
+                    OpenTelemetryContext::obtain(),
+                    PeekStage::Validate(PeekStageValidate {
+                        plan,
+                        target_cluster,
+                        copy_to_ctx: None,
+                        explain_ctx: ExplainContext::Pushdown,
+                    }),
+                )
+                .await;
+            }
+            _ => {
+                ctx.retire(Err(AdapterError::Unsupported(
+                    "EXPLAIN FILTER PUSHDOWN queries for this explainee type",
+                )));
             }
         };
     }
