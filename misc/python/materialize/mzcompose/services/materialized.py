@@ -136,9 +136,7 @@ class Materialized(Service):
             and "devel" not in image
             and "unstable" not in image
             and MzVersion.parse_mz(image.split(":")[1]) < MzVersion.parse_mz("v0.41.0")
-            else "1"
-            if default_size == 1
-            else f"{default_size}-1"
+            else "1" if default_size == 1 else f"{default_size}-1"
         )
 
         self.default_replica_size = (
