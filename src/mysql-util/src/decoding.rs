@@ -14,7 +14,9 @@ use mysql_common::value::convert::from_value_opt;
 use mysql_common::{Row as MySqlRow, Value};
 
 use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{get_precision, get_scale, Numeric, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, ScalarType};
@@ -30,6 +32,7 @@ pub fn pack_mysql_row(
     let mut packer = row_container.packer();
     let mut temp_bytes = vec![];
     let mut temp_strs = vec![];
+    let mut temp_jsonbs = vec![];
     let row_values = row.unwrap();
 
     for values in table_desc.columns.iter().zip_longest(row_values) {
@@ -51,7 +54,13 @@ pub fn pack_mysql_row(
                 break;
             }
         };
-        let datum = match val_to_datum(value, col_desc, &mut temp_strs, &mut temp_bytes) {
+        let datum = match val_to_datum(
+            value,
+            col_desc,
+            &mut temp_strs,
+            &mut temp_bytes,
+            &mut temp_jsonbs,
+        ) {
             Err(err) => Err(MySqlError::ValueDecodeError {
                 column_name: col_desc.name.clone(),
                 qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
@@ -70,6 +79,7 @@ fn val_to_datum<'a>(
     col_desc: &MySqlColumnDesc,
     temp_strs: &'a mut Vec<String>,
     temp_bytes: &'a mut Vec<Vec<u8>>,
+    temp_jsonbs: &'a mut Vec<Jsonb>,
 ) -> Result<Datum<'a>, anyhow::Error> {
     Ok(match value {
         Value::NULL => {
@@ -155,6 +165,28 @@ fn val_to_datum<'a>(
                         temp_strs.push(from_value_opt::<String>(value)?);
                         Datum::from(temp_strs.last().unwrap().as_str())
                     }
+                }
+            }
+            ScalarType::Jsonb => {
+                if let Value::Bytes(data) = value {
+                    let j = mz_repr::adt::jsonb::Jsonb::from_slice(&data).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to decode JSON: {}",
+                            // See if we can output the string that failed to be converted to JSON.
+                            match std::str::from_utf8(&data) {
+                                Ok(str) => str.to_string(),
+                                // Otherwise produce the nominally helpful error.
+                                Err(_) => e.display_with_causes().to_string(),
+                            }
+                        )
+                    })?;
+                    temp_jsonbs.push(j);
+                    temp_jsonbs.last().unwrap().as_ref().into_datum()
+                } else {
+                    Err(anyhow::anyhow!(
+                        "received unexpected value for json type: {:?}",
+                        value
+                    ))?
                 }
             }
             ScalarType::Bytes => {
