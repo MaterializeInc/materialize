@@ -388,7 +388,12 @@ impl StateVersions {
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!("logic error: fetch_current_state refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                        warn!(concat!(
+                            "fetch_current_state refetch expects earliest live diff to advance: {} vs {}. ",
+                            "In dev and testing, this happens when persist's Blob (files in mzdata) ",
+                            "is deleted out from under it or when two processes are talking to ",
+                            "different Blobs (e.g. docker containers without it shared)."),
+                            earliest_before_refetch, earliest_after_refetch)
                     }
                     continue;
                 }
@@ -452,7 +457,12 @@ impl StateVersions {
                         .expect("initialized shard should have at least one diff")
                         .seqno;
                     if earliest_before_refetch >= earliest_after_refetch {
-                        warn!("logic error: fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}", earliest_before_refetch, earliest_after_refetch)
+                        warn!(concat!(
+                            "fetch_all_live_states refetch expects earliest live diff to advance: {} vs {}. ",
+                            "In dev and testing, this happens when persist's Blob (files in mzdata) ",
+                            "is deleted out from under it or when two processes are talking to ",
+                            "different Blobs (e.g. docker containers without it shared)."),
+                            earliest_before_refetch, earliest_after_refetch)
                     }
                     continue;
                 }
