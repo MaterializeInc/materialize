@@ -15,9 +15,10 @@ from typing import Any
 import pandas as pd
 
 from materialize.buildkite_insights.step_durations.build_step import (
+    BuildJobOutcome,
     BuildStepMatcher,
-    BuildStepOutcome,
-    extract_build_step_data,
+    extract_build_step_outcomes,
+    step_outcomes_to_job_outcomes,
 )
 from materialize.buildkite_insights.util.buildkite_api import fetch_builds
 from materialize.buildkite_insights.util.data_io import (
@@ -105,47 +106,49 @@ def get_data(
 
 
 def print_data(
-    step_infos: list[BuildStepOutcome],
+    job_outcomes: list[BuildJobOutcome],
     build_steps: list[BuildStepMatcher],
     output_type: str,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
-        print(
-            "step_key,build_number,created_at,duration_in_min,passed,exit_status,retry_count"
-        )
+        print("step_key,build_number,created_at,duration_in_min,passed,retry_count")
 
-    for entry in step_infos:
+    for entry in job_outcomes:
         if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
             formatted_duration = (
                 f"{entry.duration_in_min:.2f}"
                 if entry.duration_in_min is not None
                 else "None"
             )
-            url = "" if output_type == OUTPUT_TYPE_TXT_SHORT else f"{entry.web_url}, "
+            url = (
+                ""
+                if output_type == OUTPUT_TYPE_TXT_SHORT
+                else f"{entry.web_url_to_build}, "
+            )
             print(
                 f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}{' (RETRY)' if entry.retry_count > 0 else ''}"
             )
         elif output_type == OUTPUT_TYPE_CSV:
             print(
-                f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min},{1 if entry.passed else 0},{entry.exit_status},{entry.retry_count}"
+                f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min},{1 if entry.passed else 0},{entry.retry_count}"
             )
 
     if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
-        print_stats(step_infos, build_steps)
+        print_stats(job_outcomes, build_steps)
 
 
 def print_stats(
-    step_infos: list[BuildStepOutcome],
+    job_outcomes: list[BuildJobOutcome],
     build_steps: list[BuildStepMatcher],
 ) -> None:
-    if len(step_infos) == 0:
-        print(f"No data for jobs with keys {build_steps}!")
+    if len(job_outcomes) == 0:
+        print(f"No data for jobs matching {build_steps}!")
         return
 
-    dfs = pd.DataFrame(step_infos)
+    dfs = pd.DataFrame(job_outcomes)
     dfs_with_success = dfs.loc[dfs["passed"]]
 
-    number_of_builds = len(step_infos)
+    number_of_builds = len(job_outcomes)
     number_of_builds_with_successful_step = len(dfs_with_success.index)
     success_prop = number_of_builds_with_successful_step / number_of_builds
 
@@ -179,12 +182,12 @@ def main(
     output_type: str,
 ) -> None:
     builds_data = get_data(pipeline_slug, fetch_mode, max_fetches, branch, build_state)
-    step_infos = extract_build_step_data(
+    step_outcomes = extract_build_step_outcomes(
         builds_data=builds_data,
         selected_build_steps=build_steps,
-        merge_sharded_executions=True,
     )
-    print_data(step_infos, build_steps, output_type)
+    job_outcomes = step_outcomes_to_job_outcomes(step_outcomes)
+    print_data(job_outcomes, build_steps, output_type)
 
 
 if __name__ == "__main__":
