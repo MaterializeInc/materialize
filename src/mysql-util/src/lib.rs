@@ -72,6 +72,11 @@ pub enum MySqlError {
     },
     #[error("unsupported data types: {columns:?}")]
     UnsupportedDataTypes { columns: Vec<UnsupportedDataType> },
+    #[error("duplicated column names in table '{qualified_table_name}': {columns:?}")]
+    DuplicatedColumnNames {
+        qualified_table_name: String,
+        columns: Vec<String>,
+    },
     #[error("invalid mysql system setting '{setting}'. Expected '{expected}'. Got '{actual}'.")]
     InvalidSystemSetting {
         setting: String,

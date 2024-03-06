@@ -47,6 +47,8 @@ breaking:
     - compute-types/src/sinks.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/relation.proto
+    # reason: not yet released
+    - mysql-util/src/desc.proto
     # reason: still under active development
     - persist-types/src/stats.proto
     # reason: does currently not require backward-compatibility

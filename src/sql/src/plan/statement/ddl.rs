@@ -429,7 +429,8 @@ generate_extracted_config!(
 generate_extracted_config!(
     MySqlConfigOption,
     (Details, String),
-    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
+    (IgnoreColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
 pub fn plan_create_webhook_source(
@@ -1002,6 +1003,7 @@ pub fn plan_create_source(
             let MySqlConfigOptionExtracted {
                 details,
                 text_columns: text_cols,
+                ignore_columns: ignore_cols,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -1050,12 +1052,34 @@ pub fn plan_create_source(
                 });
             }
 
+            let mut ignore_columns = vec![];
+            for name in ignore_cols {
+                // We already verified that this is a fully-qualified column name during purification
+                // but we double check to be sure
+                if name.0.len() != 3 {
+                    tracing::error!(
+                        name = %name,
+                        "internal error: Expected fully qualified mysql column name"
+                    );
+                    sql_bail!(
+                        "internal error: Expected fully qualified mysql column name, got {}",
+                        name
+                    );
+                }
+                ignore_columns.push(MySqlColumnRef {
+                    schema_name: name.0[0].to_string(),
+                    table_name: name.0[1].to_string(),
+                    column_name: name.0[2].to_string(),
+                });
+            }
+
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
                     connection: connection_item.id(),
                     connection_id: connection_item.id(),
                     details,
                     text_columns,
+                    ignore_columns,
                 });
 
             (connection, Some(available_subsources))

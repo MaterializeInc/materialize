@@ -23,20 +23,13 @@ pub(super) async fn verify_schemas<'a, Q>(
     conn: &mut Q,
     expected: &[(&'a MySqlTableName, &MySqlTableDesc)],
     text_columns: &Vec<MySqlColumnRef>,
+    ignore_columns: &Vec<MySqlColumnRef>,
 ) -> Result<Vec<(&'a MySqlTableName, DefiniteError)>, MySqlError>
 where
     Q: Queryable,
 {
-    let mut text_column_map = BTreeMap::new();
-    for column in text_columns {
-        text_column_map
-            .entry(QualifiedTableRef {
-                schema_name: column.schema_name.as_str(),
-                table_name: column.table_name.as_str(),
-            })
-            .or_insert_with(BTreeSet::new)
-            .insert(column.column_name.as_str());
-    }
+    let text_column_map = map_columns(text_columns);
+    let ignore_column_map = map_columns(ignore_columns);
 
     // Get the current schema for each requested table from mysql
     let cur_schemas: BTreeMap<_, _> = schema_info(
@@ -48,6 +41,7 @@ where
                 .collect(),
         ),
         Some(&text_column_map),
+        Some(&ignore_column_map),
     )
     .await?
     .into_iter()
@@ -86,4 +80,20 @@ fn verify_schema(
         Ok(()) => Ok(()),
         Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
     }
+}
+
+fn map_columns<'a>(
+    columns: &'a Vec<MySqlColumnRef>,
+) -> BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>> {
+    let mut column_map = BTreeMap::new();
+    for column in columns {
+        column_map
+            .entry(QualifiedTableRef {
+                schema_name: column.schema_name.as_str(),
+                table_name: column.table_name.as_str(),
+            })
+            .or_insert_with(BTreeSet::new)
+            .insert(column.column_name.as_str());
+    }
+    column_map
 }

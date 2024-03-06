@@ -935,6 +935,8 @@ pub enum MySqlConfigOptionName {
     Details,
     /// Columns whose types you want to unconditionally format as text
     TextColumns,
+    /// Columns you want to ignore
+    IgnoreColumns,
 }
 
 impl AstDisplay for MySqlConfigOptionName {
@@ -942,6 +944,7 @@ impl AstDisplay for MySqlConfigOptionName {
         f.write_str(match self {
             MySqlConfigOptionName::Details => "DETAILS",
             MySqlConfigOptionName::TextColumns => "TEXT COLUMNS",
+            MySqlConfigOptionName::IgnoreColumns => "IGNORE COLUMNS",
         })
     }
 }

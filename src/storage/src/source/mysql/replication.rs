@@ -292,6 +292,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 &table_info,
                 &metrics,
                 &connection.text_columns,
+                &connection.ignore_columns,
                 &mut data_output,
                 data_cap_set,
                 upper_cap_set,

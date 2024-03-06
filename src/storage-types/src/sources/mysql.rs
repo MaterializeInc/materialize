@@ -69,6 +69,7 @@ pub struct MySqlSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::MySql,
     pub details: MySqlSourceDetails,
     pub text_columns: Vec<MySqlColumnRef>,
+    pub ignore_columns: Vec<MySqlColumnRef>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
@@ -80,6 +81,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
             connection,
             details,
             text_columns,
+            ignore_columns,
         } = self;
 
         MySqlSourceConnection {
@@ -87,6 +89,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
             connection: r.resolve_connection(connection).unwrap_mysql(),
             details,
             text_columns,
+            ignore_columns,
         }
     }
 }
@@ -140,6 +143,7 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
             connection_id: Some(self.connection_id.into_proto()),
             details: Some(self.details.into_proto()),
             text_columns: self.text_columns.into_proto(),
+            ignore_columns: self.ignore_columns.into_proto(),
         }
     }
 
@@ -155,6 +159,7 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
                 .details
                 .into_rust_if_some("ProtoMySqlSourceConnection::details")?,
             text_columns: proto.text_columns.into_rust()?,
+            ignore_columns: proto.ignore_columns.into_rust()?,
         })
     }
 }

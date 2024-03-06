@@ -27,6 +27,7 @@ message ProtoMySqlSourceConnection {
     ProtoMySqlSourceDetails details = 3;
 
     repeated ProtoMySqlColumnRef text_columns = 4;
+    repeated ProtoMySqlColumnRef ignore_columns = 5;
 }
 
 message ProtoMySqlSourceDetails {
