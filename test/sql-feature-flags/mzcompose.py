@@ -8,8 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-import os
-import tempfile
 from textwrap import dedent, indent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -239,26 +237,14 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
 
     # To add a new scenario create a new FeatureTestScenario subclass
     for scenario in scenarios:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=c.path,
-            prefix=f"{scenario.__name__}-phase1-",
-        ) as tmp:
-            tmp.write(scenario.phase1())
-            tmp.flush()
-            c.exec("testdrive", os.path.basename(tmp.name))
+        print(f"--- Running scenario {scenario.__name__} phase 1")
+        c.testdrive(scenario.phase1())
 
         c.stop("materialized")
         c.up("materialized")
 
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=c.path,
-            prefix=f"{scenario.__name__}-phase2-",
-        ) as tmp:
-            tmp.write(scenario.phase2())
-            tmp.flush()
-            c.exec("testdrive", os.path.basename(tmp.name))
+        print(f"--- Running scenario {scenario.__name__} phase 2")
+        c.testdrive(scenario.phase2())
 
         materialized = Materialized(
             unsafe_mode=False,
@@ -271,45 +257,33 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
             c.stop("materialized")
             c.up("materialized")
 
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                dir=c.path,
-                prefix=f"{scenario.__name__}-phase3-",
-            ) as tmp:
-                tmp.write(scenario.phase3())
-                tmp.flush()
-                c.exec("testdrive", os.path.basename(tmp.name))
+            print(f"--- Running scenario {scenario.__name__} phase 3")
+            c.testdrive(scenario.phase3())
 
     # Dedicated test for ALTER SYSTEM RESET ALL
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        dir=c.path,
-        prefix="phase-reset-all-",
-    ) as tmp:
-        tmp_buf = [header("(phase reset-all)", drop_schema=False)]
-        for scenario in scenarios:
-            # Turn all features off.
-            tmp_buf.append(alter_system_set(scenario.feature_name(), "off"))
+    print("--- Running ALTER SYSTEM RESET ALL")
+    tmp = [header("(phase reset-all)", drop_schema=False)]
+    for scenario in scenarios:
+        # Turn all features off.
+        tmp.append(alter_system_set(scenario.feature_name(), "off"))
 
-        # Run ALTER SYSTEM RESET ALL
-        tmp_buf.append(alter_system_reset_all())
-        for scenario in scenarios:
-            # Write each scenarios reset all data
-            tmp_buf.append(scenario.reset_all())
+    # Run ALTER SYSTEM RESET ALL
+    tmp.append(alter_system_reset_all())
+    for scenario in scenarios:
+        # Write each scenarios reset all data
+        tmp.append(scenario.reset_all())
 
-        # Create MZ config with all features set on by default
-        materialized = Materialized(
-            unsafe_mode=False,
-            additional_system_parameter_defaults={
-                scenario.feature_name(): "on" for scenario in scenarios
-            },
-        )
-        with c.override(materialized):
-            c.stop("materialized")
-            c.up("materialized")
-            tmp.write("\n\n".join(tmp_buf))
-            tmp.flush()
-            c.exec("testdrive", os.path.basename(tmp.name))
+    # Create MZ config with all features set on by default
+    materialized = Materialized(
+        unsafe_mode=False,
+        additional_system_parameter_defaults={
+            scenario.feature_name(): "on" for scenario in scenarios
+        },
+    )
+    with c.override(materialized):
+        c.stop("materialized")
+        c.up("materialized")
+        c.testdrive("\n\n".join(tmp))
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
