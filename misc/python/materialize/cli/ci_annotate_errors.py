@@ -304,7 +304,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
             msg = "\n".join(filter(None, [error.message, error.text]))
             if "in Code Coverage" in error.text or "covered" in error.message:
                 # Don't bother looking up known issues for code coverage report, just print it verbatim as an info message
-                known_errors.append(f"{error.testcase}:\n{msg}")
+                known_errors.append(f"{error.testcase}:\n```\n{msg}\n```")
             else:
                 handle_error(msg.encode("utf-8"), error.testcase)
 
