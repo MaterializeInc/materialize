@@ -29,6 +29,7 @@ use mz_compute_client::protocol::response::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::{NodeId, Plan};
+use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
@@ -58,7 +59,7 @@ use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceMana
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
-use crate::render::{LinearJoinImpl, LinearJoinSpec};
+use crate::render::LinearJoinSpec;
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 /// Worker-local state that is maintained across dataflows.
@@ -108,10 +109,20 @@ pub struct ComputeState {
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
-    /// Enable operator hydration status logging
-    pub enable_operator_hydration_status_logging: bool,
     /// Other configuration for compute
     pub context: ComputeInstanceContext,
+    /// Per-worker dynamic configuration.
+    ///
+    /// This is separate from the process-global `ConfigSet` and contains config options that need
+    /// to be applied consistently with compute command order.
+    ///
+    /// For example, for options that influence dataflow rendering it is important that all workers
+    /// render the same dataflow with the same options. If these options were stored in a global
+    /// `ConfigSet`, we couldn't guarantee that all workers observe changes to them at the same
+    /// point in the stream of compute commands. Storing per-worker configuration ensures that
+    /// because each worker's configuration is only updated once that worker observes the
+    /// respective `UpdateConfiguration` command.
+    pub worker_config: ConfigSet,
 
     /// Receiver of operator hydration events.
     pub hydration_rx: mpsc::Receiver<HydrationEvent>,
@@ -149,8 +160,8 @@ impl ComputeState {
             linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
-            enable_operator_hydration_status_logging: true,
             context,
+            worker_config: mz_dyncfgs::all_dyncfgs(),
             hydration_rx,
             hydration_tx,
         }
@@ -175,6 +186,41 @@ impl ComputeState {
         self.collections
             .get_mut(&id)
             .expect("collection must exist")
+    }
+
+    /// Apply the current `worker_config` to the compute state.
+    fn apply_worker_config(&mut self) {
+        use mz_compute_types::dyncfgs::*;
+
+        let config = &self.worker_config;
+
+        self.linear_join_spec = LinearJoinSpec::from_config(config);
+
+        if ENABLE_COLUMNATION_LGALLOC.get(config) {
+            if let Some(path) = &self.context.scratch_directory {
+                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
+                info!(?path, eager_return, "enabling lgalloc");
+                lgalloc::lgalloc_set_config(
+                    lgalloc::LgAlloc::new()
+                        .enable()
+                        .with_path(path.clone())
+                        .with_background_config(lgalloc::BackgroundWorkerConfig {
+                            interval: Duration::from_secs(1),
+                            batch: 32,
+                        })
+                        .eager_return(eager_return),
+                );
+            } else {
+                debug!("not enabling lgalloc, scratch directory not specified");
+            }
+        } else {
+            info!("disabling lgalloc");
+            lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
+        }
+
+        let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
+        info!("using chunked stack: {chunked_stack}");
+        crate::containers::stack::use_chunked_stack(chunked_stack);
     }
 }
 
@@ -222,6 +268,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     fn handle_create_instance(&mut self, config: InstanceConfig) {
+        // Ensure the state is consistent with the config before we initialize anything.
+        self.compute_state.apply_worker_config();
+
         self.initialize_logging(&config.logging);
     }
 
@@ -231,15 +280,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            linear_join_yielding,
-            enable_mz_join_core,
-            enable_columnation_lgalloc,
-            enable_chunked_stack,
-            enable_operator_hydration_status_logging,
-            enable_lgalloc_eager_reclamation,
-            persist,
             tracing,
             grpc_client: _grpc_client,
+            dyncfg_updates,
         } = params;
 
         if let Some(v) = max_result_size {
@@ -248,61 +291,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
         }
-        if let Some(v) = linear_join_yielding {
-            self.compute_state.linear_join_spec.yielding = v;
-        }
-        if let Some(v) = enable_mz_join_core {
-            self.compute_state.linear_join_spec.implementation = match v {
-                false => LinearJoinImpl::DifferentialDataflow,
-                true => LinearJoinImpl::Materialize,
-            };
-        }
 
-        // TODO(mh): This has a potential problem that when `enable_columnation_lgalloc` and
-        // `enable_lgalloc_eager_reclamation` arrive at different times, we won't pick up
-        // the expected configuration. This works at the moment because we receive a whole
-        // copy of the parameters when any single one changes, but it's not a guarantee
-        // that's written down.
-        match enable_columnation_lgalloc {
-            Some(true) => {
-                if let Some(path) = self.compute_state.context.scratch_directory.as_ref() {
-                    info!(
-                        ?path,
-                        eager_return = enable_lgalloc_eager_reclamation,
-                        "Enabling lgalloc"
-                    );
-                    let mut config = lgalloc::LgAlloc::new();
-                    config
-                        .enable()
-                        .with_path(path.clone())
-                        .with_background_config(lgalloc::BackgroundWorkerConfig {
-                            interval: Duration::from_secs(1),
-                            batch: 32,
-                        });
-                    if let Some(eager_return) = enable_lgalloc_eager_reclamation {
-                        config.eager_return(eager_return);
-                    }
-                    lgalloc::lgalloc_set_config(&config);
-                } else {
-                    debug!("Not enabling lgalloc, scratch directory not specified");
-                }
-            }
-            Some(false) => {
-                info!("Disabling lgalloc");
-                lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
-            }
-            None => {}
-        }
-        if let Some(enabled) = enable_chunked_stack {
-            info!(enabled, "Chunked stack");
-            crate::containers::stack::use_chunked_stack(enabled);
-        }
-        if let Some(v) = enable_operator_hydration_status_logging {
-            self.compute_state.enable_operator_hydration_status_logging = v;
-        }
-
-        persist.apply(self.compute_state.persist_clients.cfg());
         tracing.apply(self.compute_state.tracing_handle.as_ref());
+
+        dyncfg_updates.apply(&self.compute_state.worker_config);
+        dyncfg_updates.apply(&self.compute_state.persist_clients.cfg().configs);
+
+        self.compute_state.apply_worker_config();
     }
 
     fn handle_create_dataflow(&mut self, dataflow: DataflowDescription<Plan, CollectionMetadata>) {

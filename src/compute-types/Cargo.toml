@@ -13,6 +13,7 @@ workspace = true
 columnation = { git = "https://github.com/frankmcsherry/columnation" }
 differential-dataflow = "0.12.0"
 itertools = "0.10.5"
+mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing_", "metrics"] }
 mz-proto = { path = "../proto" }

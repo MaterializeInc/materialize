@@ -14,6 +14,7 @@
 use std::time::Duration;
 
 pub mod dataflows;
+pub mod dyncfgs;
 pub mod explain;
 pub mod plan;
 pub mod sinks;

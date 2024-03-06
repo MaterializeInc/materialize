@@ -10,10 +10,10 @@
 //! Compute protocol commands.
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
-use mz_compute_types::dataflows::{DataflowDescription, YieldSpec};
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use mz_service::params::GrpcClientParameters;
@@ -375,24 +375,13 @@ pub struct ComputeParameters {
     /// NB: This value is optional, so the outer option indicates if this update
     /// includes an override and the inner option is part of the config value.
     pub dataflow_max_inflight_bytes: Option<Option<usize>>,
-    /// The yielding behavior with which linear joins should be rendered.
-    pub linear_join_yielding: Option<YieldSpec>,
-    /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
-    pub enable_mz_join_core: Option<bool>,
-    /// Enable lgalloc for columnation.
-    pub enable_columnation_lgalloc: Option<bool>,
-    /// Enable the chunked stack implementation.
-    pub enable_chunked_stack: Option<bool>,
-    /// Enable operator hydration status logging.
-    pub enable_operator_hydration_status_logging: Option<bool>,
-    /// Enable lgalloc's eager memory return/reclamation feature.
-    pub enable_lgalloc_eager_reclamation: Option<bool>,
-    /// Persist client configuration.
-    pub persist: PersistParameters,
     /// Tracing configuration.
     pub tracing: TracingParameters,
     /// gRPC client configuration.
     pub grpc_client: GrpcClientParameters,
+
+    /// Config updates for components migrated to `mz_dyncfg`.
+    pub dyncfg_updates: ConfigUpdates,
 }
 
 impl ComputeParameters {
@@ -401,15 +390,9 @@ impl ComputeParameters {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            linear_join_yielding,
-            enable_mz_join_core,
-            enable_columnation_lgalloc,
-            enable_chunked_stack,
-            enable_operator_hydration_status_logging,
-            enable_lgalloc_eager_reclamation,
-            persist,
             tracing,
             grpc_client,
+            dyncfg_updates,
         } = other;
 
         if max_result_size.is_some() {
@@ -418,34 +401,18 @@ impl ComputeParameters {
         if dataflow_max_inflight_bytes.is_some() {
             self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
         }
-        if linear_join_yielding.is_some() {
-            self.linear_join_yielding = linear_join_yielding;
-        }
-        if enable_mz_join_core.is_some() {
-            self.enable_mz_join_core = enable_mz_join_core;
-        }
-        if enable_columnation_lgalloc.is_some() {
-            self.enable_columnation_lgalloc = enable_columnation_lgalloc;
-        }
-        if enable_chunked_stack.is_some() {
-            self.enable_chunked_stack = enable_chunked_stack;
-        }
-        if enable_operator_hydration_status_logging.is_some() {
-            self.enable_operator_hydration_status_logging =
-                enable_operator_hydration_status_logging;
-        }
-        if enable_lgalloc_eager_reclamation.is_some() {
-            self.enable_lgalloc_eager_reclamation = enable_lgalloc_eager_reclamation;
-        }
 
-        self.persist.update(persist);
         self.tracing.update(tracing);
         self.grpc_client.update(grpc_client);
+
+        self.dyncfg_updates.extend(dyncfg_updates);
     }
 
     /// Return whether all parameters are unset.
     pub fn all_unset(&self) -> bool {
-        self.max_result_size.is_none() && self.persist.all_unset() && self.grpc_client.all_unset()
+        self.max_result_size.is_none()
+            && self.grpc_client.all_unset()
+            && self.dyncfg_updates.updates.is_empty()
     }
 }
 
@@ -458,17 +425,9 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                     dataflow_max_inflight_bytes: x.into_proto(),
                 }
             }),
-            linear_join_yielding: self.linear_join_yielding.into_proto(),
-            enable_mz_join_core: self.enable_mz_join_core.into_proto(),
-            enable_columnation_lgalloc: self.enable_columnation_lgalloc.into_proto(),
-            enable_chunked_stack: self.enable_chunked_stack.into_proto(),
-            enable_operator_hydration_status_logging: self
-                .enable_operator_hydration_status_logging
-                .into_proto(),
-            enable_lgalloc_eager_reclamation: self.enable_lgalloc_eager_reclamation.into_proto(),
-            persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
+            dyncfg_updates: Some(self.dyncfg_updates.clone()),
         }
     }
 
@@ -479,23 +438,15 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
                 .dataflow_max_inflight_bytes
                 .map(|x| x.dataflow_max_inflight_bytes.into_rust())
                 .transpose()?,
-            linear_join_yielding: proto.linear_join_yielding.into_rust()?,
-            enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
-            enable_columnation_lgalloc: proto.enable_columnation_lgalloc.into_rust()?,
-            enable_chunked_stack: proto.enable_chunked_stack.into_rust()?,
-            enable_operator_hydration_status_logging: proto
-                .enable_operator_hydration_status_logging
-                .into_rust()?,
-            enable_lgalloc_eager_reclamation: proto.enable_lgalloc_eager_reclamation.into_rust()?,
-            persist: proto
-                .persist
-                .into_rust_if_some("ProtoComputeParameters::persist")?,
             tracing: proto
                 .tracing
                 .into_rust_if_some("ProtoComputeParameters::tracing")?,
             grpc_client: proto
                 .grpc_client
                 .into_rust_if_some("ProtoComputeParameters::grpc_client")?,
+            dyncfg_updates: proto.dyncfg_updates.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoComputeParameters::dyncfg_updates")
+            })?,
         })
     }
 }

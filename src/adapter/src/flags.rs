@@ -10,13 +10,12 @@
 use std::time::Duration;
 
 use mz_compute_client::protocol::command::ComputeParameters;
-use mz_compute_types::dataflows::YieldSpec;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::PersistParameters;
 use mz_service::params::GrpcClientParameters;
-use mz_sql::session::vars::{SystemVars, DEFAULT_LINEAR_JOIN_YIELDING};
+use mz_sql::session::vars::SystemVars;
 use mz_storage_types::parameters::{
     PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
@@ -26,60 +25,21 @@ use mz_timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
-    let linear_join_yielding = config.linear_join_yielding();
-    let linear_join_yielding = parse_yield_spec(linear_join_yielding).unwrap_or_else(|| {
-        tracing::error!("invalid `linear_join_yielding` config: {linear_join_yielding}");
-        parse_yield_spec(&DEFAULT_LINEAR_JOIN_YIELDING).expect("default is valid")
-    });
-
     ComputeParameters {
         max_result_size: Some(config.max_result_size()),
         dataflow_max_inflight_bytes: Some(config.compute_dataflow_max_inflight_bytes()),
-        linear_join_yielding: Some(linear_join_yielding),
-        enable_mz_join_core: Some(config.enable_mz_join_core()),
-        enable_columnation_lgalloc: Some(config.enable_columnation_lgalloc()),
-        enable_chunked_stack: Some(config.enable_compute_chunked_stack()),
-        enable_operator_hydration_status_logging: Some(
-            config.enable_compute_operator_hydration_status_logging(),
-        ),
-        enable_lgalloc_eager_reclamation: Some(config.enable_lgalloc_eager_reclamation()),
-        persist: persist_config(config),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
+        dyncfg_updates: config.dyncfg_updates(),
     }
-}
-
-fn parse_yield_spec(s: &str) -> Option<YieldSpec> {
-    let mut after_work = None;
-    let mut after_time = None;
-
-    let options = s.split(',').map(|o| o.trim());
-    for option in options {
-        let parts: Vec<_> = option.split(':').map(|p| p.trim()).collect();
-        match &parts[..] {
-            ["work", amount] => {
-                let amount = amount.parse().ok()?;
-                after_work = Some(amount);
-            }
-            ["time", millis] => {
-                let millis = millis.parse().ok()?;
-                let duration = Duration::from_millis(millis);
-                after_time = Some(duration);
-            }
-            _ => return None,
-        }
-    }
-
-    Some(YieldSpec {
-        after_work,
-        after_time,
-    })
 }
 
 /// Return the current storage configuration, derived from the system configuration.
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
-        persist: persist_config(config),
+        persist: PersistParameters {
+            config_updates: config.dyncfg_updates(),
+        },
         pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig {
             connect_timeout: Some(config.pg_source_connect_timeout()),
             keepalives_retries: Some(config.pg_source_keepalives_retries()),
@@ -211,12 +171,6 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
     mz_secrets::CachingPolicy {
         enabled: ttl_secs > 0,
         ttl: Duration::from_secs(u64::cast_from(ttl_secs)),
-    }
-}
-
-fn persist_config(config: &SystemVars) -> PersistParameters {
-    PersistParameters {
-        config_updates: config.persist_configs(),
     }
 }
 

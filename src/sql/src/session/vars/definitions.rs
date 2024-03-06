@@ -1323,27 +1323,6 @@ pub static STATEMENT_LOGGING_SAMPLE_RATE: VarDefinition = VarDefinition::new_laz
     false,
 ).with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
-/// Whether compute rendering should use Materialize's custom linear join implementation rather
-/// than the one from Differential Dataflow.
-pub static ENABLE_MZ_JOIN_CORE: VarDefinition = VarDefinition::new(
-    "enable_mz_join_core",
-    value!(bool; true),
-    "Feature flag indicating whether compute rendering should use Materialize's custom linear \
-        join implementation rather than the one from Differential Dataflow. (Materialize).",
-    true,
-);
-
-pub const DEFAULT_LINEAR_JOIN_YIELDING: Cow<'static, str> = Cow::Borrowed("work:1000000,time:100");
-pub static LINEAR_JOIN_YIELDING: VarDefinition = VarDefinition::new(
-    "linear_join_yielding",
-    value!(Cow<'static, str>; DEFAULT_LINEAR_JOIN_YIELDING),
-    "The yielding behavior compute rendering should apply for linear join operators. Either \
-        'work:<amount>' or 'time:<milliseconds>' or 'work:<amount>,time:<milliseconds>'. Note \
-        that omitting one of 'work' or 'time' will entirely disable join yielding by time or \
-        work, respectively, rather than falling back to some default.",
-    true,
-);
-
 pub static DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: VarDefinition = VarDefinition::new(
     "default_idle_arrangement_merge_effort",
     value!(u32; 0),
@@ -1483,27 +1462,6 @@ pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarD
     "user_storage_managed_collections_batch_duration",
     value!(Duration; STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT),
     "Duration which we'll wait to collect a batch of events for a webhook source.",
-    true,
-);
-
-pub static ENABLE_COLUMNATION_LGALLOC: VarDefinition = VarDefinition::new(
-    "enable_columnation_lgalloc",
-    value!(bool; false),
-    "Enable allocating regions from lgalloc",
-    true,
-);
-
-pub static ENABLE_COMPUTE_CHUNKED_STACK: VarDefinition = VarDefinition::new(
-    "enable_compute_chunked_stack",
-    value!(bool; false),
-    "Enable the chunked stack implementation in compute",
-    true,
-);
-
-pub static ENABLE_LGALLOC_EAGER_RECLAMATION: VarDefinition = VarDefinition::new(
-    "enable_lgalloc_eager_reclamation",
-    value!(bool; true),
-    "Enable lgalloc's eager return behavior.",
     true,
 );
 
@@ -2159,13 +2117,6 @@ feature_flags!(
         name: enable_session_timelines,
         desc: "strong session serializable isolation levels",
         default: false,
-        internal: true,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_compute_operator_hydration_status_logging,
-        desc: "log the hydration status of compute operators",
-        default: true,
         internal: true,
         enable_for_item_parsing: false,
     },
