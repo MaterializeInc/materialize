@@ -270,6 +270,8 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+                let mut read_policy_updates = Vec::new();
+
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(coord.catalog().resolve_builtin_storage_collection(
@@ -333,13 +335,29 @@ impl Coordinator {
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
+                    if !set_read_policies.is_empty() {
+                        let compaction_window = source
+                            .custom_logical_compaction_window
+                            .unwrap_or(CompactionWindow::Default);
+
+                        read_policy_updates.push((set_read_policies, compaction_window));
+                    }
+                }
+
+                // It is _very_ important that we only initialize read policies
+                // after we have created all the sources/collections. Some of
+                // the sources created in this collection might have
+                // dependencies on other sources, so the controller must get a
+                // chance to install read holds before we set a policy that
+                // might make the since advance.
+                //
+                // One instance of this is the remap shard: it presents as a
+                // SUBSOURCE, and all other SUBSOURCES of a SOURCE will depend
+                // on it. Both subsources and sources will show up as a `Source`
+                // in the above.
+                for (storage_policies, compaction_window) in read_policy_updates {
                     coord
-                        .initialize_storage_read_policies(
-                            set_read_policies,
-                            source
-                                .custom_logical_compaction_window
-                                .unwrap_or(CompactionWindow::Default),
-                        )
+                        .initialize_storage_read_policies(storage_policies, compaction_window)
                         .await;
                 }
             })
