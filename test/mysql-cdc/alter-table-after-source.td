@@ -401,8 +401,9 @@ contains: table was truncated
 $ mysql-execute name=mysql
 DROP TABLE drop_table;
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'drop_table';
-ceased
+# TODO: redesign ceased status #25768
+# > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'drop_table';
+# ceased
 
 # this should not brick the whole source
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';

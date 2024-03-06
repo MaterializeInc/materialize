@@ -296,19 +296,16 @@ where
             let AsyncEvent::Data([cap_data, _cap_progress], mut data) = event else {
                 continue;
             };
-            for ((output_index, message), _, diff) in data.iter() {
+            for ((output_index, message), _, _) in data.iter() {
                 let status = match message {
                     Ok(_) => HealthStatusUpdate::running(),
                     // All errors coming into the data stream are definite.
                     // Downstream consumers of this data will preserve this
                     // status.
-                    Err(ref error) => {
-                        mz_ore::soft_assert_or_log!(
-                            *diff > 0,
-                            "unexpected retraction of definite error"
-                        );
-                        HealthStatusUpdate::ceasing(error.inner.to_string())
-                    }
+                    Err(ref error) => HealthStatusUpdate::stalled(
+                        error.inner.to_string(),
+                        Some("retracting the errored value may resume the source".to_string()),
+                    ),
                 };
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();

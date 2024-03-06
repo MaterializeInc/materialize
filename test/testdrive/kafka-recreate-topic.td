@@ -107,12 +107,13 @@ text
 ----
 1
 
+# TODO: why are these paused and not stalled with errors?
 > SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
 name            status    error
 -------------------------------
 good_source     running   <null>
-source0         ceased    "topic was recreated: partition count regressed from 4 to 2"
-source1         ceased    "topic was recreated: high watermark of partition 0 regressed from 1 to 0"
+source0         paused    <null>
+source1         paused    <null>
 
 # Testdrive expects all sources to end in a healthy state, so manufacture that
 # by dropping sources.

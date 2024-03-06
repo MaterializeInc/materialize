@@ -115,10 +115,14 @@ impl PerWorkerHealthStatus {
         for status in self.errors_by_worker.iter() {
             for (ns, ns_status) in status.iter() {
                 match ns_status {
+                    // HealthStatusUpdate::Ceased is currently unused, so just
+                    // treat it as if it were a normal error.
+                    //
+                    // TODO: redesign ceased status #25768
                     HealthStatusUpdate::Ceased { error } => {
-                        return OverallStatus::Ceased {
-                            error: error.clone(),
-                        };
+                        if Some(error) > namespaced_errors.get(ns).as_deref() {
+                            namespaced_errors.insert(*ns, error.to_string());
+                        }
                     }
                     HealthStatusUpdate::Stalled { error, hint, .. } => {
                         if Some(error) > namespaced_errors.get(ns).as_deref() {
@@ -562,10 +566,11 @@ impl HealthStatusUpdate {
         }
     }
 
-    /// Generates a ceasing [`HealthStatusUpdate`] with `update`.
-    pub(crate) fn ceasing(error: String) -> Self {
-        HealthStatusUpdate::Ceased { error }
-    }
+    // TODO: redesign ceased status #25768
+    // Generates a ceasing [`HealthStatusUpdate`] with `update`.
+    // pub(crate) fn ceasing(error: String) -> Self {
+    //     HealthStatusUpdate::Ceased { error }
+    // }
 
     /// Whether or not we should halt the dataflow instances and restart it.
     pub(crate) fn should_halt(&self) -> bool {

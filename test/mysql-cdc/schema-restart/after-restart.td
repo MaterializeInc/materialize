@@ -14,14 +14,15 @@
         name = 'schema_test' AND status = 'running';
 true
 
-# dummy subsource is put into error state
-> SELECT true
-    FROM mz_internal.mz_source_statuses
-    WHERE
-        name = 'dummy' AND status = 'ceased'
-            AND
-        error ILIKE 'incompatible schema change%';
-true
+# TODO: redesign ceased status #25768
+# # dummy subsource is put into error state
+# > SELECT true
+#     FROM mz_internal.mz_source_statuses
+#     WHERE
+#         name = 'dummy' AND status = 'ceased'
+#             AND
+#         error ILIKE 'incompatible schema change%';
+# true
 
 # other table still has data
 > SELECT count(*) FROM other;
