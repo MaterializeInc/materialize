@@ -220,19 +220,6 @@ struct BindingReplay<FromTime, IntoTime: Timestamp + TotalOrder> {
     frontier: MutableAntichain<FromTime>,
 }
 
-impl<FromTime: Debug, IntoTime: Timestamp + TotalOrder> Debug
-    for BindingReplay<FromTime, IntoTime>
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BindingReplay")
-            .field("upper", &self.upper_capability.as_deref())
-            .field("bindings", &self.bindings)
-            .field("active_binding", &self.active_binding.as_deref())
-            .field("frontier", &&*self.frontier.frontier())
-            .finish()
-    }
-}
-
 impl<FromTime: Timestamp, IntoTime: Timestamp + TotalOrder> BindingReplay<FromTime, IntoTime> {
     /// Constructs a new replayer with a given initial capability. The provided capability must be
     /// at the minimum timestamp.
@@ -308,6 +295,19 @@ impl<FromTime: Timestamp, IntoTime: Timestamp + TotalOrder> BindingReplay<FromTi
             Some((_, into, _)) => self.active_binding.as_mut().unwrap().downgrade(&into),
             None => self.active_binding = None,
         }
+    }
+}
+
+impl<FromTime: Debug, IntoTime: Timestamp + TotalOrder> Debug
+    for BindingReplay<FromTime, IntoTime>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BindingReplay")
+            .field("upper", &self.upper_capability.as_deref())
+            .field("bindings", &self.bindings)
+            .field("active_binding", &self.active_binding.as_deref())
+            .field("frontier", &&*self.frontier.frontier())
+            .finish()
     }
 }
 
