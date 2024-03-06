@@ -115,11 +115,12 @@ impl NormalizeLets {
         let_motion::assert_no_lets(relation);
         let_motion::assert_letrec_major(relation);
 
-        // Refresh types while we are in letrec-major form.
-        support::refresh_types(relation)?;
-
         // Inlining may violate letrec-major form.
         inlining::inline_lets(relation, self.inline_mfp)?;
+
+        // Return to letrec-major form to refresh types.
+        let_motion::promote_let_rec(relation);
+        support::refresh_types(relation)?;
 
         // Renumber bindings for good measure.
         // Ideally we could skip when `action` is a no-op, but hard to thread that through at the moment.
