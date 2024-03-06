@@ -24,7 +24,7 @@ from junitparser.junitparser import Error, Failure, JUnitXml
 from materialize import ci_util, ui
 from materialize.buildkite import add_annotation_raw, get_artifact_url, truncate_str
 from materialize.buildkite_insights.step_durations.build_step import (
-    BuildStep,
+    BuildStepMatcher,
     extract_build_step_data,
 )
 from materialize.buildkite_insights.util.buildkite_api import fetch, fetch_builds
@@ -524,7 +524,7 @@ def get_failures_on_main() -> str | None:
 
     last_build_step_outcomes = extract_build_step_data(
         builds_data,
-        selected_build_steps=[BuildStep(step_key, parallel_job)],
+        selected_build_steps=[BuildStepMatcher(step_key, parallel_job)],
         merge_sharded_executions=False,
     )
 

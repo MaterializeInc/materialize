@@ -31,15 +31,25 @@ class BuildStepOutcome:
 
 
 @dataclass
-class BuildStep:
+class BuildStepMatcher:
     step_key: str
     # will be ignored if not specified
     parallel_job_index: int | None
 
+    def matches(self, job_step_key: str, job_parallel_index: int | None) -> bool:
+        if self.step_key != job_step_key:
+            return False
+
+        if self.parallel_job_index is None:
+            # not specified
+            return True
+
+        return self.parallel_job_index == job_parallel_index
+
 
 def extract_build_step_data(
     builds_data: list[Any],
-    selected_build_steps: list[BuildStep],
+    selected_build_steps: list[BuildStepMatcher],
     merge_sharded_executions: bool,
 ) -> list[BuildStepOutcome]:
     result = []
@@ -55,7 +65,7 @@ def extract_build_step_data(
 
 
 def _extract_build_step_data_from_build(
-    build_data: Any, selected_build_steps: list[BuildStep]
+    build_data: Any, selected_build_steps: list[BuildStepMatcher]
 ) -> list[BuildStepOutcome]:
     collected_steps = []
 
@@ -108,25 +118,18 @@ def _extract_build_step_data_from_build(
     return collected_steps
 
 
-def _shall_include_build_step(job: Any, selected_build_steps: list[BuildStep]) -> bool:
+def _shall_include_build_step(
+    job: Any, selected_build_steps: list[BuildStepMatcher]
+) -> bool:
     if len(selected_build_steps) == 0:
         return True
 
     job_step_key = job["step_key"]
     job_parallel_index = job.get("parallel_group_index")
 
-    for selected_step in selected_build_steps:
-        if selected_step.step_key != job_step_key:
-            continue
-
-        if (
-            selected_step.parallel_job_index is not None
-            and job_parallel_index != selected_step.parallel_job_index
-        ):
-            # parallel_job_index is specified but does not match
-            continue
-
-        return True
+    for build_step_matcher in selected_build_steps:
+        if build_step_matcher.matches(job_step_key, job_parallel_index):
+            return True
 
     return False
 

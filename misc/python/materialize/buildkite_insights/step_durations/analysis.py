@@ -15,7 +15,7 @@ from typing import Any
 import pandas as pd
 
 from materialize.buildkite_insights.step_durations.build_step import (
-    BuildStep,
+    BuildStepMatcher,
     BuildStepOutcome,
     extract_build_step_data,
 )
@@ -106,7 +106,7 @@ def get_data(
 
 def print_data(
     step_infos: list[BuildStepOutcome],
-    build_steps: list[BuildStep],
+    build_steps: list[BuildStepMatcher],
     output_type: str,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
@@ -136,7 +136,7 @@ def print_data(
 
 def print_stats(
     step_infos: list[BuildStepOutcome],
-    build_steps: list[BuildStep],
+    build_steps: list[BuildStepMatcher],
 ) -> None:
     if len(step_infos) == 0:
         print(f"No data for jobs with keys {build_steps}!")
@@ -171,7 +171,7 @@ def print_stats(
 
 def main(
     pipeline_slug: str,
-    build_steps: list[BuildStep],
+    build_steps: list[BuildStepMatcher],
     fetch_mode: str,
     max_fetches: int,
     branch: str | None,
@@ -222,7 +222,10 @@ if __name__ == "__main__":
 
     main(
         args.pipeline,
-        [BuildStep(build_step_key, None) for build_step_key in args.build_step_key]
+        [
+            BuildStepMatcher(build_step_key, None)
+            for build_step_key in args.build_step_key
+        ]
         if args.build_step_key is not None
         else [],
         args.fetch,
