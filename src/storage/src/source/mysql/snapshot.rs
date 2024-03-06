@@ -438,11 +438,18 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     let mut count = 0;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
-                        let packed_row = pack_mysql_row(&mut final_row, row, &table_desc)?;
+                        let event = match pack_mysql_row(&mut final_row, row, &table_desc) {
+                            Ok(row) => Ok(row),
+                            // Produce a DefiniteError in the stream for any rows that fail to decode
+                            Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                                Err(DefiniteError::ValueDecodeError(err.to_string()))
+                            }
+                            Err(err) => Err(err)?,
+                        };
                         raw_handle
                             .give(
                                 &data_cap_set[0],
-                                ((output_index, Ok(packed_row)), GtidPartition::minimum(), 1),
+                                ((output_index, event), GtidPartition::minimum(), 1),
                             )
                             .await;
                         count += 1;

@@ -409,5 +409,6 @@ DROP TABLE drop_table;
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
 
-# TODO: #25365 (source bricked after restart)
+# the subsources are in a bad state so we need to drop the source so the
+# restart check doesn't error
 > DROP SOURCE mz_source CASCADE;

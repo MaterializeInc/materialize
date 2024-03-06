@@ -12,7 +12,7 @@ use mysql_common::binlog::events::{QueryEvent, RowsEventData};
 use timely::progress::Timestamp;
 use tracing::trace;
 
-use mz_mysql_util::pack_mysql_row;
+use mz_mysql_util::{pack_mysql_row, MySqlError};
 use mz_repr::Row;
 use mz_storage_types::sources::mysql::GtidPartition;
 
@@ -233,8 +233,16 @@ pub(super) async fn handle_rows_event(
         let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
-            let packed_row = pack_mysql_row(&mut final_row, row, table_desc)?;
-            let data = (*output_index, Ok(packed_row));
+            let event = match pack_mysql_row(&mut final_row, row, table_desc) {
+                Ok(row) => Ok(row),
+                // Produce a DefiniteError in the stream for any rows that fail to decode
+                Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                    Err(DefiniteError::ValueDecodeError(err.to_string()))
+                }
+                Err(err) => Err(err)?,
+            };
+
+            let data = (*output_index, event);
 
             // Rewind this update if it was already present in the snapshot
             if let Some(([data_cap, _upper_cap], rewind_req)) = ctx.rewinds.get(&table) {

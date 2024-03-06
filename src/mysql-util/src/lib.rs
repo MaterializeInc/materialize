@@ -39,8 +39,6 @@ pub enum MySqlError {
     InvalidClientConfig(String),
     #[error("error setting up ssh: {0}")]
     Ssh(#[source] anyhow::Error),
-    #[error("decode error: {0}")]
-    DecodeError(String),
     #[error("error decoding value for '{qualified_table_name}' column '{column_name}': {error}")]
     ValueDecodeError {
         column_name: String,

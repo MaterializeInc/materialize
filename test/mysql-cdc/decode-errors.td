@@ -7,14 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# MySQL specifies that pg type INTERVAL is mapped to TIME in MySQL.
+# Validate that decode errors are produced in the stream and can be
+# retracted if the offending row(s) are deleted
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_mysql_source = true
-
-#
-# Test the INTERVAL type
-#
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -30,48 +27,39 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-# Insert data pre-snapshot
-CREATE TABLE t1 (f1 TIME(6));
+# Start with an invalid snapshot and verify the source presents an error
+CREATE TABLE decode_err (f1 INTEGER, f2 TIME(6));
 
-INSERT INTO t1 VALUES (TIME '23:59:59')
-
-> CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
-  FOR ALL TABLES;
-
-> SELECT COUNT(*) > 0 FROM t1;
-true
-
-# Insert the same data post-snapshot
-$ mysql-execute name=mysql
-INSERT INTO t1 SELECT * FROM t1;
-
-> SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-time
-
-> SELECT * FROM t1;
-"23:59:59"
-"23:59:59"
-
-# Now insert an out-of-bounds time value that should
-# put us into an error state
-
-$ mysql-execute name=mysql
-INSERT INTO t1 VALUES (TIME '838:59:59')
-
-! SELECT * FROM t1;
-contains: error decoding value
-
-# Drop and recreate the source to confirm the decoding
-# error is also encountered in the snapshot phase
-
-> DROP SOURCE mz_source;
+INSERT INTO decode_err VALUES (1, TIME '12:00:00');
+INSERT INTO decode_err VALUES (2, TIME '29:59:59');
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
 
-! SELECT * FROM t1;
+! SELECT * FROM decode_err;
 contains: error decoding value
 
-> DROP SOURCE mz_source;
+# Remove the invalid row and verify that the source is now showing the correct data
+
+$ mysql-execute name=mysql
+DELETE FROM decode_err WHERE f1 = 2;
+
+> SELECT * FROM decode_err;
+1 "12:00:00"
+
+# Re-add an invalid row and we verify that replication also correctly puts the source into an errored state
+
+$ mysql-execute name=mysql
+INSERT INTO decode_err VALUES (3, TIME '39:59:59');
+
+! SELECT * FROM decode_err;
+contains: error decoding value
+
+# Remove the invalid row and the source is good again
+
+$ mysql-execute name=mysql
+DELETE FROM decode_err WHERE f1 = 3;
+
+> SELECT * FROM decode_err;
+1 "12:00:00"

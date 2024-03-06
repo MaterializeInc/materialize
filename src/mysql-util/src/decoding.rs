@@ -39,10 +39,11 @@ pub fn pack_mysql_row(
                     "mysql: extra column description {col_desc:?} for table {}",
                     table_desc.name
                 );
-                Err(MySqlError::DecodeError(format!(
-                    "extra column description {col_desc:?} for table {}",
-                    table_desc.name
-                )))?
+                Err(MySqlError::ValueDecodeError {
+                    column_name: col_desc.name.clone(),
+                    qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
+                    error: "extra column description".to_string(),
+                })?
             }
             EitherOrBoth::Right(_) => {
                 // If there are extra columns on the upstream table we can safely ignore them
