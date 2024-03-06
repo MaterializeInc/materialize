@@ -27,6 +27,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 
 use crate::render::sinks::SinkRender;
+use crate::render::StartSignal;
 
 impl<G> SinkRender<G> for SubscribeSinkConnection
 where
@@ -38,6 +39,7 @@ where
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
+        _start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>

@@ -25,6 +25,7 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
 use crate::render::sinks::SinkRender;
+use crate::render::StartSignal;
 use crate::typedefs::KeyBatcher;
 
 impl<G> SinkRender<G> for CopyToS3OneshotSinkConnection
@@ -37,6 +38,7 @@ where
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         _as_of: Antichain<Timestamp>,
+        _start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>

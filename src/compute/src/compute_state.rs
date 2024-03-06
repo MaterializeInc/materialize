@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -28,6 +28,7 @@ use mz_compute_client::protocol::response::{
     SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::HYDRATION_CONCURRENCY;
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
@@ -60,7 +61,7 @@ use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceMana
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
-use crate::render::LinearJoinSpec;
+use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 /// Worker-local state that is maintained across dataflows.
@@ -129,6 +130,14 @@ pub struct ComputeState {
     ///
     /// Copies of this sender are passed to the hydration logging operators.
     pub hydration_tx: mpsc::Sender<HydrationEvent>,
+
+    /// Collections in the process of hydrating.
+    hydrating_collections: BTreeSet<GlobalId>,
+    /// Queue of dataflows awaiting hydration.
+    ///
+    /// Each entry is a dataflow ID and a token that can be dropped to unsuspend the dataflow.
+    /// Entries are `Option`s to enable efficient removal of dropped collections.
+    hydration_queue: VecDeque<(usize, Box<dyn Any>)>,
 }
 
 impl ComputeState {
@@ -162,6 +171,8 @@ impl ComputeState {
             worker_config: mz_dyncfgs::all_dyncfgs(),
             hydration_rx,
             hydration_tx,
+            hydrating_collections: Default::default(),
+            hydration_queue: Default::default(),
         }
     }
 
@@ -238,6 +249,36 @@ impl ComputeState {
             DATAFLOW_MAX_INFLIGHT_BYTES_CC.get(&self.worker_config)
         } else {
             DATAFLOW_MAX_INFLIGHT_BYTES.get(&self.worker_config)
+        }
+    }
+
+    /// Check for completed hydration of dataflows and begin hydrating new ones if capacity is
+    /// available.
+    pub fn process_sequential_hydration(&mut self) {
+        self.hydrating_collections.retain(|id| {
+            let collection = self.collections.get(id).expect("must exist");
+            if collection.is_hydrated() {
+                info!(%id, "collection hydrated (or dropped)");
+                false
+            } else {
+                true
+            }
+        });
+
+        let capacity = HYDRATION_CONCURRENCY.get(&self.worker_config);
+        while self.hydrating_collections.len() < capacity {
+            let Some((dataflow_id, suspension_token)) = self.hydration_queue.pop_front() else {
+                break;
+            };
+
+            drop(suspension_token);
+
+            for (id, collection) in &self.collections {
+                if collection.dataflow_id == Some(dataflow_id) {
+                    info!(?id, "collection hydration started");
+                    self.hydrating_collections.insert(*id);
+                }
+            }
         }
     }
 }
@@ -347,6 +388,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for object_id in dataflow.export_ids() {
             let mut collection = CollectionState::new();
 
+            collection.as_of = as_of.clone();
+            collection.dataflow_id = Some(dataflow_index);
             collection.reported_frontier = ReportedFrontier::NotReported {
                 lower: as_of.clone(),
             };
@@ -373,7 +416,23 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             }
         }
 
-        crate::render::build_compute_dataflow(self.timely_worker, self.compute_state, dataflow);
+        // If this is a non-transient dataflow, suspend it until we have capacity to start its
+        // hydration. See `process_sequential_hydration`.
+        let (start_signal, suspension_token) = StartSignal::new();
+        if dataflow.is_transient() {
+            drop(suspension_token);
+        } else {
+            self.compute_state
+                .hydration_queue
+                .push_back((dataflow_index, suspension_token));
+        };
+
+        crate::render::build_compute_dataflow(
+            self.timely_worker,
+            self.compute_state,
+            dataflow,
+            start_signal,
+        );
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
@@ -430,6 +489,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.del_trace(&id);
+        // If the collection is hydrating, remove its tracking state.
+        self.compute_state.hydrating_collections.remove(&id);
 
         // Remove frontier logging.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
@@ -1314,6 +1375,12 @@ impl ReportedFrontier {
 
 /// State maintained for a compute collection.
 pub struct CollectionState {
+    /// The initial as-of frontier.
+    as_of: Antichain<Timestamp>,
+    /// The ID of the dataflow maintaining this collection.
+    ///
+    /// `None` if the dataflow ID is unknown, which is the case for logging collections.
+    dataflow_id: Option<usize>,
     /// Tracks the frontier that has been reported to the controller.
     pub reported_frontier: ReportedFrontier,
     /// A token that should be dropped when this collection is dropped to clean up associated
@@ -1330,6 +1397,8 @@ pub struct CollectionState {
 impl CollectionState {
     fn new() -> Self {
         Self {
+            as_of: Antichain::from_elem(Timestamp::MIN),
+            dataflow_id: None,
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
@@ -1338,6 +1407,13 @@ impl CollectionState {
 
     fn is_subscribe(&self) -> bool {
         self.sink_token.is_some() && self.sink_write_frontier.is_none()
+    }
+
+    fn is_hydrated(&self) -> bool {
+        match &self.reported_frontier {
+            ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
+            ReportedFrontier::NotReported { .. } => false,
+        }
     }
 }
 

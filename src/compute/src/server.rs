@@ -487,6 +487,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_copy_tos();
             }
 
+            if let Some(compute_state) = &mut self.compute_state {
+                compute_state.process_sequential_hydration();
+            }
+
             self.metrics
                 .record_shared_row_metrics(self.timely_worker.index());
         }
