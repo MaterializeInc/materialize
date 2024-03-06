@@ -591,7 +591,11 @@ impl Catalog {
                     .iter()
                     .map(|(log, index_id)| (id, log.name.to_string(), *index_id))
                     .collect();
-                let new_indexes: BTreeMap<_, _> = txn.insert_introspection_source_indexes(new_indexes)?.into_iter().map(|introspection_source_index| (introspection_source_index.name, introspection_source_index.oid)).collect();
+                let new_indexes: BTreeMap<_, _> = txn
+                    .insert_introspection_source_indexes(new_indexes)?
+                    .into_iter()
+                    .map(|introspection_source_index| (introspection_source_index.name, introspection_source_index.oid))
+                    .collect();
 
                 let all_indexes: Vec<_> = all_indexes.into_iter().map(|(log, id)| {
                     // First look in existing indexes.
