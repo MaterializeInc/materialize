@@ -64,6 +64,12 @@ pub enum DurableCatalogError {
     /// Unable to serialize/deserialize Protobuf message.
     #[error("proto: {0}")]
     Proto(TryFromProtoError),
+    /// Duplicate key inserted into some catalog collection.
+    #[error("duplicate key")]
+    DuplicateKey,
+    /// Uniqueness violation occurred in some catalog collection.
+    #[error("uniqueness violation")]
+    UniquenessViolation,
     /// Misc errors from the Stash implementation.
     ///
     /// Once the Stash implementation is removed we can remove this variant.
