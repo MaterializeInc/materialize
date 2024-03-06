@@ -98,7 +98,9 @@ impl EventType {
 
 serde_plain::derive_display_from_serialize!(EventType);
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum ObjectType {
     Cluster,
