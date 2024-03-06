@@ -71,7 +71,6 @@ steps:
       timeout_in_minutes: 2880
       agents:
         queue: linux-aarch64-large
-      artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
