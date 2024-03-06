@@ -107,7 +107,7 @@ where
         SnapshotMode::Include,
         Antichain::new(), // we want all updates
         None,             // no MFP
-        compute_state.dataflow_max_inflight_bytes,
+        compute_state.dataflow_max_inflight_bytes(),
     );
     let persist_collection = ok_stream
         .as_collection()
