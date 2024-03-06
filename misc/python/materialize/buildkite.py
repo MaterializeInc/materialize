@@ -10,10 +10,13 @@
 """Buildkite utilities."""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from materialize import git, spawn, ui
+
+T = TypeVar("T")
 
 
 def is_in_buildkite() -> bool:
@@ -136,11 +139,32 @@ def get_parallelism_count() -> int:
     return int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
 
 
-def accepted_by_shard(identifier: str) -> bool:
-    parallelism_index = get_parallelism_index()
-    parallelism_count = get_parallelism_count()
+def accepted_by_shard(
+    identifier: str,
+    parallelism_index: int | None = None,
+    parallelism_count: int | None = None,
+) -> bool:
+    if parallelism_index is None:
+        parallelism_index = get_parallelism_index()
+    if parallelism_count is None:
+        parallelism_count = get_parallelism_count()
+
     hash_value = hash(identifier)
     return hash_value % parallelism_count == parallelism_index
+
+
+def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
+    parallelism_index = get_parallelism_index()
+    parallelism_count = get_parallelism_count()
+
+    if parallelism_count == 1:
+        return items
+
+    return [
+        item
+        for item in items
+        if accepted_by_shard(to_identifier(item), parallelism_index, parallelism_count)
+    ]
 
 
 def _validate_parallelism_configuration() -> None:
