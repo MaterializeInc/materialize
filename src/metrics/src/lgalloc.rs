@@ -42,28 +42,28 @@ impl AddAssign<&FileStats> for FileStatsAccum {
 
 macro_rules! metrics_size_class {
     ($namespace:ident
-        @size_class ($(($name:ident, $desc:expr, $suffix:expr, $conv:expr)),*)
+        @size_class ($(($name:ident, $desc:expr, $metric:expr, $conv:expr)),*)
         @file ($(($f_name:ident, $f_metric:ident, $f_desc:expr)),*)
     ) => {
         metrics_size_class! {
             @define $namespace
-            @size_class $(($name, $desc, $suffix, $conv)),*
+            @size_class $(($name, $desc, $metric, $conv)),*
             @file $(($f_name, $f_metric, $f_desc)),*
         }
     };
     (@define $namespace:ident
-        @size_class $(($name:ident, $desc:expr, $suffix:expr, $conv:expr)),*
+        @size_class $(($name:ident, $desc:expr, $metric:expr, $conv:expr)),*
         @file $(($f_name:ident, $f_metric:ident, $f_desc:expr)),*
     ) => {
         paste! {
             struct LgMetrics {
                 stats: lgalloc::LgAllocStats,
                 size_class: BTreeMap<usize, LgMetricsSC>,
-                $([<$name $suffix>]: raw::UIntGaugeVec,)*
+                $($metric: raw::UIntGaugeVec,)*
                 $($f_metric: raw::UIntGaugeVec,)*
             }
             struct LgMetricsSC {
-                $([<$name $suffix>]: GenericGauge<AtomicU64>,)*
+                $($metric: GenericGauge<AtomicU64>,)*
                 $($f_metric: GenericGauge<AtomicU64>,)*
             }
             impl LgMetrics {
@@ -71,8 +71,8 @@ macro_rules! metrics_size_class {
                     Self {
                         size_class: BTreeMap::default(),
                         stats: lgalloc::LgAllocStats::default(),
-                        $([<$name $suffix>]: registry.register(mz_ore::metric!(
-                            name: concat!(stringify!($namespace), "_", stringify!($name), $suffix),
+                        $($metric: registry.register(mz_ore::metric!(
+                            name: concat!(stringify!($namespace), "_", stringify!($metric)),
                             help: $desc,
                             var_labels: ["size_class"],
                         )),)*
@@ -87,7 +87,7 @@ macro_rules! metrics_size_class {
                     self.size_class.entry(size_class).or_insert_with(|| {
                         let labels: &[&str] = &[&size_class.to_string()];
                         LgMetricsSC {
-                            $([<$name $suffix>]: self.[<$name $suffix>].with_label_values(labels),)*
+                            $($metric: self.$metric.with_label_values(labels),)*
                             $($f_metric: self.$f_metric.with_label_values(labels),)*
                         }
                     })
@@ -97,7 +97,7 @@ macro_rules! metrics_size_class {
                     lgalloc::lgalloc_stats(&mut stats);
                     for sc in &stats.size_class {
                         let sc_stats = self.get_size_class(sc.size_class);
-                        $(sc_stats.[<$name $suffix>].set(($conv)(u64::cast_from(sc.$name), sc));)*
+                        $(sc_stats.$metric.set(($conv)(u64::cast_from(sc.$name), sc));)*
                     }
                     let mut accums = BTreeMap::new();
                     for file_stat in &stats.file_stats {
@@ -126,20 +126,24 @@ fn id(value: u64, _stats: &SizeClassStats) -> u64 {
 metrics_size_class! {
     mz_metrics_lgalloc
     @size_class (
-        (allocations, "Number of region allocations in size class", "_total", id),
-        (area_total_bytes, "Number of bytes in all areas in size class", "", id),
-        (areas, "Number of areas backing size class", "_total", id),
-        (clean_regions, "Number of clean regions in size class", "_total", id),
-        (clean_regions, "Number of clean regions in size class", "_bytes_total", normalize_by_size_class),
-        (deallocations, "Number of region deallocations for size class", "_total", id),
-        (free_regions, "Number of free regions in size class", "_total", id),
-        (free_regions, "Number of free regions in size class", "_bytes_total", normalize_by_size_class),
-        (global_regions, "Number of global regions in size class", "_total", id),
-        (global_regions, "Number of global regions in size class", "_bytes_total", normalize_by_size_class),
-        (refill, "Number of area refills for size class", "_total", id),
-        (slow_path, "Number of slow path region allocations for size class", "_total", id),
-        (thread_regions, "Number of thread regions in size class", "_total", id),
-        (thread_regions, "Number of thread regions in size class", "_bytes_total", normalize_by_size_class)
+        (allocations, "Number of region allocations in size class", allocations_total, id),
+        (area_total_bytes, "Number of bytes in all areas in size class", area_total_bytes, id),
+        (areas, "Number of areas backing size class", areas_total, id),
+        (clean_regions, "Number of clean regions in size class", clean_regions_total, id),
+        (clean_regions, "Number of clean regions in size class", clean_regions_bytes_total, normalize_by_size_class),
+        (deallocations, "Number of region deallocations for size class", deallocations_total, id),
+        (free_regions, "Number of free regions in size class", free_regions_total, id),
+        (free_regions, "Number of free regions in size class", free_regions_bytes_total, normalize_by_size_class),
+        (global_regions, "Number of global regions in size class", global_regions_total, id),
+        (global_regions, "Number of global regions in size class", global_regions_bytes_total, normalize_by_size_class),
+        (refill, "Number of area refills for size class", refill_total, id),
+        (slow_path, "Number of slow path region allocations for size class", slow_path_total, id),
+        (thread_regions, "Number of thread regions in size class", thread_regions_total, id),
+        (thread_regions, "Number of thread regions in size class", thread_regions_bytes_total, normalize_by_size_class),
+        (clear_eager_total, "Number of thread regions in size class", clear_eager_total, id),
+        (clear_eager_total, "Number of thread regions in size class", clear_eager_bytes_total, normalize_by_size_class),
+        (clear_slow_total, "Number of thread regions in size class", clear_slow_total, id),
+        (clear_slow_total, "Number of thread regions in size class", clear_slow_bytes_total, normalize_by_size_class)
     )
     @file (
         (file_size, file_size_bytes, "Sum of file sizes in size class"),

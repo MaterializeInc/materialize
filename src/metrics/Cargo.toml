@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-lgalloc = "0.2"
+lgalloc = "0.3"
 libc = "0.2.138"
 mz-ore = { path = "../ore", features = ["metrics"] }
 paste = "1.0"
