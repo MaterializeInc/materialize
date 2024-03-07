@@ -36,6 +36,8 @@ pub(crate) struct GeneralSourceMetricDefs {
     pub(crate) capability: UIntGaugeVec,
     pub(crate) resume_upper: IntGaugeVec,
     pub(crate) inmemory_remap_bindings: UIntGaugeVec,
+    pub(crate) commit_upper_ready_times: UIntGaugeVec,
+    pub(crate) commit_upper_accepted_times: UIntGaugeVec,
 
     // OffsetCommitMetrics
     pub(crate) offset_commit_failures: IntCounterVec,
@@ -70,6 +72,16 @@ impl GeneralSourceMetricDefs {
             inmemory_remap_bindings: registry.register(metric!(
                 name: "mz_source_inmemory_remap_bindings",
                 help: "The number of in-memory remap bindings that reclocking a time needs to iterate over.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            commit_upper_ready_times: registry.register(metric!(
+                name: "mz_source_commit_upper_ready_times",
+                help: "The number of ready remap bindings that are held in the reclock commit upper operator.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            commit_upper_accepted_times: registry.register(metric!(
+                name: "mz_source_commit_upper_accepted_times",
+                help: "The number of accepted remap bindings that are held in the reclock commit upper operator.",
                 var_labels: ["source_id", "worker_id"],
             )),
             offset_commit_failures: registry.register(metric!(
@@ -120,6 +132,10 @@ pub(crate) struct SourceMetrics {
     pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// The number of in-memory remap bindings that reclocking a time needs to iterate over.
     pub(crate) inmemory_remap_bindings: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    /// The number of ready remap bindings that are held in the reclock commit upper operator.
+    pub(crate) commit_upper_ready_times: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    /// The number of accepted remap bindings that are held in the reclock commit upper operator.
+    pub(crate) commit_upper_accepted_times: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceMetrics {
@@ -142,6 +158,12 @@ impl SourceMetrics {
                 .get_delete_on_drop_gauge(vec![source_id.to_string()]),
             inmemory_remap_bindings: defs
                 .inmemory_remap_bindings
+                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+            commit_upper_ready_times: defs
+                .commit_upper_ready_times
+                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
+            commit_upper_accepted_times: defs
+                .commit_upper_accepted_times
                 .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
         }
     }
