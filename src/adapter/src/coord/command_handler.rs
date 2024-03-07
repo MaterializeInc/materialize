@@ -1053,12 +1053,17 @@ impl Coordinator {
                 .controller
                 .storage
                 .monotonic_appender(entry.id())
+                .map_err(|_| name.clone())?;
+            let stats = coord
+                .controller
+                .storage
+                .webhook_statistics(entry.id())
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks
                 .entry(entry.id())
                 .or_insert_with(WebhookAppenderInvalidator::new);
-            let tx = WebhookAppender::new(row_tx, invalidator.guard());
+            let tx = WebhookAppender::new(row_tx, invalidator.guard(), stats);
 
             Ok(AppendWebhookResponse {
                 tx,

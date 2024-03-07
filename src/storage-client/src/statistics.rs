@@ -16,6 +16,8 @@
 //!
 //! The proto conversions for this types are in the `client` module, for now.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
@@ -722,5 +724,36 @@ impl RustType<ProtoSinkStatisticsUpdate> for SinkStatisticsUpdate {
             bytes_staged: Counter(proto.bytes_staged),
             bytes_committed: Counter(proto.bytes_committed),
         })
+    }
+}
+
+/// Statistics for webhooks.
+#[derive(Default, Debug)]
+pub struct WebhookStatistics {
+    pub messages_received: AtomicU64,
+    pub bytes_received: AtomicU64,
+    pub updates_staged: AtomicU64,
+    pub updates_committed: AtomicU64,
+}
+
+impl WebhookStatistics {
+    /// Drain the current statistics into a `SourceStatisticsUpdate` with
+    /// other values defaulted, resetting the atomic counters.
+    pub fn drain_into_update(&self, id: GlobalId) -> SourceStatisticsUpdate {
+        SourceStatisticsUpdate {
+            id,
+            messages_received: self.messages_received.swap(0, Ordering::Relaxed).into(),
+            bytes_received: self.bytes_received.swap(0, Ordering::Relaxed).into(),
+            updates_staged: self.updates_staged.swap(0, Ordering::Relaxed).into(),
+            updates_committed: self.updates_committed.swap(0, Ordering::Relaxed).into(),
+            records_indexed: Gauge::gauge(0),
+            bytes_indexed: Gauge::gauge(0),
+            rehydration_latency_ms: Gauge::gauge(None),
+            snapshot_records_known: Gauge::gauge(None),
+            snapshot_records_staged: Gauge::gauge(None),
+            snapshot_committed: Gauge::gauge(true),
+            offset_known: SkippableGauge::gauge(None::<Total>),
+            offset_committed: SkippableGauge::gauge(None::<Total>),
+        }
     }
 }

@@ -12,6 +12,9 @@ $ set-sql-timeout duration=180s
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
 
 # Create sources and verify they can ingest data while `environmentd` is online.
 
@@ -45,6 +48,12 @@ one
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote2-${testdrive.seed}')
   FORMAT TEXT
 
+> CREATE SOURCE webhook_text IN CLUSTER storage_cluster FROM WEBHOOK
+  BODY FORMAT TEXT;
+
+$ webhook-append database=materialize schema=public name=webhook_text
+a
+
 > SELECT * from remote1
 one
 > SELECT * from remote2
@@ -61,3 +70,11 @@ one
   GROUP BY s.id, s.name
 remote1 true 1 1 1
 remote2 true 1 1 1
+
+> SELECT s.name,
+  SUM(u.updates_committed)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('webhook_text')
+  GROUP BY s.id, s.name
+webhook_text 1
