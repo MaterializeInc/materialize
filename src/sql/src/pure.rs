@@ -827,7 +827,7 @@ async fn purify_create_source(
                 text_cols_option.value = Some(WithOptionValue::Sequence(seq));
             }
 
-            let (targeted_subsources, new_subsources) = postgres::generate_targeted_subsources(
+            let new_subsources = postgres::generate_targeted_subsources(
                 &scx,
                 None,
                 validated_requested_subsources,
@@ -835,7 +835,10 @@ async fn purify_create_source(
                 &publication_tables,
             )?;
 
-            *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+            // Now that we know which subsources to create alongside this
+            // statement, remove the references so it is not canonicalized as
+            // part of the `CREATE SOURCE` statement in the catalog.
+            *referenced_subsources = None;
             subsources.extend(new_subsources);
 
             // Record the active replication timeline_id to allow detection of a future upstream
@@ -1093,10 +1096,13 @@ async fn purify_create_source(
             )
             .await?;
 
-            let (targeted_subsources, new_subsources) =
+            let new_subsources =
                 mysql::generate_targeted_subsources(&scx, validated_requested_subsources)?;
 
-            *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+            // Now that we know which subsources to create alongside this
+            // statement, remove the references so it is not canonicalized as
+            // part of the `CREATE SOURCE` statement in the catalog.
+            *referenced_subsources = None;
             subsources.extend(new_subsources);
 
             // Retrieve the current @gtid_executed value of the server to mark as the effective
@@ -1124,8 +1130,6 @@ async fn purify_create_source(
 
             let (_load_generator, available_subsources) =
                 load_generator_ast_to_generator(&scx, generator, options, include_metadata)?;
-
-            let mut targeted_subsources = vec![];
 
             let mut validated_requested_subsources = vec![];
             match referenced_subsources {
@@ -1158,12 +1162,7 @@ async fn purify_create_source(
             {
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
 
-                targeted_subsources.push(CreateSourceSubsource {
-                    reference: upstream_name.clone(),
-                    subsource: None,
-                });
-
-                // Create the subsourcev2 statement
+                // Create the subsource statement
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,
                     columns,
@@ -1181,10 +1180,11 @@ async fn purify_create_source(
                 };
                 subsources.push(subsource);
             }
-            if available_subsources.is_some() {
-                *referenced_subsources =
-                    Some(ReferencedSubsources::SubsetTables(targeted_subsources));
-            }
+
+            // Now that we know which subsources to create alongside this
+            // statement, remove the references so it is not canonicalized as
+            // part of the `CREATE SOURCE` statement in the catalog.
+            *referenced_subsources = None;
         }
     }
 
@@ -1482,7 +1482,7 @@ async fn purify_alter_source(
         text_cols_option.value = Some(WithOptionValue::Sequence(seq));
     }
 
-    let (_named_subsources, new_subsources) = postgres::generate_targeted_subsources(
+    let new_subsources = postgres::generate_targeted_subsources(
         &scx,
         Some(source_name),
         validated_requested_subsources,

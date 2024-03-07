@@ -3210,6 +3210,7 @@ impl Coordinator {
                 let purification_err =
                     || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
+                // TODO: refactor how you remove subsources.
                 let referenced_subsources = match create_source_stmt
                     .referenced_subsources
                     .as_mut()
@@ -3420,6 +3421,7 @@ impl Coordinator {
                 let purification_err =
                     || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
+                // TODO: refactor how you add subsources
                 match create_source_stmt
                     .referenced_subsources
                     .as_mut()

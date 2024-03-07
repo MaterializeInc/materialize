@@ -612,6 +612,11 @@ pub fn plan_create_source(
         progress_subsource,
     } = &stmt;
 
+    // TODO: after next version of MZ, enable this assert.
+    //
+    // mz_ore::soft_assert_or_log!( referenced_subsources.is_none(), "referenced
+    //     subsources must be cleared in purification" );
+
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 
     let allowed_with_options = vec![
@@ -1104,40 +1109,45 @@ pub fn plan_create_source(
         }
     };
 
-    let (available_subsources, requested_subsources) = match (
-        available_subsources,
-        referenced_subsources,
-    ) {
-        (Some(available_subsources), Some(ReferencedSubsources::SubsetTables(subsources))) => {
-            let mut requested_subsources = vec![];
-            for subsource in subsources {
-                let name = subsource.reference.clone();
+    // TODO(migration): remove requested_subsources; primary sources will lose
+    // this feature in planning.
+    let (available_subsources, requested_subsources) = match (available_subsources, referenced_subsources) {
+            (Some(available_subsources), Some(ReferencedSubsources::SubsetTables(subsources))) => {
+                let mut requested_subsources = vec![];
+                for subsource in subsources {
+                    let name = subsource.reference.clone();
 
-                let target = match &subsource.subsource {
-                    // migration: this only needs to be supported for one
-                    // version to allow booting old-style subsources.
-                    None => continue,
-                    Some(DeferredItemName::Named(target)) => target.clone(),
-                    _ => {
-                        sql_bail!("[internal error] subsources must be named during purification")
-                    }
-                };
+                    let target = match &subsource.subsource {
+                        // migration: this only needs to be supported for one
+                        // version to allow booting old-style subsources.
+                        None => continue,
+                        Some(DeferredItemName::Named(target)) => target.clone(),
+                        _ => {
+                            sql_bail!(
+                                "[internal error] subsources must be named during purification"
+                            )
+                        }
+                    };
 
-                requested_subsources.push((name, target));
+                    requested_subsources.push((name, target));
+                }
+                (available_subsources, requested_subsources)
             }
-            (available_subsources, requested_subsources)
-        }
-        (Some(_), None) => {
-            // Multi-output sources must have a table selection clause
-            sql_bail!("This is a multi-output source. Use `FOR TABLE (..)` or `FOR ALL TABLES` to select which ones to ingest");
-        }
-        (None, Some(_))
-        | (Some(_), Some(ReferencedSubsources::All | ReferencedSubsources::SubsetSchemas(_))) => {
-            sql_bail!("[internal error] subsources should be resolved during purification")
-        }
-        (None, None) => (BTreeMap::new(), vec![]),
-    };
+            // Some(_), None indicates that this is a new-style source that
+            // doesn't track its subsources directly.
+            (Some(_), None)
+            // `(None, None)` indicates that this a non-subsource bearing
+            // source.
+            | (None, None) => (BTreeMap::new(), vec![]),
+            (None, Some(_))
+            | (Some(_), Some(ReferencedSubsources::All | ReferencedSubsources::SubsetSchemas(_))) =>
+            {
+                sql_bail!("[internal error] subsources should be resolved during purification")
+            }
+        };
 
+    // TODO(migration): remove subsource exports, which are vestigial for
+    // old-style sources.
     let mut subsource_exports = BTreeMap::new();
     for (name, target) in requested_subsources {
         let name = normalize::full_name(name)?;
