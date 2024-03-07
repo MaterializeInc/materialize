@@ -1469,6 +1469,21 @@ impl CatalogEntry {
         }
     }
 
+    /// Reports whether this catalog entry is a subsource.
+    pub fn source_exports(&self) -> BTreeMap<GlobalId, usize> {
+        match &self.item() {
+            CatalogItem::Source(source) => match &source.data_source {
+                DataSourceDesc::Ingestion(ingestion) => ingestion
+                    .source_exports
+                    .iter()
+                    .map(|(id, export)| (*id, export.output_index))
+                    .collect(),
+                _ => BTreeMap::new(),
+            },
+            _ => BTreeMap::new(),
+        }
+    }
+
     /// Reports whether this catalog entry is a progress source.
     pub fn is_progress_source(&self) -> bool {
         self.item().is_progress_source()
@@ -2248,6 +2263,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn is_subsource(&self) -> bool {
         self.is_subsource()
+    }
+
+    fn source_exports(&self) -> BTreeMap<GlobalId, usize> {
+        self.source_exports()
     }
 
     fn is_progress_source(&self) -> bool {
