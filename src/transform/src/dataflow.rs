@@ -25,13 +25,11 @@ use mz_expr::{
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::explain::{IndexUsageType, UsedIndexes};
-use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 
 use crate::monotonic::MonotonicFlag;
 use crate::notice::RawOptimizerNotice;
-use crate::typecheck::empty_context;
-use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformCtx, TransformError};
+use crate::{IndexOracle, Optimizer, TransformCtx, TransformError};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -45,15 +43,8 @@ use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformCtx, TransformErr
 )]
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
-    indexes: &dyn IndexOracle,
-    stats: &dyn StatisticsOracle,
-    features: &OptimizerFeatures,
-) -> Result<DataflowMetainfo, TransformError> {
-    let typecheck_ctx = empty_context();
-    let mut df_meta = DataflowMetainfo::default();
-    let mut transform_ctx =
-        TransformCtx::global(indexes, stats, &features, &typecheck_ctx, &mut df_meta);
-
+    transform_ctx: &mut TransformCtx,
+) -> Result<(), TransformError> {
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
 
@@ -62,7 +53,7 @@ pub fn optimize_dataflow(
         dataflow,
         #[allow(deprecated)]
         &Optimizer::logical_optimizer(transform_ctx.typecheck_ctx),
-        &mut transform_ctx,
+        transform_ctx,
     )?;
 
     optimize_dataflow_filters(dataflow)?;
@@ -79,23 +70,27 @@ pub fn optimize_dataflow(
     optimize_dataflow_relations(
         dataflow,
         &Optimizer::logical_cleanup_pass(transform_ctx.typecheck_ctx, false),
-        &mut transform_ctx,
+        transform_ctx,
     )?;
 
     // Physical optimization pass
     optimize_dataflow_relations(
         dataflow,
         &Optimizer::physical_optimizer(transform_ctx.typecheck_ctx),
-        &mut transform_ctx,
+        transform_ctx,
     )?;
 
     optimize_dataflow_monotonic(dataflow)?;
 
-    prune_and_annotate_dataflow_index_imports(dataflow, indexes, &mut df_meta)?;
+    prune_and_annotate_dataflow_index_imports(
+        dataflow,
+        transform_ctx.indexes,
+        transform_ctx.df_meta,
+    )?;
 
     mz_repr::explain::trace_plan(dataflow);
 
-    Ok(df_meta)
+    Ok(())
 }
 
 /// Inline views used in one other view, and in no exported objects.

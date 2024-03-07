@@ -37,6 +37,7 @@ use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
+use mz_transform::TransformCtx;
 use timely::progress::Antichain;
 
 use crate::catalog::Catalog;
@@ -225,12 +226,17 @@ impl Optimize<LocalMirPlan> for Optimizer {
             |s| prep_scalar_expr(s, style),
         )?;
 
-        let df_meta = mz_transform::optimize_dataflow(
-            &mut df_desc,
+        // Construct TransformCtx for global optimization.
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx = TransformCtx::global(
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
-        )?;
+            &self.typecheck_ctx,
+            &mut df_meta,
+        );
+        // Run global optimization.
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.
