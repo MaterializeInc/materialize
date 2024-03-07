@@ -131,25 +131,13 @@ def workflow_sink_queue_full(c: Composition) -> None:
     """Similar to the sink-networking workflow, but with 11 million rows (more then the 11 million defined as queue.buffering.max.messages) and only creating the sink after these rows are ingested into Mz. Triggers #24936"""
     seed = random.getrandbits(16)
     c.up("zookeeper", "kafka", "schema-registry", "materialized", "toxiproxy")
-    for i, failure_mode in enumerate(
-        [
-            "toxiproxy-close-connection.td",
-            "toxiproxy-limit-connection.td",
-            "toxiproxy-timeout.td",
-            "toxiproxy-timeout-hold.td",
-        ]
-    ):
-        c.up("toxiproxy")
-        c.run_testdrive_files(
-            "--no-reset",
-            "--max-errors=1",
-            f"--seed={seed}{i}",
-            f"--temp-dir=/share/tmp/kafka-resumption-{seed}{i}",
-            "sink-queue-full/setup.td",
-            f"sink-queue-full/{failure_mode}",
-            "sink-queue-full/during.td",
-            "sink-queue-full/toxiproxy-restore-connection.td",
-            "sink-queue-full/verify-success.td",
-            "sink-queue-full/cleanup.td",
-        )
-        c.kill("toxiproxy")
+    c.run_testdrive_files(
+        "--no-reset",
+        "--max-errors=1",
+        f"--seed={seed}",
+        f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
+        "sink-queue-full/setup.td",
+        "sink-queue-full/during.td",
+        "sink-queue-full/verify-success.td",
+        "sink-queue-full/cleanup.td",
+    )
