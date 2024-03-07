@@ -20,7 +20,8 @@ use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
+use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::NodeId;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::sources::SourceInstanceDesc;
@@ -1062,12 +1063,22 @@ where
             sink_exports.insert(id, desc);
         }
 
+        // Flatten the dataflow plans into the representation expected by replicas.
+        let objects_to_build = dataflow
+            .objects_to_build
+            .into_iter()
+            .map(|object| BuildDesc {
+                id: object.id,
+                plan: FlatPlan::from(object.plan),
+            })
+            .collect();
+
         let augmented_dataflow = DataflowDescription {
             source_imports,
             sink_exports,
+            objects_to_build,
             // The rest of the fields are identical
             index_imports: dataflow.index_imports,
-            objects_to_build: dataflow.objects_to_build,
             index_exports: dataflow.index_exports,
             as_of: dataflow.as_of.clone(),
             until: dataflow.until,
