@@ -144,6 +144,10 @@ impl<'a> TransformCtx<'a> {
         }
     }
 
+    fn typecheck(&self) -> SharedContext {
+        Arc::clone(self.typecheck_ctx)
+    }
+
     fn set_global_id(&mut self, global_id: GlobalId) {
         self.global_id = Some(global_id);
     }
@@ -455,10 +459,9 @@ pub struct Optimizer {
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     #[deprecated = "Create an Optimize instance and call `optimize` instead."]
-    // TODO: pass TransformCtx instead
-    pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
+    pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.typecheck()).strict_join_equivalences()),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(crate::non_null_requirements::NonNullRequirements::default()),
@@ -509,7 +512,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                crate::typecheck::Typecheck::new(Arc::clone(ctx))
+                crate::typecheck::Typecheck::new(ctx.typecheck())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -526,11 +529,11 @@ impl Optimizer {
     /// This is meant to be used for optimizing each view within a dataflow
     /// once view inlining has already happened, right before dataflow
     /// rendering.
-    pub fn physical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
+    pub fn physical_optimizer(ctx: &mut TransformCtx) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(
-                crate::typecheck::Typecheck::new(Arc::clone(ctx))
+                crate::typecheck::Typecheck::new(ctx.typecheck())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -594,7 +597,7 @@ impl Optimizer {
             // (For example, `FoldConstants` can break the normalized form by removing all
             // references to a Let, see https://github.com/MaterializeInc/materialize/issues/21175)
             Box::new(crate::normalize_lets::NormalizeLets::new(false)),
-            Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).disallow_new_globals()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.typecheck()).disallow_new_globals()),
         ];
         Self {
             name: "physical",
@@ -608,12 +611,9 @@ impl Optimizer {
     /// Set `allow_new_globals` when you will use these as the first passes.
     /// The first instance of the typechecker in an optimizer pipeline should
     /// allow new globals (or it will crash when it encounters them).
-    pub fn logical_cleanup_pass(
-        ctx: &crate::typecheck::SharedContext,
-        allow_new_globals: bool,
-    ) -> Self {
+    pub fn logical_cleanup_pass(ctx: &mut TransformCtx, allow_new_globals: bool) -> Self {
         let mut typechecker =
-            crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences();
+            crate::typecheck::Typecheck::new(ctx.typecheck()).strict_join_equivalences();
 
         if !allow_new_globals {
             typechecker = typechecker.disallow_new_globals();
@@ -648,7 +648,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                crate::typecheck::Typecheck::new(Arc::clone(ctx))
+                crate::typecheck::Typecheck::new(ctx.typecheck())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),

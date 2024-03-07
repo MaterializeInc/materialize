@@ -52,7 +52,7 @@ pub fn optimize_dataflow(
     optimize_dataflow_relations(
         dataflow,
         #[allow(deprecated)]
-        &Optimizer::logical_optimizer(transform_ctx.typecheck_ctx),
+        &Optimizer::logical_optimizer(transform_ctx),
         transform_ctx,
     )?;
 
@@ -69,14 +69,14 @@ pub fn optimize_dataflow(
     // pushed down across views.
     optimize_dataflow_relations(
         dataflow,
-        &Optimizer::logical_cleanup_pass(transform_ctx.typecheck_ctx, false),
+        &Optimizer::logical_cleanup_pass(transform_ctx, false),
         transform_ctx,
     )?;
 
     // Physical optimization pass
     optimize_dataflow_relations(
         dataflow,
-        &Optimizer::physical_optimizer(transform_ctx.typecheck_ctx),
+        &Optimizer::physical_optimizer(transform_ctx),
         transform_ctx,
     )?;
 

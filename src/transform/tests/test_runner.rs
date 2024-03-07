@@ -48,9 +48,13 @@ mod tests {
 
     thread_local! {
         static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
-            let ctx = mz_transform::typecheck::empty_context();
+            let features = OptimizerFeatures::default();
+            let typecheck_ctx = typecheck::empty_context();
+            let mut df_meta = DataflowMetainfo::default();
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+
             #[allow(deprecated)]
-            Optimizer::logical_optimizer(&ctx)
+            Optimizer::logical_optimizer(&mut transform_ctx)
                 .transforms
                 .into_iter()
                 .chain(std::iter::once::<Box<dyn Transform>>(
@@ -59,8 +63,8 @@ mod tests {
                 .chain(std::iter::once::<Box<dyn Transform>>(
                     Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
                 ))
-                .chain(Optimizer::logical_cleanup_pass(&ctx, false).transforms.into_iter())
-                .chain(Optimizer::physical_optimizer(&ctx).transforms.into_iter())
+                .chain(Optimizer::logical_cleanup_pass(&mut transform_ctx, false).transforms.into_iter())
+                .chain(Optimizer::physical_optimizer(&mut transform_ctx).transforms.into_iter())
                 .collect::<Vec<_>>()
             };
     }
@@ -348,7 +352,7 @@ mod tests {
             let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
 
             #[allow(deprecated)]
-            let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
+            let optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
@@ -381,8 +385,8 @@ mod tests {
             let mut df_meta = DataflowMetainfo::default();
             let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
 
-            let log_optimizer = Optimizer::logical_cleanup_pass(&typecheck_ctx, true);
-            let phys_optimizer = Optimizer::physical_optimizer(&typecheck_ctx);
+            let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
+            let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {

@@ -340,7 +340,7 @@ fn optimize_mir_local(
     ctx: &mut TransformCtx,
 ) -> Result<OptimizedMirRelationExpr, OptimizerError> {
     #[allow(deprecated)]
-    let optimizer = mz_transform::Optimizer::logical_optimizer(ctx.typecheck_ctx);
+    let optimizer = mz_transform::Optimizer::logical_optimizer(ctx);
     let expr = optimizer.optimize(expr, ctx)?;
 
     // Trace the result of this phase.
