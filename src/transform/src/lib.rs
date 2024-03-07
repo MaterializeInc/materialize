@@ -65,6 +65,7 @@ pub mod typecheck;
 pub mod union_cancel;
 
 use crate::dataflow::DataflowMetainfo;
+use crate::typecheck::SharedContext;
 pub use dataflow::optimize_dataflow;
 use mz_ore::soft_assert_or_log;
 
@@ -94,18 +95,25 @@ pub struct TransformCtx<'a> {
     pub stats: &'a dyn StatisticsOracle,
     /// Features passed to the enclosing `Optimizer`.
     pub features: &'a OptimizerFeatures,
+    /// Typechecking context.
+    pub typecheck_ctx: &'a SharedContext,
     /// Transforms can use this field to communicate information outside the result plans.
     pub df_meta: &'a mut DataflowMetainfo,
 }
 
 impl<'a> TransformCtx<'a> {
     /// Generates a dummy [`TransformCtx`] instance for crate tests.
-    pub fn dummy(features: &'a OptimizerFeatures, df_meta: &'a mut DataflowMetainfo) -> Self {
+    pub fn dummy(
+        features: &'a OptimizerFeatures,
+        typecheck_ctx: &'a typecheck::SharedContext,
+        df_meta: &'a mut DataflowMetainfo,
+    ) -> Self {
         Self {
             indexes: &EmptyIndexOracle,
             stats: &EmptyStatisticsOracle,
             global_id: None,
             features,
+            typecheck_ctx,
             df_meta,
         }
     }
@@ -118,6 +126,7 @@ impl<'a> TransformCtx<'a> {
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
         features: &'a OptimizerFeatures,
+        typecheck_ctx: &'a SharedContext,
         df_meta: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
@@ -126,6 +135,7 @@ impl<'a> TransformCtx<'a> {
             global_id: None,
             features,
             df_meta,
+            typecheck_ctx,
         }
     }
 
@@ -440,6 +450,7 @@ pub struct Optimizer {
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     #[deprecated = "Create an Optimize instance and call `optimize` instead."]
+    // TODO: pass TransformCtx instead
     pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences()),
@@ -656,9 +667,10 @@ impl Optimizer {
         &self,
         mut relation: MirRelationExpr,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
-        let mut df_meta = DataflowMetainfo::default();
         let features = OptimizerFeatures::default();
-        let mut transform_ctx = TransformCtx::dummy(&features, &mut df_meta);
+        let typecheck_ctx = typecheck::empty_context();
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx = TransformCtx::dummy(&features, &typecheck_ctx, &mut df_meta);
         let transform_result = self.transform(&mut relation, &mut transform_ctx);
 
         // Make sure we are not swallowing any notice.

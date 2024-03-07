@@ -13,8 +13,10 @@
 //!
 //! ```rust
 //! use mz_expr::{MirRelationExpr, MirScalarExpr};
-//! use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
-//!
+//! use mz_repr::{typecheck, ColumnType, Datum, RelationType, ScalarType};
+//! use mz_repr::optimizer::OptimizerFeatures;
+//! use mz_transform::{Transform, TransformCtx};
+//! use mz_transform::dataflow::DataflowMetainfo;
 //! use mz_transform::fusion::filter::Filter;
 //!
 //! let input = MirRelationExpr::constant(vec![], RelationType::new(vec![
@@ -25,23 +27,19 @@
 //! let predicate1 = MirScalarExpr::Column(0);
 //! let predicate2 = MirScalarExpr::Column(0);
 //!
-//! let mut expr =
-//! input
+//! let mut expr = input
 //!     .clone()
 //!     .filter(vec![predicate0.clone()])
 //!     .filter(vec![predicate1.clone()])
 //!     .filter(vec![predicate2.clone()]);
 //!
-//! // .transform() will deduplicate any predicates
-//! use mz_transform::{Transform, TransformCtx};
-//! use mz_transform::dataflow::DataflowMetainfo;
-//! Filter.transform(&mut expr, &mut TransformCtx {
-//!   indexes: &mz_transform::EmptyIndexOracle,
-//!   stats: &mz_transform::EmptyStatisticsOracle,
-//!   global_id: None,
-//!   enable_eager_delta_joins: false,
-//!   dataflow_metainfo: &mut DataflowMetainfo::default(),
-//! });
+//! let features = OptimizerFeatures::default();
+//! let typecheck_ctx = typecheck::empty_context();
+//! let mut df_meta = DataflowMetainfo::default();
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+//!
+//! // Filter.transform() will deduplicate any predicates
+//! Filter.transform(&mut expr, &mut transform_ctx);
 //!
 //! let correct = input.filter(vec![predicate0]);
 //!

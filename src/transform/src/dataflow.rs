@@ -30,6 +30,7 @@ use mz_repr::GlobalId;
 
 use crate::monotonic::MonotonicFlag;
 use crate::notice::RawOptimizerNotice;
+use crate::typecheck::empty_context;
 use crate::{IndexOracle, Optimizer, StatisticsOracle, TransformCtx, TransformError};
 
 /// Optimizes the implementation of each dataflow.
@@ -48,9 +49,10 @@ pub fn optimize_dataflow(
     stats: &dyn StatisticsOracle,
     features: &OptimizerFeatures,
 ) -> Result<DataflowMetainfo, TransformError> {
-    let typecheck_ctx = crate::typecheck::empty_context(); // TODO: make part of TransformCtx
+    let typecheck_ctx = empty_context();
     let mut df_meta = DataflowMetainfo::default();
-    let mut transform_ctx = TransformCtx::global(indexes, stats, &features, &mut df_meta);
+    let mut transform_ctx =
+        TransformCtx::global(indexes, stats, &features, &typecheck_ctx, &mut df_meta);
 
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
@@ -59,7 +61,7 @@ pub fn optimize_dataflow(
     optimize_dataflow_relations(
         dataflow,
         #[allow(deprecated)]
-        &Optimizer::logical_optimizer(&typecheck_ctx),
+        &Optimizer::logical_optimizer(transform_ctx.typecheck_ctx),
         &mut transform_ctx,
     )?;
 
@@ -76,14 +78,14 @@ pub fn optimize_dataflow(
     // pushed down across views.
     optimize_dataflow_relations(
         dataflow,
-        &Optimizer::logical_cleanup_pass(&typecheck_ctx, false),
+        &Optimizer::logical_cleanup_pass(transform_ctx.typecheck_ctx, false),
         &mut transform_ctx,
     )?;
 
     // Physical optimization pass
     optimize_dataflow_relations(
         dataflow,
-        &Optimizer::physical_optimizer(&typecheck_ctx),
+        &Optimizer::physical_optimizer(transform_ctx.typecheck_ctx),
         &mut transform_ctx,
     )?;
 
