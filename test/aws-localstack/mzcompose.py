@@ -258,7 +258,7 @@ def workflow_copy_to_s3(c: Composition) -> None:
             assert output_lines == expected_output_set
 
         # asserting the uploaded files
-        date = datetime.now().strftime("%Y-%m-%d")
+        date = c.sql_query("SELECT TO_CHAR(now(), 'YYYY-MM-DD')")[0][0]
         expected_output = set(map(lambda x: str(x), range(10)))
         first_upload = s3_client.list_objects_v2(
             Bucket=bucket_name, Prefix=f"{path_prefix}/1/{date}/"
