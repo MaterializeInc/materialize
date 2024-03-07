@@ -206,7 +206,7 @@ mod tests {
         let actual: StructStats = RustType::from_proto(actual).unwrap();
         for (name, typ) in schema.iter() {
             struct ColMinMaxNulls<'a>(&'a dyn DynStats);
-            impl<'a> DatumToPersistFn<()> for ColMinMaxNulls<'a> {
+            impl<'a> DatumToPersistFn<'a, ()> for ColMinMaxNulls<'a> {
                 fn call<T: DatumToPersist>(self) {
                     let ColMinMaxNulls(stats) = self;
                     let stats = stats

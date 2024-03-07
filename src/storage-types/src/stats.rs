@@ -299,7 +299,7 @@ impl RelationPartStats<'_> {
             &'a RowArena,
             Option<usize>,
         );
-        impl<'a> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a> {
+        impl<'a> DatumToPersistFn<'a, Option<ResultSpec<'a>>> for ColValues<'a> {
             fn call<T: DatumToPersist>(self) -> Option<ResultSpec<'a>> {
                 let ColValues(metrics, name, col_name, stats, arena, total_count) = self;
                 let stats = downcast_stats::<T::Data>(metrics, name, col_name, stats)?;
@@ -365,7 +365,7 @@ mod tests {
         }
 
         struct ValidateStats<'a>(RelationPartStats<'a>, &'a RowArena, Datum<'a>);
-        impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
+        impl<'a> DatumToPersistFn<'a, ()> for ValidateStats<'a> {
             fn call<T: DatumToPersist>(self) -> () {
                 let ValidateStats(stats, arena, datum) = self;
                 if let Some(spec) = stats.col_values(0, arena) {
