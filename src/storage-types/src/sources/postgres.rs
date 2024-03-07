@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 
-use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -119,25 +118,15 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
             connection_id,
             // Connection details may change
             connection: _,
-            table_casts,
+            // Table casts may change (e.g. dropping TEXT COLUMNs, schema of
+            // unconsumed table changing)
+            table_casts: _,
             publication,
             publication_details,
         } = self;
 
         let compatibility_checks = [
             (connection_id == &other.connection_id, "connection_id"),
-            (
-                table_casts
-                    .iter()
-                    .merge_join_by(&other.table_casts, |(l_key, _), (r_key, _)| {
-                        l_key.cmp(r_key)
-                    })
-                    .all(|r| match r {
-                        Both((_, l_val), (_, r_val)) => l_val == r_val,
-                        _ => true,
-                    }),
-                "table_casts",
-            ),
             (publication == &other.publication, "publication"),
             (
                 publication_details

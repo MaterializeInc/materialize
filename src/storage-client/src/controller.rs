@@ -353,7 +353,7 @@ pub trait StorageController: Debug {
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
-    fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
+    async fn drop_sources(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     fn drop_sinks(&mut self, identifiers: Vec<GlobalId>) -> Result<(), StorageError>;
@@ -380,7 +380,10 @@ pub trait StorageController: Debug {
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
     ///     `drop_sources`.
-    fn drop_sources_unvalidated(&mut self, identifiers: Vec<GlobalId>);
+    async fn drop_sources_unvalidated(
+        &mut self,
+        identifiers: Vec<GlobalId>,
+    ) -> Result<(), StorageError>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///
