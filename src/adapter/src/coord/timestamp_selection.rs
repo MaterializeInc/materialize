@@ -367,8 +367,8 @@ pub trait TimestampProvider {
         {
             let mut timestamp = largest_not_in_advance_of_upper;
             // In practice advancing the timestamp into the future is confusing for users. So if
-            // there is an `oracle_read_ts` then we treat is as "the current time" bound the upper
-            // advancement to "the current time".
+            // there is an `oracle_read_ts` then we treat is as "the current time" and bound the
+            // upper advancement to "the current time".
             if isolation_level == &IsolationLevel::Serializable {
                 if let Some(oracle_read_ts) = oracle_read_ts {
                     timestamp.meet_assign(&oracle_read_ts);
