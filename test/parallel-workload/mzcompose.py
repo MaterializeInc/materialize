@@ -72,7 +72,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
     scenario = Scenario(args.scenario)
     complexity = Complexity(args.complexity)
-    catalog_store = "persist"
     sanity_restart = False
 
     with c.override(
@@ -81,7 +80,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_minio="toxiproxy",
             external_cockroach="toxiproxy",
             ports=["6975:6875", "6976:6876", "6977:6877"],
-            catalog_store=catalog_store,
             sanity_restart=sanity_restart,
         ),
         Toxiproxy(seed=random.randrange(2**63)),
@@ -116,7 +114,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.naughty_identifiers,
             args.fast_startup,
             c,
-            catalog_store,
             sanity_restart,
         )
         # TODO: Only ignore errors that will be handled by parallel-workload, not others

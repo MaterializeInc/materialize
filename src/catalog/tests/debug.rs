@@ -11,14 +11,13 @@ use mz_catalog::durable::debug::{CollectionTrace, ConfigCollection, SettingColle
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
-    test_bootstrap_args, test_persist_backed_catalog_state, test_stash_backed_catalog_state,
-    CatalogError, DurableCatalogError, Epoch, OpenableDurableCatalogState, CATALOG_VERSION,
+    test_bootstrap_args, test_persist_backed_catalog_state, CatalogError, DurableCatalogError,
+    Epoch, OpenableDurableCatalogState, CATALOG_VERSION,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_persist_client::PersistClient;
 use mz_repr::Diff;
-use mz_stash::DebugStashFactory;
 use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
 
@@ -98,23 +97,6 @@ impl Debug for HiddenUserVersionTrace<'_> {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_debug() {
-    let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
-    test_debug(
-        "stash",
-        debug_openable_state1,
-        debug_openable_state2,
-        debug_openable_state3,
-    )
-    .await;
-    debug_factory.drop().await;
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_debug() {
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
@@ -126,7 +108,6 @@ async fn test_persist_debug() {
         test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
 
     test_debug(
-        "persist",
         persist_openable_state1,
         persist_openable_state2,
         persist_openable_state3,
@@ -135,7 +116,6 @@ async fn test_persist_debug() {
 }
 
 async fn test_debug(
-    catalog_kind: &str,
     mut openable_state1: impl OpenableDurableCatalogState,
     mut openable_state2: impl OpenableDurableCatalogState,
     mut openable_state3: impl OpenableDurableCatalogState,
@@ -172,14 +152,10 @@ async fn test_debug(
             test_trace.user_version().unwrap();
         assert_eq!(user_version_key.key, USER_VERSION_KEY);
         assert_eq!(user_version_value.value, CATALOG_VERSION);
-        let expected_ts = match catalog_kind {
-            "persist" => "2",
-            "stash" => "-9223372036854775808",
-            _ => panic!("unexpected catalog_kind {catalog_kind}"),
-        };
+        let expected_ts = "2";
         assert_eq!(user_version_ts, expected_ts);
         assert_eq!(user_version_diff, &1);
-        insta::assert_debug_snapshot!(format!("{catalog_kind}_opened_trace"), test_trace);
+        insta::assert_debug_snapshot!("opened_trace".to_string(), test_trace);
     }
 
     let mut debug_state = Box::new(openable_state2).open_debug().await.unwrap();

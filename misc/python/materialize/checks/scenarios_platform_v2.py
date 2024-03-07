@@ -78,25 +78,3 @@ class PersistTxnFencing(Scenario):
             KillMz(mz_service="mz_txn_tables_default", capture_logs=True),
             Down(),
         ]
-
-
-class PersistCatalogToggle(Scenario):
-    """Toggle catalog_kind between `stash` and `persist`"""
-
-    def actions(self) -> list[Action]:
-        return [
-            StartMz(self, catalog_store="stash"),
-            Initialize(self),
-            KillMz(capture_logs=True),
-            StartMz(self, catalog_store="persist"),
-            Manipulate(self, phase=1),
-            KillMz(capture_logs=True),
-            StartMz(self, catalog_store="stash"),
-            Manipulate(self, phase=2),
-            KillMz(capture_logs=True),
-            StartMz(self, catalog_store="persist"),
-            Validate(self),
-            KillMz(capture_logs=True),
-            StartMz(self, catalog_store="stash"),
-            Validate(self),
-        ]

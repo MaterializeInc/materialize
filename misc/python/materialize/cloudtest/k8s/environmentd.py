@@ -189,7 +189,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--orchestrator=kubernetes",
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
             f"--persist-consensus-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=consensus",
-            f"--adapter-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
             f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
             "--internal-http-listen-addr=0.0.0.0:6878",
@@ -288,6 +287,12 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                         for key, value in system_parameter_defaults.items()
                     ]
                 ),
+            ),
+            # Set the adapter stash URL for older environments that need it (versions before
+            # v0.92.0).
+            V1EnvVar(
+                name="MZ_ADAPTER_STASH_URL",
+                value=f"postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
             ),
         ]
 

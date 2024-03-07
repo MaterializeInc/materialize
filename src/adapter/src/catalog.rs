@@ -35,7 +35,7 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
 use mz_catalog::durable::{
-    test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
+    test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, Transaction,
 };
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -79,12 +79,10 @@ use mz_sql::names::{
 use mz_sql::plan::{PlanContext, PlanNotice, StatementDesc};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
-    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, CATALOG_KIND_IMPL,
-    PERSIST_TXN_TABLES,
+    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, PERSIST_TXN_TABLES,
 };
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_stash::StashFactory;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -527,50 +525,6 @@ impl Catalog {
         );
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None, None)
-            .await?;
-        Self::open_debug_catalog_inner(storage, now, environment_id).await
-    }
-
-    /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
-    ///
-    /// See [`Catalog::with_debug`].
-    pub async fn open_debug_stash_catalog_url(
-        url: String,
-        schema: String,
-        now: NowFn,
-        environment_id: Option<EnvironmentId>,
-    ) -> Result<Catalog, anyhow::Error> {
-        let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new())
-            .expect("unable to create TLS connector");
-        let factory = StashFactory::new(&MetricsRegistry::new());
-        let stash_config = StashConfig {
-            stash_factory: factory,
-            stash_url: url,
-            schema: Some(schema),
-            tls,
-        };
-        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
-            stash_config,
-        ));
-        let storage = openable_storage
-            .open(now(), &test_bootstrap_args(), None, None)
-            .await?;
-        Self::open_debug_catalog_inner(storage, now, environment_id).await
-    }
-
-    /// Opens a read only debug stash backed catalog defined by `stash_config`.
-    ///
-    /// See [`Catalog::with_debug`].
-    pub async fn open_debug_read_only_stash_catalog_config(
-        stash_config: StashConfig,
-        now: NowFn,
-        environment_id: Option<EnvironmentId>,
-    ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
-            stash_config,
-        ));
-        let storage = openable_storage
-            .open_read_only(&test_bootstrap_args())
             .await?;
         Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
@@ -2875,15 +2829,12 @@ impl Catalog {
                     // Launch Darkly, but use it in boot before Launch Darkly is available.
                     if name == PERSIST_TXN_TABLES.name() {
                         tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
-                    } else if name == CATALOG_KIND_IMPL.name() {
-                        tx.set_catalog_kind(None)?;
                     }
                 }
                 Op::ResetAllSystemConfiguration => {
                     state.clear_system_configuration();
                     tx.clear_system_configs();
                     tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
-                    tx.set_catalog_kind(None)?;
                 }
                 Op::UpdateRotatedKeys {
                     id,
@@ -3050,8 +3001,6 @@ impl Catalog {
         // Launch Darkly, but use it in boot before Launch Darkly is available.
         if name == PERSIST_TXN_TABLES.name() {
             tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
-        } else if name == CATALOG_KIND_IMPL.name() {
-            tx.set_catalog_kind(state.system_configuration.catalog_kind())?;
         }
         Ok(())
     }
@@ -4193,8 +4142,6 @@ mod tests {
         Builtin, BuiltinType, BUILTINS,
         REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
     };
-    use mz_catalog::durable::initialize::CATALOG_KIND_KEY;
-    use mz_catalog::durable::objects::serialization::proto;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
@@ -4216,7 +4163,7 @@ mod tests {
         Scope, StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-    use mz_sql::session::vars::{CatalogKind, OwnedVarInput, Var, VarInput, CATALOG_KIND_IMPL};
+    use mz_sql::session::vars::VarInput;
 
     use crate::catalog::{Catalog, CatalogItem, Op, PrivilegeMap, SYSTEM_CONN_ID};
     use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
@@ -5528,64 +5475,5 @@ mod tests {
 
             catalog.expire().await;
         }
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-    async fn test_catalog_kind_feature_flag() {
-        Catalog::with_debug(SYSTEM_TIME.clone(), |mut catalog| async move {
-            // Update "catalog_kind" system variable.
-            let op = Op::UpdateSystemConfiguration {
-                name: CATALOG_KIND_IMPL.name().to_string(),
-                value: OwnedVarInput::Flat(CatalogKind::Persist.as_str().to_string()),
-            };
-            catalog
-                .transact(mz_repr::Timestamp::MIN, None, vec![op])
-                .await
-                .expect("failed to transact");
-
-            // Check that the config was also updated.
-            let configs = catalog
-                .storage()
-                .await
-                .snapshot()
-                .await
-                .expect("failed to get snapshot")
-                .configs;
-            let catalog_kind_value = configs
-                .get(&proto::ConfigKey {
-                    key: CATALOG_KIND_KEY.to_string(),
-                })
-                .expect("config should exist")
-                .value;
-            let catalog_kind =
-                CatalogKind::try_from(catalog_kind_value).expect("invalid value persisted");
-            assert_eq!(catalog_kind, CatalogKind::Persist);
-
-            // Remove "catalog_kind" system variable.
-            let op = Op::ResetSystemConfiguration {
-                name: CATALOG_KIND_IMPL.name().to_string(),
-            };
-            catalog
-                .transact(mz_repr::Timestamp::MIN, None, vec![op])
-                .await
-                .expect("failed to transact");
-
-            // Check that the config was also removed.
-            let configs = catalog
-                .storage()
-                .await
-                .snapshot()
-                .await
-                .expect("failed to get snapshot")
-                .configs;
-            let catalog_kind_value = configs.get(&proto::ConfigKey {
-                key: CATALOG_KIND_KEY.to_string(),
-            });
-            assert_eq!(catalog_kind_value, None);
-
-            catalog.expire().await;
-        })
-        .await;
     }
 }

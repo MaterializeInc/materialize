@@ -234,7 +234,6 @@ def create_mz_service(
         external_cockroach=True,
         external_minio=True,
         sanity_restart=False,
-        catalog_store="persist",
     )
 
 
@@ -411,7 +410,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     scenarios_with_regressions = []
     for cycle in range(0, args.max_retries):
         print(
-            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
+            f"Cycle {cycle + 1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
         )
 
         report = Report()
@@ -429,7 +428,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if any([c.is_regression() for c in comparators]):
                 scenarios_with_regressions.append(scenario)
 
-            print(f"+++ Benchmark Report for cycle {cycle+1}:")
+            print(f"+++ Benchmark Report for cycle {cycle + 1}:")
             report.dump()
 
         scenarios_to_run = scenarios_with_regressions

@@ -13,21 +13,12 @@
 use std::fmt::Debug;
 
 use mz_repr::Diff;
-use mz_stash::{Stash, TypedCollection};
 use serde::{Deserialize, Serialize};
 use serde_plain::{derive_display_from_serialize, derive_fromstr_from_deserialize};
 
-use crate::durable;
 use crate::durable::impls::persist::{StateUpdateKind, UnopenedPersistCatalogState};
 use crate::durable::objects::serialization::proto;
-use crate::durable::{
-    CatalogError, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
-    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
-    CONFIG_COLLECTION, DATABASES_COLLECTION, DEFAULT_PRIVILEGES_COLLECTION,
-    ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION,
-    SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
-    SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
-};
+use crate::durable::CatalogError;
 
 /// The contents of the catalog are logically separated into separate [`Collection`]s, which
 /// describe the category of data that the content belongs to.
@@ -43,13 +34,10 @@ pub trait Collection: Debug {
     /// Extract the [`CollectionTrace`] from a [`Trace`] that corresponds to [`Collection`].
     fn collection_trace(trace: Trace) -> CollectionTrace<Self>;
 
-    /// Return [`TypedCollection`] that corresponds to [`Collection`].
-    fn stash_collection() -> TypedCollection<Self::Key, Self::Value>;
-
     /// Generate a `StateUpdateKind` with `key` and `value` that corresponds to [`Collection`].
-    fn persist_update(key: Self::Key, value: Self::Value) -> StateUpdateKind;
+    fn update(key: Self::Key, value: Self::Value) -> StateUpdateKind;
 
-    /// The human readable name of this collection.
+    /// The human-readable name of this collection.
     fn name() -> String {
         Self::collection_type().to_string()
     }
@@ -95,8 +83,7 @@ derive_fromstr_from_deserialize!(CollectionType);
 /// - `$value`, the type used to store values.
 /// - `$collection_type`, the [`CollectionType`].
 /// - `$trace_field`, the corresponding field name within a [`Trace`].
-/// - `$stash_collection`, the corresponding [`TypedCollection`].
-/// - `$persist_update`, the corresponding [`StateUpdateKind`] constructor.
+/// - `$update`, the corresponding [`StateUpdateKind`] constructor.
 macro_rules! collection_impl {
     ({
     name: $name:ident,
@@ -104,8 +91,7 @@ macro_rules! collection_impl {
     value: $value:ty,
     collection_type: $collection_type:expr,
     trace_field: $trace_field:ident,
-    stash_collection: $stash_collection:expr,
-    persist_update: $persist_update:expr,
+    update: $update:expr,
 }) => {
         #[derive(Debug, Clone, PartialEq, Eq)]
         pub struct $name {}
@@ -122,12 +108,8 @@ macro_rules! collection_impl {
                 trace.$trace_field
             }
 
-            fn stash_collection() -> TypedCollection<Self::Key, Self::Value> {
-                $stash_collection
-            }
-
-            fn persist_update(key: Self::Key, value: Self::Value) -> StateUpdateKind {
-                $persist_update(key, value)
+            fn update(key: Self::Key, value: Self::Value) -> StateUpdateKind {
+                $update(key, value)
             }
         }
     };
@@ -139,8 +121,7 @@ collection_impl!({
     value: (),
     collection_type: CollectionType::AuditLog,
     trace_field: audit_log,
-    stash_collection: AUDIT_LOG_COLLECTION,
-    persist_update: StateUpdateKind::AuditLog,
+    update: StateUpdateKind::AuditLog,
 });
 collection_impl!({
     name: ClusterCollection,
@@ -148,8 +129,7 @@ collection_impl!({
     value: proto::ClusterValue,
     collection_type: CollectionType::ComputeInstance,
     trace_field: clusters,
-    stash_collection: CLUSTER_COLLECTION,
-    persist_update: StateUpdateKind::Cluster,
+    update: StateUpdateKind::Cluster,
 });
 collection_impl!({
     name: ClusterIntrospectionSourceIndexCollection,
@@ -157,8 +137,7 @@ collection_impl!({
     value: proto::ClusterIntrospectionSourceIndexValue,
     collection_type: CollectionType::ComputeIntrospectionSourceIndex,
     trace_field: introspection_sources,
-    stash_collection: CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    persist_update: StateUpdateKind::IntrospectionSourceIndex,
+    update: StateUpdateKind::IntrospectionSourceIndex,
 });
 collection_impl!({
     name: ClusterReplicaCollection,
@@ -166,8 +145,7 @@ collection_impl!({
     value: proto::ClusterReplicaValue,
     collection_type: CollectionType::ComputeReplicas,
     trace_field: cluster_replicas,
-    stash_collection: CLUSTER_REPLICA_COLLECTION,
-    persist_update: StateUpdateKind::ClusterReplica,
+    update: StateUpdateKind::ClusterReplica,
 });
 collection_impl!({
     name: CommentCollection,
@@ -175,8 +153,7 @@ collection_impl!({
     value: proto::CommentValue,
     collection_type: CollectionType::Comments,
     trace_field: comments,
-    stash_collection: COMMENTS_COLLECTION,
-    persist_update: StateUpdateKind::Comment,
+    update: StateUpdateKind::Comment,
 });
 collection_impl!({
     name: ConfigCollection,
@@ -184,8 +161,7 @@ collection_impl!({
     value: proto::ConfigValue,
     collection_type: CollectionType::Config,
     trace_field: configs,
-    stash_collection: CONFIG_COLLECTION,
-    persist_update: StateUpdateKind::Config,
+    update: StateUpdateKind::Config,
 });
 collection_impl!({
     name: DatabaseCollection,
@@ -193,8 +169,7 @@ collection_impl!({
     value: proto::DatabaseValue,
     collection_type: CollectionType::Database,
     trace_field: databases,
-    stash_collection: DATABASES_COLLECTION,
-    persist_update: StateUpdateKind::Database,
+    update: StateUpdateKind::Database,
 });
 collection_impl!({
     name: DefaultPrivilegeCollection,
@@ -202,8 +177,7 @@ collection_impl!({
     value: proto::DefaultPrivilegesValue,
     collection_type: CollectionType::DefaultPrivileges,
     trace_field: default_privileges,
-    stash_collection: DEFAULT_PRIVILEGES_COLLECTION,
-    persist_update: StateUpdateKind::DefaultPrivilege,
+    update: StateUpdateKind::DefaultPrivilege,
 });
 collection_impl!({
     name: IdAllocatorCollection,
@@ -211,8 +185,7 @@ collection_impl!({
     value: proto::IdAllocValue,
     collection_type: CollectionType::IdAlloc,
     trace_field: id_allocator,
-    stash_collection: ID_ALLOCATOR_COLLECTION,
-    persist_update: StateUpdateKind::IdAllocator,
+    update: StateUpdateKind::IdAllocator,
 });
 collection_impl!({
     name: ItemCollection,
@@ -220,8 +193,7 @@ collection_impl!({
     value: proto::ItemValue,
     collection_type: CollectionType::Item,
     trace_field: items,
-    stash_collection: ITEM_COLLECTION,
-    persist_update: StateUpdateKind::Item,
+    update: StateUpdateKind::Item,
 });
 collection_impl!({
     name: RoleCollection,
@@ -229,8 +201,7 @@ collection_impl!({
     value: proto::RoleValue,
     collection_type: CollectionType::Role,
     trace_field: roles,
-    stash_collection: ROLES_COLLECTION,
-    persist_update: StateUpdateKind::Role,
+    update: StateUpdateKind::Role,
 });
 collection_impl!({
     name: SchemaCollection,
@@ -238,8 +209,7 @@ collection_impl!({
     value: proto::SchemaValue,
     collection_type: CollectionType::Schema,
     trace_field: schemas,
-    stash_collection: SCHEMAS_COLLECTION,
-    persist_update: StateUpdateKind::Schema,
+    update: StateUpdateKind::Schema,
 });
 collection_impl!({
     name: SettingCollection,
@@ -247,8 +217,7 @@ collection_impl!({
     value: proto::SettingValue,
     collection_type: CollectionType::Setting,
     trace_field: settings,
-    stash_collection: SETTING_COLLECTION,
-    persist_update: StateUpdateKind::Setting,
+    update: StateUpdateKind::Setting,
 });
 collection_impl!({
     name: StorageUsageCollection,
@@ -256,8 +225,7 @@ collection_impl!({
     value: (),
     collection_type: CollectionType::StorageUsage,
     trace_field: storage_usage,
-    stash_collection: STORAGE_USAGE_COLLECTION,
-    persist_update: StateUpdateKind::StorageUsage,
+    update: StateUpdateKind::StorageUsage,
 });
 collection_impl!({
     name: SystemConfigurationCollection,
@@ -265,8 +233,7 @@ collection_impl!({
     value: proto::ServerConfigurationValue,
     collection_type: CollectionType::SystemConfiguration,
     trace_field: system_configurations,
-    stash_collection: SYSTEM_CONFIGURATION_COLLECTION,
-    persist_update: StateUpdateKind::SystemConfiguration,
+    update: StateUpdateKind::SystemConfiguration,
 });
 collection_impl!({
     name: SystemItemMappingCollection,
@@ -274,8 +241,7 @@ collection_impl!({
     value: proto::GidMappingValue,
     collection_type: CollectionType::SystemGidMapping,
     trace_field: system_object_mappings,
-    stash_collection: SYSTEM_GID_MAPPING_COLLECTION,
-    persist_update: StateUpdateKind::SystemObjectMapping,
+    update: StateUpdateKind::SystemObjectMapping,
 });
 collection_impl!({
     name: SystemPrivilegeCollection,
@@ -283,8 +249,7 @@ collection_impl!({
     value: proto::SystemPrivilegesValue,
     collection_type: CollectionType::SystemPrivileges,
     trace_field: system_privileges,
-    stash_collection: SYSTEM_PRIVILEGES_COLLECTION,
-    persist_update: StateUpdateKind::SystemPrivilege,
+    update: StateUpdateKind::SystemPrivilege,
 });
 collection_impl!({
     name: TimestampCollection,
@@ -292,8 +257,7 @@ collection_impl!({
     value: proto::TimestampValue,
     collection_type: CollectionType::Timestamp,
     trace_field: timestamps,
-    stash_collection: TIMESTAMP_COLLECTION,
-    persist_update: StateUpdateKind::Timestamp,
+    update: StateUpdateKind::Timestamp,
 });
 
 /// A trace of timestamped diffs for a particular [`Collection`].
@@ -359,10 +323,7 @@ impl Trace {
     }
 }
 
-pub enum DebugCatalogState {
-    Stash(Stash),
-    Persist(UnopenedPersistCatalogState),
-}
+pub struct DebugCatalogState(pub UnopenedPersistCatalogState);
 
 impl DebugCatalogState {
     /// Manually update value of `key` in collection `T` to `value`.
@@ -372,28 +333,18 @@ impl DebugCatalogState {
         value: T::Value,
     ) -> Result<Option<T::Value>, CatalogError>
     where
-        T::Key: mz_stash::Data + Clone + 'static,
-        T::Value: mz_stash::Data + Clone + 'static,
+        T::Key: PartialEq + Eq + Debug + Clone,
+        T::Value: Debug + Clone,
     {
-        match self {
-            DebugCatalogState::Stash(stash) => {
-                durable::impls::stash::debug_edit::<T>(stash, key, value).await
-            }
-            DebugCatalogState::Persist(handle) => handle.debug_edit::<T>(key, value).await,
-        }
+        self.0.debug_edit::<T>(key, value).await
     }
 
     /// Manually delete `key` from collection `T`.
     pub async fn delete<T: Collection>(&mut self, key: T::Key) -> Result<(), CatalogError>
     where
-        T::Key: mz_stash::Data + Clone + 'static,
-        T::Value: mz_stash::Data + Clone,
+        T::Key: PartialEq + Eq + Debug + Clone,
+        T::Value: Debug,
     {
-        match self {
-            DebugCatalogState::Stash(stash) => {
-                durable::impls::stash::debug_delete::<T>(stash, key).await
-            }
-            DebugCatalogState::Persist(handle) => handle.debug_delete::<T>(key).await,
-        }
+        self.0.debug_delete::<T>(key).await
     }
 }

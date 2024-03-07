@@ -23,14 +23,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use clap::ValueEnum;
-use futures::FutureExt;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_catalog::durable::{BootstrapArgs, CatalogError, OpenableDurableCatalogState, StashConfig};
+use mz_catalog::durable::{BootstrapArgs, CatalogError, OpenableDurableCatalogState};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
@@ -44,10 +42,7 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{
-    CatalogKind, ConnectionCounter, OwnedVarInput, Var, VarInput, CATALOG_KIND_IMPL,
-    PERSIST_TXN_TABLES,
-};
+use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, Var, VarInput, PERSIST_TXN_TABLES};
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
@@ -183,40 +178,11 @@ pub struct ListenersConfig {
 
 /// Configuration for the Catalog.
 #[derive(Debug, Clone)]
-pub enum CatalogConfig {
-    /// The catalog contents are stored the stash.
-    Stash {
-        /// The PostgreSQL URL for the adapter stash.
-        url: String,
-        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
-        persist_clients: Arc<PersistClientCache>,
-        /// Persist catalog metrics.
-        metrics: Arc<mz_catalog::durable::Metrics>,
-    },
-    /// The catalog contents are stored the stash and we don't attempt to rollback from persist.
-    EmergencyStash {
-        /// The PostgreSQL URL for the adapter stash.
-        url: String,
-    },
-    /// The catalog contents are stored in persist.
-    Persist {
-        /// The PostgreSQL URL for the adapter stash.
-        url: String,
-        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
-        persist_clients: Arc<PersistClientCache>,
-        /// Persist catalog metrics.
-        metrics: Arc<mz_catalog::durable::Metrics>,
-    },
-}
-
-impl CatalogConfig {
-    fn catalog_kind(&self) -> CatalogKind {
-        match self {
-            CatalogConfig::Stash { .. } => CatalogKind::Stash,
-            CatalogConfig::Persist { .. } => CatalogKind::Persist,
-            CatalogConfig::EmergencyStash { .. } => CatalogKind::EmergencyStash,
-        }
-    }
+pub struct CatalogConfig {
+    /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+    pub persist_clients: Arc<PersistClientCache>,
+    /// Persist catalog metrics.
+    pub metrics: Arc<mz_catalog::durable::Metrics>,
 }
 
 /// Listeners for an `environmentd` server.
@@ -340,27 +306,20 @@ impl Listeners {
         // Get the current timestamp so we can record when we booted.
         let boot_ts = (config.now)();
 
-        let catalog_kind_impl_default = config
-            .system_parameter_defaults
-            .get(CATALOG_KIND_IMPL.name())
-            .map(|x| {
-                CatalogKind::from_str(x, true).map_err(|err| {
-                    anyhow!(
-                        "failed to parse default for {}: {}",
-                        CATALOG_KIND_IMPL.name(),
-                        err
-                    )
-                })
-            })
-            .transpose()?;
-
-        let mut openable_adapter_storage = catalog_opener(
-            &config.catalog_config,
-            &config.controller,
-            &config.environment_id,
-        )
-        .boxed()
-        .await?;
+        let persist_client = config
+            .catalog_config
+            .persist_clients
+            .open(config.controller.persist_location.clone())
+            .await?;
+        let mut openable_adapter_storage: Box<dyn OpenableDurableCatalogState> = Box::new(
+            mz_catalog::durable::persist_backed_catalog_state(
+                persist_client.clone(),
+                config.environment_id.organization_id(),
+                BUILD_INFO.semver_version(),
+                Arc::clone(&config.catalog_config.metrics),
+            )
+            .await?,
+        );
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
@@ -382,28 +341,12 @@ impl Listeners {
         )
         .await?;
 
-        let catalog_kind_impl_ld =
-            get_ld_value(CATALOG_KIND_IMPL.name(), &remote_system_parameters, |x| {
-                CatalogKind::from_str(x, true)
-            })?;
-
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
                 break 'leader_promotion;
             };
             tracing::info!("Requested deploy generation {deploy_generation}");
 
-            let catalog_kind_impl_config =
-                openable_adapter_storage.get_catalog_kind_config().await?;
-            let catalog_kind_impl = catalog_kind_impl_reconcile(
-                catalog_kind_impl_ld,
-                catalog_kind_impl_config,
-                catalog_kind_impl_default,
-                config.catalog_config.catalog_kind(),
-            );
-            if let Some(catalog_kind) = catalog_kind_impl {
-                openable_adapter_storage.set_catalog_kind(catalog_kind);
-            }
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
                 break 'leader_promotion;
@@ -436,13 +379,15 @@ impl Listeners {
                         // implementation. Still it's easy to protect against this and worth it in
                         // case things change in the future.
                         tracing::warn!("Unable to perform upgrade test because the target implementation is uninitialized");
-                        openable_adapter_storage = catalog_opener(
-                            &config.catalog_config,
-                            &config.controller,
-                            &config.environment_id,
-                        )
-                        .boxed()
-                        .await?;
+                        openable_adapter_storage = Box::new(
+                            mz_catalog::durable::persist_backed_catalog_state(
+                                persist_client,
+                                config.environment_id.organization_id(),
+                                BUILD_INFO.semver_version(),
+                                Arc::clone(&config.catalog_config.metrics),
+                            )
+                            .await?,
+                        );
                         break 'leader_promotion;
                     }
                     Err(e) => {
@@ -465,13 +410,15 @@ impl Listeners {
                     ));
                 }
 
-                openable_adapter_storage = catalog_opener(
-                    &config.catalog_config,
-                    &config.controller,
-                    &config.environment_id,
-                )
-                .boxed()
-                .await?;
+                openable_adapter_storage = Box::new(
+                    mz_catalog::durable::persist_backed_catalog_state(
+                        persist_client,
+                        config.environment_id.organization_id(),
+                        BUILD_INFO.semver_version(),
+                        Arc::clone(&config.catalog_config.metrics),
+                    )
+                    .await?,
+                );
             } else if catalog_generation == Some(deploy_generation) {
                 tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
             } else {
@@ -479,16 +426,6 @@ impl Listeners {
             }
         }
 
-        let catalog_kind_impl_config = openable_adapter_storage.get_catalog_kind_config().await?;
-        let catalog_kind_impl = catalog_kind_impl_reconcile(
-            catalog_kind_impl_ld,
-            catalog_kind_impl_config,
-            catalog_kind_impl_default,
-            config.catalog_config.catalog_kind(),
-        );
-        if let Some(catalog_kind) = catalog_kind_impl {
-            openable_adapter_storage.set_catalog_kind(catalog_kind);
-        }
         let mut adapter_storage = openable_adapter_storage
             .open(
                 boot_ts,
@@ -743,86 +680,6 @@ impl Listeners {
     }
 }
 
-async fn catalog_opener(
-    catalog_config: &CatalogConfig,
-    controller_config: &ControllerConfig,
-    environment_id: &EnvironmentId,
-) -> Result<Box<dyn OpenableDurableCatalogState>, anyhow::Error> {
-    info!(
-        "Using {} backed catalog",
-        catalog_config.catalog_kind().as_str()
-    );
-    Ok(match catalog_config {
-        CatalogConfig::Stash {
-            url,
-            persist_clients,
-            metrics,
-        } => {
-            let stash_factory =
-                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
-            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
-            let persist_client = persist_clients
-                .open(controller_config.persist_location.clone())
-                .await?;
-            Box::new(
-                mz_catalog::durable::rollback_from_persist_to_stash_state(
-                    StashConfig {
-                        stash_factory,
-                        stash_url: url.clone(),
-                        schema: None,
-                        tls,
-                    },
-                    persist_client,
-                    environment_id.organization_id(),
-                    BUILD_INFO.semver_version(),
-                    Arc::clone(metrics),
-                )
-                .await?,
-            )
-        }
-        CatalogConfig::EmergencyStash { url } => {
-            let stash_factory =
-                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
-            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
-            Box::new(mz_catalog::durable::stash_backed_catalog_state(
-                StashConfig {
-                    stash_factory,
-                    stash_url: url.clone(),
-                    schema: None,
-                    tls,
-                },
-            ))
-        }
-        CatalogConfig::Persist {
-            url,
-            persist_clients,
-            metrics,
-        } => {
-            let stash_factory =
-                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
-            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
-            let persist_client = persist_clients
-                .open(controller_config.persist_location.clone())
-                .await?;
-            Box::new(
-                mz_catalog::durable::migrate_from_stash_to_persist_state(
-                    StashConfig {
-                        stash_factory,
-                        stash_url: url.clone(),
-                        schema: None,
-                        tls,
-                    },
-                    persist_client,
-                    environment_id.organization_id(),
-                    BUILD_INFO.semver_version(),
-                    Arc::clone(metrics),
-                )
-                .await?,
-            )
-        }
-    })
-}
-
 fn get_ld_value<V>(
     name: &str,
     remote_system_parameters: &Option<BTreeMap<String, OwnedVarInput>>,
@@ -841,31 +698,6 @@ fn get_ld_value<V>(
             parse(x).map_err(|err| anyhow!("failed to parse remote value for {}: {}", name, err))
         })
         .transpose()
-}
-
-fn catalog_kind_impl_reconcile(
-    catalog_kind_impl_ld: Option<CatalogKind>,
-    catalog_kind_impl_config: Option<CatalogKind>,
-    catalog_kind_impl_default: Option<CatalogKind>,
-    catalog_kind_impl_cli: CatalogKind,
-) -> Option<CatalogKind> {
-    let catalog_kind_impl = catalog_kind_impl_ld
-        .or(catalog_kind_impl_config)
-        .or(catalog_kind_impl_default);
-    match catalog_kind_impl {
-        Some(catalog_kind_impl) if catalog_kind_impl != catalog_kind_impl_cli => {
-            info!(
-                "catalog_kind value of {:?} computed from default: {:?}, catalog: {:?}, remote: {:?}, and flag: {:?}",
-                catalog_kind_impl,
-                catalog_kind_impl_default,
-                catalog_kind_impl_config,
-                catalog_kind_impl_ld,
-                catalog_kind_impl_cli,
-            );
-            Some(catalog_kind_impl)
-        }
-        _ => None,
-    }
 }
 
 /// A running `environmentd` server.

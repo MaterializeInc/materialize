@@ -21,7 +21,6 @@ use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
-use mz_sql::session::vars::CatalogKind;
 use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -145,30 +144,23 @@ struct Args {
     /// Materialize.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
     materialize_param: Vec<(String, String)>,
-    /// Postgres connection string of the stash state.
-    #[clap(
-        long,
-        value_name = "POSTGRES_URL",
-        required_if_eq("validate-catalog-store", "stash")
-    )]
-    postgres_stash: Option<String>,
     /// Validate the catalog state of the specified catalog kind.
-    #[clap(long, arg_enum, value_name = "CATALOG_STORE")]
-    validate_catalog_store: Option<CatalogKind>,
+    #[clap(long)]
+    validate_catalog_store: bool,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
     #[clap(
         long,
         value_name = "PERSIST_CONSENSUS_URL",
-        required_if_eq("validate-catalog-store", "persist")
+        required_if_eq("validate-catalog-store", "true")
     )]
     persist_consensus_url: Option<String>,
     /// Handle to the persist blob storage.
     #[clap(
         long,
         value_name = "PERSIST_BLOB_URL",
-        required_if_eq("validate-catalog-store", "persist")
+        required_if_eq("validate-catalog-store", "true")
     )]
     persist_blob_url: Option<String>,
 
@@ -331,25 +323,19 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
-    let materialize_catalog_config = match args.validate_catalog_store {
-        Some(kind) => Some(match kind {
-            CatalogKind::Stash => CatalogConfig::Stash {
-                url: args.postgres_stash.expect("required for stash catalog"),
-            },
-
-            CatalogKind::Persist => CatalogConfig::Persist {
-                persist_consensus_url: args
-                    .persist_consensus_url
-                    .clone()
-                    .expect("required for persist catalog"),
-                persist_blob_url: args
-                    .persist_blob_url
-                    .clone()
-                    .expect("required for persist catalog"),
-            },
-            CatalogKind::EmergencyStash => panic!("emergency stash cannot be used with testdrive"),
-        }),
-        None => None,
+    let materialize_catalog_config = if args.validate_catalog_store {
+        Some(CatalogConfig {
+            persist_consensus_url: args
+                .persist_consensus_url
+                .clone()
+                .expect("required for persist catalog"),
+            persist_blob_url: args
+                .persist_blob_url
+                .clone()
+                .expect("required for persist catalog"),
+        })
+    } else {
+        None
     };
     let config = Config {
         // === Testdrive options. ===

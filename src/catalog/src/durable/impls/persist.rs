@@ -40,7 +40,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Opaque;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
-use mz_sql::session::vars::CatalogKind;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
@@ -53,8 +52,7 @@ use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::state_update::{IntoStateUpdateKindRaw, StateUpdateKindRaw};
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
 use crate::durable::initialize::{
-    CATALOG_KIND_KEY, DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY,
-    USER_VERSION_KEY,
+    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Snapshot, StorageUsageKey};
@@ -717,7 +715,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
-        Ok(DebugCatalogState::Persist(*self))
+        Ok(DebugCatalogState(*self))
     }
 
     #[mz_ore::instrument]
@@ -746,18 +744,6 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .map(|value| value.map(|value| value > 0).unwrap_or(false))
     }
 
-    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
-        panic!("Persist implementation does not have a tombstone")
-    }
-
-    #[mz_ore::instrument]
-    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
-        let value = self.get_current_config(CATALOG_KIND_KEY).await?;
-        value.map(CatalogKind::try_from).transpose().map_err(|err| {
-            DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string())).into()
-        })
-    }
-
     #[mz_ore::instrument]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         self.sync_to_current_upper().await?;
@@ -767,10 +753,6 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         } else {
             Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
         }
-    }
-
-    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
-        error!("unable to set catalog kind to {catalog_kind:?}");
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -820,26 +802,6 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
                 .map(|(v, diff)| {
                     assert_eq!(1, diff, "consolidated cache should have no retraction");
                     v
-                })
-                .collect();
-            Some(cache)
-        } else {
-            None
-        }
-    }
-}
-
-impl<T: Ord + Clone> LargeCollectionStartupCache<T> {
-    /// If the cache is open, then return clones of the cached values without closing the cache,
-    /// otherwise return `None`.
-    fn cloned(&mut self) -> Option<Vec<T>> {
-        if let Self::Open(cache) = self {
-            differential_dataflow::consolidation::consolidate(cache);
-            let cache = cache
-                .into_iter()
-                .map(|(v, diff)| {
-                    assert_eq!(1, *diff, "consolidated cache should have no retraction");
-                    v.clone()
                 })
                 .collect();
             Some(cache)
@@ -1145,7 +1107,7 @@ impl PersistCatalogState {
 
 #[async_trait]
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
-    fn epoch(&mut self) -> Epoch {
+    fn epoch(&self) -> Epoch {
         self.epoch
     }
 
@@ -1220,62 +1182,9 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             })
     }
 
-    async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
-        panic!("Persist implementation does not have a tombstone")
-    }
-
     #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(|snapshot| Ok(snapshot.clone())).await
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn whole_migration_snapshot(
-        &mut self,
-    ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
-        self.sync_to_current_upper().await?;
-        let snapshot = self.snapshot.clone();
-        let (audit_events, storage_usage_events) = match (
-            self.audit_logs.cloned(),
-            self.storage_usage_events.cloned(),
-        ) {
-            (Some(audit_events), Some(storage_usage_events)) => {
-                (audit_events, storage_usage_events)
-            }
-            // We could check if each individual cache is populated, but this is unexpected and we
-            // need a full snapshot anyway. So we might as well compute both from a full snapshot.
-            _ => {
-                error!("audit events and storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
-                let mut audit_events = Vec::new();
-                let mut storage_usage_events = Vec::new();
-                for StateUpdate { kind, ts: _, diff } in self.persist_snapshot().await {
-                    soft_assert_eq_or_log!(1, diff, "updates should be consolidated");
-                    match kind {
-                        StateUpdateKind::AuditLog(audit_event, ()) => {
-                            audit_events.push(audit_event);
-                        }
-                        StateUpdateKind::StorageUsage(storage_usage, ()) => {
-                            storage_usage_events.push(storage_usage);
-                        }
-                        _ => {
-                            // Everything else is already cached in `self.snapshot`.
-                        }
-                    }
-                }
-                (audit_events, storage_usage_events)
-            }
-        };
-        let audit_events = audit_events
-            .into_iter()
-            .map(AuditLogKey::from_proto)
-            .map_ok(|audit_event| audit_event.event)
-            .collect::<Result<Vec<_>, _>>()?;
-        let storage_usage_events = storage_usage_events
-            .into_iter()
-            .map(StorageUsageKey::from_proto)
-            .map_ok(|storage_usage| storage_usage.metric)
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((snapshot, audit_events, storage_usage_events))
     }
 }
 
@@ -1290,16 +1199,6 @@ impl DurableCatalogState for PersistCatalogState {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn whole_migration_transaction(
-        &mut self,
-    ) -> Result<(Transaction, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
-        self.metrics.transactions_started.inc();
-        let (snapshot, audit_events, storage_usages) = self.whole_migration_snapshot().await?;
-        let transaction = Transaction::new(self, snapshot)?;
-        Ok((transaction, audit_events, storage_usages))
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1768,9 +1667,9 @@ impl UnopenedPersistCatalogState {
 
         let mut updates: Vec<_> = prev_values
             .into_iter()
-            .map(|((k, v), _, _)| (T::persist_update(k, v), -1))
+            .map(|((k, v), _, _)| (T::update(k, v), -1))
             .collect();
-        updates.push((T::persist_update(key.clone(), value.clone()), 1));
+        updates.push((T::update(key.clone(), value.clone()), 1));
         self.compare_and_append(updates).await?;
         Ok(prev_value)
     }
@@ -1813,7 +1712,7 @@ impl UnopenedPersistCatalogState {
                 soft_assert_eq_or_log!(*diff, 1, "trace is consolidated");
                 &key == k
             })
-            .map(|((k, v), _, _)| (T::persist_update(k, v), -1))
+            .map(|((k, v), _, _)| (T::update(k, v), -1))
             .collect();
         self.compare_and_append(retractions).await?;
         Ok(())

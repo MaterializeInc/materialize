@@ -25,7 +25,7 @@ steps:
   - group: Builds
     key: builds
     steps:
-    # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
+      # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
       - id: build-x86_64
         label: Build x86_64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -615,13 +615,13 @@ steps:
     agents:
       queue: linux-aarch64-small
 
-  - id: persist-catalog-migration
-    label: "Persist Catalog Migration"
+  - id: skip-version-upgrade
+    label: "Skip Version Upgrade"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
-          composition: persist-catalog-migration
+          composition: skip-version-upgrade
     agents:
       queue: linux-aarch64-small
 

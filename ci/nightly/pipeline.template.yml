@@ -11,23 +11,23 @@ steps:
   - group: Builds
     key: builds
     steps:
-    - id: build-x86_64
-      label: Build x86_64
-      command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
-      timeout_in_minutes: 60
-      # For releases we trigger nightly from the test job directly, no need to build again
-      branches: "!v*.*"
-      agents:
-        queue: builder-linux-x86_64
+      - id: build-x86_64
+        label: Build x86_64
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+        timeout_in_minutes: 60
+        # For releases we trigger nightly from the test job directly, no need to build again
+        branches: "!v*.*"
+        agents:
+          queue: builder-linux-x86_64
 
-    - id: build-aarch64
-      label: Build aarch64
-      command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
-      timeout_in_minutes: 60
-      # For releases we trigger nightly from the test job directly, no need to build again
-      branches: "!v*.*"
-      agents:
-        queue: builder-linux-aarch64
+      - id: build-aarch64
+        label: Build aarch64
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
+        timeout_in_minutes: 60
+        # For releases we trigger nightly from the test job directly, no need to build again
+        branches: "!v*.*"
+        agents:
+          queue: builder-linux-aarch64
 
   - wait: ~
 
@@ -42,20 +42,20 @@ steps:
   - group: Linters
     key: linters
     steps:
-    - id: closed-issues-detect
-      timeout_in_minutes: 10
-      label: Detect references to already closed issues
-      command: bin/ci-builder run stable bin/ci-closed-issues-detect
-      agents:
-        queue: linux-aarch64-small
-      branches: "!v*.*"
+      - id: closed-issues-detect
+        timeout_in_minutes: 10
+        label: Detect references to already closed issues
+        command: bin/ci-builder run stable bin/ci-closed-issues-detect
+        agents:
+          queue: linux-aarch64-small
+        branches: "!v*.*"
 
-    - id: unused-deps
-      label: Unused dependencies
-      command: bin/ci-builder run nightly bin/unused-deps
-      timeout_in_minutes: 30
-      agents:
-        queue: linux-aarch64
+      - id: unused-deps
+        label: Unused dependencies
+        command: bin/ci-builder run nightly bin/unused-deps
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-aarch64
 
 
   - id: miri-test
@@ -72,103 +72,103 @@ steps:
   - group: Benchmarks
     key: benchmark
     steps:
-    - id: feature-benchmark
-      label: "Feature benchmark against merge base or 'latest' %N"
-      timeout_in_minutes: 720
-      parallelism: 8
-      agents:
-        queue: linux-aarch64-large
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: feature-benchmark
-            args:
-               - --other-tag
-               # common-ancestor will default to latest if not in a PR
-               - common-ancestor
-    - id: scalability-benchmark-dml-dql
-      label: "Scalability benchmark (read & write) against merge base or 'latest'"
-      timeout_in_minutes: 180
-      agents:
-        queue: linux-aarch64
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: scalability
-            args:
-              - --target
-              - HEAD
-              - --target
-              - common-ancestor
-              - --regression-against
-              - common-ancestor
-              - --workload-group-marker
-              - "DmlDqlWorkload"
-              - --max-concurrency
-              - "256"
-    - id: scalability-benchmark-ddl
-      label: "Scalability benchmark (DDL) against merge base or 'latest'"
-      timeout_in_minutes: 1200
-      agents:
-        queue: linux-aarch64
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: scalability
-            args:
-              - --target
-              - HEAD
-              - --target
-              - common-ancestor
-              - --regression-against
-              - common-ancestor
-              - --workload-group-marker
-              - "DdlWorkload"
-              - --count
-              - "128"
-              - --exponent-base
-              - "4"
-              - --max-concurrency
-              - "64"
-    - id: scalability-benchmark-connection
-      label: "Scalability benchmark (connection) against merge base or 'latest'"
-      timeout_in_minutes: 180
-      agents:
-        queue: linux-aarch64-large
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: scalability
-            args:
-              - --target
-              - HEAD
-              - --target
-              - common-ancestor
-              - --regression-against
-              - common-ancestor
-              - --workload-group-marker
-              - "ConnectionWorkload"
-              - --exponent-base
-              - "2.5"
-              - --max-concurrency
-              - "2048"
+      - id: feature-benchmark
+        label: "Feature benchmark against merge base or 'latest' %N"
+        timeout_in_minutes: 720
+        parallelism: 8
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: feature-benchmark
+              args:
+                - --other-tag
+                # common-ancestor will default to latest if not in a PR
+                - common-ancestor
+      - id: scalability-benchmark-dml-dql
+        label: "Scalability benchmark (read & write) against merge base or 'latest'"
+        timeout_in_minutes: 180
+        agents:
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: scalability
+              args:
+                - --target
+                - HEAD
+                - --target
+                - common-ancestor
+                - --regression-against
+                - common-ancestor
+                - --workload-group-marker
+                - "DmlDqlWorkload"
+                - --max-concurrency
+                - "256"
+      - id: scalability-benchmark-ddl
+        label: "Scalability benchmark (DDL) against merge base or 'latest'"
+        timeout_in_minutes: 1200
+        agents:
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: scalability
+              args:
+                - --target
+                - HEAD
+                - --target
+                - common-ancestor
+                - --regression-against
+                - common-ancestor
+                - --workload-group-marker
+                - "DdlWorkload"
+                - --count
+                - "128"
+                - --exponent-base
+                - "4"
+                - --max-concurrency
+                - "64"
+      - id: scalability-benchmark-connection
+        label: "Scalability benchmark (connection) against merge base or 'latest'"
+        timeout_in_minutes: 180
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: scalability
+              args:
+                - --target
+                - HEAD
+                - --target
+                - common-ancestor
+                - --regression-against
+                - common-ancestor
+                - --workload-group-marker
+                - "ConnectionWorkload"
+                - --exponent-base
+                - "2.5"
+                - --max-concurrency
+                - "2048"
 
   - group: Kafka
     key: kafka
     steps:
-    - id: kafka-matrix
-      label: Kafka smoke test against previous Kafka versions
-      timeout_in_minutes: 60
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: kafka-matrix
+      - id: kafka-matrix
+        label: Kafka smoke test against previous Kafka versions
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-matrix
 
-    - id: kafka-multi-broker
-      label: Kafka multi-broker test
-      timeout_in_minutes: 30
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: kafka-multi-broker
+      - id: kafka-multi-broker
+        label: Kafka multi-broker test
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: kafka-multi-broker
 
   - group: Testdrive
     key: testdrive
@@ -265,58 +265,58 @@ steps:
   - group: Limits
     key: limits-group
     steps:
-    - id: limits
-      label: "Product limits"
-      agents:
-        queue: linux-aarch64-large
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: limits
-            run: main
-      timeout_in_minutes: 120
+      - id: limits
+        label: "Product limits"
+        agents:
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: limits
+              run: main
+        timeout_in_minutes: 120
 
-    - id: limits-instance-size
-      label: "Instance size limits"
-      agents:
-        # A larger instance is needed due to the
-        # many containers that are being created
-        queue: linux-aarch64-large
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: limits
-            run: instance-size
-      timeout_in_minutes: 50
+      - id: limits-instance-size
+        label: "Instance size limits"
+        agents:
+          # A larger instance is needed due to the
+          # many containers that are being created
+          queue: linux-aarch64-large
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: limits
+              run: instance-size
+        timeout_in_minutes: 50
 
-    - id: bounded-memory
-      label: "Bounded Memory"
-      timeout_in_minutes: 3600
-      agents:
-        queue: linux-aarch64
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: bounded-memory
+      - id: bounded-memory
+        label: "Bounded Memory"
+        timeout_in_minutes: 3600
+        agents:
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: bounded-memory
 
   - group: Upsert
     key: upsert
     steps:
-    - id: upsert-compaction-enabled
-      label: Upsert (compaction enabled)
-      timeout_in_minutes: 60
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: upsert
-      agents:
-        queue: linux-aarch64-small
+      - id: upsert-compaction-enabled
+        label: Upsert (compaction enabled)
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: upsert
+        agents:
+          queue: linux-aarch64-small
 
-    - id: upsert-compaction-disabled
-      label: Upsert (compaction disabled)
-      timeout_in_minutes: 60
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: upsert
-            args: [--compaction-disabled]
-      agents:
-        queue: linux-aarch64-small
+      - id: upsert-compaction-disabled
+        label: Upsert (compaction disabled)
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: upsert
+              args: [--compaction-disabled]
+        agents:
+          queue: linux-aarch64-small
 
   - id: ssh-connection-extended
     label: Extended SSH connection tests
@@ -752,16 +752,6 @@ steps:
               composition: platform-checks
               args: [--scenario=PersistTxnFencing, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-persist-catalog-toggle
-        label: "Checks + Toggle persist catalog"
-        timeout_in_minutes: 45
-        agents:
-          queue: builder-linux-aarch64
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=PersistCatalogToggle, "--seed=$BUILDKITE_JOB_ID"]
-
       - id: checks-migrate-x86-64-aarch64
         label: "Checks migrate from x86-64 to aarch64"
         timeout_in_minutes: 180
@@ -939,23 +929,23 @@ steps:
   - group: LD
     key: ld
     steps:
-    - id: sql-feature-flags
-      label: "SQL-level feature flags"
-      timeout_in_minutes: 30
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: sql-feature-flags
+      - id: sql-feature-flags
+        label: "SQL-level feature flags"
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sql-feature-flags
 
-    - id: launchdarkly
-      label: "LaunchDarkly"
-      timeout_in_minutes: 30
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: launchdarkly
+      - id: launchdarkly
+        label: "LaunchDarkly"
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: launchdarkly
 
   - id: cloud-canary
     label: "Canary Deploy in Staging Cloud"
@@ -1083,79 +1073,79 @@ steps:
   - group: RQG
     key: rqg
     steps:
-    - id: rqg-simple-aggregates
-      label: "RQG simple-aggregates workload"
-      timeout_in_minutes: 45
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: rqg
-            args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
+      - id: rqg-simple-aggregates
+        label: "RQG simple-aggregates workload"
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
 
-    - id: rqg-db3-joins
-      label: "RQG dbt3-joins workload"
-      timeout_in_minutes: 45
-      agents:
-        # Runs into timeout on small agents
-        queue: linux-aarch64
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: rqg
-            args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
+      - id: rqg-db3-joins
+        label: "RQG dbt3-joins workload"
+        timeout_in_minutes: 45
+        agents:
+          # Runs into timeout on small agents
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
 
-    - id: rqg-lateral-joins
-      label: "RQG lateral-joins workload"
-      timeout_in_minutes: 45
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: rqg
-            args: ["lateral-joins", "--seed=$BUILDKITE_JOB_ID"]
+      - id: rqg-lateral-joins
+        label: "RQG lateral-joins workload"
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              args: ["lateral-joins", "--seed=$BUILDKITE_JOB_ID"]
 
-    - id: rqg-subqueries
-      label: "RQG subqueries workload"
-      timeout_in_minutes: 45
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: rqg
-            args: ["subqueries", "--seed=$BUILDKITE_JOB_ID"]
+      - id: rqg-subqueries
+        label: "RQG subqueries workload"
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              args: ["subqueries", "--seed=$BUILDKITE_JOB_ID"]
 
-    - id: rqg-window-functions
-      label: "RQG window functions workload"
-      timeout_in_minutes: 45
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: rqg
-            args: ["window-functions", "--seed=$BUILDKITE_JOB_ID"]
+      - id: rqg-window-functions
+        label: "RQG window functions workload"
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              args: ["window-functions", "--seed=$BUILDKITE_JOB_ID"]
 
-    - id: rqg-wmr
-      label: "RQG WMR workload"
-      skip: "flaky until #24904 is fixed"
-      timeout_in_minutes: 45
-      agents:
-        queue: linux-aarch64
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: rqg
-            # Postgres does not support WMR, so our only hope for a comparison
-            # test is to use a previous Mz version via --other-tag=...
-            args: ["wmr", "--seed=$BUILDKITE_JOB_ID", "--other-tag=common-ancestor"]
+      - id: rqg-wmr
+        label: "RQG WMR workload"
+        skip: "flaky until #24904 is fixed"
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              # Postgres does not support WMR, so our only hope for a comparison
+              # test is to use a previous Mz version via --other-tag=...
+              args: ["wmr", "--seed=$BUILDKITE_JOB_ID", "--other-tag=common-ancestor"]
 
-    - id: rqg-banking
-      label: "RQG banking workload"
-      timeout_in_minutes: 45
-      agents:
-        queue: linux-aarch64-small
-      plugins:
-        - ./ci/plugins/mzcompose:
-            composition: rqg
-            args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
+      - id: rqg-banking
+        label: "RQG banking workload"
+        timeout_in_minutes: 45
+        agents:
+          queue: linux-aarch64-small
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: rqg
+              args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"

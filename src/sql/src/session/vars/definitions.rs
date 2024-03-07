@@ -37,8 +37,8 @@ use crate::session::vars::constraints::{
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{lazy_value, value, LazyValueFn};
 use crate::session::vars::value::{
-    CatalogKind, ClientEncoding, ClientSeverity, Failpoints, IntervalStyle, IsolationLevel,
-    TimeZone, TimestampOracleImpl, Value, DEFAULT_DATE_STYLE,
+    ClientEncoding, ClientSeverity, Failpoints, IntervalStyle, IsolationLevel, TimeZone,
+    TimestampOracleImpl, Value, DEFAULT_DATE_STYLE,
 };
 use crate::session::vars::{FeatureFlag, Var, VarInput, VarParseError};
 use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
@@ -606,13 +606,6 @@ pub static TIMESTAMP_ORACLE_IMPL: VarDefinition = VarDefinition::new(
     "timestamp_oracle",
     value!(TimestampOracleImpl; TimestampOracleImpl::Postgres),
     "Backing implementation of TimestampOracle.",
-    true,
-);
-
-pub static CATALOG_KIND_IMPL: VarDefinition = VarDefinition::new(
-    "catalog_kind",
-    value!(Option<CatalogKind>; None),
-    "Backing implementation of catalog.",
     true,
 );
 

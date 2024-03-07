@@ -8,9 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use mz_stash::upgrade::WireCompatible;
+use mz_stash::wire_compatible;
 
 use crate::durable::upgrade::persist::MigrationAction;
 use crate::durable::upgrade::{objects_v45 as v45, objects_v46 as v46};
+
+wire_compatible!(v45::ClusterConfig with v46::ClusterConfig);
+wire_compatible!(v45::ClusterId with v46::ClusterId);
+wire_compatible!(v45::ClusterKey with v46::ClusterKey);
+wire_compatible!(v45::MzAclItem with v46::MzAclItem);
+wire_compatible!(v45::RoleId with v46::RoleId);
 
 /// Remove `ClusterValue`'s `linked_object_id` field.
 pub fn upgrade(

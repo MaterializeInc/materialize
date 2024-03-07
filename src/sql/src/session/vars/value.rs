@@ -14,8 +14,6 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use clap::clap_derive::ArgEnum;
-use clap::ValueEnum;
 use itertools::Itertools;
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
@@ -25,7 +23,6 @@ use mz_rocksdb_types::config::{CompactionStyle, CompressionType};
 use mz_sql_parser::ast::{Ident, TransactionIsolationLevel};
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
-use proptest_derive::Arbitrary;
 use serde::Serialize;
 use uncased::UncasedStr;
 
@@ -1142,71 +1139,6 @@ impl Value for PersistTxnTablesImpl {
     }
 }
 
-#[derive(
-    ArgEnum,
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    num_enum::TryFromPrimitive,
-    num_enum::IntoPrimitive,
-    Arbitrary,
-)]
-#[repr(u64)]
-pub enum CatalogKind {
-    Stash = 0,
-    Persist = 1,
-    /// Escape hatch to use the stash directly without trying to rollover from persist.
-    EmergencyStash = 3,
-}
-
-impl CatalogKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            CatalogKind::Stash => "stash",
-            CatalogKind::Persist => "persist",
-            CatalogKind::EmergencyStash => "emergency-stash",
-        }
-    }
-
-    fn valid_values() -> Vec<&'static str> {
-        vec![
-            CatalogKind::Stash.as_str(),
-            CatalogKind::Persist.as_str(),
-            CatalogKind::EmergencyStash.as_str(),
-        ]
-    }
-}
-
-impl Value for CatalogKind {
-    fn type_name() -> Cow<'static, str>
-    where
-        Self: Sized,
-    {
-        "string".into()
-    }
-
-    fn parse(input: VarInput<'_>) -> Result<Self, VarParseError>
-    where
-        Self: Sized,
-    {
-        let s = extract_single_value(input)?;
-        CatalogKind::from_str(s, true).map_err(|_| VarParseError::ConstrainedParameter {
-            invalid_values: input.to_vec(),
-            valid_values: Some(CatalogKind::valid_values()),
-        })
-    }
-
-    fn box_clone(&self) -> Box<dyn Value> {
-        Box::new(self.clone())
-    }
-
-    fn format(&self) -> String {
-        self.as_str().into()
-    }
-}
-
 /// Macro to implement [`Value`] for simpler types, i.e. ones that already implement `FromStr` and
 /// `ToString`.
 ///
@@ -1255,7 +1187,6 @@ impl_value_for_simple!(CompressionType, "rocksdb_compression_type");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
 
     #[mz_ore::test]
     fn test_value_duration() {
@@ -1356,17 +1287,6 @@ mod tests {
                         == expected
                 )
             }
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // slow
-        fn catalog_kind_roundtrip(catalog_kind: CatalogKind) {
-            let s = catalog_kind.as_str();
-            let round = CatalogKind::from_str(s, true).expect("to roundtrip");
-
-            prop_assert_eq!(catalog_kind, round);
         }
     }
 }
