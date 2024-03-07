@@ -10,7 +10,6 @@
 """Tests of AWS functionality that run against localstack."""
 
 import uuid
-from datetime import datetime
 from typing import Any, cast
 
 import boto3
