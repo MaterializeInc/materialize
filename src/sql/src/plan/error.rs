@@ -136,9 +136,6 @@ pub enum PlanError {
         non_subsource: String,
         source: String,
     },
-    DropLastSubsource {
-        source: String,
-    },
     DependentObjectsStillExist {
         object_type: String,
         object_name: String,
@@ -352,9 +349,6 @@ impl PlanError {
             }
             Self::DropSubsource { source, subsource } => Some(format!(
                 "Use ALTER SOURCE {source} DROP SUBSOURCE {subsource}"
-            )),
-            Self::DropLastSubsource { source } | Self::DropProgressCollection { source, .. } => Some(format!(
-                "Use DROP SOURCE {source} to drop the primary source along with all subsources"
             )),
             Self::DependentObjectsStillExist {..} => Some("Use DROP ... CASCADE to drop the dependent objects too.".into()),
             Self::AlterViewOnMaterializedView(_) => {
@@ -590,7 +584,6 @@ impl fmt::Display for PlanError {
                 write!(f, "invalid protobuf schema")
             }
             Self::DropSubsource { subsource, source: _} => write!(f, "SOURCE {} is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE", subsource.quoted()),
-            Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
             Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
             Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is not a subsource of {}", non_subsource.quoted(), source.quoted()),
             Self::DependentObjectsStillExist {object_type, object_name, dependents} => {
