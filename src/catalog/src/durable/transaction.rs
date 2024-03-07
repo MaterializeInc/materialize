@@ -685,7 +685,7 @@ impl<'a> Transaction<'a> {
 
         self.oids.extend(oids.clone());
 
-        return Ok(oids);
+        Ok(oids)
     }
 
     /// Allocates a single OID. OIDs can be recycled if they aren't currently assigned to any
