@@ -64,8 +64,7 @@ where
         // we can write files to s3 deterministically across different replicas of different sizes
         // using the bucket ID. Each worker will split a bucket's data into 1 or more
         // files based on the user provided `MAX_FILE_SIZE`.
-        // TODO(#7256): make the number of buckets configurable.
-        let bucket_count = 20;
+        let bucket_count = self.output_bucket_count;
 
         let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
             &sinked_collection.map(move |row| {
