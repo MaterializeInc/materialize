@@ -101,7 +101,7 @@ def workflow_reset_gtid(c: Composition) -> None:
         # No end confirmation here, since we expect the source to be in a bad state
 
 
-def initialize(c: Composition) -> None:
+def initialize(c: Composition, create_source: bool = True) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized", "mysql", "toxiproxy")
 
@@ -112,6 +112,13 @@ def initialize(c: Composition) -> None:
         "populate-tables.td",
         "configure-materialize.td",
     )
+
+    if create_source:
+        run_testdrive_files(
+            c,
+            "--var=mysql-source-host=toxiproxy",
+            "create-source.td",
+        )
 
 
 def restart_mysql(c: Composition) -> None:
@@ -294,10 +301,9 @@ def backup_restore_mysql(c: Composition) -> None:
     # run_testdrive_files(c, "verify-source-failed.td")
 
 
-def run_testdrive_files(
-    c: Composition,
-    *files: str,
-) -> None:
+def run_testdrive_files(c: Composition, *files: str, mysql_host: str = "mysql") -> None:
     c.run_testdrive_files(
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}", *files
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        f"--var=mysql-host={mysql_host}",
+        *files,
     )
