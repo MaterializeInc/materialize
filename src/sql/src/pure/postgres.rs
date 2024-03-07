@@ -15,11 +15,11 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
     WithOptionValue,
 };
-use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
 use crate::catalog::SubsourceCatalog;
@@ -160,14 +160,7 @@ pub(crate) fn generate_targeted_subsources(
     validated_requested_subsources: Vec<RequestedSubsource<'_, PostgresTableDesc>>,
     mut text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
     publication_tables: &[PostgresTableDesc],
-) -> Result<
-    (
-        Vec<CreateSourceSubsource<Aug>>,
-        Vec<CreateSubsourceStatement<Aug>>,
-    ),
-    PlanError,
-> {
-    let mut targeted_subsources = vec![];
+) -> Result<Vec<CreateSubsourceStatement<Aug>>, PlanError> {
     let mut subsources = vec![];
 
     // Aggregate all unrecognized types.
@@ -251,13 +244,6 @@ pub(crate) fn generate_targeted_subsources(
             }
         }
 
-        // Create the targeted AST node for the original CREATE SOURCE statement
-
-        targeted_subsources.push(CreateSourceSubsource {
-            reference: upstream_name.clone(),
-            subsource: None,
-        });
-
         // Create the subsource statement
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
@@ -312,9 +298,7 @@ pub(crate) fn generate_targeted_subsources(
         })?;
     }
 
-    targeted_subsources.sort();
-
-    Ok((targeted_subsources, subsources))
+    Ok(subsources)
 }
 
 mod privileges {

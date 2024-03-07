@@ -13,11 +13,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_mysql_util::{MySqlTableDesc, QualifiedTableRef};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
     IdentError, Value, WithOptionValue,
 };
-use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 
 use crate::catalog::SubsourceCatalog;
 use crate::names::Aug;
@@ -62,19 +62,13 @@ pub(super) fn derive_catalog_from_tables<'a>(
 pub(super) fn generate_targeted_subsources(
     scx: &StatementContext,
     validated_requested_subsources: Vec<RequestedSubsource<MySqlTableDesc>>,
-) -> Result<
-    (
-        Vec<CreateSourceSubsource<Aug>>,
-        Vec<CreateSubsourceStatement<Aug>>,
-    ),
-    PlanError,
-> {
-    let mut targeted_subsources = vec![];
+) -> Result<Vec<CreateSubsourceStatement<Aug>>, PlanError> {
     let mut subsources = vec![];
 
     // Now that we have an explicit list of validated requested subsources we can create them
     for RequestedSubsource {
-        upstream_name,
+        // TODO: move MySQL sources to new structure
+        upstream_name: _,
         subsource_name,
         table,
     } in validated_requested_subsources.into_iter()
@@ -129,12 +123,6 @@ pub(super) fn generate_targeted_subsources(
             }
         }
 
-        // Create the targeted AST node for the original CREATE SOURCE statement
-        targeted_subsources.push(CreateSourceSubsource {
-            reference: upstream_name,
-            subsource: None,
-        });
-
         // Create the subsource statement
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
@@ -150,9 +138,7 @@ pub(super) fn generate_targeted_subsources(
         subsources.push(subsource);
     }
 
-    targeted_subsources.sort();
-
-    Ok((targeted_subsources, subsources))
+    Ok(subsources)
 }
 
 /// Map a list of column references to a map of table references to column names.

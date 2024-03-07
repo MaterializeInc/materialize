@@ -824,7 +824,7 @@ async fn purify_create_source(
                 text_cols_option.value = Some(WithOptionValue::Sequence(seq));
             }
 
-            let (targeted_subsources, new_subsources) = postgres::generate_targeted_subsources(
+            let new_subsources = postgres::generate_targeted_subsources(
                 &scx,
                 None,
                 validated_requested_subsources,
@@ -832,7 +832,7 @@ async fn purify_create_source(
                 &publication_tables,
             )?;
 
-            *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+            *referenced_subsources = None;
             subsources.extend(new_subsources);
 
             // Record the active replication timeline_id to allow detection of a future upstream
@@ -1081,11 +1081,10 @@ async fn purify_create_source(
             validate_subsource_names(&validated_requested_subsources)?;
 
             // TODO(roshan): Implement privileges check for MySQL
-
-            let (targeted_subsources, new_subsources) =
+            let new_subsources =
                 mysql::generate_targeted_subsources(&scx, validated_requested_subsources)?;
 
-            *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+            *referenced_subsources = None;
             subsources.extend(new_subsources);
 
             // Retrieve the current @gtid_executed value of the server to mark as the effective
@@ -1471,7 +1470,7 @@ async fn purify_alter_source(
         text_cols_option.value = Some(WithOptionValue::Sequence(seq));
     }
 
-    let (_named_subsources, new_subsources) = postgres::generate_targeted_subsources(
+    let new_subsources = postgres::generate_targeted_subsources(
         &scx,
         Some(source_name),
         validated_requested_subsources,
