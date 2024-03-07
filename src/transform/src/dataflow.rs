@@ -48,8 +48,9 @@ pub fn optimize_dataflow(
     stats: &dyn StatisticsOracle,
     features: &OptimizerFeatures,
 ) -> Result<DataflowMetainfo, TransformError> {
-    let ctx = crate::typecheck::empty_context();
-    let mut dataflow_metainfo = DataflowMetainfo::default();
+    let typecheck_ctx = crate::typecheck::empty_context(); // TODO: make part of TransformCtx
+    let mut df_meta = DataflowMetainfo::default();
+    let mut transform_ctx = TransformCtx::global(indexes, stats, &features, &mut df_meta);
 
     // Inline views that are used in only one other view.
     inline_views(dataflow)?;
@@ -57,12 +58,9 @@ pub fn optimize_dataflow(
     // Logical optimization pass after view inlining
     optimize_dataflow_relations(
         dataflow,
-        indexes,
-        stats,
-        features,
         #[allow(deprecated)]
-        &Optimizer::logical_optimizer(&ctx),
-        &mut dataflow_metainfo,
+        &Optimizer::logical_optimizer(&typecheck_ctx),
+        &mut transform_ctx,
     )?;
 
     optimize_dataflow_filters(dataflow)?;
@@ -78,30 +76,24 @@ pub fn optimize_dataflow(
     // pushed down across views.
     optimize_dataflow_relations(
         dataflow,
-        indexes,
-        stats,
-        features,
-        &Optimizer::logical_cleanup_pass(&ctx, false),
-        &mut dataflow_metainfo,
+        &Optimizer::logical_cleanup_pass(&typecheck_ctx, false),
+        &mut transform_ctx,
     )?;
 
     // Physical optimization pass
     optimize_dataflow_relations(
         dataflow,
-        indexes,
-        stats,
-        features,
-        &Optimizer::physical_optimizer(&ctx),
-        &mut dataflow_metainfo,
+        &Optimizer::physical_optimizer(&typecheck_ctx),
+        &mut transform_ctx,
     )?;
 
     optimize_dataflow_monotonic(dataflow)?;
 
-    prune_and_annotate_dataflow_index_imports(dataflow, indexes, &mut dataflow_metainfo)?;
+    prune_and_annotate_dataflow_index_imports(dataflow, indexes, &mut df_meta)?;
 
     mz_repr::explain::trace_plan(dataflow);
 
-    Ok(dataflow_metainfo)
+    Ok(df_meta)
 }
 
 /// Inline views used in one other view, and in no exported objects.
@@ -217,11 +209,8 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 )]
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
-    indexes: &dyn IndexOracle,
-    stats: &dyn StatisticsOracle,
-    features: &OptimizerFeatures,
     optimizer: &Optimizer,
-    df_meta: &mut DataflowMetainfo,
+    ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow
     // TODO(mcsherry): we should determine indexes from the optimized representation
@@ -229,10 +218,9 @@ fn optimize_dataflow_relations(
     // add indexes imperatively to `DataflowDesc`.
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-run all optimizations on the composite views.
-        optimizer.transform(
-            object.plan.as_inner_mut(),
-            &mut TransformCtx::global(indexes, stats, &object.id, &features, df_meta),
-        )?;
+        ctx.set_global_id(object.id);
+        optimizer.transform(object.plan.as_inner_mut(), ctx)?;
+        ctx.reset_global_id();
     }
 
     mz_repr::explain::trace_plan(dataflow);

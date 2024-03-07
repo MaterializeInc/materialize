@@ -87,7 +87,7 @@ macro_rules! any {
 #[derive(Debug)]
 pub struct TransformCtx<'a> {
     /// The global ID for this query (if it exists).
-    pub global_id: Option<&'a GlobalId>,
+    pub global_id: Option<GlobalId>,
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
     /// Statistical estimates.
@@ -117,17 +117,24 @@ impl<'a> TransformCtx<'a> {
     pub fn global(
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
-        global_id: &'a GlobalId,
         features: &'a OptimizerFeatures,
         df_meta: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
             indexes,
             stats,
-            global_id: Some(global_id),
+            global_id: None,
             features,
             df_meta,
         }
+    }
+
+    fn set_global_id(&mut self, global_id: GlobalId) {
+        self.global_id = Some(global_id);
+    }
+
+    fn reset_global_id(&mut self) {
+        self.global_id = None;
     }
 }
 

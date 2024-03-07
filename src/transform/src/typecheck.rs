@@ -1168,7 +1168,7 @@ impl crate::Transform for Typecheck {
 
         let expected = transform_ctx
             .global_id
-            .map_or_else(|| None, |id| typecheck_ctx.get(&Id::Global(*id)));
+            .map_or_else(|| None, |id| typecheck_ctx.get(&Id::Global(id)));
 
         if let Some(id) = transform_ctx.global_id {
             if self.disallow_new_globals
@@ -1213,7 +1213,7 @@ impl crate::Transform for Typecheck {
             }
             (Ok(got), None) => {
                 if let Some(id) = transform_ctx.global_id {
-                    typecheck_ctx.insert(Id::Global(*id), got);
+                    typecheck_ctx.insert(Id::Global(id), got);
                 }
             }
             (Err(err), _) => {
