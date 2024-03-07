@@ -9,10 +9,11 @@
 
 //! MySQL utilities for SQL purification.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use mz_mysql_util::MySqlTableDesc;
+use mz_mysql_util::{MySqlTableDesc, QualifiedTableRef};
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
     DeferredItemName, Ident, IdentError, Value, WithOptionValue,
@@ -22,6 +23,7 @@ use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 use crate::catalog::SubsourceCatalog;
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
+use crate::pure::MySqlConfigOptionName;
 
 use super::RequestedSubsource;
 
@@ -85,24 +87,31 @@ where
         // Figure out the schema of the subsource
         let mut columns = vec![];
         for c in table.columns.iter() {
-            let name = Ident::new(&c.name)?;
+            match c.column_type {
+                // This column is intentionally ignored, so we don't generate a column for it in
+                // the subsource.
+                None => {}
+                Some(ref column_type) => {
+                    let name = Ident::new(&c.name)?;
 
-            let ty = mz_pgrepr::Type::from(&c.column_type.scalar_type);
-            let data_type = scx.resolve_type(ty)?;
-            let mut col_options = vec![];
+                    let ty = mz_pgrepr::Type::from(&column_type.scalar_type);
+                    let data_type = scx.resolve_type(ty)?;
+                    let mut col_options = vec![];
 
-            if !c.column_type.nullable {
-                col_options.push(mz_sql_parser::ast::ColumnOptionDef {
-                    name: None,
-                    option: mz_sql_parser::ast::ColumnOption::NotNull,
-                });
+                    if !column_type.nullable {
+                        col_options.push(mz_sql_parser::ast::ColumnOptionDef {
+                            name: None,
+                            option: mz_sql_parser::ast::ColumnOption::NotNull,
+                        });
+                    }
+                    columns.push(ColumnDef {
+                        name,
+                        data_type,
+                        collation: None,
+                        options: col_options,
+                    });
+                }
             }
-            columns.push(ColumnDef {
-                name,
-                data_type,
-                collation: None,
-                options: col_options,
-            });
         }
 
         let mut constraints = vec![];
@@ -152,4 +161,53 @@ where
     targeted_subsources.sort();
 
     Ok((targeted_subsources, subsources))
+}
+
+/// Map a list of column references to a map of table references to column names.
+pub(super) fn map_column_refs<'a>(
+    cols: &'a [UnresolvedItemName],
+    option_type: MySqlConfigOptionName,
+) -> Result<BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>, PlanError> {
+    let mut table_to_cols = BTreeMap::new();
+    for name in cols.iter() {
+        // We only support fully qualified references for now (e.g. `schema_name.table_name.column_name`)
+        if name.0.len() == 3 {
+            let key = mz_mysql_util::QualifiedTableRef {
+                schema_name: name.0[0].as_str(),
+                table_name: name.0[1].as_str(),
+            };
+            table_to_cols
+                .entry(key)
+                .or_insert_with(BTreeSet::new)
+                .insert(name.0[2].as_str());
+        } else {
+            return Err(PlanError::InvalidOptionValue {
+                option_name: option_type.to_ast_string(),
+                err: Box::new(PlanError::UnderqualifiedColumnName(name.to_string())),
+            });
+        }
+    }
+    Ok(table_to_cols)
+}
+
+/// Normalize column references to a sorted, deduplicated options list of column names.
+pub(super) fn normalize_column_refs<'a>(
+    cols: Vec<UnresolvedItemName>,
+    catalog: &'a SubsourceCatalog<&'a MySqlTableDesc>,
+) -> Vec<WithOptionValue<Aug>> {
+    let mut seq: Vec<_> = cols
+        .into_iter()
+        .filter(|name| {
+            let (column_name, qual) = name.0.split_last().expect("non-empty");
+            match catalog.resolve(UnresolvedItemName::qualified(qual)) {
+                Ok((_, desc)) => desc.columns.iter().any(|n| &n.name == column_name.as_str()),
+                Err(_) => false,
+            }
+        })
+        .map(WithOptionValue::UnresolvedItemName)
+        .collect();
+
+    seq.sort();
+    seq.dedup();
+    seq
 }

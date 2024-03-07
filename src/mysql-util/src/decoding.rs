@@ -54,6 +54,10 @@ pub fn pack_mysql_row(
                 break;
             }
         };
+        if col_desc.column_type.is_none() {
+            // This column is ignored, so don't decode it it
+            continue;
+        }
         let datum = match val_to_datum(
             value,
             col_desc,
@@ -81,9 +85,13 @@ fn val_to_datum<'a>(
     temp_bytes: &'a mut Vec<Vec<u8>>,
     temp_jsonbs: &'a mut Vec<Jsonb>,
 ) -> Result<Datum<'a>, anyhow::Error> {
+    let column_type = match col_desc.column_type {
+        Some(ref column_type) => column_type,
+        None => anyhow::bail!("column type is not set for column: {}", col_desc.name),
+    };
     Ok(match value {
         Value::NULL => {
-            if col_desc.column_type.nullable {
+            if column_type.nullable {
                 Datum::Null
             } else {
                 Err(anyhow::anyhow!(
@@ -91,7 +99,7 @@ fn val_to_datum<'a>(
                 ))?
             }
         }
-        value => match &col_desc.column_type.scalar_type {
+        value => match &column_type.scalar_type {
             ScalarType::Bool => Datum::from(from_value_opt::<bool>(value)?),
             ScalarType::UInt16 => Datum::from(from_value_opt::<u16>(value)?),
             ScalarType::Int16 => Datum::from(from_value_opt::<i16>(value)?),

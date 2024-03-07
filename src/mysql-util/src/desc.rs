@@ -14,7 +14,7 @@ use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::ColumnType;
 
 use self::proto_my_sql_column_desc::Meta;
@@ -166,7 +166,8 @@ pub struct MySqlColumnDesc {
     /// The name of the column.
     pub name: String,
     /// The intended data type of this column within Materialize
-    pub column_type: ColumnType,
+    /// If this is None, the column is intended to be skipped within Materialize
+    pub column_type: Option<ColumnType>,
     /// Optional metadata about the column that may be necessary for decoding
     pub meta: Option<MySqlColumnMeta>,
 }
@@ -175,7 +176,7 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
     fn into_proto(&self) -> ProtoMySqlColumnDesc {
         ProtoMySqlColumnDesc {
             name: self.name.clone(),
-            column_type: Some(self.column_type.into_proto()),
+            column_type: self.column_type.into_proto(),
             meta: self.meta.as_ref().and_then(|meta| match meta {
                 MySqlColumnMeta::Enum(e) => Some(Meta::Enum(e.into_proto())),
                 MySqlColumnMeta::Json => Some(Meta::Json(ProtoMySqlColumnMetaJson {})),
@@ -186,9 +187,7 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
     fn from_proto(proto: ProtoMySqlColumnDesc) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             name: proto.name,
-            column_type: proto
-                .column_type
-                .into_rust_if_some("ProtoMySqlColumnDesc::column_type")?,
+            column_type: proto.column_type.into_rust()?,
             meta: proto
                 .meta
                 .and_then(|meta| match meta {
@@ -208,12 +207,19 @@ impl MySqlColumnDesc {
     /// a way that Materialize can handle.
     pub fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
         self.name == other.name
-            && self.column_type.scalar_type == other.column_type.scalar_type
-            // Columns are compatible if:
-            // - self is nullable; introducing a not null constraint doesn't
-            //   change this column's behavior.
-            // - self and other are both not nullable
-            && (self.column_type.nullable || self.column_type.nullable == other.column_type.nullable)
+            && match (&self.column_type, &other.column_type) {
+                (None, None) => true,
+                (Some(self_type), Some(other_type)) => {
+                    self_type.scalar_type == other_type.scalar_type
+                    // Columns are compatible if:
+                    // - self is nullable; introducing a not null constraint doesn't
+                    //   change this column's behavior.
+                    // - self and other are both not nullable
+                    && (self_type.nullable || self_type.nullable == other_type.nullable)
+                }
+                (Some(_), None) => false,
+                (None, Some(_)) => false,
+            }
     }
 }
 

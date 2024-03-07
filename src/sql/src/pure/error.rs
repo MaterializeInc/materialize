@@ -240,6 +240,8 @@ pub enum MySqlSourcePurificationError {
     ReplicationSettingsError(Vec<(String, String, String)>),
     #[error("referenced tables use unsupported types")]
     UnrecognizedTypes { cols: Vec<(String, String, String)> },
+    #[error("duplicated column name references in table {0}: {1:?}")]
+    DuplicatedColumnNames(String, Vec<String>),
     #[error("Invalid MySQL table reference: {0}")]
     InvalidTableReference(String),
     #[error("No tables found")]
@@ -298,7 +300,7 @@ impl MySqlSourcePurificationError {
             ),
             Self::UnrecognizedTypes { cols: _ } => Some(
                 "Check the docs -- some types can be supported using the TEXT COLUMNS option to \
-                ingest their values as text."
+                ingest their values as text, or ignored using IGNORE COLUMNS."
                     .into(),
             ),
             _ => None,

@@ -492,6 +492,41 @@ CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK = db.schema.item, PORT = 1
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
 
 parse-statement
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES (foo, bar as qux, baz into zop);
+----
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES (foo, bar AS qux, baz AS zop)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
+
+parse-statement
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES ([s1 AS foo.bar]);
+----
+error: Expected identifier, found left square bracket
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES ([s1 AS foo.bar]);
+                                                                    ^
+
+parse-statement
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (TEXT COLUMNS (public.foo.bar)) FOR ALL TABLES;
+----
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (TEXT COLUMNS = (public.foo.bar)) FOR ALL TABLES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [MySqlConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
+
+parse-statement
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (IGNORE COLUMNS (public.foo.bar)) FOR ALL TABLES;
+----
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (IGNORE COLUMNS = (public.foo.bar)) FOR ALL TABLES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [MySqlConfigOption { name: IgnoreColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
+
+parse-statement
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (IGNORE COLUMNS (public.foo.bar), TEXT COLUMNS (public.foo.baz)) FOR ALL TABLES;
+----
+CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn (IGNORE COLUMNS = (public.foo.bar), TEXT COLUMNS = (public.foo.baz)) FOR ALL TABLES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: MySql { connection: Name(UnresolvedItemName([Ident("mysqlconn")])), options: [MySqlConfigOption { name: IgnoreColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("bar")]))])) }, MySqlConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("public"), Ident("foo"), Ident("baz")]))])) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
+
+parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')

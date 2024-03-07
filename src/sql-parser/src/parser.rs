@@ -3130,7 +3130,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mysql_connection_option(&mut self) -> Result<MySqlConfigOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[DETAILS, TEXT])? {
+        match self.expect_one_of_keywords(&[DETAILS, TEXT, IGNORE])? {
             DETAILS => Ok(MySqlConfigOption {
                 name: MySqlConfigOptionName::Details,
                 value: self.parse_optional_option_value()?,
@@ -3153,6 +3153,27 @@ impl<'a> Parser<'a> {
 
                 Ok(MySqlConfigOption {
                     name: MySqlConfigOptionName::TextColumns,
+                    value,
+                })
+            }
+            IGNORE => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                Ok(MySqlConfigOption {
+                    name: MySqlConfigOptionName::IgnoreColumns,
                     value,
                 })
             }

@@ -894,6 +894,7 @@ async fn purify_create_source(
             let crate::plan::statement::ddl::MySqlConfigOptionExtracted {
                 details,
                 text_columns,
+                ignore_columns,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -976,42 +977,37 @@ async fn purify_create_source(
                 ),
             };
 
-            let mut text_cols_map = BTreeMap::new();
-
-            for name in text_columns.iter() {
-                // We only support fully qualified references for now (e.g. `schema_name.table_name.column_name`)
-                if name.0.len() == 3 {
-                    let key = mz_mysql_util::QualifiedTableRef {
-                        schema_name: name.0[0].as_str(),
-                        table_name: name.0[1].as_str(),
-                    };
-                    text_cols_map
-                        .entry(key)
-                        .or_insert_with(BTreeSet::new)
-                        .insert(name.0[2].as_str());
-                } else {
-                    return Err(PlanError::InvalidOptionValue {
-                        option_name: MySqlConfigOptionName::TextColumns.to_ast_string(),
-                        err: Box::new(PlanError::UnderqualifiedColumnName(name.to_string())),
-                    });
-                };
-            }
+            let text_cols_map =
+                mysql::map_column_refs(&text_columns, MySqlConfigOptionName::TextColumns)?;
+            let ignore_cols_map =
+                mysql::map_column_refs(&ignore_columns, MySqlConfigOptionName::IgnoreColumns)?;
 
             // Retrieve schemas for all requested tables
-            let tables =
-                mz_mysql_util::schema_info(&mut *conn, &table_schema_request, Some(&text_cols_map))
-                    .await
-                    .map_err(|err| match err {
-                        mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
-                            PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
-                                cols: columns
-                                    .into_iter()
-                                    .map(|c| (c.qualified_table_name, c.column_name, c.column_type))
-                                    .collect(),
-                            })
-                        }
-                        _ => err.into(),
-                    })?;
+            let tables = mz_mysql_util::schema_info(
+                &mut *conn,
+                &table_schema_request,
+                Some(&text_cols_map),
+                Some(&ignore_cols_map),
+            )
+            .await
+            .map_err(|err| match err {
+                mz_mysql_util::MySqlError::UnsupportedDataTypes { columns } => {
+                    PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
+                        cols: columns
+                            .into_iter()
+                            .map(|c| (c.qualified_table_name, c.column_name, c.column_type))
+                            .collect(),
+                    })
+                }
+                mz_mysql_util::MySqlError::DuplicatedColumnNames {
+                    qualified_table_name,
+                    columns,
+                } => PlanError::from(MySqlSourcePurificationError::DuplicatedColumnNames(
+                    qualified_table_name,
+                    columns,
+                )),
+                _ => err.into(),
+            })?;
 
             if tables.is_empty() {
                 Err(MySqlSourcePurificationError::EmptyDatabase)?;
@@ -1019,29 +1015,22 @@ async fn purify_create_source(
 
             let mysql_catalog = mysql::derive_catalog_from_tables(&tables)?;
 
-            // Normalize text columns option and remove unused text column references.
+            // Normalize column options and remove unused column references.
             if let Some(text_cols_option) = options
                 .iter_mut()
                 .find(|option| option.name == MySqlConfigOptionName::TextColumns)
             {
-                let mut seq: Vec<_> = text_columns
-                    .into_iter()
-                    .filter(|name| {
-                        let (column_name, qual) = name.0.split_last().expect("non-empty");
-                        match mysql_catalog.resolve(UnresolvedItemName::qualified(qual)) {
-                            Ok((_, desc)) => {
-                                desc.columns.iter().any(|n| &n.name == column_name.as_str())
-                            }
-                            Err(_) => false,
-                        }
-                    })
-                    .map(WithOptionValue::UnresolvedItemName)
-                    .collect();
-
-                seq.sort();
-                seq.dedup();
-
-                text_cols_option.value = Some(WithOptionValue::Sequence(seq));
+                text_cols_option.value = Some(WithOptionValue::Sequence(
+                    mysql::normalize_column_refs(text_columns, &mysql_catalog),
+                ));
+            }
+            if let Some(ignore_cols_option) = options
+                .iter_mut()
+                .find(|option| option.name == MySqlConfigOptionName::IgnoreColumns)
+            {
+                ignore_cols_option.value = Some(WithOptionValue::Sequence(
+                    mysql::normalize_column_refs(ignore_columns, &mysql_catalog),
+                ));
             }
 
             let mut validated_requested_subsources = vec![];
