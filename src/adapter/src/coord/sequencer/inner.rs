@@ -96,7 +96,9 @@ use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
-use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
+use crate::{
+    guard_write_critical_section, PeekResponseUnary, TimelineContext, TimestampExplanation,
+};
 
 mod create_index;
 mod create_materialized_view;
@@ -2115,7 +2117,15 @@ impl Coordinator {
             }
         };
         let source_ids = source.depends_on();
-        let timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        if matches!(timeline_context, TimelineContext::TimestampIndependent)
+            && source.contains_temporal()
+        {
+            // If the source IDs are timestamp independent but the query contains temporal functions,
+            // then the timeline context needs to be upgraded to timestamp dependent. This is
+            // required because `source_ids` doesn't contain functions.
+            timeline_context = TimelineContext::TimestampDependent;
+        }
 
         let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
 

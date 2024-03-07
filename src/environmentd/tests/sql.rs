@@ -3743,6 +3743,31 @@ async fn test_explain_timestamp_blocking() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+async fn test_explain_timestamp_on_const_with_temporal() {
+    // Regression test for https://github.com/MaterializeInc/materialize/issues/25841
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+
+    // EXPLAIN TIMESTAMP a query that is a constant, but has a temporal filter.
+    // Before fixing the bug, this was returning the timestamp u64:MAX.
+    let timestamp = get_explain_timestamp(
+        "(
+            WITH dt_series AS (
+                SELECT generate_series(
+                    date_trunc('day', date '2024-03-02'),
+                    date_trunc('day', date '2024-03-10'),
+                    '1 day'::interval
+                ) AS dt
+            )
+            SELECT dt FROM dt_series WHERE mz_now() <= dt + '7 days'::interval AND dt < mz_now())",
+        &client,
+    )
+    .await;
+    assert!(timestamp < 32503716000000); // year 3000
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
 async fn test_cancel_linearize_reads() {
     let server = test_util::TestHarness::default().start().await;
     server
