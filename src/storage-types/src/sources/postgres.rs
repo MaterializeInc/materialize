@@ -342,10 +342,10 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
         for (compatible, field) in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "PostgresSourcePublicationDetails incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
-                    self,
-                    other
-                );
+                        "PostgresSourcePublicationDetails incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                        self,
+                        other
+                    );
 
                 return Err(AlterError { id });
             }

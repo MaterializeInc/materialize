@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -34,6 +33,7 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_sql::ast::{Ident, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -64,13 +64,14 @@ use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOptionName, ConnectionOption, ConnectionOptionName,
-    CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
-    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
+    CreateSourceConnection, DeferredItemName, PgConfigOption, PgConfigOptionName, Statement,
+    TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::sources::GenericSourceConnection;
 use mz_storage_types::AlterCompatible;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::EmptyStatisticsOracle;
@@ -3386,69 +3387,77 @@ impl Coordinator {
 
                 const ALTER_SOURCE: &str = "ALTER SOURCE...DROP TABLES";
 
-                let (mut create_source_stmt, mut resolved_ids) =
-                    create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
-
-                // Ensure that we are only dropping items on which we depend.
-                for t in &to_drop {
-                    // Remove dependency.
-                    let existed = resolved_ids.0.remove(t);
-                    if !existed {
-                        Err(AdapterError::internal(
-                            ALTER_SOURCE,
-                            format!("removed {t}, but {id} did not have dependency"),
-                        ))?;
-                    }
-                }
-
-                // We are doing a lot of unwrapping, so just make an error to reference; all of
-                // these invariants are guaranteed to be true because of how we plan subsources.
-                let purification_err =
-                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
-
-                // TODO: refactor how you remove subsources.
-                let referenced_subsources = match create_source_stmt
-                    .referenced_subsources
-                    .as_mut()
-                    .ok_or(purification_err())?
-                {
-                    ReferencedSubsources::SubsetTables(ref mut s) => s,
-                    _ => return Err(purification_err()),
+                let conn = match &cur_source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => &ingestion.desc.connection,
+                    _ => unreachable!(),
                 };
 
-                let mut dropped_references = BTreeSet::new();
+                let tables: Vec<_> = match conn {
+                    GenericSourceConnection::Postgres(pg) => {
+                        let connection = self.catalog.get_entry(&pg.connection_id);
+                        let conn = connection
+                            .connection()
+                            .expect("generic source connection has connection details");
+                        let database = match &conn.connection {
+                            mz_storage_types::connections::Connection::Postgres(p) => {
+                                p.database.clone()
+                            }
+                            _ => unreachable!("PG sources must have PG connections"),
+                        };
 
-                // Fixup referenced_subsources. We panic rather than return
-                // errors here because `retain` is an infallible operation and
-                // actually erroring here is both incredibly unlikely and
-                // recoverable (users can stop trying to drop subsources if it
-                // panics).
-                referenced_subsources.retain(
-                    |CreateSourceSubsource {
-                         subsource,
-                         reference,
-                     }| {
-                        match subsource
-                            .as_ref()
-                            .unwrap_or_else(|| panic!("{}", purification_err().to_string()))
-                        {
-                            DeferredItemName::Named(name) => match name {
-                                // Retain all sources which we still have a dependency on.
-                                ResolvedItemName::Item { id, .. } => {
-                                    let contains = resolved_ids.0.contains(id);
-                                    if !contains {
-                                        dropped_references.insert(reference.clone());
-                                    }
-                                    contains
-                                }
-                                _ => unreachable!("{}", purification_err()),
-                            },
-                            _ => unreachable!("{}", purification_err()),
-                        }
-                    },
-                );
+                        pg.publication_details
+                            .tables
+                            .iter()
+                            .map(|t| {
+                                UnresolvedItemName(vec![
+                                    Ident::new_unchecked(database.clone()),
+                                    Ident::new_unchecked(t.namespace.clone()),
+                                    Ident::new_unchecked(t.name.clone()),
+                                ])
+                            })
+                            .collect()
+                    }
+                    GenericSourceConnection::MySql(mysql) => mysql
+                        .details
+                        .tables
+                        .iter()
+                        .map(|t| {
+                            UnresolvedItemName(vec![
+                                Ident::new_unchecked("mysql"),
+                                Ident::new_unchecked(t.schema_name.clone()),
+                                Ident::new_unchecked(t.name.clone()),
+                            ])
+                        })
+                        .collect(),
+                    _ => unreachable!("only PG and MySQL sources have non-self source exports"),
+                };
 
-                referenced_subsources.sort();
+                let mut exports_to_drop = BTreeMap::new();
+
+                let dropped_subsource_native_idxs: Vec<_> = to_drop
+                    .iter()
+                    .map(|subsource_id| {
+                        let (source_id, output_index) = self
+                            .catalog
+                            .get_entry(subsource_id)
+                            .subsource_details()
+                            .expect("must drop subsources");
+                        assert_eq!(source_id, id);
+
+                        exports_to_drop.insert(*subsource_id, (source_id, output_index));
+
+                        // Adjust for 0 idx primary source ref idiom.
+                        output_index - 1
+                    })
+                    .collect();
+
+                let dropped_references: BTreeSet<_> = dropped_subsource_native_idxs
+                    .into_iter()
+                    .map(|native_idx| tables[native_idx].clone())
+                    .collect();
+
+                let (mut create_source_stmt, resolved_ids) =
+                    create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
 
                 // Remove dropped references from text columns.
                 match &mut create_source_stmt.connection {
@@ -3504,7 +3513,7 @@ impl Coordinator {
                 let plan = match mz_sql::plan::plan(
                     None,
                     &catalog,
-                    Statement::CreateSource(create_source_stmt),
+                    Statement::CreateSource(create_source_stmt.clone()),
                     &Params::empty(),
                     &resolved_ids,
                 )
@@ -3516,20 +3525,20 @@ impl Coordinator {
 
                 // Ensure we have actually removed the subsource from the source's dependency and
                 // did not in any other way alter the dependencies.
-                let (_, new_resolved_ids) =
+                let (new_create_source_stmt, new_resolved_ids) =
                     create_sql_to_stmt_deps(self, ALTER_SOURCE, &plan.source.create_sql)?;
 
-                if let Some(id) = new_resolved_ids.0.iter().find(|id| to_drop.contains(id)) {
-                    Err(AdapterError::internal(
-                        ALTER_SOURCE,
-                        format!("failed to remove dropped ID {id} from dependencies"),
-                    ))?;
-                }
+                if create_source_stmt != new_create_source_stmt || resolved_ids != new_resolved_ids
+                {
+                    tracing::warn!(
+                        "sequence_alter_source DropSubsourceExports did not roundtrip statement.\noriginal: {:?}\ngot: {:?}",
+                        create_source_stmt,
+                        new_create_source_stmt
+                    );
 
-                if new_resolved_ids.0 != resolved_ids.0 {
                     Err(AdapterError::internal(
                         ALTER_SOURCE,
-                        format!("expected resolved items to be {resolved_ids:?}, but is actually {new_resolved_ids:?}"),
+                        format!("dropping subsource corrupted statement"),
                     ))?;
                 }
 
@@ -3541,29 +3550,10 @@ impl Coordinator {
                     cur_source.is_retained_metrics_object,
                 );
 
-                // Get new ingestion description for storage.
-                let ingestion = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => ingestion
-                        .clone()
-                        .into_inline_connection(self.catalog().state()),
-                    _ => unreachable!("already verified of type ingestion"),
-                };
-
-                let collection = btreemap! {id => ingestion};
-
-                self.controller
-                    .storage
-                    .check_alter_collection(&collection)
-                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
-                // Do not drop this source, even though it's a dependency.
-                let primary_source = btreeset! {ObjectId::Item(id)};
-
                 // CASCADE
-                let drops = self.catalog().object_dependents_except(
-                    &to_drop.into_iter().map(ObjectId::Item).collect(),
+                let drops = self.catalog().object_dependents(
+                    &to_drop.iter().cloned().map(ObjectId::Item).collect(),
                     session.conn_id(),
-                    primary_source,
                 );
 
                 let DropOps {
@@ -3593,13 +3583,8 @@ impl Coordinator {
                 });
 
                 self.catalog_transact(Some(session), ops).await?;
-
-                // Commit the new ingestion to storage.
-                self.controller
-                    .storage
-                    .alter_collection(collection)
-                    .await
-                    .expect("altering collection after txn must succeed");
+                // Dropping the source from the catalog handles the storage
+                // controller state.
             }
             plan::AlterSourceAction::AddSubsourceExports {
                 subsources,

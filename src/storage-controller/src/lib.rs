@@ -939,28 +939,73 @@ where
         Ok(())
     }
 
-    fn drop_sources(
+    async fn drop_sources(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
-        self.drop_sources_unvalidated(storage_metadata, identifiers);
-        Ok(())
+        self.drop_sources_unvalidated(storage_metadata, identifiers)
+            .await
     }
 
-    fn drop_sources_unvalidated(
+    async fn drop_sources_unvalidated(
         &mut self,
         storage_metadata: &StorageMetadata,
-        identifiers: Vec<GlobalId>,
-    ) {
-        for id in &identifiers {
-            let metadata = storage_metadata.get_collection_shard::<T>(*id);
+        ids: Vec<GlobalId>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let mut to_execute = BTreeSet::new();
+        let mut to_drop = BTreeSet::new();
+        for id in ids {
+            let metadata = storage_metadata.get_collection_shard::<T>(id);
             mz_ore::soft_assert_or_log!(
                 matches!(metadata, Err(StorageError::IdentifierMissing(_))),
                 "dropping {id}, but drop was not synchronized with storage \
                 controller via `synchronize_collections`"
             );
+
+            let col = match self.collection(id) {
+                Ok(col) => col,
+                Err(_) => continue,
+            };
+
+            to_drop.insert(id);
+
+            // If we are dropping source exports, we need to the ingestion that
+            // it runs on.
+            if let DataSource::SourceExport {
+                id: source_id,
+                output_index,
+            } = col.description.data_source
+            {
+                // Adjust the source to contain this export.
+                let source_collection = self.collection_mut(source_id).expect("known to exist");
+                match &mut source_collection.description {
+                    CollectionDescription {
+                        data_source: DataSource::Ingestion(ingestion_desc),
+                        ..
+                    } => {
+                        let removed = ingestion_desc.source_exports.remove(&id);
+                        mz_ore::soft_assert_eq_or_log!(
+                            removed,
+                            Some(SourceExport {
+                                output_index,
+                                storage_metadata: ()
+                            })
+                        );
+                    }
+                    _ => unreachable!(
+                        "SourceExport must only refer to primary sources that already exist"
+                    ),
+                };
+
+                to_execute.insert(source_id);
+            }
+        }
+
+        to_execute.retain(|id| !to_drop.contains(id));
+        if !to_execute.is_empty() {
+            self.execute_collections(to_execute).await?;
         }
 
         self.synchronize_finalized_shards(storage_metadata);
@@ -968,12 +1013,13 @@ where
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
-        let policies = identifiers
-            .into_iter()
-            .filter(|id| self.collection(*id).is_ok())
-            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
-            .collect();
-        self.set_read_policy(policies);
+        self.set_read_policy(
+            to_drop
+                .into_iter()
+                .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
+                .collect(),
+        );
+        Ok(())
     }
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
@@ -1586,6 +1632,10 @@ where
                             monotonic_worker.drop_handle(id).await;
                         };
                         Some(drop_fut.boxed())
+                    }
+                    DataSource::SourceExport { .. } if read_frontier.is_empty() => {
+                        pending_source_drops.push(id);
+                        None
                     }
                     // These sources are manged by `clusterd`.
                     DataSource::Webhook
