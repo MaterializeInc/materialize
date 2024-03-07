@@ -3768,6 +3768,53 @@ async fn test_explain_timestamp_on_const_with_temporal() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+async fn test_timestamp_on_const_with_temporal_in_serializable() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+
+    client
+        .batch_execute("SET transaction_isolation TO SERIALIZABLE")
+        .await
+        .unwrap();
+    // Query that is a constant, but has a temporal filter should not advance to `EpochMillis::MAX`.
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    let dates: Vec<String> = client
+        .query(
+            "WITH dt_series AS (
+                SELECT generate_series(
+                    date_trunc('day', date '2024-01-01'),
+                    date_trunc('day', date '2024-01-03'),
+                    '1 day'::interval
+                ) AS dt
+                UNION ALL
+                SELECT generate_series(
+                    date_trunc('day', date '30000-01-01'),
+                    date_trunc('day', date '30000-01-03'),
+                    '1 day'::interval
+                ) AS dt
+            )
+            SELECT dt::text FROM dt_series WHERE dt <= mz_now()",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+
+    assert_eq!(
+        dates.as_slice(),
+        &[
+            "2024-01-01 00:00:00+00",
+            "2024-01-02 00:00:00+00",
+            "2024-01-03 00:00:00+00",
+        ]
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
 async fn test_cancel_linearize_reads() {
     let server = test_util::TestHarness::default().start().await;
     server

@@ -249,18 +249,25 @@ pub trait TimestampProvider {
 
         // In order to use a timestamp oracle, we must be in the context of some timeline. In that
         // context we would use the timestamp oracle in the following scenarios:
-        // - The isolation level is Strict Serializable and the `when` allows us to use the
-        //   the timestamp oracle (ex: queries with no AS OF).
+        // - The isolation level is Strict Serializable or Strong Session Serializable and the
+        //   `when` allows us to use the timestamp oracle (ex: queries with no AS OF).
+        // - The isolation level is Serializable, the `when` allows us to use the timestamp oracle
+        //   (ex: queries with no AS OF), and the timeline context is timestamp dependent (ex:
+        //   static queries that have a temporal filter).
         // - The `when` requires us to use the timestamp oracle (ex: read-then-write queries).
+        let advance_non_serializable = when.can_advance_to_timeline_ts()
+            && matches!(
+                isolation_level,
+                IsolationLevel::StrictSerializable | IsolationLevel::StrongSessionSerializable
+            );
+        let advance_serializable = when.can_advance_to_timeline_ts()
+            && isolation_level == &IsolationLevel::Serializable
+            && timeline_context == &TimelineContext::TimestampDependent;
         let linearized_timeline = match &timeline {
             Some(timeline)
                 if when.must_advance_to_timeline_ts()
-                    || (when.can_advance_to_timeline_ts()
-                        && matches!(
-                            isolation_level,
-                            IsolationLevel::StrictSerializable
-                                | IsolationLevel::StrongSessionSerializable
-                        )) =>
+                    || advance_non_serializable
+                    || advance_serializable =>
             {
                 Some(timeline.clone())
             }
@@ -358,7 +365,16 @@ pub trait TimestampProvider {
         if when.can_advance_to_upper()
             && (isolation_level == &IsolationLevel::Serializable || timeline.is_none())
         {
-            candidate.join_assign(&largest_not_in_advance_of_upper);
+            let mut timestamp = largest_not_in_advance_of_upper;
+            // In practice advancing the timestamp into the future is confusing for users. So if
+            // there is an `oracle_read_ts` then we treat is as "the current time" bound the upper
+            // advancement to "the current time".
+            if isolation_level == &IsolationLevel::Serializable {
+                if let Some(oracle_read_ts) = oracle_read_ts {
+                    timestamp.meet_assign(&oracle_read_ts);
+                }
+            }
+            candidate.join_assign(&timestamp);
         }
 
         if let Some(real_time_recency_ts) = real_time_recency_ts {

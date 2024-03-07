@@ -22,6 +22,7 @@ set-oracle
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -41,6 +42,7 @@ serializable
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -64,6 +66,7 @@ set-oracle
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -83,6 +86,7 @@ set-oracle
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -98,6 +102,7 @@ determine
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -118,6 +123,7 @@ set-oracle
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -143,6 +149,7 @@ set-oracle
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -160,6 +167,7 @@ determine
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -181,6 +189,7 @@ set-oracle
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -198,6 +207,7 @@ determine
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -219,6 +229,7 @@ set-oracle
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -241,6 +252,7 @@ set-oracle
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -258,6 +270,7 @@ determine
 
 determine
 {
+  "timeline_ctx": "timeline dependent",
   "id_bundle": {
     "compute_ids": {
       "s1": [
@@ -270,3 +283,65 @@ determine
 }
 ----
 13
+
+# Timestamp dependent serializable queries don't advance past the timestamp oracle.
+
+set-isolation
+serializable
+----
+
+set-oracle
+15
+----
+
+determine
+{
+  "timeline_ctx": "timestamp dependent",
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "Immediately",
+  "instance": "s1"
+}
+----
+15
+
+# Timeline dependent serializable queries can advance past the timestamp oracle.
+
+determine
+{
+  "timeline_ctx": "timeline dependent",
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "Immediately",
+  "instance": "s1"
+}
+----
+19
+
+# Timestamp independent serializable queries advance to the end of time.
+
+determine
+{
+  "timeline_ctx": "timestamp independent",
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "Immediately",
+  "instance": "s1"
+}
+----
+18446744073709551615

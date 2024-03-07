@@ -23,6 +23,7 @@ use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_types::sources::Timeline;
+use mz_storage_types::sources::Timeline::EpochMilliseconds;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
@@ -129,6 +130,7 @@ impl TimestampProvider for Frontiers {
 
 #[derive(Deserialize, Debug, Clone)]
 struct Determine {
+    timeline_ctx: String,
     id_bundle: IdBundle,
     when: String,
     instance: String,
@@ -241,8 +243,14 @@ fn test_timestamp_selection() {
                         Some(isolation),
                     );
 
-                    // TODO: Factor out into method, or somesuch!
-                    let timeline_ctx = TimelineContext::TimestampDependent;
+                    let timeline_ctx = match det.timeline_ctx.to_uppercase().trim() {
+                        "TIMELINE DEPENDENT" => {
+                            TimelineContext::TimelineDependent(EpochMilliseconds)
+                        }
+                        "TIMESTAMP DEPENDENT" => TimelineContext::TimestampDependent,
+                        "TIMESTAMP INDEPENDENT" => TimelineContext::TimestampIndependent,
+                        timeline_ctx => panic!("unknown timeline context: {timeline_ctx}"),
+                    };
                     let isolation_level = IsolationLevel::from(isolation);
                     let when = parse_query_when(&det.when);
                     let linearized_timeline =
@@ -268,7 +276,7 @@ fn test_timestamp_selection() {
                         &det.id_bundle.into(),
                         &parse_query_when(&det.when),
                         det.instance.parse().unwrap(),
-                        &TimelineContext::TimestampDependent,
+                        &timeline_ctx,
                         oracle_read_ts,
                         None, /* real_time_recency_ts */
                         &IsolationLevel::from(isolation),
