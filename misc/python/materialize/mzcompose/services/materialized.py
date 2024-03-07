@@ -52,7 +52,6 @@ class Materialized(Service):
         additional_system_parameter_defaults: dict[str, str] | None = None,
         soft_assertions: bool = True,
         sanity_restart: bool = True,
-        catalog_store: str | None = "persist",
         platform: str | None = None,
         healthcheck: list[str] | None = None,
     ) -> None:
@@ -110,9 +109,6 @@ class Materialized(Service):
                 )
             ]
 
-        if catalog_store:
-            environment.append(f"MZ_CATALOG_STORE={catalog_store}")
-
         command = []
 
         if unsafe_mode:
@@ -160,7 +156,6 @@ class Materialized(Service):
             address = "cockroach" if external_cockroach == True else external_cockroach
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
-                f"--adapter-stash-url=postgres://root@{address}:26257?options=--search_path=adapter",
                 f"--storage-stash-url=postgres://root@{address}:26257?options=--search_path=storage",
                 f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
             ]
