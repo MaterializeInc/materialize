@@ -30,9 +30,9 @@
 /src/adapter/src/flags.rs           @MaterializeInc/testing
 /src/alloc                          @benesch
 /src/audit-log                      @MaterializeInc/adapter
-/src/avro                           @umanwizard
-/src/avro-derive                    @umanwizard
-/src/build-id                       @umanwizard
+/src/avro                           @MaterializeInc/storage
+/src/avro-derive                    @MaterializeInc/storage
+/src/build-id                       @teskje
 /src/build-info                     @benesch
 /src/catalog                        @MaterializeInc/adapter
 /src/catalog-debug                  @MaterializeInc/adapter
@@ -77,7 +77,7 @@
 /src/pgwire                         @MaterializeInc/adapter
 /src/pid-file                       @benesch
 /src/postgres-util                  @MaterializeInc/storage
-/src/prof                           @umanwizard
+/src/prof                           @teskje
 /src/proto                          @aalexandrov
 /src/repr                           @MaterializeInc/storage @MaterializeInc/compute
 /src/repr/src/row                   @MaterializeInc/persist
