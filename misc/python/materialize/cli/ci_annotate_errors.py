@@ -152,28 +152,7 @@ and finds associated open GitHub issues in Materialize repository.""",
     parser.add_argument("log_files", nargs="+", help="log files to search in")
     args = parser.parse_args()
 
-    num_errors = annotate_logged_errors(args.log_files)
-
-    # No need for rest of the logic as no error logs were found, but since
-    # this script was called the test still failed, so showing the current
-    # failures on main branch.
-    # Only fetch the main branch status when we are running in CI, but no on
-    # main, so inside of a PR or a release branch instead.
-    if (
-        num_errors == 0
-        and ui.env_is_truthy("BUILDKITE")
-        and os.getenv("BUILDKITE_BRANCH") != "main"
-        and os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
-        and get_job_state() not in ("canceling", "canceled")
-    ):
-        failures_on_main = get_failures_on_main()
-        suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
-        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> failed, but no error in logs found"
-        if failures_on_main:
-            text += ", " + failures_on_main
-        add_annotation_raw(style="error", markdown=text)
-
-    return num_errors
+    return annotate_logged_errors(args.log_files)
 
 
 def annotate_errors(
@@ -313,6 +292,26 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     if unknown_errors:
         print(f"+++ Failing test because of {len(unknown_errors)} unknown error(s):")
         print(unknown_errors)
+
+    # No need for rest of the logic as no error logs were found, but since
+    # this script was called the test still failed, so showing the current
+    # failures on main branch.
+    # Only fetch the main branch status when we are running in CI, but no on
+    # main, so inside of a PR or a release branch instead.
+    if (
+        len(unknown_errors) == 0
+        and len(known_errors) == 0
+        and ui.env_is_truthy("BUILDKITE")
+        and os.getenv("BUILDKITE_BRANCH") != "main"
+        and os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
+        and get_job_state() not in ("canceling", "canceled")
+    ):
+        failures_on_main = get_failures_on_main()
+        suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
+        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> failed, but no error in logs found"
+        if failures_on_main:
+            text += ", " + failures_on_main
+        add_annotation_raw(style="error", markdown=text)
 
     return len(unknown_errors)
 
