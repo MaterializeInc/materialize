@@ -159,10 +159,9 @@ def annotate_errors(
     style = "info" if not unknown_errors else "error"
     unknown_errors = group_identical_errors(unknown_errors)
     known_errors = group_identical_errors(known_errors)
-    suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
 
     if unknown_errors:
-        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> failed"
+        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> failed"
         if failures_on_main:
             text += ", " + failures_on_main
     else:
@@ -171,7 +170,7 @@ def annotate_errors(
             if os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
             else "succeeded"
         )
-        text = f"<details><summary><a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> {action} with known error logs"
+        text = f"<details><summary><a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> {action} with known error logs"
         if failures_on_main:
             text += ", " + failures_on_main
         text += "</summary>\n"
@@ -305,8 +304,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
         and get_job_state() not in ("canceling", "canceled")
     ):
         failures_on_main = get_failures_on_main()
-        suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
-        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> failed, but no error in logs found"
+        text = f"<a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{get_suite_name()}</a> failed, but no error in logs found"
         if failures_on_main:
             text += ", " + failures_on_main
         add_annotation_raw(style="error", markdown=text)
@@ -519,6 +517,16 @@ def get_job_state() -> str:
         if job["id"] == job_id:
             return job["state"]
     raise ValueError("Job not found")
+
+
+def get_suite_name() -> str:
+    suite_name = os.getenv("BUILDKITE_LABEL", "Unknown Test")
+
+    retry_count = int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
+    if retry_count > 0:
+        suite_name += f" ({retry_count})"
+
+    return suite_name
 
 
 if __name__ == "__main__":
