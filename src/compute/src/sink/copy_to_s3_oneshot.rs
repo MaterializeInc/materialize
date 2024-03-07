@@ -66,6 +66,8 @@ where
         // files based on the user provided `MAX_FILE_SIZE`.
         let bucket_count = self.output_bucket_count;
 
+        // TODO(#25835): Note, even though we do get deterministic output currently
+        // after the exchange below, it's not explicitly supported and we should change it.
         let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
             &sinked_collection.map(move |row| {
                 let bucket = row.hashed() % bucket_count;
