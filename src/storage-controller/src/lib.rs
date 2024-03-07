@@ -801,34 +801,24 @@ where
         self.append_shard_mappings(new_collections.into_iter(), 1)
             .await;
 
+        self.synchronize_finalized_shards(storage_metadata);
+
         // TODO(guswynn): perform the io in this final section concurrently.
         for id in to_execute {
-            let description = &self.collection(id).unwrap().description;
-            match description.data_source.clone() {
-                DataSource::Ingestion(ingestion) => {
-                    let description = self.enrich_ingestion(id, ingestion)?;
-
-                    // Fetch the client for this ingestion's instance.
-                    let client =
-                        self.clients
-                            .get_mut(&description.instance_id)
-                            .ok_or_else(|| StorageError::IngestionInstanceMissing {
-                                storage_instance_id: description.instance_id,
-                                ingestion_id: id,
-                            })?;
-                    let augmented_ingestion = RunIngestionCommand { id, description };
-
-                    client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
+            let description = &self.collection(id)?.description;
+            match &description.data_source {
+                DataSource::Ingestion(_) => {
+                    self.run_ingestion(id)?;
                 }
                 DataSource::IngestionExport { .. } => unreachable!(
-                    "source exports do not execute directly, but instead schedule their source to be re-executed"
+                    "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
                 DataSource::Introspection(i) => {
                     let prev = self
                         .introspection_ids
                         .lock()
                         .expect("poisoned lock")
-                        .insert(i, id);
+                        .insert(*i, id);
                     assert!(
                         prev.is_none(),
                         "cannot have multiple IDs for introspection type"
@@ -978,8 +968,6 @@ where
                 DataSource::Progress | DataSource::Other(_) => {}
             }
         }
-
-        self.synchronize_finalized_shards(storage_metadata);
 
         Ok(())
     }
@@ -3310,40 +3298,6 @@ where
         }
     }
 
-    /// Converts an `IngestionDescription<()>` into `IngestionDescription<CollectionMetadata>`.
-    fn enrich_ingestion(
-        &self,
-        id: GlobalId,
-        ingestion: IngestionDescription,
-    ) -> Result<IngestionDescription<CollectionMetadata>, StorageError<T>> {
-        // The ingestion metadata is simply the collection metadata of the collection with
-        // the associated ingestion
-        let ingestion_metadata = self.collection(id)?.collection_metadata.clone();
-
-        let mut source_exports = BTreeMap::new();
-        for (id, export) in ingestion.source_exports {
-            // Note that these metadata's have been previously enriched with the
-            // required `RelationDesc` for each sub-source above!
-            let storage_metadata = self.collection(id)?.collection_metadata.clone();
-            source_exports.insert(
-                id,
-                SourceExport {
-                    storage_metadata,
-                    output_index: export.output_index,
-                },
-            );
-        }
-
-        Ok(IngestionDescription {
-            source_exports,
-            ingestion_metadata,
-            // The rest of the fields are identical
-            desc: ingestion.desc,
-            instance_id: ingestion.instance_id,
-            remap_collection_id: ingestion.remap_collection_id,
-        })
-    }
-
     /// Determine if this collection has another dependency.
     ///
     /// Currently, collections have either 0 or 1 dependencies.
@@ -3521,6 +3475,64 @@ where
         self.collections
             .get(&id)
             .ok_or(StorageError::IdentifierMissing(id))
+    }
+
+    /// Runs the identified ingestion using the current definition of the
+    /// ingestion in-memory.
+    fn run_ingestion(&mut self, id: GlobalId) -> Result<(), StorageError<T>> {
+        let collection = self.collection(id)?;
+        let ingestion_description = match &collection.description.data_source {
+            DataSource::Ingestion(i) => i.clone(),
+            _ => {
+                tracing::warn!("run_ingestion called on non-ingestion ID {}", id);
+                Err(StorageError::IdentifierInvalid(id))?
+            }
+        };
+
+        // Enrich all of the exports with their metadata
+        let mut source_exports = BTreeMap::new();
+        for (
+            export_id,
+            SourceExport {
+                output_index,
+                storage_metadata: (),
+            },
+        ) in ingestion_description.source_exports
+        {
+            let export_storage_metadata = self.collection(export_id)?.collection_metadata.clone();
+            source_exports.insert(
+                export_id,
+                SourceExport {
+                    storage_metadata: export_storage_metadata,
+                    output_index,
+                },
+            );
+        }
+
+        let description = IngestionDescription::<CollectionMetadata> {
+            source_exports,
+            // The ingestion metadata is simply the collection metadata of the collection with
+            // the associated ingestion
+            ingestion_metadata: collection.collection_metadata.clone(),
+            // The rest of the fields are identical
+            desc: ingestion_description.desc,
+            instance_id: ingestion_description.instance_id,
+            remap_collection_id: ingestion_description.remap_collection_id,
+        };
+
+        let storage_instance_id = description.instance_id;
+        // Fetch the client for this ingestion's instance.
+        let client = self.clients.get_mut(&storage_instance_id).ok_or_else(|| {
+            StorageError::IngestionInstanceMissing {
+                storage_instance_id,
+                ingestion_id: id,
+            }
+        })?;
+
+        let augmented_ingestion = RunIngestionCommand { id, description };
+        client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
+
+        Ok(())
     }
 }
 
