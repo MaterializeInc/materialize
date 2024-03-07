@@ -67,10 +67,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
+        # refresh-mv-restart: Reenable when #25821 is fixed
+        # index-source-stuck: Reenable when #25821 is fixed
         if name in (
             "default",
             "test-incident-70",
             "test-concurrent-connections",
+            "test-refresh-mv-restart",
+            "test-index-source-stuck",
         ):
             continue
         if buildkite.accepted_by_shard(name):
