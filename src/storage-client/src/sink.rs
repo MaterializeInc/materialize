@@ -15,7 +15,7 @@ use anyhow::{anyhow, bail, Context};
 use maplit::btreemap;
 use mz_kafka_util::client::{GetPartitionsError, MzClientContext, TimeoutConfig};
 use mz_ore::collections::CollectionExt;
-use mz_ore::future::OreFutureExt;
+use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::task;
 use mz_repr::Timestamp;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -221,7 +221,7 @@ pub async fn ensure_kafka_topic(
             MzClientContext::default(),
             &BTreeMap::new(),
             // Only called from `mz_storage`.
-            true,
+            InTask::Yes,
         )
         .await
         .add_context("creating admin client failed")?;
@@ -431,7 +431,7 @@ pub async fn determine_sink_resume_upper(
                 ctx,
                 &opts,
                 // Only called from `mz_storage`.
-                true,
+                InTask::Yes,
             )
             .await?
     };
@@ -447,7 +447,7 @@ pub async fn determine_sink_resume_upper(
                 ctx,
                 &opts,
                 // Only called from `mz_storage`.
-                true,
+                InTask::Yes,
             )
             .await?
     };

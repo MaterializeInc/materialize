@@ -23,6 +23,7 @@ use std::collections::{btree_map, BTreeMap};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
+use mz_ore::future::{InTask, OreFutureExt};
 use scopeguard::ScopeGuard;
 use tokio::sync::watch;
 use tracing::{error, info};
@@ -56,7 +57,7 @@ impl SshTunnelManager {
         timeout_config: SshTimeoutConfig,
         // Whether or not to connect to ssh from a Tokio task (to ensure futures are
         // polled promptly).
-        in_task: bool,
+        in_task: InTask,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
         // An SSH tunnel connection is uniquely identified by the SSH tunnel
         // configuration and the remote address.
@@ -149,7 +150,6 @@ impl SshTunnelManager {
                         remote_host, remote_port, config.user, config.host, config.port,
                     );
 
-                    use mz_ore::future::OreFutureExt;
                     let config = config.clone();
                     let remote_host = remote_host.to_string();
                     let handle = async move {
@@ -157,7 +157,7 @@ impl SshTunnelManager {
                             .connect(&remote_host, remote_port, timeout_config)
                             .await
                     }
-                    .optionally_run_in_task(|| "ssh_connect".to_string(), in_task)
+                    .run_in_task_if(in_task, || "ssh_connect".to_string())
                     .await?;
 
                     // Successful connection, so defuse the scope guard.

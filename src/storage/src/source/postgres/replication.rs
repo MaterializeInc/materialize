@@ -82,6 +82,7 @@ use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamEx
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
+use mz_ore::future::InTask;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
@@ -203,7 +204,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .config(
                     &config.config.connection_context.secrets_reader,
                     &config.config,
-                    true,
+                    InTask::Yes,
                 )
                 .await?;
 

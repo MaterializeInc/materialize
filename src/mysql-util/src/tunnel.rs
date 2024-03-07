@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use mysql_async::{Conn, Opts, OptsBuilder};
 
-use mz_ore::future::OreFutureExt;
+use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
@@ -181,7 +181,7 @@ impl MySqlConn {
 pub struct Config {
     inner: Opts,
     tunnel: TunnelConfig,
-    in_task: bool,
+    in_task: InTask,
     ssh_timeout_config: SshTimeoutConfig,
 }
 
@@ -190,7 +190,7 @@ impl Config {
         inner: Opts,
         tunnel: TunnelConfig,
         ssh_timeout_config: SshTimeoutConfig,
-        in_task: bool,
+        in_task: InTask,
     ) -> Self {
         Self {
             inner,
@@ -275,7 +275,7 @@ impl Config {
 
                 Ok(MySqlConn {
                     conn: Conn::new(opts_builder)
-                        .optionally_run_in_task(|| "msyql_connect".to_string(), self.in_task)
+                        .run_in_task_if(self.in_task, || "msyql_connect".to_string())
                         .await
                         .map_err(MySqlError::from)?,
                     _ssh_tunnel_handle: Some(tunnel),
@@ -304,7 +304,7 @@ impl Config {
 
                 Ok(MySqlConn {
                     conn: Conn::new(opts_builder)
-                        .optionally_run_in_task(|| "msyql_connect".to_string(), self.in_task)
+                        .run_in_task_if(self.in_task, || "msyql_connect".to_string())
                         .await
                         .map_err(MySqlError::from)?,
                     _ssh_tunnel_handle: None,

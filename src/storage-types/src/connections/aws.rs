@@ -18,7 +18,7 @@ use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
 use aws_types::region::Region;
 use aws_types::SdkConfig;
 use mz_ore::error::ErrorExt;
-use mz_ore::future::OreFutureExt;
+use mz_ore::future::{InTask, OreFutureExt};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use proptest_derive::Arbitrary;
@@ -113,8 +113,8 @@ impl AwsCredentials {
         let secrets_reader = &connection_context.secrets_reader;
         Ok(Credentials::from_keys(
             self.access_key_id
-                // We will already be contained within a tokio task when being called from timely.
-                .get_string(secrets_reader, false)
+                // We will already be contained within a tokio task from `load_sdk_config`.
+                .get_string(InTask::No, secrets_reader)
                 .await
                 .map_err(|_| {
                     anyhow!("internal error: failed to read access key ID from secret store")
@@ -129,8 +129,8 @@ impl AwsCredentials {
             match &self.session_token {
                 Some(t) => {
                     let t = t
-                        // We will already be contained within a tokio task when being called from timely.
-                        .get_string(secrets_reader, false)
+                        // We will already be contained within a tokio task from `load_sdk_config`.
+                        .get_string(InTask::No, secrets_reader)
                         .await
                         .map_err(|_| {
                             anyhow!(
@@ -317,9 +317,7 @@ impl AwsConnection {
         &self,
         connection_context: &ConnectionContext,
         connection_id: GlobalId,
-        // Whether or not we are connecting from timely threads. If we are, IO will
-        // occur on Tokio tasks.
-        from_timely: bool,
+        in_task: InTask,
     ) -> Result<SdkConfig, anyhow::Error> {
         let connection_context = connection_context.clone();
         let this = self.clone();
@@ -338,7 +336,7 @@ impl AwsConnection {
             };
             this.load_sdk_config_from_credentials(credentials).await
         }
-        .optionally_run_in_task(|| "load_sdk_config".to_string(), from_timely)
+        .run_in_task_if(in_task, || "load_sdk_config".to_string())
         .await
     }
 
@@ -362,7 +360,7 @@ impl AwsConnection {
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), AwsConnectionValidationError> {
         let aws_config = self
-            .load_sdk_config(&storage_configuration.connection_context, id, false)
+            .load_sdk_config(&storage_configuration.connection_context, id, InTask::No)
             .await?;
         let sts_client = aws_sdk_sts::Client::new(&aws_config);
         let _ = sts_client.get_caller_identity().send().await?;

@@ -38,6 +38,15 @@ use tokio::time::{self, Duration, Instant};
 use crate::panic::CATCHING_UNWIND_ASYNC;
 use crate::task::{self, JoinHandleExt};
 
+/// Whether or not to run the future in `run_in_task_if` in a task.
+#[derive(Clone, Copy, Debug)]
+pub enum InTask {
+    /// Run it in a task.
+    Yes,
+    /// Poll it normally.
+    No,
+}
+
 /// Extension methods for futures.
 #[async_trait::async_trait]
 pub trait OreFutureExt {
@@ -64,10 +73,10 @@ pub trait OreFutureExt {
 
     /// The same as `run_in_task`, but allows the callee to dynamically choose whether or
     /// not the future is polled into a Tokio task.
-    async fn optionally_run_in_task<Name, NameClosure>(
+    async fn run_in_task_if<Name, NameClosure>(
         self,
+        in_task: InTask,
         nc: NameClosure,
-        in_task: bool,
     ) -> Self::Output
     where
         Name: AsRef<str>,
@@ -75,7 +84,7 @@ pub trait OreFutureExt {
         Self: Sized + Future + Send + 'static,
         Self::Output: Send + 'static,
     {
-        if in_task {
+        if let InTask::Yes = in_task {
             self.run_in_task(nc).await
         } else {
             self.await

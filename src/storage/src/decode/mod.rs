@@ -21,6 +21,7 @@ use std::time::Duration;
 use differential_dataflow::capture::{Message, Progress, YieldingIter};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
@@ -316,7 +317,9 @@ async fn get_decoder(
             let csr_client = match csr_connection {
                 None => None,
                 Some(csr_connection) => {
-                    let csr_client = csr_connection.connect(storage_configuration, true).await?;
+                    let csr_client = csr_connection
+                        .connect(storage_configuration, InTask::Yes)
+                        .await?;
                     Some(csr_client)
                 }
             };

@@ -22,7 +22,7 @@ use mz_kafka_util::client::{
     BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
 use mz_ore::error::ErrorExt;
-use mz_ore::future::OreFutureExt;
+use mz_ore::future::{InTask, OreFutureExt};
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -58,40 +58,40 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.connections.rs"));
 #[async_trait::async_trait]
 trait SecretsReaderExt {
     /// `SecretsReader::read`, but optionally run in a task.
-    async fn read_optionally_in_task(
+    async fn read_in_task_if(
         &self,
+        in_task: InTask,
         id: GlobalId,
-        in_task: bool,
     ) -> Result<Vec<u8>, anyhow::Error>;
 
     /// `SecretsReader::read_string`, but optionally run in a task.
-    async fn read_string_optionally_in_task(
+    async fn read_string_in_task_if(
         &self,
+        in_task: InTask,
         id: GlobalId,
-        in_task: bool,
     ) -> Result<String, anyhow::Error>;
 }
 
 #[async_trait::async_trait]
 impl SecretsReaderExt for Arc<dyn SecretsReader> {
-    async fn read_optionally_in_task(
+    async fn read_in_task_if(
         &self,
+        in_task: InTask,
         id: GlobalId,
-        in_task: bool,
     ) -> Result<Vec<u8>, anyhow::Error> {
         let sr = Arc::clone(self);
         async move { sr.read(id).await }
-            .optionally_run_in_task(|| "secrets_reader_read".to_string(), in_task)
+            .run_in_task_if(in_task, || "secrets_reader_read".to_string())
             .await
     }
-    async fn read_string_optionally_in_task(
+    async fn read_string_in_task_if(
         &self,
+        in_task: InTask,
         id: GlobalId,
-        in_task: bool,
     ) -> Result<String, anyhow::Error> {
         let sr = Arc::clone(self);
         async move { sr.read_string(id).await }
-            .optionally_run_in_task(|| "secrets_reader_read".to_string(), in_task)
+            .run_in_task_if(in_task, || "secrets_reader_read".to_string())
             .await
     }
 }
@@ -106,16 +106,12 @@ impl StringOrSecret {
     /// Gets the value as a string, reading the secret if necessary.
     pub async fn get_string(
         &self,
+        in_task: InTask,
         secrets_reader: &Arc<dyn SecretsReader>,
-        in_task: bool,
     ) -> anyhow::Result<String> {
         match self {
             StringOrSecret::String(s) => Ok(s.clone()),
-            StringOrSecret::Secret(id) => {
-                secrets_reader
-                    .read_string_optionally_in_task(*id, in_task)
-                    .await
-            }
+            StringOrSecret::Secret(id) => secrets_reader.read_string_in_task_if(in_task, *id).await,
         }
     }
 
@@ -494,9 +490,7 @@ impl KafkaConnection {
         storage_configuration: &StorageConfiguration,
         context: C,
         extra_options: &BTreeMap<&str, String>,
-        // Whether or not we are connecting from timely threads. If we are, IO will
-        // occur on Tokio tasks.
-        from_timely: bool,
+        in_task: InTask,
     ) -> Result<T, ContextCreationError>
     where
         C: ClientContext,
@@ -562,8 +556,8 @@ impl KafkaConnection {
             config.set(
                 k,
                 v.get_string(
+                    in_task,
                     &storage_configuration.connection_context.secrets_reader,
-                    from_timely,
                 )
                 .await
                 .context("reading kafka secret")?,
@@ -581,7 +575,7 @@ impl KafkaConnection {
                 .ssh_tunnel_manager
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
-            from_timely,
+            in_task,
         );
 
         match &self.default_tunnel {
@@ -598,7 +592,7 @@ impl KafkaConnection {
                 let secret = storage_configuration
                     .connection_context
                     .secrets_reader
-                    .read_optionally_in_task(ssh_tunnel.connection_id, from_timely)
+                    .read_in_task_if(in_task, ssh_tunnel.connection_id)
                     .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
 
@@ -658,14 +652,10 @@ impl KafkaConnection {
                                     &storage_configuration
                                         .connection_context
                                         .secrets_reader
-                                        .read_optionally_in_task(
-                                            ssh_tunnel.connection_id,
-                                            from_timely,
-                                        )
+                                        .read_in_task_if(in_task, ssh_tunnel.connection_id)
                                         .await?,
                                 )?,
                             },
-                            from_timely,
                         )
                         .await
                         .map_err(ContextCreationError::Ssh)?;
@@ -683,7 +673,7 @@ impl KafkaConnection {
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
         let consumer: BaseConsumer<_> = self
-            .create_with_context(storage_configuration, context, &BTreeMap::new(), false)
+            .create_with_context(storage_configuration, context, &BTreeMap::new(), InTask::No)
             .await?;
         let consumer = Arc::new(consumer);
 
@@ -857,16 +847,14 @@ impl CsrConnection {
     pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
-        // Whether or not we are connecting from timely threads. If we are, IO will
-        // occur on Tokio tasks.
-        from_timely: bool,
+        in_task: InTask,
     ) -> Result<mz_ccsr::Client, CsrConnectError> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert
                 .get_string(
+                    in_task,
                     &storage_configuration.connection_context.secrets_reader,
-                    from_timely,
                 )
                 .await?;
             let root_cert = Certificate::from_pem(root_cert.as_bytes())?;
@@ -877,13 +865,13 @@ impl CsrConnection {
             let key = &storage_configuration
                 .connection_context
                 .secrets_reader
-                .read_string_optionally_in_task(tls_identity.key, from_timely)
+                .read_string_in_task_if(in_task, tls_identity.key)
                 .await?;
             let cert = tls_identity
                 .cert
                 .get_string(
+                    in_task,
                     &storage_configuration.connection_context.secrets_reader,
-                    from_timely,
                 )
                 .await?;
             let ident = Identity::from_pem(key.as_bytes(), cert.as_bytes())?;
@@ -894,8 +882,8 @@ impl CsrConnection {
             let username = http_auth
                 .username
                 .get_string(
+                    in_task,
                     &storage_configuration.connection_context.secrets_reader,
-                    from_timely,
                 )
                 .await?;
             let password = match http_auth.password {
@@ -904,7 +892,7 @@ impl CsrConnection {
                     storage_configuration
                         .connection_context
                         .secrets_reader
-                        .read_string_optionally_in_task(password, from_timely)
+                        .read_string_in_task_if(in_task, password)
                         .await?,
                 ),
             };
@@ -933,7 +921,7 @@ impl CsrConnection {
                         // Default to the default http port, but this
                         // could default to 8081...
                         self.url.port().unwrap_or(80),
-                        from_timely,
+                        in_task,
                     )
                     .await
                     .map_err(CsrConnectError::Ssh)?;
@@ -1001,7 +989,7 @@ impl CsrConnection {
         _id: GlobalId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
-        let client = self.connect(storage_configuration, false).await?;
+        let client = self.connect(storage_configuration, InTask::No).await?;
         client.list_subjects().await?;
         Ok(())
     }
@@ -1150,36 +1138,32 @@ impl PostgresConnection<InlinedConnection> {
         &self,
         secrets_reader: &Arc<dyn mz_secrets::SecretsReader>,
         storage_configuration: &StorageConfiguration,
-        // Whether or not we are connecting from timely threads. If we are, IO will
-        // occur on Tokio tasks.
-        from_timely: bool,
+        in_task: InTask,
     ) -> Result<mz_postgres_util::Config, anyhow::Error> {
         let mut config = tokio_postgres::Config::new();
         config
             .host(&self.host)
             .port(self.port)
             .dbname(&self.database)
-            .user(&self.user.get_string(secrets_reader, from_timely).await?)
+            .user(&self.user.get_string(in_task, secrets_reader).await?)
             .ssl_mode(self.tls_mode);
         if let Some(password) = self.password {
             let password = secrets_reader
-                .read_string_optionally_in_task(password, from_timely)
+                .read_string_in_task_if(in_task, password)
                 .await?;
             config.password(password);
         }
         if let Some(tls_root_cert) = &self.tls_root_cert {
-            let tls_root_cert = tls_root_cert
-                .get_string(secrets_reader, from_timely)
-                .await?;
+            let tls_root_cert = tls_root_cert.get_string(in_task, secrets_reader).await?;
             config.ssl_root_cert(tls_root_cert.as_bytes());
         }
         if let Some(tls_identity) = &self.tls_identity {
             let cert = tls_identity
                 .cert
-                .get_string(secrets_reader, from_timely)
+                .get_string(in_task, secrets_reader)
                 .await?;
             let key = secrets_reader
-                .read_string_optionally_in_task(tls_identity.key, from_timely)
+                .read_string_in_task_if(in_task, tls_identity.key)
                 .await?;
             config.ssl_cert(cert.as_bytes()).ssl_key(key.as_bytes());
         }
@@ -1191,7 +1175,7 @@ impl PostgresConnection<InlinedConnection> {
                 connection,
             }) => {
                 let secret = secrets_reader
-                    .read_optionally_in_task(*connection_id, from_timely)
+                    .read_in_task_if(in_task, *connection_id)
                     .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
                 mz_postgres_util::TunnelConfig::Ssh {
@@ -1219,7 +1203,7 @@ impl PostgresConnection<InlinedConnection> {
                 .pg_source_tcp_timeouts
                 .clone(),
             storage_configuration.parameters.ssh_timeout_config,
-            from_timely,
+            in_task,
         )?)
     }
 
@@ -1232,7 +1216,7 @@ impl PostgresConnection<InlinedConnection> {
             .config(
                 &storage_configuration.connection_context.secrets_reader,
                 storage_configuration,
-                false,
+                InTask::No,
             )
             .await?;
         config
@@ -1432,21 +1416,17 @@ impl MySqlConnection<InlinedConnection> {
         &self,
         secrets_reader: &Arc<dyn mz_secrets::SecretsReader>,
         storage_configuration: &StorageConfiguration,
-        // Whether or not we are connecting from timely threads. If we are, IO will
-        // occur on Tokio tasks.
-        from_timely: bool,
+        in_task: InTask,
     ) -> Result<mz_mysql_util::Config, anyhow::Error> {
         // TODO(roshan): Set appropriate connection timeouts
         let mut opts = mysql_async::OptsBuilder::default()
             .ip_or_hostname(&self.host)
             .tcp_port(self.port)
-            .user(Some(
-                &self.user.get_string(secrets_reader, from_timely).await?,
-            ));
+            .user(Some(&self.user.get_string(in_task, secrets_reader).await?));
 
         if let Some(password) = self.password {
             let password = secrets_reader
-                .read_string_optionally_in_task(password, from_timely)
+                .read_string_in_task_if(in_task, password)
                 .await?;
             opts = opts.pass(Some(password));
         }
@@ -1473,9 +1453,7 @@ impl MySqlConnection<InlinedConnection> {
             MySqlSslMode::VerifyCa | MySqlSslMode::VerifyIdentity
         ) {
             if let Some(tls_root_cert) = &self.tls_root_cert {
-                let tls_root_cert = tls_root_cert
-                    .get_string(secrets_reader, from_timely)
-                    .await?;
+                let tls_root_cert = tls_root_cert.get_string(in_task, secrets_reader).await?;
                 ssl_opts = ssl_opts
                     .map(|opts| opts.with_root_cert(Some(tls_root_cert.as_bytes().to_vec())));
             }
@@ -1483,12 +1461,9 @@ impl MySqlConnection<InlinedConnection> {
 
         if let Some(identity) = &self.tls_identity {
             let key = secrets_reader
-                .read_string_optionally_in_task(identity.key, from_timely)
+                .read_string_in_task_if(in_task, identity.key)
                 .await?;
-            let cert = identity
-                .cert
-                .get_string(secrets_reader, from_timely)
-                .await?;
+            let cert = identity.cert.get_string(in_task, secrets_reader).await?;
             let Pkcs12Archive { der, pass } =
                 mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
 
@@ -1509,7 +1484,7 @@ impl MySqlConnection<InlinedConnection> {
                 connection,
             }) => {
                 let secret = secrets_reader
-                    .read_optionally_in_task(*connection_id, from_timely)
+                    .read_in_task_if(in_task, *connection_id)
                     .await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
                 mz_mysql_util::TunnelConfig::Ssh {
@@ -1538,7 +1513,7 @@ impl MySqlConnection<InlinedConnection> {
             opts.into(),
             tunnel,
             storage_configuration.parameters.ssh_timeout_config,
-            from_timely,
+            in_task,
         ))
     }
 
@@ -1551,7 +1526,7 @@ impl MySqlConnection<InlinedConnection> {
             .config(
                 &storage_configuration.connection_context.secrets_reader,
                 storage_configuration,
-                false,
+                InTask::No,
             )
             .await?;
         let conn = config
@@ -1727,9 +1702,7 @@ impl SshTunnel<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         remote_host: &str,
         remote_port: u16,
-        // Whether or not we are connecting from timely threads. If we are, IO will
-        // occur on Tokio tasks.
-        from_timely: bool,
+        in_task: InTask,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
         storage_configuration
             .connection_context
@@ -1743,14 +1716,14 @@ impl SshTunnel<InlinedConnection> {
                         &storage_configuration
                             .connection_context
                             .secrets_reader
-                            .read_optionally_in_task(self.connection_id, from_timely)
+                            .read_in_task_if(in_task, self.connection_id)
                             .await?,
                     )?,
                 },
                 remote_host,
                 remote_port,
                 storage_configuration.parameters.ssh_timeout_config,
-                from_timely,
+                in_task,
             )
             .await
     }
@@ -1765,7 +1738,7 @@ impl SshConnection {
         let secret = storage_configuration
             .connection_context
             .secrets_reader
-            .read_optionally_in_task(id, false)
+            .read_in_task_if(InTask::No, id)
             .await?;
         let key_pair = SshKeyPair::from_bytes(&secret)?;
         let config = SshTunnelConfig {

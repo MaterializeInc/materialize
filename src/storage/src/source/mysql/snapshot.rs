@@ -98,6 +98,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{error, trace};
 
 use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, MySqlTableDesc, ER_NO_SUCH_TABLE};
+use mz_ore::future::InTask;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
@@ -214,7 +215,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     .config(
                         &config.config.connection_context.secrets_reader,
                         &config.config,
-                        true
+                        InTask::Yes,
                     )
                     .await?;
                 let task_name = format!("timely-{worker_id} MySQL snapshotter");

@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. and contributors. All rights reserved.
+// Copyright Materialize, Inc. and contributors. All rights reserved.mysql/st
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -15,6 +15,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use mz_mysql_util::query_sys_var;
+use mz_ore::future::InTask;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -69,7 +70,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 .config(
                     &config.config.connection_context.secrets_reader,
                     &config.config,
-                    true,
+                    InTask::Yes,
                 )
                 .await?;
 
