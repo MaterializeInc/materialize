@@ -380,6 +380,11 @@ pub trait StorageController: Debug {
 
     /// Returns a shared [`WebhookStatistics`] which can be used to report user-facing
     /// statistics for this given webhhook, specified by the [`GlobalId`].
+    ///
+    // This is used to support a fairly special case, where a source needs to report statistics
+    // from outside the ordinary controller-clusterd path. Its possible to merge this with
+    // `monotonic_appender`, whose only current user is webhooks, but given that they will
+    // likely be moved to clusterd, we just leave this a special case.
     fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
