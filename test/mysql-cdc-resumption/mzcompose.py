@@ -188,7 +188,9 @@ def workflow_master_changes(c: Composition) -> None:
         # delete rows in mysql-replica-1
         run_testdrive_files(c, "delete-rows-t1.td", mysql_host=host_data_master)
 
-        # This may take a minute because it takes some time until mysql-replica-2 catches up.
+        # It may take some time until mysql-replica-2 catches up.
+        time.sleep(15)
+
         run_testdrive_files(
             c,
             "verify-rows-deleted-t1.td",
