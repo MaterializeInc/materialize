@@ -159,7 +159,10 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        let expr = optimize_mir_local(expr, &self.typecheck_ctx)?.into_inner();
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx =
+            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan { expr })

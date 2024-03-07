@@ -219,7 +219,10 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
-                let expr = optimize_mir_local(expr, &self.typecheck_ctx)?;
+                let mut df_meta = DataflowMetainfo::default();
+                let mut transform_ctx =
+                    TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+                let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
                 df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
