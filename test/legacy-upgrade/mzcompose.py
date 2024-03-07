@@ -42,11 +42,7 @@ SERVICES = [
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
-        # This test will skip versions when testing certain upgrade paths. The persist catalog
-        # will panic if a version is skipped when upgrading. Even when using the stash
-        # implementation we open the persist catalog, which will cause the panic. To avoid this, we
-        # use the emergency-stash, which doesn't even attempt to open the persist catalog.
-        catalog_store="emergency-stash",
+        catalog_store="persist",
     ),
     # N.B.: we need to use `validate_catalog_store=None` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
@@ -60,8 +56,9 @@ SERVICES = [
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
+        external_cockroach=True,
         validate_catalog_store=None,
-        volumes_extra=["secrets:/share/secrets"],
+        volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
     ),
 ]
 
@@ -135,6 +132,13 @@ def test_upgrade_from_version(
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "postgres")
 
+    catalog_store = (
+        "persist"
+        if from_version == "current_source"
+        or MzVersion.parse_mz(from_version) >= MzVersion.parse_mz("v0.82.0-dev")
+        else "stash"
+    )
+
     if from_version != "current_source":
         mz_from = Materialized(
             image=f"materialize/materialized:{from_version}",
@@ -145,7 +149,7 @@ def test_upgrade_from_version(
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
-            catalog_store="emergency-stash",
+            catalog_store=catalog_store,
         )
         with c.override(mz_from):
             c.up("materialized")
@@ -168,30 +172,67 @@ def test_upgrade_from_version(
         seed,
         f"create-in-{version_glob}-{filter}.td",
     )
-
     c.kill("materialized")
     c.rm("materialized", "testdrive")
 
-    c.up("materialized")
+    if from_version != "current_source":
+        # We can't skip in-between minor versions anymore, so go through all of them
+        for version in get_published_minor_mz_versions(newest_first=False):
+            if version <= from_version:
+                continue
+            if version >= MzVersion.parse_cargo():
+                continue
+            if version <= MzVersion.parse_mz("v0.87.0"):
+                # Old versions didn't care about upgrading the catalog one version at a time, so save some time
+                continue
 
-    # Restart once more, just in case
-    c.kill("materialized")
-    c.rm("materialized")
-    c.up("materialized")
+            print(f"Upgrading to in-between version {version}")
+            with c.override(
+                Materialized(
+                    image=f"materialize/materialized:{version}",
+                    options=[
+                        opt
+                        for start_version, opt in mz_options.items()
+                        if version >= start_version
+                    ],
+                    volumes_extra=["secrets:/share/secrets"],
+                    external_cockroach=True,
+                    catalog_store=catalog_store,
+                )
+            ):
+                c.up("materialized")
+                c.kill("materialized")
+                c.rm("materialized")
 
-    with c.override(
-        Testdrive(
-            postgres_stash="cockroach",
-            validate_catalog_store="stash",
-            volumes_extra=["secrets:/share/secrets"],
-        )
-    ):
-        c.run_testdrive_files(
-            "--no-reset",
-            f"--var=upgrade-from-version={from_version}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            f"--var=created-cluster={created_cluster}",
-            temp_dir,
-            seed,
-            f"check-from-{version_glob}-{filter}.td",
-        )
+    print("Upgrading to final version")
+    mz_to = Materialized(
+        options=list(mz_options.values()),
+        volumes_extra=["secrets:/share/secrets"],
+        external_cockroach=True,
+        catalog_store=catalog_store,
+    )
+    with c.override(mz_to):
+        c.up("materialized")
+
+        # Restart once more, just in case
+        c.kill("materialized")
+        c.rm("materialized")
+        c.up("materialized")
+
+        with c.override(
+            Testdrive(
+                postgres_stash="cockroach",
+                external_cockroach=True,
+                validate_catalog_store=catalog_store,
+                volumes_extra=["secrets:/share/secrets", "mzdata:/mzdata"],
+            )
+        ):
+            c.run_testdrive_files(
+                "--no-reset",
+                f"--var=upgrade-from-version={from_version}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+                f"--var=created-cluster={created_cluster}",
+                temp_dir,
+                seed,
+                f"check-from-{version_glob}-{filter}.td",
+            )
