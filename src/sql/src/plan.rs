@@ -252,7 +252,11 @@ impl Plan {
             StatementKind::Declare => &[PlanKind::Declare],
             StatementKind::Delete => &[PlanKind::ReadThenWrite],
             StatementKind::Discard => &[PlanKind::DiscardAll, PlanKind::DiscardTemp],
-            StatementKind::DropObjects => &[PlanKind::DropObjects],
+            StatementKind::DropObjects => &[
+                PlanKind::DropObjects,
+                // DROP SOURCE may be rewritten into an ALTER SOURCE.
+                PlanKind::AlterSource,
+            ],
             StatementKind::DropOwned => &[PlanKind::DropOwned],
             StatementKind::Execute => &[PlanKind::Execute],
             StatementKind::ExplainPlan => &[PlanKind::ExplainPlan],

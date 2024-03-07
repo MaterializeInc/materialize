@@ -3887,13 +3887,53 @@ pub fn plan_drop_objects(
             }),
         }
     }
-    let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
-    Ok(Plan::DropObjects(DropObjectsPlan {
-        referenced_ids,
-        drop_ids,
-        object_type,
-    }))
+    // If you are dropping exactly one source's subsources, we can rewrite the
+    // operation as `DropSubsourceExports`, otherwise we must not drop any
+    // subsources. The rationale behind this is that there is a hidden
+    // dependency between `TEXT COLUMNS` and `IGNORED COLUMNS` options, which
+    // live on the source itself. We don't want to leave them dangling if they
+    // refer to nothing.
+    //
+    // TODO: This could be cleaned up if subsources themselves carried their
+    // table casts because `TEXT COLUMNS` would become a property of the
+    // subsource's schema, rather than a property of the source itself.
+    let mut altered_sources: BTreeMap<GlobalId, BTreeSet<GlobalId>> = BTreeMap::new();
+    let mut droped_non_sources = false;
+
+    for id in &referenced_ids {
+        match id {
+            ObjectId::Item(id) => match scx.catalog.get_item(id).subsource_details() {
+                Some((source_id, _)) => {
+                    altered_sources.entry(source_id).or_default().insert(*id);
+                }
+                None => droped_non_sources = true,
+            },
+            _ => droped_non_sources = true,
+        }
+    }
+
+    let mut altered_sources = altered_sources.into_iter();
+
+    let plan = match (droped_non_sources, altered_sources.next()) {
+        (false, Some((id, to_drop))) if altered_sources.next().is_none() => {
+            Plan::AlterSource(AlterSourcePlan {
+                id,
+                action: crate::plan::AlterSourceAction::DropSubsourceExports { to_drop },
+            })
+        }
+        (true, None) => {
+            let drop_ids = scx.catalog.object_dependents(&referenced_ids);
+            Plan::DropObjects(DropObjectsPlan {
+                referenced_ids,
+                drop_ids,
+                object_type,
+            })
+        }
+        _ => sql_bail!("cannot currently drop subsources of sources alongside other objects"),
+    };
+
+    Ok(plan)
 }
 
 fn plan_drop_schema(
@@ -5309,6 +5349,7 @@ pub fn plan_alter_source(
             return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
         }
     };
+    let id = entry.id();
 
     let action = match action {
         AlterSourceAction::SetOptions(options) => {
