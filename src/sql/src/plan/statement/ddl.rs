@@ -4094,13 +4094,65 @@ pub fn plan_drop_objects(
             }),
         }
     }
-    let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
-    Ok(Plan::DropObjects(DropObjectsPlan {
+    // Check that dropping this object does not have any implicit dependencies
+    // (e.g. `TEXT COLUMNS` references for subsources).
+    for id in &referenced_ids {
+        let ObjectId::Item(id) = id else { continue };
+        let dropping_item = scx.catalog.get_item(id);
+
+        let Some((source_id, output_index)) = dropping_item.subsource_details() else {
+            continue;
+        };
+
+        let source_item = scx.catalog.get_item(&source_id);
+
+        let source_desc = source_item
+            .source_desc()
+            .expect("must exist")
+            .expect("must be source");
+
+        let droppable = match &source_desc.connection {
+            // Cast modifications must be removed from the primary source by
+            // means of `ALTER SOURCE`.
+            GenericSourceConnection::Postgres(pg) => pg.table_casts[&output_index]
+                .iter()
+                .all(|(cast_type, _)| *cast_type == CastType::Natural),
+            // Cast modifications must be removed from the primary source by
+            // means of `ALTER SOURCE`.
+            GenericSourceConnection::MySql(mysql) => {
+                // TODO: we can check if the dropped source has a reference to a text or ignored column
+                mysql.text_columns.is_empty() && mysql.ignore_columns.is_empty()
+            }
+            // Load generator subsources cannot be removed piecemeal.
+            GenericSourceConnection::LoadGenerator(_) => false,
+            GenericSourceConnection::Kafka(_) => {
+                unreachable!("Kafka sources do not have subsources")
+            }
+        };
+
+        if !droppable {
+            return Err(PlanError::DropSourceUnavailableForSubsource {
+                source: scx
+                    .catalog
+                    .minimal_qualification(source_item.name())
+                    .to_string(),
+                subsource: scx
+                    .catalog
+                    .minimal_qualification(dropping_item.name())
+                    .to_string(),
+            });
+        }
+    }
+
+    let drop_ids = scx.catalog.object_dependents(&referenced_ids);
+    let plan = Plan::DropObjects(DropObjectsPlan {
         referenced_ids,
         drop_ids,
         object_type,
-    }))
+    });
+
+    Ok(plan)
 }
 
 fn plan_drop_schema(
