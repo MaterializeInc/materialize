@@ -102,8 +102,13 @@ pub struct TransformCtx<'a> {
 }
 
 impl<'a> TransformCtx<'a> {
-    /// Generates a dummy [`TransformCtx`] instance for crate tests.
-    pub fn dummy(
+    /// Generates a [`TransformCtx`] instance for the local MIR optimization
+    /// stage.
+    ///
+    /// Used to call [`Optimizer::optimize`] on a
+    /// [`Optimizer::logical_optimizer`] in order to transform a stand-alone
+    /// [`MirRelationExpr`].
+    pub fn local(
         features: &'a OptimizerFeatures,
         typecheck_ctx: &'a typecheck::SharedContext,
         df_meta: &'a mut DataflowMetainfo,
@@ -670,7 +675,7 @@ impl Optimizer {
         let features = OptimizerFeatures::default();
         let typecheck_ctx = typecheck::empty_context();
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::dummy(&features, &typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
         let transform_result = self.transform(&mut relation, &mut transform_ctx);
 
         // Make sure we are not swallowing any notice.
