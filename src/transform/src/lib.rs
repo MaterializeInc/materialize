@@ -671,19 +671,16 @@ impl Optimizer {
     pub fn optimize(
         &self,
         mut relation: MirRelationExpr,
+        ctx: &mut TransformCtx,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
-        let features = OptimizerFeatures::default();
-        let typecheck_ctx = typecheck::empty_context();
-        let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
-        let transform_result = self.transform(&mut relation, &mut transform_ctx);
+        let transform_result = self.transform(&mut relation, ctx);
 
         // Make sure we are not swallowing any notice.
         // TODO: we should actually wire up notices that come from here. This is not urgent, because
         // currently notices can only come from the physical MIR optimizer (specifically,
         // `LiteralConstraints`), and callers of this method are running the logical MIR optimizer.
         soft_assert_or_log!(
-            df_meta.optimizer_notices.is_empty(),
+            ctx.df_meta.optimizer_notices.is_empty(),
             "logical MIR optimization unexpectedly produced notices"
         );
 

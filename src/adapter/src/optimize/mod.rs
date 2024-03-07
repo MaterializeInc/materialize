@@ -71,8 +71,9 @@ use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFr
 use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::SharedContext as TypecheckContext;
-use mz_transform::TransformError;
+use mz_transform::{TransformCtx, TransformError};
 
 // Alias types
 // -----------
@@ -340,9 +341,13 @@ fn optimize_mir_local(
     expr: MirRelationExpr,
     typecheck_ctx: &TypecheckContext,
 ) -> Result<OptimizedMirRelationExpr, OptimizerError> {
+    let features = OptimizerFeatures::default();
+    let mut df_meta = DataflowMetainfo::default();
+    let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+
     #[allow(deprecated)]
     let optimizer = mz_transform::Optimizer::logical_optimizer(typecheck_ctx);
-    let expr = optimizer.optimize(expr)?;
+    let expr = optimizer.optimize(expr, &mut transform_ctx)?;
 
     // Trace the result of this phase.
     mz_repr::explain::trace_plan(expr.as_inner());

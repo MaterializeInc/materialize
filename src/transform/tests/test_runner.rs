@@ -342,11 +342,24 @@ mod tests {
         }
         let mut out = String::new();
         if test_type == TestType::Opt {
+            let features = OptimizerFeatures::default();
+            let typecheck_ctx = typecheck::empty_context();
+            let mut df_meta = DataflowMetainfo::default();
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+
             #[allow(deprecated)]
             let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
             dataflow = dataflow
                 .into_iter()
-                .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
+                .map(|(id, rel)| {
+                    (
+                        id,
+                        optimizer
+                            .optimize(rel, &mut transform_ctx)
+                            .unwrap()
+                            .into_inner(),
+                    )
+                })
                 .collect();
         }
         match test_type {
@@ -363,19 +376,25 @@ mod tests {
             _ => {}
         };
         if test_type == TestType::Opt {
-            let ctx = mz_transform::typecheck::empty_context();
-            let log_optimizer = Optimizer::logical_cleanup_pass(&ctx, true);
-            let phys_optimizer = Optimizer::physical_optimizer(&ctx);
+            let features = OptimizerFeatures::default();
+            let typecheck_ctx = typecheck::empty_context();
+            let mut df_meta = DataflowMetainfo::default();
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+
+            let log_optimizer = Optimizer::logical_cleanup_pass(&typecheck_ctx, true);
+            let phys_optimizer = Optimizer::physical_optimizer(&typecheck_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
-                    (
-                        id,
-                        phys_optimizer
-                            .optimize(log_optimizer.optimize(rel).unwrap().into_inner())
-                            .unwrap()
-                            .into_inner(),
-                    )
+                    let local_mir_plan = log_optimizer
+                        .optimize(rel, &mut transform_ctx)
+                        .unwrap()
+                        .into_inner();
+                    let global_mir_plan = phys_optimizer
+                        .optimize(local_mir_plan, &mut transform_ctx)
+                        .unwrap()
+                        .into_inner();
+                    (id, global_mir_plan)
                 })
                 .collect();
         }
