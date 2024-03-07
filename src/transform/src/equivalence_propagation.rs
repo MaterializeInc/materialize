@@ -376,18 +376,13 @@ impl EquivalencePropagation {
                 );
             }
             MirRelationExpr::TopK {
-                input,
-                group_key,
-                limit,
-                ..
+                input, group_key, ..
             } => {
-                if let Some(expr) = limit {
-                    let input_equivalences = derived
-                        .last_child()
-                        .value::<Equivalences>()
-                        .expect("Equivalences required");
-                    input_equivalences.reduce_expr(expr);
-                }
+                // TODO: Update `limit` expressions, but only if we update `group_key` at the same time.
+                //       It is important to both or neither, to ensure that `limit` only references columns in `group_key`.
+
+                // Discard equivalences among non-key columns, as it is not correct that `input` may drop rows
+                // that violate constraints among non-key columns without affecting the result.
                 outer_equivalences.project(0..group_key.len());
                 self.apply(
                     input,
