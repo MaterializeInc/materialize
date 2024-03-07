@@ -4003,28 +4003,6 @@ fn plan_drop_item(
     name: UnresolvedItemName,
     cascade: bool,
 ) -> Result<Option<GlobalId>, PlanError> {
-    plan_drop_item_inner(scx, object_type, if_exists, name, cascade, false)
-}
-
-/// Like [`plan_drop_item`] but specialized for the case of dropping subsources
-/// in response to `ALTER SOURCE...DROP SUBSOURCE...`
-fn plan_drop_subsource(
-    scx: &StatementContext,
-    if_exists: bool,
-    name: UnresolvedItemName,
-    cascade: bool,
-) -> Result<Option<GlobalId>, PlanError> {
-    plan_drop_item_inner(scx, ObjectType::Source, if_exists, name, cascade, true)
-}
-
-fn plan_drop_item_inner(
-    scx: &StatementContext,
-    object_type: ObjectType,
-    if_exists: bool,
-    name: UnresolvedItemName,
-    cascade: bool,
-    allow_dropping_subsources: bool,
-) -> Result<Option<GlobalId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -4047,45 +4025,6 @@ fn plan_drop_item_inner(
                     scx.catalog.minimal_qualification(catalog_item.name()),
                 );
             }
-            let item_type = catalog_item.item_type();
-
-            // Check if object is subsource if drop command doesn't allow dropping them, e.g. ALTER
-            // SOURCE can drop subsources, but DROP SOURCE cannot.
-            let primary_source = match item_type {
-                CatalogItemType::Source => catalog_item
-                    .used_by()
-                    .iter()
-                    .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source),
-                _ => None,
-            };
-
-            if let Some(source_id) = primary_source {
-                // Progress collections can never get dropped independently.
-                if Some(catalog_item.id()) == scx.catalog.get_item(source_id).progress_id() {
-                    return Err(PlanError::DropProgressCollection {
-                        progress_collection: scx
-                            .catalog
-                            .minimal_qualification(catalog_item.name())
-                            .to_string(),
-                        source: scx
-                            .catalog
-                            .minimal_qualification(scx.catalog.get_item(source_id).name())
-                            .to_string(),
-                    });
-                }
-                if !allow_dropping_subsources {
-                    return Err(PlanError::DropSubsource {
-                        subsource: scx
-                            .catalog
-                            .minimal_qualification(catalog_item.name())
-                            .to_string(),
-                        source: scx
-                            .catalog
-                            .minimal_qualification(scx.catalog.get_item(source_id).name())
-                            .to_string(),
-                    });
-                }
-            }
 
             if !cascade {
                 let entry_id = catalog_item.id();
@@ -4104,7 +4043,7 @@ fn plan_drop_item_inner(
                         // its subsources so we need to exclude it from cascade checking since it
                         // will be dropped. Similarly, if we're dropping a subsource, the primary
                         // source will show up in its dependents but should not prevent the drop.
-                        if id == &entry_id || Some(id) == primary_source {
+                        if id == &entry_id {
                             continue;
                         }
 
@@ -5389,12 +5328,15 @@ pub fn plan_alter_source(
             cascade,
         } => {
             let mut to_drop = BTreeSet::new();
-            let subsources = entry.subsources();
             for name in names {
-                match plan_drop_subsource(scx, if_exists, name.clone(), cascade)? {
+                match plan_drop_item(scx, ObjectType::Source, if_exists, name.clone(), cascade)? {
                     Some(dropped_id) => {
-                        if !subsources.contains(&dropped_id) {
-                            let dropped_entry = scx.catalog.get_item(&dropped_id);
+                        let dropped_entry = scx.catalog.get_item(&dropped_id);
+                        let details = dropped_entry.subsource_details();
+                        if details
+                            .map(|(subsource_of, _)| subsource_of != id)
+                            .unwrap_or(true)
+                        {
                             return Err(PlanError::DropNonSubsource {
                                 non_subsource: scx
                                     .catalog
@@ -5413,13 +5355,6 @@ pub fn plan_alter_source(
                         });
                     }
                 }
-            }
-
-            // Cannot drop last non-progress subsource
-            if subsources.len().saturating_sub(to_drop.len()) <= 1 {
-                return Err(PlanError::DropLastSubsource {
-                    source: scx.catalog.minimal_qualification(entry.name()).to_string(),
-                });
             }
 
             if to_drop.is_empty() {
