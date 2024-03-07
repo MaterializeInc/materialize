@@ -3602,12 +3602,9 @@ impl Coordinator {
                     .expect("altering collection after txn must succeed");
             }
             plan::AlterSourceAction::AddSubsourceExports {
-                subsources: _,
-                options,
+                subsources,
+                mut options,
             } => {
-                // TODO: change subsource handling.
-                let subsources = vec![];
-
                 const ALTER_SOURCE: &str = "ALTER SOURCE...ADD SUBSOURCES";
 
                 // Resolve items in statement
@@ -3619,37 +3616,6 @@ impl Coordinator {
                 let purification_err =
                     || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
-                // TODO: refactor how you add subsources
-                match create_source_stmt
-                    .referenced_subsources
-                    .as_mut()
-                    .ok_or(purification_err())?
-                {
-                    ReferencedSubsources::SubsetTables(c) => {
-                        mz_ore::soft_assert_no_log!(
-                            {
-                                let current_references: BTreeSet<_> = c
-                                    .iter()
-                                    .map(|CreateSourceSubsource { reference, .. }| reference)
-                                    .collect();
-                                let subsources: BTreeSet<_> = subsources
-                                    .iter()
-                                    .map(|CreateSourceSubsource { reference, .. }| reference)
-                                    .collect();
-
-                                current_references
-                                    .intersection(&subsources)
-                                    .next()
-                                    .is_none()
-                            },
-                            "cannot add subsources that refer to existing PG tables; this should have errored in purification"
-                        );
-
-                        c.extend(subsources);
-                    }
-                    _ => return Err(purification_err()),
-                };
-
                 let curr_options = match &mut create_source_stmt.connection {
                     CreateSourceConnection::Postgres { options, .. } => options,
                     _ => return Err(purification_err()),
@@ -3659,10 +3625,15 @@ impl Coordinator {
                 curr_options
                     .retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
 
-                // curr_options.push(PgConfigOption {
-                //     name: PgConfigOptionName::Details,
-                //     value: details,
-                // });
+                let details_pos = options
+                    .iter()
+                    .position(|o| o.name == AlterSourceAddSubsourceOptionName::Details)
+                    .ok_or_else(purification_err)?;
+                let details = options.remove(details_pos);
+                curr_options.push(PgConfigOption {
+                    name: PgConfigOptionName::Details,
+                    value: details.value,
+                });
 
                 // Merge text columns
                 let curr_text_columns = curr_options
@@ -3751,26 +3722,11 @@ impl Coordinator {
 
                 let source_compaction_window = source.custom_logical_compaction_window;
 
-                // Get new ingestion description for storage.
-                let ingestion = match &source.data_source {
-                    DataSourceDesc::Ingestion(ingestion) => ingestion
-                        .clone()
-                        .into_inline_connection(self.catalog().state()),
-                    _ => unreachable!("already verified of type ingestion"),
-                };
-
-                let collection = btreemap! {id => ingestion};
-
-                self.controller
-                    .storage
-                    .check_alter_collection(&collection)
-                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-
                 let CreateSourceInner {
                     mut ops,
                     sources,
                     if_not_exists_ids,
-                } = self.create_source_inner(session, vec![]).await?;
+                } = self.create_source_inner(session, subsources).await?;
 
                 assert!(
                     if_not_exists_ids.is_empty(),
@@ -3789,6 +3745,7 @@ impl Coordinator {
                 self.catalog_transact(Some(session), ops).await?;
 
                 let mut source_ids = Vec::with_capacity(sources.len());
+                let mut collections = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog().resolve_builtin_storage_collection(
@@ -3797,47 +3754,38 @@ impl Coordinator {
 
                     let (data_source, status_collection_id) = match source.data_source {
                         // Subsources use source statuses.
-                        DataSourceDesc::Source => (
-                            DataSource::Other(DataSourceOther::Source),
+                        DataSourceDesc::SourceExport { id, output_index } => (
+                            DataSource::SourceExport { id, output_index },
                             source_status_collection_id,
                         ),
                         o => {
                             unreachable!(
-                                "ALTER SOURCE...ADD SUBSOURCE only creates subsources but got {:?}",
+                                "ALTER SOURCE...ADD SUBSOURCE only creates SourceExport but got {:?}",
                                 o
                             )
                         }
                     };
 
-                    let storage_metadata = self.catalog.state().storage_metadata();
-
-                    self.controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(
-                                source_id,
-                                CollectionDescription {
-                                    desc: source.desc.clone(),
-                                    data_source,
-                                    since: None,
-                                    status_collection_id,
-                                },
-                            )],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to create collections");
+                    collections.push((
+                        source_id,
+                        CollectionDescription {
+                            desc: source.desc.clone(),
+                            data_source,
+                            since: None,
+                            status_collection_id,
+                        },
+                    ));
 
                     source_ids.push(source_id);
                 }
 
-                // Commit the new ingestion to storage.
+                let storage_metadata = self.catalog.state().storage_metadata();
+
                 self.controller
                     .storage
-                    .alter_collection(collection)
+                    .create_collections(storage_metadata, None, collections)
                     .await
-                    .expect("altering collection after txn must succeed");
+                    .unwrap_or_terminate("cannot fail to create collections");
 
                 self.initialize_storage_read_policies(
                     source_ids,
