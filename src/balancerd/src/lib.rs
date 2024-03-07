@@ -526,7 +526,6 @@ impl mz_server_core::Server for PgwireBalancer {
                                 tls.map(|tls| tls.mode),
                             )
                             .await?;
-                            // TODO: Resolver lookup then begin relaying bytes.
                             conn.flush().await?;
                             return Ok(());
                         }
@@ -622,8 +621,6 @@ async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &P
         secret_key,
     };
     msg.encode(&mut buf).expect("must encode");
-    // TODO: Is there a way to not use an Arc here by convincing rust that buf will outlive the
-    // spawn? Will awaiting the JoinHandle work?
     let buf = buf.freeze();
     for ip in all_ips {
         debug!("cancelling {suffix} to {ip}");
