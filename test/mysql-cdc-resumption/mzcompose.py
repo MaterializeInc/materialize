@@ -195,6 +195,72 @@ def workflow_master_changes(c: Composition) -> None:
         )
 
 
+def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
+    """
+    mysql-replica-1 replicates mysql. The source is attached to mysql. mz switches the connection to mysql-replica-1.
+    Changing the connection should not brick the source and the source should still work if mysql is killed.
+    """
+
+    with c.override(
+        Materialized(sanity_restart=False),
+        MySql(
+            name="mysql-replica-1",
+            version=MySql.DEFAULT_VERSION,
+            additional_args=[
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+                "--skip-replica-start",
+                "--server-id=2",
+            ],
+        ),
+    ):
+        initialize(c)
+
+        host_data_master = "mysql"
+        host_for_mz_source = "mysql"
+
+        c.up("mysql-replica-1")
+
+        # configure replica
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host="mysql-replica-1",
+        )
+
+        # give the replica some time to replicate the current state
+        time.sleep(3)
+
+        run_testdrive_files(
+            c,
+            "delete-rows-t1.td",
+            "verify-rows-deleted-t1.td",
+        )
+
+        # change connection to replica
+        host_for_mz_source = "mysql-replica-1"
+        run_testdrive_files(
+            c,
+            f"--var=mysql-source-host={host_for_mz_source}",
+            "alter-source-connection.td",
+        )
+
+        run_testdrive_files(
+            c,
+            "verify-source-running.td",
+        )
+
+        c.kill("mysql")
+
+        time.sleep(3)
+
+        run_testdrive_files(
+            c,
+            "verify-source-running.td",
+        )
+
+
 def initialize(c: Composition, create_source: bool = True) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized", "mysql", "toxiproxy")
