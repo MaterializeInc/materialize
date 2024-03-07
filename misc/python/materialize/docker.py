@@ -10,6 +10,8 @@
 """Docker utilities."""
 import subprocess
 
+import requests
+
 from materialize.mz_version import MzVersion
 
 EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
@@ -35,28 +37,36 @@ def mz_image_tag_exists(image_tag: str) -> bool:
         )
         return image_exists
 
-    command = [
-        "docker",
-        "manifest",
-        "inspect",
-        image_name,
-    ]
-
     print(f"Checking existence of image manifest: {image_name}")
 
-    try:
-        subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+    command_local = ["docker", "images", "--quiet", image_name]
+
+    output = subprocess.check_output(command_local, stderr=subprocess.STDOUT, text=True)
+    if output:
+        # image found locally, can skip querying remote Docker Hub
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
         return True
-    except subprocess.CalledProcessError as e:
-        if "no such manifest:" in e.output:
-            print(f"Failed to fetch image manifest '{image_name}' (does not exist)")
-            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
-        else:
-            print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
-            # do not cache the result of unknown error messages
 
+    # docker manifest inspect counts against the Docker Hub rate limits, even
+    # when the image doesn't exist, see https://www.docker.com/increase-rate-limits/,
+    # so use the API instead.
+
+    response = requests.get(
+        f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"
+    )
+    print(
+        f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"
+    )
+    result = response.json()
+    if result.get("images"):
+        EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
+        return True
+    if "not found" in result.get("message", ""):
+        EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
         return False
+    print(f"Failed to fetch image info from API: {result}")
+    # do not cache the result of unknown error messages
+    return False
 
 
 def commit_to_image_tag(commit_hash: str) -> str:
