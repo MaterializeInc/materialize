@@ -1079,6 +1079,25 @@ class Composition:
             # Containers exit with exit code 137 ( = 128 + 9 ) when killed via SIGKILL
             self.wait(*services, expect_exit_code=137 if signal == "SIGKILL" else None)
 
+    def is_running(self, container_name: str) -> bool:
+        qualified_container_name = f"{self.name}-{container_name}-1"
+        output_str = self.invoke(
+            "ps",
+            "--filter",
+            f"name=^/{qualified_container_name}$",
+            "--filter",
+            "status=running",
+            capture=True,
+            silent=True,
+        ).stdout
+        assert output_str is not None
+
+        # Output will be something like:
+        # CONTAINER ID   IMAGE          COMMAND                  CREATED         STATUS                   PORTS                                NAMES
+        # fd814abd6b36   mysql:8.0.35   "docker-entrypoint.s…"   5 minutes ago   Up 5 minutes (healthy)   33060/tcp, 0.0.0.0:52605->3306/tcp   mysql-cdc-resumption-mysql-replica-1-1
+
+        return qualified_container_name in output_str
+
     def wait(self, *services: str, expect_exit_code: int | None = None) -> None:
         """Wait for a container to exit
 
