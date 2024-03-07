@@ -364,12 +364,6 @@ pub struct ComputeParameters {
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
     pub max_result_size: Option<u64>,
-    /// The maximum number of in-flight bytes emitted by persist_sources feeding
-    /// dataflows.
-    ///
-    /// NB: This value is optional, so the outer option indicates if this update
-    /// includes an override and the inner option is part of the config value.
-    pub dataflow_max_inflight_bytes: Option<Option<usize>>,
     /// Tracing configuration.
     pub tracing: TracingParameters,
     /// gRPC client configuration.
@@ -384,7 +378,6 @@ impl ComputeParameters {
     pub fn update(&mut self, other: ComputeParameters) {
         let ComputeParameters {
             max_result_size,
-            dataflow_max_inflight_bytes,
             tracing,
             grpc_client,
             dyncfg_updates,
@@ -392,9 +385,6 @@ impl ComputeParameters {
 
         if max_result_size.is_some() {
             self.max_result_size = max_result_size;
-        }
-        if dataflow_max_inflight_bytes.is_some() {
-            self.dataflow_max_inflight_bytes = dataflow_max_inflight_bytes;
         }
 
         self.tracing.update(tracing);
@@ -415,11 +405,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn into_proto(&self) -> ProtoComputeParameters {
         ProtoComputeParameters {
             max_result_size: self.max_result_size.into_proto(),
-            dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.map(|x| {
-                ProtoComputeMaxInflightBytesConfig {
-                    dataflow_max_inflight_bytes: x.into_proto(),
-                }
-            }),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
             dyncfg_updates: Some(self.dyncfg_updates.clone()),
@@ -429,10 +414,6 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             max_result_size: proto.max_result_size.into_rust()?,
-            dataflow_max_inflight_bytes: proto
-                .dataflow_max_inflight_bytes
-                .map(|x| x.dataflow_max_inflight_bytes.into_rust())
-                .transpose()?,
             tracing: proto
                 .tracing
                 .into_rust_if_some("ProtoComputeParameters::tracing")?,

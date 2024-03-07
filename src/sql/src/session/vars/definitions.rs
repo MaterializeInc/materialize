@@ -1124,15 +1124,6 @@ pub static KAFKA_DEFAULT_METADATA_FETCH_INTERVAL: VarDefinition = VarDefinition:
     true,
 );
 
-/// The maximum number of in-flight bytes emitted by persist_sources feeding compute dataflows.
-pub static COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES: VarDefinition = VarDefinition::new(
-    "compute_dataflow_max_inflight_bytes",
-    value!(Option<usize>; None),
-    "The maximum number of in-flight bytes emitted by persist_sources feeding \
-        compute dataflows (Materialize).",
-    true,
-);
-
 /// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
 /// dataflows_.
 /// Currently defaults to 256MiB = 268435456 bytes

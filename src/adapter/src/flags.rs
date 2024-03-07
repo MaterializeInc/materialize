@@ -27,7 +27,6 @@ use mz_timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
     ComputeParameters {
         max_result_size: Some(config.max_result_size()),
-        dataflow_max_inflight_bytes: Some(config.compute_dataflow_max_inflight_bytes()),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
         dyncfg_updates: config.dyncfg_updates(),

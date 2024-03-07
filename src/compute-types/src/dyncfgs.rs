@@ -59,6 +59,14 @@ pub const ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING: Config<bool> = Config::new(
     "Enable logging of the hydration status of compute operators.",
 );
 
+/// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
+pub const DATAFLOW_MAX_INFLIGHT_BYTES: Config<Option<usize>> = Config::new(
+    "compute_dataflow_max_inflight_bytes",
+    None,
+    "The maximum number of in-flight bytes emitted by persist_sources feeding \
+     compute dataflows in non-cc clusters.",
+);
+
 /// The "physical backpressure" of `compute_dataflow_max_inflight_bytes_cc` has
 /// been replaced in cc replicas by persist lgalloc and we intend to remove it
 /// once everything has switched to cc. In the meantime, this is a CYA to turn
@@ -67,7 +75,7 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
     "compute_dataflow_max_inflight_bytes_cc",
     None,
     "The maximum number of in-flight bytes emitted by persist_sources feeding \
-    compute dataflows in cc clusters (Materialize).",
+     compute dataflows in cc clusters.",
 );
 
 /// The interval at which the background thread wakes.
@@ -93,6 +101,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_CHUNKED_STACK)
         .add(&ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING)
+        .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)

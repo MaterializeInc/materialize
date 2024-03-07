@@ -78,11 +78,6 @@ message ProtoPeek {
 message ProtoComputeParameters {
     optional uint64 max_result_size = 1;
     mz_dyncfg.ConfigUpdates dyncfg_updates = 2;
-    ProtoComputeMaxInflightBytesConfig dataflow_max_inflight_bytes = 3;
     mz_tracing.params.ProtoTracingParameters tracing = 5;
     mz_service.params.ProtoGrpcClientParameters grpc_client = 6;
-}
-
-message ProtoComputeMaxInflightBytesConfig {
-    optional uint64 dataflow_max_inflight_bytes = 1;
 }
