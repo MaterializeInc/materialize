@@ -386,7 +386,6 @@ steps:
         timeout_in_minutes: 120
         agents:
           queue: linux-aarch64
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -441,7 +440,6 @@ steps:
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
           queue: linux-x86_64-small
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
@@ -451,7 +449,6 @@ steps:
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc

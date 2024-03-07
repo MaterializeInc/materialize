@@ -345,7 +345,6 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc-resumption]
-        artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
