@@ -55,7 +55,7 @@ pub fn pack_mysql_row(
             }
         };
         if col_desc.column_type.is_none() {
-            // This column is ignored, so don't decode it it
+            // This column is ignored, so don't decode it.
             continue;
         }
         let datum = match val_to_datum(
