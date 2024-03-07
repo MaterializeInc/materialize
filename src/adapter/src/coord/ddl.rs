@@ -682,6 +682,7 @@ impl Coordinator {
             .expect("dropping replica must not fail");
     }
 
+    /// A convenience method for dropping sources.
     fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
             self.active_webhooks.remove(id);
@@ -701,7 +702,7 @@ impl Coordinator {
         self.controller
             .storage
             .drop_tables(tables, ts)
-            .unwrap_or_terminate("cannot fail to drop sources");
+            .unwrap_or_terminate("cannot fail to drop tables");
     }
 
     fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {
@@ -835,6 +836,7 @@ impl Coordinator {
         }
     }
 
+    /// A convenience method for dropping materialized views.
     fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();

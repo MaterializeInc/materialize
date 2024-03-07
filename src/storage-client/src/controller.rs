@@ -472,7 +472,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-    );
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Append `updates` into the local input named `id` and advance its upper to `upper`.
     ///

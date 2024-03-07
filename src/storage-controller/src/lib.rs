@@ -1373,22 +1373,73 @@ where
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
-        self.drop_sources_unvalidated(storage_metadata, identifiers);
-        Ok(())
+        self.drop_sources_unvalidated(storage_metadata, identifiers)
     }
 
     fn drop_sources_unvalidated(
         &mut self,
         storage_metadata: &StorageMetadata,
-        identifiers: Vec<GlobalId>,
-    ) {
-        for id in &identifiers {
-            let metadata = storage_metadata.get_collection_shard::<T>(*id);
+        ids: Vec<GlobalId>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let mut ingestions_to_execute = BTreeSet::new();
+        let mut to_drop = BTreeSet::new();
+        for id in ids {
+            let metadata = storage_metadata.get_collection_shard::<T>(id);
             mz_ore::soft_assert_or_log!(
                 matches!(metadata, Err(StorageError::IdentifierMissing(_))),
                 "dropping {id}, but drop was not synchronized with storage \
                 controller via `synchronize_collections`"
             );
+
+            let dropped_data_source = match self.collection(id) {
+                Ok(col) => col.description.data_source.clone(),
+                Err(_) => continue,
+            };
+
+            to_drop.insert(id);
+
+            // If we are dropping source exports, we need to modify the
+            // ingestion that it runs on.
+            if let DataSource::IngestionExport { ingestion_id, .. } = dropped_data_source {
+                // If we remove this export, we need to stop producing data to
+                // it, so plan to re-execute the ingestion with the amended
+                // description.
+                ingestions_to_execute.insert(ingestion_id);
+
+                // Adjust the source to remove this export.
+                let ingestion_collection = match self.collections.get_mut(&ingestion_id) {
+                    Some(ingestion_collection) => ingestion_collection,
+                    // Primary ingestion already dropped.
+                    None => {
+                        tracing::error!(
+                            "primary source {ingestion_id} seemingly dropped before subsource {id}",
+                        );
+                        continue;
+                    }
+                };
+
+                match &mut ingestion_collection.description {
+                    CollectionDescription {
+                        data_source: DataSource::Ingestion(ingestion_desc),
+                        ..
+                    } => {
+                        let removed = ingestion_desc.source_exports.remove(&id);
+                        mz_ore::soft_assert_or_log!(
+                            removed.is_some(),
+                            "dropped subsource {id} already removed from source exports"
+                        );
+                    }
+                    _ => unreachable!(
+                        "SourceExport must only refer to primary sources that already exist"
+                    ),
+                };
+            }
+        }
+
+        // Do not bother re-executing ingestions we know we plan to drop.
+        ingestions_to_execute.retain(|id| !to_drop.contains(id));
+        for ingestion_id in ingestions_to_execute {
+            self.run_ingestion(ingestion_id)?;
         }
 
         self.synchronize_finalized_shards(storage_metadata);
@@ -1396,12 +1447,13 @@ where
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
-        let policies = identifiers
-            .into_iter()
-            .filter(|id| self.collection(*id).is_ok())
-            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
-            .collect();
-        self.set_read_policy(policies);
+        self.set_read_policy(
+            to_drop
+                .into_iter()
+                .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())))
+                .collect(),
+        );
+        Ok(())
     }
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
@@ -2027,6 +2079,17 @@ where
                             monotonic_worker.drop_handle(id).await;
                         };
                         Some(drop_fut.boxed())
+                    }
+                    DataSource::IngestionExport { .. } if read_frontier.is_empty() => {
+                        // Dropping an ingestion is a form of dropping a source.
+                        // This won't be handled above because ingestion exports
+                        // do not yet track the cluster on pending compaction
+                        // commands.
+                        //
+                        // TODO: place the cluster ID in the pending compaction
+                        // commands of IngestionExports.
+                        pending_source_drops.push(id);
+                        None
                     }
                     // These sources are manged by `clusterd`.
                     DataSource::Webhook

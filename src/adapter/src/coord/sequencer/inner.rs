@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::{btreemap, btreeset};
+use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -70,9 +70,9 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionOption, ConnectionOptionName, CreateSourceConnection, CreateSourceSubsource,
-    DeferredItemName, PgConfigOption, PgConfigOptionName, ReferencedSubsources, Statement,
-    TransactionMode, WithOptionValue,
+    ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName,
+    PgConfigOption, PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode,
+    WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -272,7 +272,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         params: &mz_sql::plan::Params,
-        subsource_stmt: mz_sql::ast::CreateSubsourceStatement<mz_sql::names::Aug>,
+        subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
     ) -> Result<CreateSourcePlans, AdapterError> {
         let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
         let source_id = self.catalog_mut().allocate_user_id().await?;
@@ -3375,7 +3375,7 @@ impl Coordinator {
                 // recoverable (users can stop trying to drop subsources if it
                 // panics).
                 referenced_subsources.retain(
-                    |CreateSourceSubsource {
+                    |mz_sql_parser::ast::CreateSourceSubsource {
                          subsource,
                          reference,
                      }| {
@@ -3386,7 +3386,7 @@ impl Coordinator {
                             DeferredItemName::Named(name) => match name {
                                 // Retain all sources which we still have a dependency on.
                                 ResolvedItemName::Item { id, .. } => {
-                                    let contains = resolved_ids.0.contains(id);
+                                    let contains = resolved_ids.0.contains(&id);
                                     if !contains {
                                         dropped_references.insert(reference.clone());
                                     }
@@ -3510,14 +3510,10 @@ impl Coordinator {
                     .check_alter_ingestion_source_desc(&descs)
                     .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
-                // Do not drop this source, even though it's a dependency.
-                let primary_source = btreeset! {ObjectId::Item(id)};
-
                 // CASCADE
-                let drops = self.catalog().object_dependents_except(
+                let drops = self.catalog().object_dependents(
                     &to_drop.into_iter().map(ObjectId::Item).collect(),
                     session.conn_id(),
-                    primary_source,
                 );
 
                 let DropOps {
