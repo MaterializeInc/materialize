@@ -35,7 +35,6 @@ pub(crate) struct GeneralSourceMetricDefs {
     // Source metrics
     pub(crate) capability: UIntGaugeVec,
     pub(crate) resume_upper: IntGaugeVec,
-    pub(crate) inmemory_remap_bindings: UIntGaugeVec,
 
     // OffsetCommitMetrics
     pub(crate) offset_commit_failures: IntCounterVec,
@@ -66,11 +65,6 @@ impl GeneralSourceMetricDefs {
                 // TODO(guswynn): should this also track the resumption frontier operator?
                 help: "The timestamp-domain resumption frontier chosen for a source's ingestion",
                 var_labels: ["source_id"],
-            )),
-            inmemory_remap_bindings: registry.register(metric!(
-                name: "mz_source_inmemory_remap_bindings",
-                help: "The number of in-memory remap bindings that reclocking a time needs to iterate over.",
-                var_labels: ["source_id", "worker_id"],
             )),
             offset_commit_failures: registry.register(metric!(
                 name: "mz_source_offset_commit_failures",
@@ -118,8 +112,6 @@ pub(crate) struct SourceMetrics {
     pub(crate) capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// The resume_upper for a source.
     pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    /// The number of in-memory remap bindings that reclocking a time needs to iterate over.
-    pub(crate) inmemory_remap_bindings: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 }
 
 impl SourceMetrics {
@@ -140,9 +132,6 @@ impl SourceMetrics {
             resume_upper: defs
                 .resume_upper
                 .get_delete_on_drop_gauge(vec![source_id.to_string()]),
-            inmemory_remap_bindings: defs
-                .inmemory_remap_bindings
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
         }
     }
 }
