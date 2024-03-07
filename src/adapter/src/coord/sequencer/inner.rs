@@ -27,13 +27,14 @@ use mz_ore::task::spawn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_or_log, task};
+use mz_proto::RustType;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
-use mz_sql::ast::CreateSubsourceStatement;
+use mz_sql::ast::{CreateSubsourceStatement, Ident, UnresolvedItemName, Value};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -43,6 +44,10 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use mz_storage_types::sources::postgres::{
+    PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
+};
+use prost::Message as _;
 use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
@@ -65,9 +70,9 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOptionName, ConnectionOption, ConnectionOptionName,
-    CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
-    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
+    ConnectionOption, ConnectionOptionName, CreateSourceConnection, CreateSourceSubsource,
+    DeferredItemName, PgConfigOption, PgConfigOptionName, ReferencedSubsources, Statement,
+    TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -3551,14 +3556,16 @@ impl Coordinator {
                     .expect("altering collection after txn must succeed");
             }
             plan::AlterSourceAction::AddSubsourceExports {
-                subsources: _,
+                subsources,
                 options,
             } => {
-                let subsources = vec![];
-
                 const ALTER_SOURCE: &str = "ALTER SOURCE...ADD SUBSOURCES";
 
-                let id = cur_entry.id();
+                let mz_sql::plan::AlterSourceAddSubsourceOptionExtracted {
+                    text_columns: mut new_text_columns,
+                    details: new_details,
+                    ..
+                } = options.try_into()?;
 
                 // Resolve items in statement
                 let (mut create_source_stmt, resolved_ids) =
@@ -3569,106 +3576,151 @@ impl Coordinator {
                 let purification_err =
                     || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
-                // TODO: refactor how you add subsources
-                match create_source_stmt
-                    .referenced_subsources
-                    .as_mut()
-                    .ok_or(purification_err())?
-                {
-                    ReferencedSubsources::SubsetTables(c) => {
-                        mz_ore::soft_assert_no_log!(
-                            {
-                                let current_references: BTreeSet<_> = c
-                                    .iter()
-                                    .map(|CreateSourceSubsource { reference, .. }| reference)
-                                    .collect();
-                                let subsources: BTreeSet<_> = subsources
-                                    .iter()
-                                    .map(|CreateSourceSubsource { reference, .. }| reference)
-                                    .collect();
-
-                                current_references
-                                    .intersection(&subsources)
-                                    .next()
-                                    .is_none()
-                            },
-                            "cannot add subsources that refer to existing PG tables; this should have errored in purification"
-                        );
-
-                        c.extend(subsources);
-                    }
-                    _ => return Err(purification_err()),
-                };
-
                 let curr_options = match &mut create_source_stmt.connection {
                     CreateSourceConnection::Postgres { options, .. } => options,
                     _ => return Err(purification_err()),
                 };
 
-                // Remove any old detail references
-                curr_options
-                    .retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
+                let mz_sql::plan::PgConfigOptionExtracted {
+                    details,
+                    mut text_columns,
+                    ..
+                } = curr_options.clone().try_into()?;
 
-                // curr_options.push(PgConfigOption {
-                //     name: PgConfigOptionName::Details,
-                //     value: details,
-                // });
+                // Drop both details and text columns; we will add them back in
+                // as appropriate below.
+                curr_options.retain(|o| {
+                    !matches!(
+                        o.name,
+                        PgConfigOptionName::Details | PgConfigOptionName::TextColumns
+                    )
+                });
 
-                // Merge text columns
-                let curr_text_columns = curr_options
-                    .iter_mut()
-                    .find(|option| option.name == PgConfigOptionName::TextColumns);
-
-                let new_text_columns = options
+                // Get all currently referred-to items
+                let catalog = self.catalog();
+                let curr_references: BTreeSet<_> = catalog
+                    .get_entry(&id)
+                    .used_by()
                     .into_iter()
-                    .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns);
+                    .filter_map(|subsource| {
+                        catalog
+                            .get_entry(subsource)
+                            .subsource_details()
+                            .map(|(_id, reference)| reference)
+                    })
+                    .collect();
 
-                match (curr_text_columns, new_text_columns) {
-                    (Some(curr), Some(new)) => {
-                        let curr = match curr.value {
-                            Some(WithOptionValue::Sequence(ref mut curr)) => curr,
-                            _ => unreachable!(),
-                        };
-                        let new = match new.value {
-                            Some(WithOptionValue::Sequence(new)) => new,
-                            _ => unreachable!(),
-                        };
+                let gen_details =
+                    |details: Option<String>| -> Result<PostgresSourcePublicationDetails, AdapterError> {
+                        let details = details.as_ref().ok_or_else(|| {
+                            AdapterError::internal(ALTER_SOURCE, "Postgres source missing details")
+                        })?;
 
-                        curr.extend(new);
-                        curr.sort();
+                        let details = hex::decode(details)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                        let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
 
-                        mz_ore::soft_assert_no_log!(
-                            curr.iter()
-                                .all(|v| matches!(v, WithOptionValue::UnresolvedItemName(_))),
-                            "all elements of text columns must be UnresolvedItemName, but got {:?}",
-                            curr
-                        );
+                        PostgresSourcePublicationDetails::from_proto(details)
+                            .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))
+                    };
 
-                        mz_ore::soft_assert_no_log!(
-                            curr.iter().duplicates().next().is_none(),
-                            "TEXT COLUMN references must be unique among both sets, but got {:?}",
-                            curr
-                        );
+                let mut curr_details = gen_details(details)?;
+                let mut new_details = gen_details(new_details)?;
+
+                // n.b. this does not check publication table names, so we must
+                // do that separately.
+                curr_details
+                    .alter_compatible(cur_entry.id(), &new_details)
+                    .map_err(StorageError::InvalidAlter)?;
+
+                // Trim any unreferred-to tables.
+                curr_details.tables.retain(|table| {
+                    let name = UnresolvedItemName(vec![
+                        // Unchecked is fine beause we have previously verified
+                        // that these are valid idents.
+                        Ident::new_unchecked(curr_details.database.clone()),
+                        Ident::new_unchecked(table.namespace.clone()),
+                        Ident::new_unchecked(table.name.clone()),
+                    ]);
+
+                    // Retain the definition of only those that are still referenced. This
+                    // lets us retain only the minimal set of publication details, which can
+                    // help avoid issues when generating PostgreSQL table casts.
+                    //
+                    // For example, if a table in the publication contains a column whose
+                    // cast requires using `TEXT COLUMNS` but the table is not an ingested
+                    // subsource. This poses an issue because `TEXT COLUMNS` requires that
+                    // the columns refer only to referenced subsources. The best solution to
+                    // this is to ensure that we simply don't try to generate the table cast
+                    // in the first place.
+                    curr_references.contains(&name)
+                });
+
+                mz_ore::soft_assert_eq_or_log!(
+                    curr_details.tables.len(),
+                    curr_references.len(),
+                    "PostgresSourcePublicationDetails must have entry for every reference"
+                );
+
+                let referenced_oids: BTreeSet<_> =
+                    curr_details.tables.iter().map(|t| t.oid).collect();
+
+                // Ensure that new tables are distinct from the current tables. We check the names only because
+                for table in new_details.tables.iter() {
+                    let name = UnresolvedItemName(vec![
+                        // Unchecked is fine beause we have previously verified
+                        // that these are valid idents.
+                        Ident::new_unchecked(curr_details.database.clone()),
+                        Ident::new_unchecked(table.namespace.clone()),
+                        Ident::new_unchecked(table.name.clone()),
+                    ]);
+
+                    // Check both the OIDs and the names of the references to protect against
+                    // hard-to-reason-about renames.
+                    if referenced_oids.contains(&table.oid) || curr_references.contains(&name) {
+                        Err(AdapterError::SubsourceAlreadyReferredTo { name })?;
                     }
-                    (None, Some(new)) => {
-                        mz_ore::soft_assert_no_log!(
-                            match &new.value {
-                                Some(WithOptionValue::Sequence(v)) => v
-                                    .iter()
-                                    .all(|v| matches!(v, WithOptionValue::UnresolvedItemName(_))),
-                                _ => false,
-                            },
-                            "TEXT COLUMNS must have a sequence of unresolved item names but got {:?}",
-                            new.value
-                        );
+                }
 
-                        curr_options.push(PgConfigOption {
-                            name: PgConfigOptionName::TextColumns,
-                            value: new.value,
-                        })
-                    }
-                    // No change
-                    _ => {}
+                // Merge the current table definitions into new tables. Note
+                // this changes the output indexes of the subsources.
+                new_details.tables.extend(curr_details.tables);
+
+                curr_options.push(PgConfigOption {
+                    name: PgConfigOptionName::Details,
+                    value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                        new_details.into_proto().encode_to_vec(),
+                    )))),
+                });
+
+                // Drop all text columns that are not currently referred to.
+                text_columns.retain(|column_qualified_reference| {
+                    mz_ore::soft_assert_eq_or_log!(
+                        column_qualified_reference.0.len(),
+                        4,
+                        "all TEXT COLUMNS values must be column-qualified references"
+                    );
+                    let mut table = column_qualified_reference.clone();
+                    table.0.truncate(3);
+                    curr_references.contains(&table)
+                });
+
+                // Merge the current text columns into the new text columns.
+                new_text_columns.extend(text_columns);
+
+                // If we have text columns, add them to the options.
+                if !new_text_columns.is_empty() {
+                    new_text_columns.sort();
+                    let new_text_columns = new_text_columns
+                        .into_iter()
+                        .map(WithOptionValue::UnresolvedItemName)
+                        .collect();
+
+                    curr_options.push(PgConfigOption {
+                        name: PgConfigOptionName::TextColumns,
+                        value: Some(WithOptionValue::Sequence(new_text_columns)),
+                    });
                 }
 
                 let mut catalog = self.catalog().for_system_session();
@@ -3731,7 +3783,7 @@ impl Coordinator {
                     ops: new_ops,
                     sources,
                     if_not_exists_ids,
-                } = self.create_source_inner(session, vec![]).await?;
+                } = self.create_source_inner(session, subsources).await?;
 
                 ops.extend(new_ops.into_iter());
 
@@ -3749,6 +3801,7 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to alter source desc");
 
                 let mut source_ids = Vec::with_capacity(sources.len());
+                let mut collections = Vec::with_capacity(sources.len());
                 for (source_id, source) in sources {
                     let source_status_collection_id =
                         Some(self.catalog().resolve_builtin_storage_collection(
@@ -3757,43 +3810,44 @@ impl Coordinator {
 
                     let (data_source, status_collection_id) = match source.data_source {
                         // Subsources use source statuses.
-                        DataSourceDesc::Source => (
+                        DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                        } => (
                             DataSource::IngestionExport {
-                                ingestion_id: id,
-                                external_reference: mz_sql::ast::UnresolvedItemName(vec![]),
+                                ingestion_id,
+                                external_reference,
                             },
                             source_status_collection_id,
                         ),
                         o => {
                             unreachable!(
-                                "ALTER SOURCE...ADD SUBSOURCE only creates subsources but got {:?}",
+                                "ALTER SOURCE...ADD SUBSOURCE only creates SourceExport but got {:?}",
                                 o
                             )
                         }
                     };
 
-                    let storage_metadata = self.catalog.state().storage_metadata();
-
-                    self.controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(
-                                source_id,
-                                CollectionDescription {
-                                    desc: source.desc.clone(),
-                                    data_source,
-                                    since: None,
-                                    status_collection_id,
-                                },
-                            )],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to create collections");
+                    collections.push((
+                        source_id,
+                        CollectionDescription {
+                            desc: source.desc.clone(),
+                            data_source,
+                            since: None,
+                            status_collection_id,
+                        },
+                    ));
 
                     source_ids.push(source_id);
                 }
+
+                let storage_metadata = self.catalog.state().storage_metadata();
+
+                self.controller
+                    .storage
+                    .create_collections(storage_metadata, None, collections)
+                    .await
+                    .unwrap_or_terminate("cannot fail to create collections");
 
                 self.initialize_storage_read_policies(
                     source_ids,

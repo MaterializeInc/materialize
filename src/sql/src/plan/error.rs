@@ -174,10 +174,6 @@ pub enum PlanError {
         name: UnresolvedItemName,
         target_names: Vec<UnresolvedItemName>,
     },
-    /// This is the ALTER SOURCE version of [`Self::SubsourceDuplicateReference`].
-    SubsourceAlreadyReferredTo {
-        name: UnresolvedItemName,
-    },
     InvalidProtobufSchema {
         cause: protobuf_native::OperationFailedError,
     },
@@ -442,9 +438,6 @@ impl PlanError {
             | Self::InvalidRefreshEveryAlignedTo => {
                 Some("Calling `mz_now()` is allowed.".into())
             },
-            Self::SubsourceNameConflict { .. } | Self::SubsourceAlreadyReferredTo { .. } => {
-                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
-            },
             Self::PublicationContainsUningestableTypes { column,.. } => {
                 Some(format!("Remove the table from the publication or use TEXT COLUMNS ({column}, ..) to ingest this column as text"))
             }
@@ -601,9 +594,6 @@ impl fmt::Display for PlanError {
             } => {
                 write!(f, "multiple subsources refer to table {}", name)
             },
-            Self::SubsourceAlreadyReferredTo { name } => {
-                write!(f, "another subsource already refers to {}", name)
-            }
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
             }

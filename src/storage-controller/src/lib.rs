@@ -1115,8 +1115,8 @@ where
             }
         }
 
-        for _id in ingestions_to_execute {
-            todo!("run ingestions");
+        for id in ingestions_to_execute {
+            self.run_ingestion(id)?;
         }
         Ok(())
     }
