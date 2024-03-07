@@ -14,24 +14,48 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=applic
   "upstream": "kafka:9092"
 }
 
+$ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
+{
+  "name": "csr",
+  "listen": "0.0.0.0:8081",
+  "upstream": "schema-registry:8081"
+}
+
 $ kafka-create-topic topic=input
 $ kafka-ingest topic=input format=bytes
 Rochester,NY,14618
 New York,NY,10004
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS kafka_conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn2 TO KAFKA (BROKER 'toxiproxy:9093', SECURITY PROTOCOL PLAINTEXT);
 
 # The source intentionally does not go through toxiproxy.
 > CREATE SOURCE input (city, state, zip)
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn1 (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
-    URL '${testdrive.schema-registry-url}'
+    URL 'http://toxiproxy:8081/'
   );
 
 > CREATE SINK output FROM input
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-byo-sink-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output-byo-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> CREATE SINK output2 FROM input
+  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output2-byo-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> CREATE SINK output3 FROM input
+  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output3-byo-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+> CREATE SINK output4 FROM input
+  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output4-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

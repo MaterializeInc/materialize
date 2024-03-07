@@ -46,6 +46,7 @@ def workflow_sink_networking(c: Composition) -> None:
     seed = random.getrandbits(16)
     for i, failure_mode in enumerate(
         [
+            "toxiproxy-close-csr-connection.td",
             "toxiproxy-close-connection.td",
             "toxiproxy-limit-connection.td",
             "toxiproxy-timeout.td",
@@ -61,6 +62,16 @@ def workflow_sink_networking(c: Composition) -> None:
             "sink-networking/setup.td",
             f"sink-networking/{failure_mode}",
             "sink-networking/during.td",
+        )
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            f"--seed={seed}{i}",
+            f"--temp-dir=/share/tmp/kafka-resumption-{seed}{i}",
             "sink-networking/sleep.td",
             "sink-networking/toxiproxy-restore-connection.td",
             "sink-networking/verify-success.td",
@@ -80,7 +91,7 @@ def workflow_source_resumption(c: Composition) -> None:
         c.run_testdrive_files("source-resumption/setup.td")
         c.run_testdrive_files("source-resumption/verify.td")
 
-        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # TODO: Reenable when #20819 is fixed
         # assert (
         #    find_source_resume_upper(
         #        c,
@@ -100,7 +111,7 @@ def workflow_source_resumption(c: Composition) -> None:
         # the first clusterd instance ingested 3 messages, so our
         # upper is at the 4th offset (0-indexed)
 
-        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+        # TODO: Reenable when #20819 is fixed
         # assert (
         #    find_source_resume_upper(
         #        c,

@@ -7,7 +7,123 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
+$ kafka-ingest topic=input format=bytes
+Rochester,NY,14618
+New York,NY,10004
+
 # We need this length to be noticably longer than any internal
 # timeouts if we want this test to be informative.
-> SELECT mz_unsafe.mz_sleep(60);
+> SELECT mz_unsafe.mz_sleep(7200);
 <null>

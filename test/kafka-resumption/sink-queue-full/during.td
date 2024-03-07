@@ -18,6 +18,6 @@ A,B,0
 11000001
 
 > CREATE SINK output FROM largeinput
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-byo-sink-${testdrive.seed}')
+  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

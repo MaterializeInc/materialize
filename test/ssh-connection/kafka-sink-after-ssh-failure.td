@@ -29,3 +29,5 @@ one
   WHERE s.name IN ('sink_fixed')
   GROUP BY s.name
 sink_fixed 1 1 true true
+
+> select mz_unsafe.mz_sleep(7200);

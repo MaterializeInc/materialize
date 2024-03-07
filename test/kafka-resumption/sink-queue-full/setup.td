@@ -18,11 +18,13 @@ $ kafka-create-topic topic=largeinput
 $ kafka-ingest topic=largeinput format=bytes
 A,B,0
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS kafka_conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CONNECTION IF NOT EXISTS kafka_conn2 TO KAFKA (BROKER 'toxiproxy:9093', SECURITY PROTOCOL PLAINTEXT);
 
 # The source intentionally does not go through toxiproxy.
 > CREATE SOURCE largeinput (city, state, zip)
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-largeinput-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn1 (TOPIC 'testdrive-largeinput-${testdrive.seed}')
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
 
