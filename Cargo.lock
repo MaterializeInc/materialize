@@ -5079,6 +5079,8 @@ dependencies = [
  "protobuf-src",
  "serde",
  "serde_json",
+ "static_assertions",
+ "uuid",
  "workspace-hack",
 ]
 

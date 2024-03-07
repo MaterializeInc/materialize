@@ -13,8 +13,9 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use arrow2::array::{
-    Array, BinaryArray, BooleanArray, MutableArray, MutableBinaryArray, MutableBooleanArray,
-    MutablePrimitiveArray, MutableUtf8Array, PrimitiveArray, Utf8Array,
+    Array, BinaryArray, BooleanArray, FixedSizeBinaryArray, MutableArray, MutableBinaryArray,
+    MutableBooleanArray, MutableFixedSizeBinaryArray, MutablePrimitiveArray, MutableUtf8Array,
+    PrimitiveArray, Utf8Array,
 };
 use arrow2::bitmap::{Bitmap, MutableBitmap};
 use arrow2::buffer::Buffer;
@@ -447,6 +448,112 @@ impl ColumnCfg<Option<String>> for () {
     }
 }
 
+/// Newtype wrapper around [`FixedSizeBinaryArray`] where the [`Self::SIZE`] equals
+/// `std::mem::size_of::<uuid::Uuid>()`.
+#[derive(Debug, Clone)]
+pub struct UuidFixedSizeBinaryArray(pub FixedSizeBinaryArray);
+
+impl UuidFixedSizeBinaryArray {
+    const SIZE: usize = 16;
+}
+static_assertions::const_assert_eq!(
+    std::mem::size_of::<uuid::Uuid>(),
+    UuidFixedSizeBinaryArray::SIZE
+);
+
+impl From<MutableUuidFixedSizeBinaryArray> for UuidFixedSizeBinaryArray {
+    fn from(value: MutableUuidFixedSizeBinaryArray) -> Self {
+        UuidFixedSizeBinaryArray(value.0.into())
+    }
+}
+
+impl arrow2::array::Array for UuidFixedSizeBinaryArray {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn data_type(&self) -> &ArrowLogicalType {
+        self.0.data_type()
+    }
+
+    fn validity(&self) -> Option<&Bitmap> {
+        self.0.validity()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> Box<dyn Array> {
+        arrow2::array::Array::slice(&self.0, offset, length)
+    }
+
+    unsafe fn slice_unchecked(&self, offset: usize, length: usize) -> Box<dyn Array> {
+        arrow2::array::Array::slice_unchecked(&self.0, offset, length)
+    }
+
+    fn with_validity(&self, validity: Option<Bitmap>) -> Box<dyn Array> {
+        arrow2::array::Array::with_validity(&self.0, validity)
+    }
+
+    fn to_boxed(&self) -> Box<dyn Array> {
+        Box::new(self.clone())
+    }
+}
+
+/// Newtype wrapper around [`MutableFixedSizeBinaryArray`] where the [`Self::SIZE`] equals
+/// `std::mem::size_of::<uuid::Uuid>()`.
+#[derive(Debug, Clone)]
+pub struct MutableUuidFixedSizeBinaryArray(pub MutableFixedSizeBinaryArray);
+
+impl MutableUuidFixedSizeBinaryArray {
+    const SIZE: usize = UuidFixedSizeBinaryArray::SIZE;
+}
+
+impl Default for MutableUuidFixedSizeBinaryArray {
+    fn default() -> Self {
+        MutableUuidFixedSizeBinaryArray(MutableFixedSizeBinaryArray::new(Self::SIZE))
+    }
+}
+
+impl Data for uuid::Uuid {
+    type Cfg = ();
+    type Ref<'a> = uuid::Uuid;
+    type Col = UuidFixedSizeBinaryArray;
+    type Mut = MutableUuidFixedSizeBinaryArray;
+    type Stats = PrimitiveStats<uuid::Uuid>;
+}
+
+impl ColumnCfg<uuid::Uuid> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: false,
+            format: ColumnFormat::Bytes,
+        }
+    }
+}
+
+impl Data for Option<uuid::Uuid> {
+    type Cfg = ();
+    type Ref<'a> = Option<uuid::Uuid>;
+    type Col = UuidFixedSizeBinaryArray;
+    type Mut = MutableUuidFixedSizeBinaryArray;
+    type Stats = OptionStats<PrimitiveStats<uuid::Uuid>>;
+}
+
+impl ColumnCfg<Option<uuid::Uuid>> for () {
+    fn as_type(&self) -> DataType {
+        DataType {
+            optional: false,
+            format: ColumnFormat::Bytes,
+        }
+    }
+}
+
 impl Data for DynStruct {
     type Cfg = DynStructCfg;
     type Ref<'a> = DynStructRef<'a>;
@@ -746,6 +853,64 @@ impl ColumnPush<String> for MutableUtf8Array<i32> {
 impl ColumnPush<Option<String>> for MutableUtf8Array<i32> {
     fn push<'a>(&mut self, val: Option<&'a str>) {
         <MutableUtf8Array<i32>>::push(self, val)
+    }
+}
+
+impl ColumnRef<()> for UuidFixedSizeBinaryArray {
+    fn cfg(&self) -> &() {
+        &()
+    }
+
+    fn len(&self) -> usize {
+        arrow2::array::Array::len(self)
+    }
+
+    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+        (Encoding::Plain, Box::new(self.clone()))
+    }
+
+    fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
+        let array = array
+            .as_any()
+            .downcast_ref::<UuidFixedSizeBinaryArray>()
+            .ok_or_else(|| {
+                format!(
+                    "expected UuidFixedSizeBinaryArray but was {:?}",
+                    array.data_type()
+                )
+            })?;
+        Ok(array.clone())
+    }
+}
+
+impl ColumnGet<uuid::Uuid> for UuidFixedSizeBinaryArray {
+    fn get<'a>(&'a self, idx: usize) -> uuid::Uuid {
+        assert!(self.0.validity().is_none());
+        uuid::Uuid::from_slice(self.0.value(idx)).expect("got back invalid UUID")
+    }
+}
+
+impl ColumnGet<Option<uuid::Uuid>> for UuidFixedSizeBinaryArray {
+    fn get<'a>(&'a self, idx: usize) -> Option<uuid::Uuid> {
+        assert!(self.0.validity().is_none());
+        if self.validity().map_or(true, |x| x.get_bit(idx)) {
+            Some(uuid::Uuid::from_slice(self.0.value(idx)).expect("got back invalid UUID"))
+        } else {
+            None
+        }
+    }
+}
+
+impl ColumnPush<uuid::Uuid> for MutableUuidFixedSizeBinaryArray {
+    fn push<'a>(&mut self, val: uuid::Uuid) {
+        assert!(self.0.validity().is_none());
+        <MutableFixedSizeBinaryArray>::push(&mut self.0, Some(val))
+    }
+}
+
+impl ColumnPush<Option<uuid::Uuid>> for MutableUuidFixedSizeBinaryArray {
+    fn push<'a>(&mut self, val: Option<uuid::Uuid>) {
+        <MutableFixedSizeBinaryArray>::push(&mut self.0, val)
     }
 }
 
