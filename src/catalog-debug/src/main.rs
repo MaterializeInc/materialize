@@ -260,8 +260,8 @@ async fn edit(
         value: serde_json::Value,
     ) -> Result<serde_json::Value, anyhow::Error>
     where
-        T::Key: PartialEq + Eq + Debug + Clone + for<'a> Deserialize<'a>,
-        T::Value: Debug + Clone + Serialize + for<'a> Deserialize<'a>,
+        for<'a> T::Key: PartialEq + Eq + Debug + Clone + Deserialize<'a>,
+        for<'a> T::Value: Debug + Clone + Serialize + Deserialize<'a>,
     {
         let key: T::Key = serde_json::from_value(key)?;
         let value: T::Value = serde_json::from_value(value)?;
@@ -286,7 +286,7 @@ async fn delete(
         key: serde_json::Value,
     ) -> Result<(), anyhow::Error>
     where
-        T::Key: PartialEq + Eq + Debug + Clone + for<'a> Deserialize<'a>,
+        for<'a> T::Key: PartialEq + Eq + Debug + Clone + Deserialize<'a>,
         T::Value: Debug,
     {
         let key: T::Key = serde_json::from_value(key)?;

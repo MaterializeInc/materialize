@@ -288,6 +288,8 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                     ]
                 ),
             ),
+            # Set the adapter stash URL for older environments that need it (versions before
+            # v0.92.0).
             V1EnvVar(
                 name="MZ_ADAPTER_STASH_URL",
                 value=f"postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
