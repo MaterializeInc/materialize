@@ -288,6 +288,10 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                     ]
                 ),
             ),
+            V1EnvVar(
+                name="MZ_ADAPTER_STASH_URL",
+                value=f"postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
+            ),
         ]
 
         if self.coverage_mode:
