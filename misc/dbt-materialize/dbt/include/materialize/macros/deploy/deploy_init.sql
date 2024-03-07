@@ -43,6 +43,8 @@
     {% endif %}
 {% endfor %}
 
+{{ deploy_validate_permissions(clusters, schemas) }}
+
 {% for schema in schemas %}
     {% set deploy_schema = schema ~ "_dbt_deploy" %}
     {% if schema_exists(deploy_schema) %}
