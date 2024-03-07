@@ -103,6 +103,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct LocalMirPlan<T = Unresolved> {
     expr: MirRelationExpr,
+    df_meta: DataflowMetainfo,
     context: T,
 }
 
@@ -155,6 +156,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
             expr,
+            df_meta,
             context: Unresolved,
         })
     }
@@ -171,6 +173,7 @@ impl LocalMirPlan<Unresolved> {
     ) -> LocalMirPlan<Resolved> {
         LocalMirPlan {
             expr: self.expr,
+            df_meta: self.df_meta,
             context: Resolved {
                 timestamp_ctx,
                 session,
@@ -186,6 +189,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
     fn optimize(&mut self, plan: LocalMirPlan<Resolved<'s>>) -> Result<Self::To, OptimizerError> {
         let LocalMirPlan {
             expr,
+            mut df_meta,
             context:
                 Resolved {
                     timestamp_ctx,
@@ -283,7 +287,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         }
 
         // Construct TransformCtx for global optimization.
-        let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
             &*stats,

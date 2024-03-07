@@ -178,8 +178,9 @@ impl Optimize<SubscribeFrom> for Optimizer {
             DataflowBuilder::new(catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
+        let mut df_meta = DataflowMetainfo::default();
 
-        let mut df_desc = match plan {
+        match plan {
             SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
@@ -208,8 +209,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     refresh_schedule: None,
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
-
-                df_desc
             }
             SubscribeFrom::Query { expr, desc } => {
                 // TODO: Change the `expr` type to be `HirRelationExpr` and run
@@ -219,7 +218,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
-                let mut df_meta = DataflowMetainfo::default();
                 let mut transform_ctx =
                     TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
@@ -240,8 +238,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     refresh_schedule: None,
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
-
-                df_desc
             }
         };
 
@@ -253,7 +249,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
         )?;
 
         // Construct TransformCtx for global optimization.
-        let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats

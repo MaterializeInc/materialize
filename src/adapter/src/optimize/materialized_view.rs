@@ -105,6 +105,7 @@ impl Optimizer {
 #[derive(Clone, Debug)]
 pub struct LocalMirPlan {
     expr: MirRelationExpr,
+    df_meta: DataflowMetainfo,
 }
 
 /// The (sealed intermediate) result after:
@@ -165,7 +166,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         // Return the (sealed) plan at the end of this optimization step.
-        Ok(LocalMirPlan { expr })
+        Ok(LocalMirPlan { expr, df_meta })
     }
 }
 
@@ -182,7 +183,8 @@ impl Optimize<OptimizedMirRelationExpr> for Optimizer {
 
     fn optimize(&mut self, expr: OptimizedMirRelationExpr) -> Result<Self::To, OptimizerError> {
         let expr = expr.into_inner();
-        self.optimize(LocalMirPlan { expr })
+        let df_meta = DataflowMetainfo::default();
+        self.optimize(LocalMirPlan { expr, df_meta })
     }
 }
 
@@ -191,6 +193,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
 
     fn optimize(&mut self, plan: LocalMirPlan) -> Result<Self::To, OptimizerError> {
         let expr = OptimizedMirRelationExpr(plan.expr);
+        let mut df_meta = plan.df_meta;
 
         let mut rel_typ = expr.typ();
         for &i in self.non_null_assertions.iter() {
@@ -230,7 +233,6 @@ impl Optimize<LocalMirPlan> for Optimizer {
         )?;
 
         // Construct TransformCtx for global optimization.
-        let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::global(
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
