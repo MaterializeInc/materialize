@@ -624,13 +624,19 @@ impl Arbitrary for CopyCsvFormatParams<'static> {
             any::<bool>(),
             any::<String>(),
         )
-            .prop_map(|(delimiter, quote, escape, header, null)| Self {
-                delimiter,
-                quote,
-                escape,
-                header,
-                null: Cow::Owned(null),
-            })
+            .prop_filter_map(
+                "valid csv params",
+                |(delimiter, quote, escape, header, null)| {
+                    Self::try_new(
+                        Some(delimiter),
+                        Some(quote),
+                        Some(escape),
+                        Some(header),
+                        Some(null),
+                    )
+                    .ok()
+                },
+            )
             .boxed()
     }
 }
@@ -757,7 +763,8 @@ pub fn decode_copy_format_csv(
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::ColumnType;
+    use mz_repr::{ColumnType, ScalarType};
+    use proptest::proptest;
 
     use super::*;
 
@@ -1030,5 +1037,58 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        fn proptest_csv_roundtrips(copy_csv_params: CopyCsvFormatParams)  {
+            let mut out = Vec::new();
+            for scalar_type in ScalarType::enumerate() {
+                for datum in scalar_type.interesting_datums() {
+                    let updated_datum = match datum {
+                        // rounding timestamp precision as only max precision of 6 will be returned
+                        // by the decoder.
+                        Datum::Timestamp(ts) => {
+                            let updated = ts.round_to_precision(None)?;
+                            Datum::Timestamp(updated)
+                        }
+                        Datum::TimestampTz(ts) => {
+                            let updated = ts.round_to_precision(None)?;
+                            Datum::TimestampTz(updated)
+                        }
+                        _ => datum
+                    };
+                    let mut row = Row::default();
+                    let mut packer = row.packer();
+                    packer.push(updated_datum);
+
+                    let typ: RelationType = RelationType::new(vec![
+                        ColumnType {
+                            scalar_type: scalar_type.clone(),
+                            nullable: true,
+                        }
+                    ]);
+                    out.clear();
+                    let params = CopyFormatParams::Csv(copy_csv_params.clone());
+                    encode_copy_format(params.clone(), &row, &typ, &mut out)?;
+                    let column_types = typ
+                        .column_types
+                        .iter()
+                        .map(|x| &x.scalar_type)
+                        .map(mz_pgrepr::Type::from)
+                        .collect::<Vec<mz_pgrepr::Type>>();
+                    match decode_copy_format(&out, &column_types, params) {
+                        Ok(rows) if rows.len() == 1 => {
+                            use mz_ore::collections::CollectionExt;
+                            let output = rows.into_element();
+                            proptest::prop_assert_eq!(row, output, "csv string: {:?}, scalar_type: {:?}", std::str::from_utf8(&out), scalar_type);
+                        }
+                        _ => {
+                            // ignoring decoding failures
+                        }
+                    }
+                }
+            }
+        }
     }
 }
