@@ -159,6 +159,8 @@ pub enum MySqlColumnMeta {
     Enum(MySqlColumnMetaEnum),
     /// The described column is a json value.
     Json,
+    /// The described column is a year value.
+    Year,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
@@ -179,6 +181,7 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
             meta: self.meta.as_ref().and_then(|meta| match meta {
                 MySqlColumnMeta::Enum(e) => Some(Meta::Enum(e.into_proto())),
                 MySqlColumnMeta::Json => Some(Meta::Json(ProtoMySqlColumnMetaJson {})),
+                MySqlColumnMeta::Year => Some(Meta::Year(ProtoMySqlColumnMetaYear {})),
             }),
         }
     }
@@ -197,6 +200,7 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                             .and_then(|e| Ok(MySqlColumnMeta::Enum(e))),
                     ),
                     Meta::Json(_) => Some(Ok(MySqlColumnMeta::Json)),
+                    Meta::Year(_) => Some(Ok(MySqlColumnMeta::Year)),
                 })
                 .transpose()?,
         })

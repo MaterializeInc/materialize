@@ -161,6 +161,11 @@ fn val_to_datum<'a>(
                             ))?
                         }
                     }
+                    Some(MySqlColumnMeta::Year) => {
+                        let val = from_value_opt::<u16>(value)?;
+                        temp_strs.push(val.to_string());
+                        Datum::from(temp_strs.last().unwrap().as_str())
+                    }
                     None => {
                         temp_strs.push(from_value_opt::<String>(value)?);
                         Datum::from(temp_strs.last().unwrap().as_str())

@@ -359,7 +359,7 @@ fn parse_data_type(
                     intended_type: None,
                 })?,
         }),
-        "text" | "mediumtext" | "longtext" => Ok(ScalarType::String),
+        "text" | "tinytext" | "mediumtext" | "longtext" => Ok(ScalarType::String),
         "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => {
             Ok(ScalarType::Bytes)
         }
@@ -382,6 +382,7 @@ fn parse_as_text_column(
     table_name: &str,
 ) -> Result<(ScalarType, Option<MySqlColumnMeta>), UnsupportedDataType> {
     match info.data_type.as_str() {
+        "year" => Ok((ScalarType::String, Some(MySqlColumnMeta::Year))),
         "json" => Ok((ScalarType::String, Some(MySqlColumnMeta::Json))),
         "enum" => Ok((
             ScalarType::String,
