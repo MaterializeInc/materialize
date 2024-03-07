@@ -327,7 +327,7 @@ impl LiteralConstraints {
                                 .into_iter()
                                 .collect_vec();
 
-                            transform_ctx.dataflow_metainfo.push_optimizer_notice_dedup(
+                            transform_ctx.df_meta.push_optimizer_notice_dedup(
                                 IndexTooWideForLiteralConstraints {
                                     index_id,
                                     index_key,

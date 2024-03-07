@@ -28,6 +28,7 @@ use std::{fmt, iter};
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 use tracing::error;
 
@@ -85,45 +86,47 @@ macro_rules! any {
 /// manipulated by the transforms.
 #[derive(Debug)]
 pub struct TransformCtx<'a> {
+    /// The global ID for this query (if it exists).
+    pub global_id: Option<&'a GlobalId>,
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
     /// Statistical estimates.
     pub stats: &'a dyn StatisticsOracle,
-    /// The global ID for this query (if it exists).
-    pub global_id: Option<&'a GlobalId>,
-    /// Whether or not to eagerly apply delta joins.
-    pub enable_eager_delta_joins: bool,
+    /// Features passed to the enclosing `Optimizer`.
+    pub features: &'a OptimizerFeatures,
     /// Transforms can use this field to communicate information outside the result plans.
-    pub dataflow_metainfo: &'a mut DataflowMetainfo,
+    pub df_meta: &'a mut DataflowMetainfo,
 }
 
 impl<'a> TransformCtx<'a> {
-    /// Generates a `TransformArgs` instance for the given `IndexOracle` with no `GlobalId`
-    pub fn dummy(dataflow_metainfo: &'a mut DataflowMetainfo) -> Self {
+    /// Generates a dummy [`TransformCtx`] instance for crate tests.
+    pub fn dummy(features: &'a OptimizerFeatures, df_meta: &'a mut DataflowMetainfo) -> Self {
         Self {
             indexes: &EmptyIndexOracle,
             stats: &EmptyStatisticsOracle,
             global_id: None,
-            enable_eager_delta_joins: false,
-            dataflow_metainfo,
+            features,
+            df_meta,
         }
     }
 
-    /// Generates a `TransformArgs` instance for the given `IndexOracle` and `StatisticsOracle` with
-    /// a `GlobalId`
-    pub fn with_config_and_metainfo(
+    /// Generates a [`TransformCtx`] instance for the global MIR optimization
+    /// stage.
+    ///
+    /// Used to call [`dataflow::optimize_dataflow`].
+    pub fn global(
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
         global_id: &'a GlobalId,
-        eager_delta_joins: bool,
-        dataflow_metainfo: &'a mut DataflowMetainfo,
+        features: &'a OptimizerFeatures,
+        df_meta: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
             indexes,
             stats,
             global_id: Some(global_id),
-            enable_eager_delta_joins: eager_delta_joins,
-            dataflow_metainfo,
+            features,
+            df_meta,
         }
     }
 }
@@ -646,8 +649,9 @@ impl Optimizer {
         &self,
         mut relation: MirRelationExpr,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
-        let mut dataflow_metainfo = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::dummy(&mut dataflow_metainfo);
+        let mut df_meta = DataflowMetainfo::default();
+        let features = OptimizerFeatures::default();
+        let mut transform_ctx = TransformCtx::dummy(&features, &mut df_meta);
         let transform_result = self.transform(&mut relation, &mut transform_ctx);
 
         // Make sure we are not swallowing any notice.
@@ -655,7 +659,7 @@ impl Optimizer {
         // currently notices can only come from the physical MIR optimizer (specifically,
         // `LiteralConstraints`), and callers of this method are running the logical MIR optimizer.
         soft_assert_or_log!(
-            dataflow_metainfo.optimizer_notices.is_empty(),
+            df_meta.optimizer_notices.is_empty(),
             "logical MIR optimization unexpectedly produced notices"
         );
 

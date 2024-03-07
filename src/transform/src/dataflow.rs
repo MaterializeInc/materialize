@@ -221,7 +221,7 @@ fn optimize_dataflow_relations(
     stats: &dyn StatisticsOracle,
     features: &OptimizerFeatures,
     optimizer: &Optimizer,
-    dataflow_metainfo: &mut DataflowMetainfo,
+    df_meta: &mut DataflowMetainfo,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow
     // TODO(mcsherry): we should determine indexes from the optimized representation
@@ -231,13 +231,7 @@ fn optimize_dataflow_relations(
         // Re-run all optimizations on the composite views.
         optimizer.transform(
             object.plan.as_inner_mut(),
-            &mut TransformCtx::with_config_and_metainfo(
-                indexes,
-                stats,
-                &object.id,
-                features.enable_eager_delta_joins,
-                dataflow_metainfo,
-            ),
+            &mut TransformCtx::global(indexes, stats, &object.id, &features, df_meta),
         )?;
     }
 

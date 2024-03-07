@@ -29,6 +29,7 @@ mod tests {
     use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat};
+    use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{
         optimize_dataflow_demand_inner, optimize_dataflow_filters_inner, DataflowMetainfo,
@@ -164,12 +165,12 @@ mod tests {
         args: &HashMap<String, Vec<String>>,
         test_type: TestType,
     ) -> Result<String, Error> {
+        let mut df_meta = DataflowMetainfo::default();
+        let features = OptimizerFeatures::default();
+        let mut ctx = TransformCtx::dummy(&features, &mut df_meta);
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
-            get_transform(t)?.transform(
-                &mut rel,
-                &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
-            )?;
+            get_transform(t)?.transform(&mut rel, &mut ctx)?;
         }
 
         let format_type = get_format_type(args);
@@ -177,10 +178,7 @@ mod tests {
         let out = match test_type {
             TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                 for transform in transforms.iter() {
-                    transform.transform(
-                        &mut rel,
-                        &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
-                    )?;
+                    transform.transform(&mut rel, &mut ctx)?;
                 }
                 Ok(convert_rel_to_string(&rel, cat, &format_type))
             })?,
@@ -198,10 +196,7 @@ mod tests {
                 FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                     for transform in transforms {
                         let prev = rel.clone();
-                        transform.transform(
-                            &mut rel,
-                            &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
-                        )?;
+                        transform.transform(&mut rel, &mut ctx)?;
 
                         if rel != prev {
                             if no_change.len() > 0 {
