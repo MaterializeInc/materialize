@@ -101,6 +101,100 @@ def workflow_reset_gtid(c: Composition) -> None:
         # No end confirmation here, since we expect the source to be in a bad state
 
 
+def workflow_master_changes(c: Composition) -> None:
+    """
+    mysql-replica-1 and mysql-replica-2 replicate mysql. The source is attached to mysql-replica-2. mysql is
+    killed and mysql-replica-1 becomes the new master. mysql-replica-2 is configured to replicate from mysql-replica-1.
+    """
+
+    with c.override(
+        Materialized(sanity_restart=False),
+        MySql(
+            name="mysql-replica-1",
+            version=MySql.DEFAULT_VERSION,
+            additional_args=[
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+                "--skip-replica-start",
+                "--server-id=2",
+                # "--log-bin=mysql-bin",
+                # "--binlog-format=row",
+                # "--binlog-row-image=full",
+            ],
+        ),
+        MySql(
+            name="mysql-replica-2",
+            version=MySql.DEFAULT_VERSION,
+            additional_args=[
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+                "--skip-replica-start",
+                "--server-id=3",
+                # "--log-bin=mysql-bin",
+                # "--binlog-format=row",
+                # "--binlog-row-image=full",
+            ],
+        ),
+    ):
+        initialize(c, create_source=False)
+
+        host_data_master = "mysql"
+        host_for_mz_source = "mysql-replica-2"
+
+        c.up("mysql-replica-1", "mysql-replica-2")
+
+        # configure mysql-replica-1 to replicate mysql
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host="mysql-replica-1",
+        )
+        # configure mysql-replica-2 to replicate mysql
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host="mysql-replica-2",
+        )
+        # create source pointing to mysql-replica-2
+        run_testdrive_files(
+            c,
+            f"--var=mysql-source-host={host_for_mz_source}",
+            "create-source.td",
+        )
+
+        run_testdrive_files(
+            c,
+            "verify-source-running.td",
+        )
+
+        c.kill("mysql")
+        host_data_master = "mysql-replica-1"
+
+        # let mysql-replica-2 replicate from mysql-replica-1
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host=host_for_mz_source,
+        )
+
+        run_testdrive_files(
+            c,
+            "verify-source-running.td",
+        )
+
+        # delete rows in mysql-replica-1
+        run_testdrive_files(c, "delete-rows-t1.td", mysql_host=host_data_master)
+
+        # This may take a minute because it takes some time until mysql-replica-2 catches up.
+        run_testdrive_files(
+            c,
+            "verify-rows-deleted-t1.td",
+        )
+
+
 def initialize(c: Composition, create_source: bool = True) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized", "mysql", "toxiproxy")
