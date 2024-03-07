@@ -718,186 +718,7 @@ where
         self.append_shard_mappings(to_execute.iter().cloned(), 1)
             .await;
 
-        // TODO(guswynn): perform the io in this final section concurrently.
-        for id in to_execute {
-            // Remove the provisional shard mappings.
-            self.provisional_shard_mappings.remove(&id);
-
-            let description = &self.collection(id).unwrap().description;
-            match description.data_source.clone() {
-                DataSource::Ingestion(ingestion) => {
-                    let description = self.enrich_ingestion(id, ingestion)?;
-
-                    // Fetch the client for this ingestion's instance.
-                    let client =
-                        self.clients
-                            .get_mut(&description.instance_id)
-                            .ok_or_else(|| StorageError::IngestionInstanceMissing {
-                                storage_instance_id: description.instance_id,
-                                ingestion_id: id,
-                            })?;
-                    let augmented_ingestion = RunIngestionCommand { id, description };
-
-                    client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
-                }
-                DataSource::SourceExport { .. } => unreachable!(
-                    "source exports do not execute directly, but instead schedule their source to be re-executed"
-                ),
-                DataSource::Introspection(i) => {
-                    let prev = self
-                        .introspection_ids
-                        .lock()
-                        .expect("poisoned lock")
-                        .insert(i, id);
-                    assert!(
-                        prev.is_none(),
-                        "cannot have multiple IDs for introspection type"
-                    );
-
-                    self.collection_manager.register_collection(id);
-
-                    match i {
-                        IntrospectionType::ShardMapping => {
-                            self.initialize_shard_mapping().await;
-                        }
-                        IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
-                            // Set the collection to empty.
-                            self.reconcile_managed_collection(id, vec![]).await;
-                        }
-                        IntrospectionType::StorageSourceStatistics => {
-                            let prev = self.snapshot_statistics(id).await;
-
-                            let scraper_token = statistics::spawn_statistics_scraper::<
-                                statistics::SourceStatistics,
-                                SourceStatisticsUpdate,
-                                _,
-                            >(
-                                id.clone(),
-                                // These do a shallow copy.
-                                self.collection_manager.clone(),
-                                Arc::clone(&self.source_statistics),
-                                prev,
-                                self.config.parameters.statistics_interval,
-                                self.statistics_interval_sender.subscribe(),
-                            );
-                            let web_token = statistics::spawn_webhook_statistics_scraper(
-                                Arc::clone(&self.source_statistics),
-                                self.config.parameters.statistics_interval,
-                                self.statistics_interval_sender.subscribe(),
-                            );
-
-                            // Make sure these are dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.introspection_tokens
-                                .insert(id, Box::new((scraper_token, web_token)));
-                        }
-                        IntrospectionType::StorageSinkStatistics => {
-                            let prev = self.snapshot_statistics(id).await;
-
-                            let scraper_token =
-                                statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
-                                    id.clone(),
-                                    // These do a shallow copy.
-                                    self.collection_manager.clone(),
-                                    Arc::clone(&self.sink_statistics),
-                                    prev,
-                                    self.config.parameters.statistics_interval,
-                                    self.statistics_interval_sender.subscribe(),
-                                );
-
-                            // Make sure this is dropped when the controller is
-                            // dropped, so that the internal task will stop.
-                            self.introspection_tokens.insert(id, scraper_token);
-                        }
-                        IntrospectionType::SourceStatusHistory => {
-                            let last_status_per_id = self
-                                .partially_truncate_status_history(
-                                    IntrospectionType::SourceStatusHistory,
-                                )
-                                .await;
-
-                            let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from("status"))
-                                .expect("schema has not changed")
-                                .0;
-
-                            self.collection_status_manager.extend_previous_statuses(
-                                last_status_per_id.into_iter().map(|(id, row)| {
-                                    (
-                                        id,
-                                        Status::from_str(
-                                            row.iter()
-                                                .nth(status_col)
-                                                .expect("schema has not changed")
-                                                .unwrap_str(),
-                                        )
-                                        .expect("statuses must be uncorrupted"),
-                                    )
-                                }),
-                            )
-                        }
-                        IntrospectionType::SinkStatusHistory => {
-                            let last_status_per_id = self
-                                .partially_truncate_status_history(
-                                    IntrospectionType::SinkStatusHistory,
-                                )
-                                .await;
-
-                            let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from("status"))
-                                .expect("schema has not changed")
-                                .0;
-
-                            self.collection_status_manager.extend_previous_statuses(
-                                last_status_per_id.into_iter().map(|(id, row)| {
-                                    (
-                                        id,
-                                        Status::from_str(
-                                            row.iter()
-                                                .nth(status_col)
-                                                .expect("schema has not changed")
-                                                .unwrap_str(),
-                                        )
-                                        .expect("statuses must be uncorrupted"),
-                                    )
-                                }),
-                            )
-                        }
-                        IntrospectionType::PrivatelinkConnectionStatusHistory => {
-                            self.partially_truncate_status_history(
-                                IntrospectionType::PrivatelinkConnectionStatusHistory,
-                            )
-                            .await;
-                        }
-
-                        // Truncate compute-maintained collections.
-                        IntrospectionType::ComputeDependencies
-                        | IntrospectionType::ComputeReplicaHeartbeats
-                        | IntrospectionType::ComputeHydrationStatus
-                        | IntrospectionType::ComputeOperatorHydrationStatus => {
-                            self.reconcile_managed_collection(id, vec![]).await;
-                        }
-
-                        // Note [btv] - we don't truncate these, because that uses
-                        // a huge amount of memory on environmentd startup.
-                        IntrospectionType::PreparedStatementHistory
-                        | IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory
-                        | IntrospectionType::StatementLifecycleHistory
-                        | IntrospectionType::SqlText => {
-                            // do nothing.
-                        }
-                    }
-                }
-                DataSource::Webhook => {
-                    // Register the collection so our manager knows about it.
-                    self.collection_manager.register_collection(id);
-                }
-                DataSource::Progress | DataSource::Other(_) => {}
-            }
-        }
-
-        Ok(())
+        self.execute_collections(to_execute).await
     }
 
     fn check_alter_collection(
@@ -3320,5 +3141,193 @@ where
         self.collection_status_manager
             .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory)
             .await;
+    }
+
+    async fn execute_collections(
+        &mut self,
+        to_execute: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError> {
+        // TODO(guswynn): perform the io in this final section concurrently.
+        for id in to_execute {
+            // Remove the provisional shard mappings.
+            self.provisional_shard_mappings.remove(&id);
+
+            let description = &self.collection(id).unwrap().description;
+            match description.data_source.clone() {
+                DataSource::Ingestion(ingestion) => {
+
+
+                    let description = self.enrich_ingestion(id, ingestion)?;
+
+                    // Fetch the client for this ingestion's instance.
+                    let client =
+                        self.clients
+                            .get_mut(&description.instance_id)
+                            .ok_or_else(|| StorageError::IngestionInstanceMissing {
+                                storage_instance_id: description.instance_id,
+                                ingestion_id: id,
+                            })?;
+                    let augmented_ingestion = RunIngestionCommand { id, description };
+
+                    client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
+                }
+                DataSource::SourceExport { .. } => unreachable!(
+                    "source exports do not execute directly, but instead schedule their source to be re-executed"
+                ),
+                DataSource::Introspection(i) => {
+                    let prev = self
+                        .introspection_ids
+                        .lock()
+                        .expect("poisoned lock")
+                        .insert(i, id);
+                    assert!(
+                        prev.is_none(),
+                        "cannot have multiple IDs for introspection type"
+                    );
+
+                    self.collection_manager.register_collection(id);
+
+                    match i {
+                        IntrospectionType::ShardMapping => {
+                            self.initialize_shard_mapping().await;
+                        }
+                        IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
+                            // Set the collection to empty.
+                            self.reconcile_managed_collection(id, vec![]).await;
+                        }
+                        IntrospectionType::StorageSourceStatistics => {
+                            let prev = self.snapshot_statistics(id).await;
+
+                            let scraper_token = statistics::spawn_statistics_scraper::<
+                                statistics::SourceStatistics,
+                                SourceStatisticsUpdate,
+                                _,
+                            >(
+                                id.clone(),
+                                // These do a shallow copy.
+                                self.collection_manager.clone(),
+                                Arc::clone(&self.source_statistics),
+                                prev,
+                                self.config.parameters.statistics_interval,
+                                self.statistics_interval_sender.subscribe(),
+                            );
+                            let web_token = statistics::spawn_webhook_statistics_scraper(
+                                Arc::clone(&self.source_statistics),
+                                self.config.parameters.statistics_interval,
+                                self.statistics_interval_sender.subscribe(),
+                            );
+
+                            // Make sure these are dropped when the controller is
+                            // dropped, so that the internal task will stop.
+                            self.introspection_tokens
+                                .insert(id, Box::new((scraper_token, web_token)));
+                        }
+                        IntrospectionType::StorageSinkStatistics => {
+                            let prev = self.snapshot_statistics(id).await;
+
+                            let scraper_token =
+                                statistics::spawn_statistics_scraper::<_, SinkStatisticsUpdate, _>(
+                                    id.clone(),
+                                    // These do a shallow copy.
+                                    self.collection_manager.clone(),
+                                    Arc::clone(&self.sink_statistics),
+                                    prev,
+                                    self.config.parameters.statistics_interval,
+                                    self.statistics_interval_sender.subscribe(),
+                                );
+
+                            // Make sure this is dropped when the controller is
+                            // dropped, so that the internal task will stop.
+                            self.introspection_tokens.insert(id, scraper_token);
+                        }
+                        IntrospectionType::SourceStatusHistory => {
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::SourceStatusHistory,
+                                )
+                                .await;
+
+                            let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
+                                .get_by_name(&ColumnName::from("status"))
+                                .expect("schema has not changed")
+                                .0;
+
+                            self.collection_status_manager.extend_previous_statuses(
+                                last_status_per_id.into_iter().map(|(id, row)| {
+                                    (
+                                        id,
+                                        Status::from_str(
+                                            row.iter()
+                                                .nth(status_col)
+                                                .expect("schema has not changed")
+                                                .unwrap_str(),
+                                        )
+                                        .expect("statuses must be uncorrupted"),
+                                    )
+                                }),
+                            )
+                        }
+                        IntrospectionType::SinkStatusHistory => {
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::SinkStatusHistory,
+                                )
+                                .await;
+
+                            let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
+                                .get_by_name(&ColumnName::from("status"))
+                                .expect("schema has not changed")
+                                .0;
+
+                            self.collection_status_manager.extend_previous_statuses(
+                                last_status_per_id.into_iter().map(|(id, row)| {
+                                    (
+                                        id,
+                                        Status::from_str(
+                                            row.iter()
+                                                .nth(status_col)
+                                                .expect("schema has not changed")
+                                                .unwrap_str(),
+                                        )
+                                        .expect("statuses must be uncorrupted"),
+                                    )
+                                }),
+                            )
+                        }
+                        IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                            self.partially_truncate_status_history(
+                                IntrospectionType::PrivatelinkConnectionStatusHistory,
+                            )
+                            .await;
+                        }
+
+                        // Truncate compute-maintained collections.
+                        IntrospectionType::ComputeDependencies
+                        | IntrospectionType::ComputeReplicaHeartbeats
+                        | IntrospectionType::ComputeHydrationStatus
+                        | IntrospectionType::ComputeOperatorHydrationStatus => {
+                            self.reconcile_managed_collection(id, vec![]).await;
+                        }
+
+                        // Note [btv] - we don't truncate these, because that uses
+                        // a huge amount of memory on environmentd startup.
+                        IntrospectionType::PreparedStatementHistory
+                        | IntrospectionType::StatementExecutionHistory
+                        | IntrospectionType::SessionHistory
+                        | IntrospectionType::StatementLifecycleHistory
+                        | IntrospectionType::SqlText => {
+                            // do nothing.
+                        }
+                    }
+                }
+                DataSource::Webhook => {
+                    // Register the collection so our manager knows about it.
+                    self.collection_manager.register_collection(id);
+                }
+                DataSource::Progress | DataSource::Other(_) => {}
+            }
+        }
+
+        Ok(())
     }
 }
