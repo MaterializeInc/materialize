@@ -175,6 +175,36 @@ def test_upgrade_from_version(
     c.kill("materialized")
     c.rm("materialized", "testdrive")
 
+    if from_version != "current_source":
+        # We can't skip in-between minor versions anymore, so go through all of them
+        for version in get_published_minor_mz_versions(newest_first=False):
+            if version <= from_version:
+                continue
+            if version >= MzVersion.parse_cargo():
+                continue
+            if version <= MzVersion.parse_mz("v0.87.0"):
+                # Old versions didn't care about upgrading the catalog one version at a time, so save some time
+                continue
+
+            print(f"Upgrading to in-between version {version}")
+            with c.override(
+                Materialized(
+                    image=f"materialize/materialized:{version}",
+                    options=[
+                        opt
+                        for start_version, opt in mz_options.items()
+                        if version >= start_version
+                    ],
+                    volumes_extra=["secrets:/share/secrets"],
+                    external_cockroach=True,
+                    catalog_store=catalog_store,
+                )
+            ):
+                c.up("materialized")
+                c.kill("materialized")
+                c.rm("materialized")
+
+    print("Upgrading to final version")
     mz_to = Materialized(
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
