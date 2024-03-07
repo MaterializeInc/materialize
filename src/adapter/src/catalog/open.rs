@@ -602,7 +602,7 @@ impl Catalog {
                     let oid = introspection_source_index_ids.get(log.name).map(|(_id, oid)| oid);
                     // Then look in new indexes.
                     let oid = oid.or_else(|| new_indexes.get(log.name));
-                    let oid = oid.cloned().expect(&format!("log, {log:?}, with ID {id:?} must exist in one of the maps"));
+                    let oid = oid.cloned().unwrap_or_else(|| panic!("log, {log:?}, with ID {id:?} must exist in one of the maps"));
                     (log, id, oid)
                 }).collect();
 
