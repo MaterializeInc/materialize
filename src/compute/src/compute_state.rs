@@ -102,8 +102,6 @@ pub struct ComputeState {
     pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
     max_result_size: u64,
-    /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    dataflow_max_inflight_bytes: Option<usize>,
     /// Specification for rendering linear joins.
     pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
@@ -157,7 +155,6 @@ impl ComputeState {
             persist_clients,
             command_history,
             max_result_size: u64::MAX,
-            dataflow_max_inflight_bytes: None,
             linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
@@ -233,10 +230,14 @@ impl ComputeState {
     /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as
     /// appropriate to this replica.
     pub fn dataflow_max_inflight_bytes(&self) -> Option<usize> {
+        use mz_compute_types::dyncfgs::{
+            DATAFLOW_MAX_INFLIGHT_BYTES, DATAFLOW_MAX_INFLIGHT_BYTES_CC,
+        };
+
         if self.persist_clients.cfg.is_cc_active {
-            mz_compute_types::dyncfgs::DATAFLOW_MAX_INFLIGHT_BYTES_CC.get(&self.worker_config)
+            DATAFLOW_MAX_INFLIGHT_BYTES_CC.get(&self.worker_config)
         } else {
-            self.dataflow_max_inflight_bytes
+            DATAFLOW_MAX_INFLIGHT_BYTES.get(&self.worker_config)
         }
     }
 }
@@ -296,7 +297,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         let ComputeParameters {
             max_result_size,
-            dataflow_max_inflight_bytes,
             tracing,
             grpc_client: _grpc_client,
             dyncfg_updates,
@@ -304,9 +304,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         if let Some(v) = max_result_size {
             self.compute_state.max_result_size = v;
-        }
-        if let Some(v) = dataflow_max_inflight_bytes {
-            self.compute_state.dataflow_max_inflight_bytes = v;
         }
 
         tracing.apply(self.compute_state.tracing_handle.as_ref());

@@ -1116,7 +1116,6 @@ impl SystemVars {
             &upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION,
             &upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES,
             &upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL,
-            &COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES,
             &STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES,
             &STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION,
             &STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY,
@@ -1802,11 +1801,6 @@ impl SystemVars {
         ))
     }
 
-    /// Returns the `compute_dataflow_max_inflight_bytes` configuration parameter.
-    pub fn compute_dataflow_max_inflight_bytes(&self) -> Option<usize> {
-        *self.expect_value(&COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES)
-    }
-
     /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
     pub fn storage_dataflow_max_inflight_bytes(&self) -> Option<usize> {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
@@ -2119,10 +2113,7 @@ impl SystemVars {
     /// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
     /// commands).
     pub fn is_compute_config_var(&self, name: &str) -> bool {
-        name == MAX_RESULT_SIZE.name()
-            || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-            || self.is_dyncfg_var(name)
-            || is_tracing_var(name)
+        name == MAX_RESULT_SIZE.name() || self.is_dyncfg_var(name) || is_tracing_var(name)
     }
 
     /// Returns whether the named variable is a storage configuration parameter.
