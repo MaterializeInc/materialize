@@ -372,10 +372,12 @@ where
         consolidation::consolidate_updates(&mut inner.remap_trace);
     }
 
+    #[allow(dead_code)]
     pub fn since(&self) -> AntichainRef<'_, IntoTime> {
         self.since.borrow()
     }
 
+    #[allow(dead_code)]
     pub fn share(&self) -> Self {
         self.inner
             .borrow_mut()
