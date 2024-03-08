@@ -83,7 +83,6 @@ pub struct Transaction<'a> {
     // in-memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
     storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
-    oids: HashSet<u32>,
 }
 
 impl<'a> Transaction<'a> {
@@ -149,7 +148,6 @@ impl<'a> Transaction<'a> {
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
-            oids,
         })
     }
 
@@ -639,6 +637,22 @@ impl<'a> Transaction<'a> {
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
     /// object.
     fn allocate_oids(&mut self, amount: u64) -> Result<Vec<u32>, CatalogError> {
+        let allocated_oids: HashSet<_> = self
+            .databases
+            .items()
+            .values()
+            .map(|value| value.oid)
+            .chain(self.schemas.items().values().map(|value| value.oid))
+            .chain(self.roles.items().values().map(|value| value.oid))
+            .chain(self.items.items().values().map(|value| value.oid))
+            .chain(
+                self.introspection_sources
+                    .items()
+                    .values()
+                    .map(|value| value.oid),
+            )
+            .collect();
+
         if amount > u32::MAX.into() {
             return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
         }
@@ -656,7 +670,7 @@ impl<'a> Transaction<'a> {
             .expect("we should never persist an oid outside of user OID range");
         let mut oids = Vec::new();
         while oids.len() < u64_to_usize(amount) {
-            if !self.oids.contains(&current_oid.0) {
+            if !allocated_oids.contains(&current_oid.0) {
                 oids.push(current_oid.0);
             }
             current_oid += 1;
@@ -682,8 +696,6 @@ impl<'a> Transaction<'a> {
                 next_id: current_id.into(),
             })
         );
-
-        self.oids.extend(oids.clone());
 
         Ok(oids)
     }
