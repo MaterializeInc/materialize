@@ -14,13 +14,13 @@ from typing import Any
 
 import pandas as pd
 
+from materialize.buildkite_insights.buildkite_api import builds_api
 from materialize.buildkite_insights.step_durations.build_step import (
     BuildJobOutcome,
     BuildStepMatcher,
     extract_build_step_outcomes,
     step_outcomes_to_job_outcomes,
 )
-from materialize.buildkite_insights.util.buildkite_api import fetch_builds
 from materialize.buildkite_insights.util.data_io import (
     ensure_temp_dir_exists,
     exists_file_with_recent_data,
@@ -94,7 +94,7 @@ def get_data(
         print(f"Using existing data: {file_path}")
         return read_results_from_file(file_path)
 
-    result = fetch_builds(
+    result = builds_api.get_builds(
         pipeline_slug=pipeline_slug,
         max_fetches=max_fetches,
         branch=branch,
