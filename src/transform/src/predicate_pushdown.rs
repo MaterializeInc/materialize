@@ -66,8 +66,15 @@
 //!   indexes: &mz_transform::EmptyIndexOracle,
 //!   stats: &mz_transform::EmptyStatisticsOracle,
 //!   global_id: None,
-//!   enable_eager_delta_joins: false,
-//!   dataflow_metainfo: &mut DataflowMetainfo::default(),
+//!   features: &mz_repr::optimizer::OptimizerFeatures {
+//!       enable_consolidate_after_union_negate: false,
+//!       enable_eager_delta_joins: false,
+//!       enable_new_outer_join_lowering: false,
+//!       enable_reduce_mfp_fusion: false,
+//!       persist_fast_path_limit: 0,
+//!       reoptimize_imported_views: false,
+//!   },
+//!   df_meta: &mut DataflowMetainfo::default(),
 //! });
 //!
 //! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);

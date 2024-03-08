@@ -27,7 +27,7 @@ use mz_storage_types::sinks::S3UploadInfo;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::StatisticsOracle;
+use mz_transform::{StatisticsOracle, TransformCtx};
 use timely::progress::Antichain;
 use tracing::warn;
 
@@ -103,6 +103,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct LocalMirPlan<T = Unresolved> {
     expr: MirRelationExpr,
+    df_meta: DataflowMetainfo,
     context: T,
 }
 
@@ -147,11 +148,15 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        let expr = optimize_mir_local(expr, &self.typecheck_ctx)?.into_inner();
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx =
+            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
             expr,
+            df_meta,
             context: Unresolved,
         })
     }
@@ -168,6 +173,7 @@ impl LocalMirPlan<Unresolved> {
     ) -> LocalMirPlan<Resolved> {
         LocalMirPlan {
             expr: self.expr,
+            df_meta: self.df_meta,
             context: Resolved {
                 timestamp_ctx,
                 session,
@@ -183,6 +189,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
     fn optimize(&mut self, plan: LocalMirPlan<Resolved<'s>>) -> Result<Self::To, OptimizerError> {
         let LocalMirPlan {
             expr,
+            mut df_meta,
             context:
                 Resolved {
                     timestamp_ctx,
@@ -279,12 +286,16 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             }
         }
 
-        let df_meta = mz_transform::optimize_dataflow(
-            &mut df_desc,
+        // Construct TransformCtx for global optimization.
+        let mut transform_ctx = TransformCtx::global(
             &df_builder,
             &*stats,
             &self.config.features,
-        )?;
+            &self.typecheck_ctx,
+            &mut df_meta,
+        );
+        // Run global optimization.
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.

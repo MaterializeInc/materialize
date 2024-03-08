@@ -28,6 +28,7 @@ use std::{fmt, iter};
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 use tracing::error;
 
@@ -64,6 +65,7 @@ pub mod typecheck;
 pub mod union_cancel;
 
 use crate::dataflow::DataflowMetainfo;
+use crate::typecheck::SharedContext;
 pub use dataflow::optimize_dataflow;
 use mz_ore::soft_assert_or_log;
 
@@ -85,46 +87,73 @@ macro_rules! any {
 /// manipulated by the transforms.
 #[derive(Debug)]
 pub struct TransformCtx<'a> {
+    /// The global ID for this query (if it exists).
+    pub global_id: Option<GlobalId>,
     /// The indexes accessible.
     pub indexes: &'a dyn IndexOracle,
     /// Statistical estimates.
     pub stats: &'a dyn StatisticsOracle,
-    /// The global ID for this query (if it exists).
-    pub global_id: Option<&'a GlobalId>,
-    /// Whether or not to eagerly apply delta joins.
-    pub enable_eager_delta_joins: bool,
+    /// Features passed to the enclosing `Optimizer`.
+    pub features: &'a OptimizerFeatures,
+    /// Typechecking context.
+    pub typecheck_ctx: &'a SharedContext,
     /// Transforms can use this field to communicate information outside the result plans.
-    pub dataflow_metainfo: &'a mut DataflowMetainfo,
+    pub df_meta: &'a mut DataflowMetainfo,
 }
 
 impl<'a> TransformCtx<'a> {
-    /// Generates a `TransformArgs` instance for the given `IndexOracle` with no `GlobalId`
-    pub fn dummy(dataflow_metainfo: &'a mut DataflowMetainfo) -> Self {
+    /// Generates a [`TransformCtx`] instance for the local MIR optimization
+    /// stage.
+    ///
+    /// Used to call [`Optimizer::optimize`] on a
+    /// [`Optimizer::logical_optimizer`] in order to transform a stand-alone
+    /// [`MirRelationExpr`].
+    pub fn local(
+        features: &'a OptimizerFeatures,
+        typecheck_ctx: &'a typecheck::SharedContext,
+        df_meta: &'a mut DataflowMetainfo,
+    ) -> Self {
         Self {
             indexes: &EmptyIndexOracle,
             stats: &EmptyStatisticsOracle,
             global_id: None,
-            enable_eager_delta_joins: false,
-            dataflow_metainfo,
+            features,
+            typecheck_ctx,
+            df_meta,
         }
     }
 
-    /// Generates a `TransformArgs` instance for the given `IndexOracle` and `StatisticsOracle` with
-    /// a `GlobalId`
-    pub fn with_config_and_metainfo(
+    /// Generates a [`TransformCtx`] instance for the global MIR optimization
+    /// stage.
+    ///
+    /// Used to call [`dataflow::optimize_dataflow`].
+    pub fn global(
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
-        global_id: &'a GlobalId,
-        eager_delta_joins: bool,
-        dataflow_metainfo: &'a mut DataflowMetainfo,
+        features: &'a OptimizerFeatures,
+        typecheck_ctx: &'a SharedContext,
+        df_meta: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
             indexes,
             stats,
-            global_id: Some(global_id),
-            enable_eager_delta_joins: eager_delta_joins,
-            dataflow_metainfo,
+            global_id: None,
+            features,
+            df_meta,
+            typecheck_ctx,
         }
+    }
+
+    fn typecheck(&self) -> SharedContext {
+        Arc::clone(self.typecheck_ctx)
+    }
+
+    fn set_global_id(&mut self, global_id: GlobalId) {
+        self.global_id = Some(global_id);
+    }
+
+    fn reset_global_id(&mut self) {
+        self.global_id = None;
     }
 }
 
@@ -430,9 +459,9 @@ pub struct Optimizer {
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     #[deprecated = "Create an Optimize instance and call `optimize` instead."]
-    pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
+    pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.typecheck()).strict_join_equivalences()),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(crate::non_null_requirements::NonNullRequirements::default()),
@@ -483,7 +512,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                crate::typecheck::Typecheck::new(Arc::clone(ctx))
+                crate::typecheck::Typecheck::new(ctx.typecheck())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -500,11 +529,11 @@ impl Optimizer {
     /// This is meant to be used for optimizing each view within a dataflow
     /// once view inlining has already happened, right before dataflow
     /// rendering.
-    pub fn physical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
+    pub fn physical_optimizer(ctx: &mut TransformCtx) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(
-                crate::typecheck::Typecheck::new(Arc::clone(ctx))
+                crate::typecheck::Typecheck::new(ctx.typecheck())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -568,7 +597,7 @@ impl Optimizer {
             // (For example, `FoldConstants` can break the normalized form by removing all
             // references to a Let, see https://github.com/MaterializeInc/materialize/issues/21175)
             Box::new(crate::normalize_lets::NormalizeLets::new(false)),
-            Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).disallow_new_globals()),
+            Box::new(crate::typecheck::Typecheck::new(ctx.typecheck()).disallow_new_globals()),
         ];
         Self {
             name: "physical",
@@ -582,12 +611,9 @@ impl Optimizer {
     /// Set `allow_new_globals` when you will use these as the first passes.
     /// The first instance of the typechecker in an optimizer pipeline should
     /// allow new globals (or it will crash when it encounters them).
-    pub fn logical_cleanup_pass(
-        ctx: &crate::typecheck::SharedContext,
-        allow_new_globals: bool,
-    ) -> Self {
+    pub fn logical_cleanup_pass(ctx: &mut TransformCtx, allow_new_globals: bool) -> Self {
         let mut typechecker =
-            crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences();
+            crate::typecheck::Typecheck::new(ctx.typecheck()).strict_join_equivalences();
 
         if !allow_new_globals {
             typechecker = typechecker.disallow_new_globals();
@@ -622,7 +648,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                crate::typecheck::Typecheck::new(Arc::clone(ctx))
+                crate::typecheck::Typecheck::new(ctx.typecheck())
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -645,17 +671,16 @@ impl Optimizer {
     pub fn optimize(
         &self,
         mut relation: MirRelationExpr,
+        ctx: &mut TransformCtx,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
-        let mut dataflow_metainfo = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::dummy(&mut dataflow_metainfo);
-        let transform_result = self.transform(&mut relation, &mut transform_ctx);
+        let transform_result = self.transform(&mut relation, ctx);
 
         // Make sure we are not swallowing any notice.
         // TODO: we should actually wire up notices that come from here. This is not urgent, because
         // currently notices can only come from the physical MIR optimizer (specifically,
         // `LiteralConstraints`), and callers of this method are running the logical MIR optimizer.
         soft_assert_or_log!(
-            dataflow_metainfo.optimizer_notices.is_empty(),
+            ctx.df_meta.optimizer_notices.is_empty(),
             "logical MIR optimization unexpectedly produced notices"
         );
 

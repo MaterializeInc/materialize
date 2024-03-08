@@ -29,11 +29,12 @@ mod tests {
     use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
     use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat};
+    use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{
         optimize_dataflow_demand_inner, optimize_dataflow_filters_inner, DataflowMetainfo,
     };
-    use mz_transform::{Optimizer, Transform, TransformCtx};
+    use mz_transform::{typecheck, Optimizer, Transform, TransformCtx};
     use proc_macro2::TokenTree;
 
     use crate::explain::Explainable;
@@ -47,9 +48,13 @@ mod tests {
 
     thread_local! {
         static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
-            let ctx = mz_transform::typecheck::empty_context();
+            let features = OptimizerFeatures::default();
+            let typecheck_ctx = typecheck::empty_context();
+            let mut df_meta = DataflowMetainfo::default();
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+
             #[allow(deprecated)]
-            Optimizer::logical_optimizer(&ctx)
+            Optimizer::logical_optimizer(&mut transform_ctx)
                 .transforms
                 .into_iter()
                 .chain(std::iter::once::<Box<dyn Transform>>(
@@ -58,8 +63,8 @@ mod tests {
                 .chain(std::iter::once::<Box<dyn Transform>>(
                     Box::new(mz_transform::normalize_lets::NormalizeLets::new(false))
                 ))
-                .chain(Optimizer::logical_cleanup_pass(&ctx, false).transforms.into_iter())
-                .chain(Optimizer::physical_optimizer(&ctx).transforms.into_iter())
+                .chain(Optimizer::logical_cleanup_pass(&mut transform_ctx, false).transforms.into_iter())
+                .chain(Optimizer::physical_optimizer(&mut transform_ctx).transforms.into_iter())
                 .collect::<Vec<_>>()
             };
     }
@@ -164,12 +169,13 @@ mod tests {
         args: &HashMap<String, Vec<String>>,
         test_type: TestType,
     ) -> Result<String, Error> {
+        let features = OptimizerFeatures::default();
+        let typecheck_ctx = typecheck::empty_context();
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
-            get_transform(t)?.transform(
-                &mut rel,
-                &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
-            )?;
+            get_transform(t)?.transform(&mut rel, &mut transform_ctx)?;
         }
 
         let format_type = get_format_type(args);
@@ -177,10 +183,7 @@ mod tests {
         let out = match test_type {
             TestType::Opt => FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                 for transform in transforms.iter() {
-                    transform.transform(
-                        &mut rel,
-                        &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
-                    )?;
+                    transform.transform(&mut rel, &mut transform_ctx)?;
                 }
                 Ok(convert_rel_to_string(&rel, cat, &format_type))
             })?,
@@ -198,10 +201,7 @@ mod tests {
                 FULL_TRANSFORM_LIST.with(|transforms| -> Result<_, Error> {
                     for transform in transforms {
                         let prev = rel.clone();
-                        transform.transform(
-                            &mut rel,
-                            &mut TransformCtx::dummy(&mut DataflowMetainfo::default()),
-                        )?;
+                        transform.transform(&mut rel, &mut transform_ctx)?;
 
                         if rel != prev {
                             if no_change.len() > 0 {
@@ -346,11 +346,24 @@ mod tests {
         }
         let mut out = String::new();
         if test_type == TestType::Opt {
+            let features = OptimizerFeatures::default();
+            let typecheck_ctx = typecheck::empty_context();
+            let mut df_meta = DataflowMetainfo::default();
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+
             #[allow(deprecated)]
-            let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
+            let optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
-                .map(|(id, rel)| (id, optimizer.optimize(rel).unwrap().into_inner()))
+                .map(|(id, rel)| {
+                    (
+                        id,
+                        optimizer
+                            .optimize(rel, &mut transform_ctx)
+                            .unwrap()
+                            .into_inner(),
+                    )
+                })
                 .collect();
         }
         match test_type {
@@ -367,19 +380,25 @@ mod tests {
             _ => {}
         };
         if test_type == TestType::Opt {
-            let ctx = mz_transform::typecheck::empty_context();
-            let log_optimizer = Optimizer::logical_cleanup_pass(&ctx, true);
-            let phys_optimizer = Optimizer::physical_optimizer(&ctx);
+            let features = OptimizerFeatures::default();
+            let typecheck_ctx = typecheck::empty_context();
+            let mut df_meta = DataflowMetainfo::default();
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+
+            let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
+            let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
-                    (
-                        id,
-                        phys_optimizer
-                            .optimize(log_optimizer.optimize(rel).unwrap().into_inner())
-                            .unwrap()
-                            .into_inner(),
-                    )
+                    let local_mir_plan = log_optimizer
+                        .optimize(rel, &mut transform_ctx)
+                        .unwrap()
+                        .into_inner();
+                    let global_mir_plan = phys_optimizer
+                        .optimize(local_mir_plan, &mut transform_ctx)
+                        .unwrap()
+                        .into_inner();
+                    (id, global_mir_plan)
                 })
                 .collect();
         }

@@ -68,7 +68,7 @@ impl crate::Transform for JoinImplementation {
             relation,
             &mut IndexMap::new(ctx.indexes),
             ctx.stats,
-            ctx.enable_eager_delta_joins,
+            ctx.features.enable_eager_delta_joins,
         );
         mz_repr::explain::trace_plan(&*relation);
         result

@@ -36,6 +36,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
+use mz_transform::TransformCtx;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
@@ -48,7 +49,7 @@ use crate::optimize::{
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
-    _typecheck_ctx: TypecheckContext,
+    typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -67,7 +68,7 @@ impl Optimizer {
         config: OptimizerConfig,
     ) -> Self {
         Self {
-            _typecheck_ctx: empty_context(),
+            typecheck_ctx: empty_context(),
             catalog,
             compute_instance,
             exported_index_id,
@@ -166,13 +167,17 @@ impl Optimize<Index> for Optimizer {
             |s| prep_scalar_expr(s, style),
         )?;
 
-        // Optimize the dataflow across views, and any other ways that appeal.
-        let mut df_meta = mz_transform::optimize_dataflow(
-            &mut df_desc,
+        // Construct TransformCtx for global optimization.
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx = TransformCtx::global(
             &df_builder,
-            &mz_transform::EmptyStatisticsOracle,
+            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
-        )?;
+            &self.typecheck_ctx,
+            &mut df_meta,
+        );
+        // Run global optimization.
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.

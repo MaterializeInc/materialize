@@ -230,18 +230,15 @@ fn apply_transform<T: mz_transform::Transform>(
     // Parse the relation, returning early on parse error.
     let mut relation = try_parse_mir(catalog, input)?;
 
-    let mut dataflow_metainfo = DataflowMetainfo::default();
-    let mut empty_args: mz_transform::TransformCtx = mz_transform::TransformCtx {
-        indexes: &mz_transform::EmptyIndexOracle,
-        stats: &mz_transform::EmptyStatisticsOracle,
-        global_id: None,
-        enable_eager_delta_joins: false,
-        dataflow_metainfo: &mut dataflow_metainfo,
-    };
+    let features = mz_repr::optimize::OptimizerFeatures::default();
+    let typecheck_ctx = mz_transform::typecheck::empty_context();
+    let mut df_meta = DataflowMetainfo::default();
+    let mut transform_ctx =
+        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
 
     // Apply the transformation, returning early on TransformError.
     transform
-        .transform(&mut relation, &mut empty_args)
+        .transform(&mut relation, &mut transform_ctx)
         .map_err(|e| format!("{}\n", e.to_string().trim()))?;
 
     // Serialize and return the transformed relation.

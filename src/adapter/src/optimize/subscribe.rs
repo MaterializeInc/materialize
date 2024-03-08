@@ -24,6 +24,7 @@ use mz_sql::plan::SubscribeFrom;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
+use mz_transform::TransformCtx;
 use timely::progress::Antichain;
 
 use crate::catalog::Catalog;
@@ -177,8 +178,9 @@ impl Optimize<SubscribeFrom> for Optimizer {
             DataflowBuilder::new(catalog, compute).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
+        let mut df_meta = DataflowMetainfo::default();
 
-        let mut df_desc = match plan {
+        match plan {
             SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
@@ -207,8 +209,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     refresh_schedule: None,
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
-
-                df_desc
             }
             SubscribeFrom::Query { expr, desc } => {
                 // TODO: Change the `expr` type to be `HirRelationExpr` and run
@@ -218,7 +218,9 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
-                let expr = optimize_mir_local(expr, &self.typecheck_ctx)?;
+                let mut transform_ctx =
+                    TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+                let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
                 df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
@@ -236,8 +238,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     refresh_schedule: None,
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
-
-                df_desc
             }
         };
 
@@ -248,12 +248,16 @@ impl Optimize<SubscribeFrom> for Optimizer {
             |s| prep_scalar_expr(s, style),
         )?;
 
-        let df_meta = mz_transform::optimize_dataflow(
-            &mut df_desc,
+        // Construct TransformCtx for global optimization.
+        let mut transform_ctx = TransformCtx::global(
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
-        )?;
+            &self.typecheck_ctx,
+            &mut df_meta,
+        );
+        // Run global optimization.
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx)?;
 
         if self.config.mode == OptimizeMode::Explain {
             // Collect the list of indexes used by the dataflow at this point.

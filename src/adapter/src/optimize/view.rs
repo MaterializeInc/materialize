@@ -11,7 +11,9 @@
 
 use mz_expr::OptimizedMirRelationExpr;
 use mz_sql::plan::HirRelationExpr;
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
+use mz_transform::TransformCtx;
 
 use crate::optimize::{optimize_mir_local, trace_plan, Optimize, OptimizerConfig, OptimizerError};
 
@@ -42,7 +44,10 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        let expr = optimize_mir_local(expr, &self.typecheck_ctx)?;
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx =
+            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
         // Return the resulting OptimizedMirRelationExpr.
         Ok(expr)
