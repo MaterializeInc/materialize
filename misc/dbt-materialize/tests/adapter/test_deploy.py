@@ -35,10 +35,6 @@ class TestApplyGrantsAndPrivileges:
         project.run_sql("CREATE ROLE my_role")
         project.run_sql("CREATE SCHEMA blue")
         project.run_sql("CREATE SCHEMA green")
-
-        project.run_sql(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA green GRANT SELECT ON SOURCES TO my_role"
-        )
         project.run_sql(
             "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA blue GRANT SELECT ON TABLES TO my_role"
         )
@@ -51,19 +47,6 @@ class TestApplyGrantsAndPrivileges:
                 "{from: blue, to: green}",
             ]
         )
-
-        result = project.run_sql(
-            """SELECT count(*) = 0
-             FROM mz_internal.mz_show_default_privileges
-             WHERE database = current_database()
-                AND schema = 'green'
-                AND grantee = 'my_role'
-                AND object_type = 'source'
-                AND privilege_type = 'SELECT'""",
-            fetch="one",
-        )
-
-        assert bool(result[0])
 
         result = project.run_sql(
             """SELECT count(*) = 1
@@ -83,6 +66,7 @@ class TestApplyGrantsAndPrivileges:
         project.run_sql("CREATE SCHEMA blue")
         project.run_sql("CREATE SCHEMA green")
 
+        project.run_sql("GRANT CREATE ON SCHEMA green TO my_role")
         project.run_sql("GRANT USAGE ON SCHEMA blue TO my_role")
         run_dbt(
             [
@@ -92,6 +76,18 @@ class TestApplyGrantsAndPrivileges:
                 "{from: blue, to: green}",
             ]
         )
+
+        result = project.run_sql(
+            """
+            SELECT count(*) = 0
+            FROM mz_internal.mz_show_schema_privileges
+            WHERE grantee = 'my_role'
+                AND name = 'green'
+                AND privilege_type = 'CREATE'""",
+            fetch="one",
+        )
+
+        assert bool(result[0])
 
         result = project.run_sql(
             """
@@ -110,6 +106,7 @@ class TestApplyGrantsAndPrivileges:
         project.run_sql("CREATE CLUSTER blue SIZE = '1'")
         project.run_sql("CREATE CLUSTER green SIZE = '1'")
 
+        project.run_sql("GRANT CREATE ON CLUSTER green TO my_role")
         project.run_sql("GRANT USAGE ON CLUSTER blue TO my_role")
         run_dbt(
             [
@@ -119,6 +116,18 @@ class TestApplyGrantsAndPrivileges:
                 "{from: blue, to: green}",
             ]
         )
+
+        result = project.run_sql(
+            """
+            SELECT count(*) = 0
+            FROM mz_internal.mz_show_cluster_privileges
+            WHERE grantee = 'my_role'
+                AND name = 'green'
+                AND privilege_type = 'CREATE'""",
+            fetch="one",
+        )
+
+        assert bool(result[0])
 
         result = project.run_sql(
             """

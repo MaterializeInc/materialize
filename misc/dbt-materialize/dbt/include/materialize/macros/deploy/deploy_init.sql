@@ -192,28 +192,6 @@
 {% endmacro %}
 
 {% macro internal_copy_schema_default_privs(from, to) %}
-{% set revoke_initial_defaults %}
-SELECT
-  'ALTER DEFAULT PRIVILEGES ' ||
-  CASE
-    WHEN object_owner = 'PUBLIC' THEN 'FOR ALL ROLES '
-    ELSE 'FOR ROLE ' || object_owner
-  END ||
-  'IN SCHEMA quote_ident({{ to }}) ' ||
-  'REVOKE '    || privilege_type || ' ' ||
-  'ON ' || object_type || 's ' ||
-  'TO ' || grantee || ';'
-FROM mz_internal.mz_show_default_privileges
-WHERE database = current_database() AND schema = lower(trim('{{ from }}'))
-    AND object_owner <> 'none' AND grantee <> 'none'
-{% endset %}
-
-{% set revoke_defaults = run_query(revoke_initial_defaults) %}
-{% if execute %}
-    {% for alter in revoke_defaults.rows %}
-        {{ run_query(alter) }}
-    {% endfor %}
-{% endif %}
 
 {% set find_default_privs %}
 SELECT
@@ -222,10 +200,10 @@ SELECT
     WHEN object_owner = 'PUBLIC' THEN 'FOR ALL ROLES '
     ELSE 'FOR ROLE ' || object_owner
   END ||
-  'IN SCHEMA quote_ident({{ to }}) ' ||
-  'GRANT '    || privilege_type || ' ' ||
-  'ON ' || object_type || 's ' ||
-  'TO ' || grantee || ';'
+  'IN SCHEMA {{ to }} '         ||
+  'GRANT '  || privilege_type   || ' ' ||
+  'ON '     || object_type      || 's ' ||
+  'TO '     || grantee
 FROM mz_internal.mz_show_default_privileges
 WHERE database = current_database() AND schema = lower(trim('{{ from }}'))
     AND object_owner <> 'none' AND grantee <> 'none'
@@ -240,85 +218,103 @@ WHERE database = current_database() AND schema = lower(trim('{{ from }}'))
 {% endmacro %}
 
 {% macro internal_copy_schema_grants(from, to) %}
-{% set find_grants %}
-WITH schema_privledges_from AS (
-    SELECT mz_internal.mz_aclexplode(s.privileges).*
-    FROM mz_schemas s
-    JOIN mz_databases d ON s.database_id = d.id
-    WHERE d.name = current_database()
-        AND s.name = trim(lower('{{ from }}'))
-),
-
-schema_privledges_to AS (
+{% set find_revokes %}
+WITH schema_privledge AS (
     SELECT mz_internal.mz_aclexplode(s.privileges).*
     FROM mz_schemas s
     JOIN mz_databases d ON s.database_id = d.id
     WHERE d.name = current_database()
         AND s.name = trim(lower('{{ to }}'))
-),
-
-schema_privledges AS (
-  SELECT privilege_type, grantee FROM schema_privledges_from
-
-  EXCEPT
-
-  SELECT privilege_type, grantee FROM schema_privledges_to
 )
 
-SELECT s.privilege_type, quote_ident(grantee.name) AS grantee
-FROM schema_privledges AS s
-LEFT JOIN mz_roles AS grantee ON s.grantee = grantee.id
-WHERE grantee.name <> 'none' AND grantee.name <> 'mz_system'
+SELECT 'REVOKE '    || s.privilege_type || ' ' ||
+       'ON SCHEMA ' || quote_ident('{{ to }}') || ' ' ||
+       'FROM '      || quote_ident(grantee.name)
+FROM schema_privledge AS s
+JOIN mz_roles AS grantee ON s.grantee = grantee.id
+WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
+{% endset %}
+
+{% set revokes = run_query(find_revokes) %}
+{% if execute %}
+    {% for revoke in revokes.rows %}
+        {{ run_query(revoke[0]) }}
+    {% endfor %}
+{% endif %}
+
+{% set find_grants %}
+WITH schema_privledge AS (
+    SELECT mz_internal.mz_aclexplode(s.privileges).*
+    FROM mz_schemas s
+    JOIN mz_databases d ON s.database_id = d.id
+    WHERE d.name = current_database()
+        AND s.name = trim(lower('{{ from }}'))
+)
+
+SELECT 'GRANT '     || s.privilege_type || ' ' ||
+       'ON SCHEMA ' || quote_ident('{{ to }}') || ' ' ||
+       'TO '        || quote_ident(grantee.name)
+FROM schema_privledge AS s
+JOIN mz_roles AS grantee ON s.grantee = grantee.id
+WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
 {% endset %}
 
 {% set grants = run_query(find_grants) %}
 {% if execute %}
     {% for grant in grants.rows %}
-        {% set new_grant %}
-            GRANT {{ grant[0] }} ON SCHEMA {{ to }} TO {{ grant[1] }}
-        {% endset %}
-        {{ run_query(new_grant) }}
+        {{ run_query(grant[0]) }}
     {% endfor %}
 {% endif %}
 
 {% endmacro %}
 
 {% macro internal_copy_cluster_grants(from, to) %}
+{% set find_revokes %}
+WITH schema_privledge AS (
+    SELECT mz_internal.mz_aclexplode(s.privileges).*
+    FROM mz_schemas s
+    JOIN mz_databases d ON s.database_id = d.id
+    WHERE d.name = current_database()
+        AND s.name = trim(lower('{{ to }}'))
+)
+
+SELECT 'REVOKE '     || s.privilege_type || ' ' ||
+       'ON CLUSTER ' || quote_ident('{{ to }}') || ' ' ||
+       'FROM '       || quote_ident(grantee.name)
+FROM schema_privledge AS s
+JOIN mz_roles AS grantee ON s.grantee = grantee.id
+WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+    AND grantee.name <> current_role
+{% endset %}
+
+{% set revokes = run_query(find_revokes) %}
+{% if execute %}
+    {% for revoke in revokes.rows %}
+        {{ run_query(revoke[0]) }}
+    {% endfor %}
+{% endif %}
+
 {% set find_grants %}
-WITH cluster_privledges_from AS (
+WITH cluster_privledge AS (
     SELECT mz_internal.mz_aclexplode(privileges).*
     FROM mz_clusters
     WHERE name = trim(lower('{{ from }}'))
-),
-
-cluster_privledges_to AS (
-    SELECT mz_internal.mz_aclexplode(privileges).*
-    FROM mz_clusters
-    WHERE name = trim(lower('{{ to }}'))
-),
-
-cluster_privledges AS (
-  SELECT privilege_type, grantee FROM cluster_privledges_from
-
-  EXCEPT
-
-  SELECT privilege_type, grantee FROM cluster_privledges_to
 )
 
-SELECT c.privilege_type, quote_ident(grantee.name) AS grantee
-FROM cluster_privledges AS c
-LEFT JOIN mz_roles AS grantee ON c.grantee = grantee.id
-WHERE grantee.name <> 'none' AND grantee.name <> 'mz_system'
+SELECT 'GRANT '      || c.privilege_type || ' ' ||
+       'ON CLUSTER ' || quote_ident('{{ to }}') || ' ' ||
+       'TO '         || quote_ident(grantee.name)
+FROM cluster_privledge AS c
+JOIN mz_roles AS grantee ON c.grantee = grantee.id
+WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
 {% endset %}
 
 {% set grants = run_query(find_grants) %}
 {% if execute %}
     {% for grant in grants.rows %}
-        {% set new_grant %}
-            GRANT {{ grant[0] }} ON SCHEMA {{ to }} TO {{ grant[1] }}
-        {% endset %}
-        {{ run_query(new_grant) }}
+        {{ run_query(grant[0]) }}
     {% endfor %}
 {% endif %}
 
 {% endmacro %}
+
