@@ -97,6 +97,8 @@ optimizer_feature_flags!({
     enable_consolidate_after_union_negate: bool,
     // Bound from `SystemVars::enable_eager_delta_joins`.
     enable_eager_delta_joins: bool,
+    // Enable the `EquivalencePropagation` transform in the optimizer.
+    enable_equivalence_propagation: bool,
     // Bound from `SystemVars::enable_new_outer_join_lowering`.
     enable_new_outer_join_lowering: bool,
     // Bound from `SystemVars::enable_reduce_mfp_fusion`.
