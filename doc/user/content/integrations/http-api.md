@@ -52,6 +52,11 @@ The HTTP API provides two modes with slightly different transactional semantics 
     - Eagerly commits DDL (e.g. `CREATE TABLE`) in implicit transactions, but
       not DML (e.g. `INSERT`).
 
+### OpenAPI spec
+
+Download our [OpenAPI](https://swagger.io/specification/) v3 spec for this
+interface: [environmentd-openapi.yml](/materialize-openapi.yml).
+
 ## Usage
 
 ### Endpoint
