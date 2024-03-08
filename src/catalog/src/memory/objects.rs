@@ -536,7 +536,7 @@ impl Source {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
             DataSourceDesc::Progress => "progress",
-            DataSourceDesc::SourceExport { .. } => "subsourcev2",
+            DataSourceDesc::SourceExport { .. } => "subsource",
             DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
             DataSourceDesc::Webhook { .. } => "webhook",

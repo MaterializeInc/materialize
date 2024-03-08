@@ -391,14 +391,14 @@ fn show_subsources<'a>(
     }
 
     let query = format!(
-        "SELECT
+        "SELECT DISTINCT
             subsources.name AS name,
             subsources.type AS type
         FROM
             mz_sources AS subsources
-            JOIN mz_internal.mz_object_dependencies deps ON subsources.id = deps.referenced_object_id
-            JOIN mz_sources AS sources ON sources.id = deps.object_id
-        WHERE {}",
+            JOIN mz_internal.mz_object_dependencies deps ON (subsources.id = deps.object_id OR subsources.id = deps.referenced_object_id)
+            JOIN mz_sources AS sources ON (sources.id = deps.object_id OR sources.id = deps.referenced_object_id)
+        WHERE (subsources.type = 'subsource' OR subsources.type = 'progress') AND {}",
         itertools::join(query_filter, " AND "),
     );
     ShowSelect::new(scx, query, filter, None, None)
