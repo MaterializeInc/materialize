@@ -14,6 +14,7 @@ operational after an upgrade.
 import random
 
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
@@ -144,8 +145,22 @@ def test_upgrade_from_version(
         )
         with c.override(mz_from):
             c.up("materialized")
+
+            for key, value in mz_from.system_parameter_defaults.items():
+                c.sql(
+                    f"ALTER SYSTEM SET {key} = '{value}'",
+                    port=6877,
+                    user="mz_system",
+                )
     else:
         c.up("materialized")
+
+        for key, value in DEFAULT_SYSTEM_PARAMETERS.items():
+            c.sql(
+                f"ALTER SYSTEM SET {key} = '{value}'",
+                port=6877,
+                user="mz_system",
+            )
 
     if from_version == "current_source" or MzVersion.parse_mz(
         from_version

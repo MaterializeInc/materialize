@@ -42,7 +42,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # -----
     # Unsafe functions
     "enable_unsafe_functions": "true",
-    "enable_dangerous_functions": "true",  # former name of 'enable_unsafe_functions'
     # -----
     # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
     "persist_next_listen_batch_retryer_clamp": "16s",

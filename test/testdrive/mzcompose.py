@@ -95,6 +95,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(testdrive, materialized):
         c.up(*dependencies)
 
+        for key, value in materialized.system_parameter_defaults.items():
+            c.sql(
+                f"ALTER SYSTEM SET {key} = '{value}'",
+                port=6877,
+                user="mz_system",
+            )
+
         c.sql(
             "ALTER SYSTEM SET max_clusters = 50;",
             port=6877,

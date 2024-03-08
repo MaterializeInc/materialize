@@ -101,6 +101,9 @@ class Materialized(Service):
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)
 
+        # Make the computed system_parameter_defaults available for as a property.
+        self.system_parameter_defaults = system_parameter_defaults
+
         if len(system_parameter_defaults) > 0:
             environment += [
                 "MZ_SYSTEM_PARAMETER_DEFAULT="
