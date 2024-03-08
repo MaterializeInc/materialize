@@ -3093,6 +3093,7 @@ pub enum ExplainPlanOptionName {
     ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
+    EnableEquivalencePropagation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

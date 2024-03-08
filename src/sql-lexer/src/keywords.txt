@@ -138,6 +138,7 @@ End
 Endpoint
 Enforced
 Envelope
+Equivalence
 Error
 Escape
 Every
@@ -310,6 +311,7 @@ Primary
 Privatelink
 Privileges
 Progress
+Propagation
 Protobuf
 Protocol
 Publication
