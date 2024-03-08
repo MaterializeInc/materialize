@@ -38,16 +38,20 @@ def ensure_temp_dir_exists() -> None:
     )
 
 
-def write_results_to_file(results: list[Any], output_file_path: str) -> None:
+def write_results_to_file(
+    results: list[Any], output_file_path: str, quiet_mode: bool = False
+) -> None:
     with open(output_file_path, "w") as f:
         json.dump(results, f, ensure_ascii=False, indent=4)
-        print(f"Written data to {output_file_path}")
+        if not quiet_mode:
+            print(f"Written data to {output_file_path}")
 
 
-def read_results_from_file(file_path: str) -> list[Any]:
+def read_results_from_file(file_path: str, quiet_mode: bool = False) -> list[Any]:
     with open(file_path) as f:
         data = json.load(f)
-        print(f"Loaded data from {file_path}")
+        if not quiet_mode:
+            print(f"Loaded data from {file_path}")
         return data
 
 

@@ -9,30 +9,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-BUILDKITE_BUILD_STATES = [
-    "running",
-    "scheduled",
-    "passed",
-    "failing",
-    "failed",
-    "blocked",
-    "canceled",
-    "canceling",
-    "skipped",
-    "not_run",
-    "finished",
-]
+from typing import Any
 
-BUILDKITE_FAILED_BUILD_STATES = [
-    "failing",
-    "failed",
-]
+from materialize.buildkite_insights.buildkite_api import generic_api
 
-BUILDKITE_COMPLETED_BUILD_STATES = [
-    "passed",
-    "failed",
-    "canceled",
-    "skipped",
-    "not_run",
-    "finished",
-]
+
+def get_annotations(
+    pipeline_slug: str,
+    build_number: str,
+) -> list[Any]:
+    request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds/{build_number}/annotations"
+    return generic_api.get(request_path, {})
