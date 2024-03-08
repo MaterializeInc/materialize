@@ -606,104 +606,94 @@ DELETE FROM mixED_CAse;
 0
 
 # Reference exists in two schemas, so is not unambiguous
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [another_enum_table."колона"]
-#   )
-#   FOR TABLES(
-#     conflict_schema.another_enum_table AS conflict_enum,
-#     public.another_enum_table AS public_enum
-#   );
-# contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguous, consider specifying the schema
+! CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [another_enum_table."колона"]
+  )
+  FOR TABLES(
+    conflict_schema.another_enum_table AS conflict_enum,
+    public.another_enum_table AS public_enum
+  );
+contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguous, consider specifying the schema
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [foo]
-#   )
-#   FOR TABLES (pk_table);
-# contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
+! CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [foo]
+  )
+  FOR TABLES (pk_table);
+contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [foo.bar.qux.qax.foo]
-#   )
-#   FOR TABLES (pk_table);
-# contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
+! CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [foo.bar.qux.qax.foo]
+  )
+  FOR TABLES (pk_table);
+contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [enum_table.a, enum_table.a]
-#   )
-#   FOR TABLES (enum_table);
-# contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
+! CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [enum_table.a, enum_table.a]
+  )
+  FOR TABLES (enum_table);
+contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# utf8_table is not part of mz_source_narrow publication
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [enum_table.a, utf8_table.f1]
-#   )
-#   FOR TABLES (enum_table);
-# contains: invalid TEXT COLUMNS option value: table utf8_table not found in source
+utf8_table is not part of mz_source_narrow publication
+! CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [enum_table.a, utf8_table.f1]
+  )
+  FOR TABLES (enum_table);
+contains: invalid TEXT COLUMNS option value: table utf8_table not found in source
 
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [
-#       enum_table.a,
-#       public.another_enum_table."колона",
-#       pk_table.pk
-#     ]
-#   )
-#   FOR TABLES (
-#     "enum_table",
-#     public.another_enum_table
-#   );
-# contains:TEXT COLUMNS refers to table not currently being added
+! CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [
+      enum_table.a,
+      public.another_enum_table."колона",
+      pk_table.pk
+    ]
+  )
+  FOR TABLES (
+    "enum_table",
+    public.another_enum_table
+  );
+contains:TEXT COLUMNS refers to table not currently being added
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# > CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [
-#       enum_table.a,
-#       public.another_enum_table."колона"
-#     ]
-#   )
-#   FOR TABLES (
-#     "enum_table",
-#     public.another_enum_table
-#   );
+> CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [
+      enum_table.a,
+      public.another_enum_table."колона"
+    ]
+  )
+  FOR TABLES (
+    "enum_table",
+    public.another_enum_table
+  );
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-# another_enum_table      subsource <null> <null>
-# enum_source             mysql     ${arg.default-replica-size} cdc_cluster
-# enum_source_progress    progress  <null> <null>
-# enum_table              subsource <null> <null>
+> SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
+another_enum_table      subsource <null> <null>
+enum_source             mysql     ${arg.default-replica-size} cdc_cluster
+enum_source_progress    progress  <null> <null>
+enum_table              subsource <null> <null>
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# > SELECT * FROM enum_table
-# var0
-# var1
+> SELECT * FROM enum_table
+var0
+var1
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# > SELECT "колона" FROM another_enum_table
-# var2
-# var3
+> SELECT "колона" FROM another_enum_table
+var2
+var3
 
 #
 # Cleanup
@@ -713,8 +703,7 @@ DELETE FROM mixED_CAse;
 $ mysql-execute name=mysql
 INSERT INTO pk_table VALUES (99999, 'abc');
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
-# > DROP SOURCE enum_source CASCADE;
+> DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;
 
 #
