@@ -10,32 +10,26 @@
 # by the Apache License, Version 2.0.
 
 import argparse
-from typing import Any
 
 import pandas as pd
 
-from materialize.buildkite_insights.buildkite_api import builds_api
+from materialize.buildkite_insights.cache import builds_cache
+from materialize.buildkite_insights.cache.cache_constants import (
+    FETCH_MODE_AUTO,
+    FETCH_MODE_NO,
+    FETCH_MODE_YES,
+)
 from materialize.buildkite_insights.step_durations.build_step import (
     BuildJobOutcome,
     BuildStepMatcher,
     extract_build_step_outcomes,
     step_outcomes_to_job_outcomes,
 )
-from materialize.buildkite_insights.util.data_io import (
-    ensure_temp_dir_exists,
-    exists_file_with_recent_data,
-    get_file_path,
-    read_results_from_file,
-    write_results_to_file,
-)
 
 OUTPUT_TYPE_TXT = "txt"
 OUTPUT_TYPE_TXT_SHORT = "txt-short"
 OUTPUT_TYPE_CSV = "csv"
 
-FETCH_MODE_NO = "no"
-FETCH_MODE_YES = "yes"
-FETCH_MODE_AUTO = "auto"
 
 BUILDKITE_BUILD_STATES = [
     "running",
@@ -66,43 +60,6 @@ MZ_PIPELINES = [
     "tests",
     "www",
 ]
-
-
-def get_data(
-    pipeline_slug: str,
-    fetch_mode: str,
-    max_fetches: int,
-    branch: str | None,
-    build_state: str | None,
-    items_per_page: int = 50,
-) -> list[Any]:
-    ensure_temp_dir_exists()
-
-    file_path = get_file_path(
-        pipeline_slug=pipeline_slug,
-        branch=branch,
-        build_state=build_state,
-        max_fetches=max_fetches,
-        items_per_page=items_per_page,
-    )
-    no_fetch = fetch_mode == FETCH_MODE_NO
-
-    if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(file_path):
-        no_fetch = True
-
-    if no_fetch:
-        print(f"Using existing data: {file_path}")
-        return read_results_from_file(file_path)
-
-    result = builds_api.get_builds(
-        pipeline_slug=pipeline_slug,
-        max_fetches=max_fetches,
-        branch=branch,
-        build_state=build_state,
-        items_per_page=items_per_page,
-    )
-    write_results_to_file(result, file_path)
-    return result
 
 
 def print_data(
@@ -182,7 +139,9 @@ def main(
     build_state: str | None,
     output_type: str,
 ) -> None:
-    builds_data = get_data(pipeline_slug, fetch_mode, max_fetches, branch, build_state)
+    builds_data = builds_cache.get_or_query_builds(
+        pipeline_slug, fetch_mode, max_fetches, branch, build_state
+    )
     step_outcomes = extract_build_step_outcomes(
         builds_data=builds_data,
         selected_build_steps=build_steps,
