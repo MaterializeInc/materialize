@@ -4286,26 +4286,21 @@ fn plan_drop_item(
             }
 
             if !cascade {
-                let entry_id = catalog_item.id();
-                // When this item gets dropped it will also drop its subsources, so we need to check the
-                // users of those
                 let mut dropped_items = catalog_item
-                    .subsources()
+                    .progress_id()
                     .iter()
                     .map(|id| scx.catalog.get_item(id))
                     .collect_vec();
                 dropped_items.push(catalog_item);
 
-                for entry in dropped_items {
-                    for id in entry.used_by() {
-                        // The catalog_entry we're trying to drop will appear in the used_by list of
-                        // its subsources so we need to exclude it from cascade checking since it
-                        // will be dropped. Similarly, if we're dropping a subsource, the primary
-                        // source will show up in its dependents but should not prevent the drop.
-                        if id == &entry_id {
-                            continue;
-                        }
+                let dropped_items_map: BTreeSet<_> = dropped_items.iter().map(|i| i.id()).collect();
 
+                for entry in dropped_items {
+                    for id in entry
+                        .used_by()
+                        .iter()
+                        .filter(|id| !dropped_items_map.contains(id))
+                    {
                         let dep = scx.catalog.get_item(id);
                         if dependency_prevents_drop(object_type, dep) {
                             return Err(PlanError::DependentObjectsStillExist {
@@ -5756,24 +5751,37 @@ pub fn plan_alter_source(
         } => {
             let mut to_drop = BTreeSet::new();
             for name in names {
-                match plan_drop_item(scx, ObjectType::Source, if_exists, name.clone(), cascade)? {
-                    Some(dropped_id) => {
-                        let dropped_entry = scx.catalog.get_item(&dropped_id);
-                        let details = dropped_entry.subsource_details();
-                        if details
-                            .map(|(subsource_of, _)| subsource_of != id)
-                            .unwrap_or(true)
-                        {
+                // Ensure item is a source.
+                match resolve_item_or_type(scx, ObjectType::Source, name.clone(), if_exists)? {
+                    Some(catalog_item) => {
+                        // Ensure source is subsource of this source.
+                        let source_id = catalog_item
+                            .subsource_details()
+                            .map(|(source_id, _)| source_id)
+                            // Just need some value that is never equal to the
+                            // source id.
+                            .unwrap_or(GlobalId::System(0));
+
+                        if source_id == id {
+                            let dropped_id = plan_drop_item(
+                                scx,
+                                ObjectType::Source,
+                                if_exists,
+                                name.clone(),
+                                cascade,
+                            )?
+                            .expect("already verified non-None result");
+
+                            to_drop.insert(dropped_id);
+                        } else {
                             return Err(PlanError::DropNonSubsource {
                                 non_subsource: scx
                                     .catalog
-                                    .minimal_qualification(dropped_entry.name())
+                                    .minimal_qualification(catalog_item.name())
                                     .to_string(),
                                 source: scx.catalog.minimal_qualification(entry.name()).to_string(),
                             });
                         }
-
-                        to_drop.insert(dropped_id);
                     }
                     None => {
                         scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
@@ -5781,7 +5789,7 @@ pub fn plan_alter_source(
                             object_type: ObjectType::Source,
                         });
                     }
-                }
+                };
             }
 
             if to_drop.is_empty() {
