@@ -25,7 +25,6 @@ use std::error::Error;
 use std::sync::Arc;
 use std::{fmt, iter};
 
-use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
@@ -242,6 +241,28 @@ pub struct Fixpoint {
     limit: usize,
 }
 
+impl Fixpoint {
+    /// Run a single iteration of the [`Fixpoint`] transform by iterating
+    /// through all transforms.
+    #[mz_ore::instrument(
+        target = "optimizer",
+        level = "debug",
+        fields(path.segment = iter_name)
+    )]
+    fn apply_transforms(
+        &self,
+        relation: &mut MirRelationExpr,
+        ctx: &mut TransformCtx,
+        iter_name: String,
+    ) -> Result<(), TransformError> {
+        for transform in self.transforms.iter() {
+            transform.transform(relation, ctx)?;
+        }
+        mz_repr::explain::trace_plan(relation);
+        Ok(())
+    }
+}
+
 impl Transform for Fixpoint {
     #[mz_ore::instrument(
         target = "optimizer",
@@ -260,45 +281,47 @@ impl Transform for Fixpoint {
         // If so, we perform another pass of transforms. Otherwise, there is
         // a bug somewhere that prevents the relation from settling on a
         // stable shape.
+        let mut iter_no = 0;
         loop {
-            let mut original_count = 0;
-            relation.try_visit_post::<_, TransformError>(&mut |_| Ok(original_count += 1))?;
-            for i in 0..self.limit {
+            let start_size = relation.size();
+            for i in iter_no..iter_no + self.limit {
                 let original = relation.clone();
-
-                let span = tracing::span!(
-                    target: "optimizer",
-                    tracing::Level::DEBUG,
-                    "iteration",
-                    path.segment = format!("{:04}", i)
-                );
-                span.in_scope(|| -> Result<(), TransformError> {
-                    for transform in self.transforms.iter() {
-                        transform.transform(relation, ctx)?;
-                    }
-                    mz_repr::explain::trace_plan(relation);
-                    Ok(())
-                })?;
-
+                self.apply_transforms(relation, ctx, format!("{i:04}"))?;
                 if *relation == original {
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
             }
-            let mut final_count = 0;
-            relation.try_visit_post::<_, TransformError>(&mut |_| Ok(final_count += 1))?;
-            if final_count >= original_count {
-                break;
+            let final_size = relation.size();
+
+            iter_no += self.limit;
+
+            if final_size < start_size {
+                tracing::warn!(
+                    "fixpoint {} ran for {} iterations \
+                     without reaching a fixpoint but reduced the relation size; \
+                     final_size ({}) < start_size ({}); \
+                     continuing for {} more iterations",
+                    self.name,
+                    iter_no,
+                    final_size,
+                    start_size,
+                    self.limit
+                );
+            } else {
+                return Err(TransformError::Internal(format!(
+                    "fixpoint {} ran for {} iterations \
+                     without reaching a fixpoint or reducing the relation size; \
+                     final_size ({}) >= start_size ({}); \
+                     transformed relation:\n{}",
+                    self.name,
+                    iter_no,
+                    start_size,
+                    final_size,
+                    relation.pretty()
+                )));
             }
         }
-        for transform in self.transforms.iter() {
-            transform.transform(relation, ctx)?;
-        }
-        Err(TransformError::Internal(format!(
-            "fixpoint looped too many times {:#?}; transformed relation: {}",
-            self,
-            relation.pretty()
-        )))
     }
 }
 
@@ -363,6 +386,15 @@ impl Transform for FuseAndCollapse {
     }
 }
 
+/// Run the [`FuseAndCollapse`] transforms in a fixpoint.
+pub fn fuse_and_collapse() -> crate::Fixpoint {
+    crate::Fixpoint {
+        name: "fuse_and_collapse",
+        limit: 100,
+        transforms: FuseAndCollapse::default().transforms,
+    }
+}
+
 /// Construct a normalizing transform that runs transforms that normalize the
 /// structure of the tree until a fixpoint.
 ///
@@ -407,17 +439,13 @@ impl Optimizer {
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
-            Box::new(crate::Fixpoint {
-                name: "fixpoint",
-                limit: 100,
-                transforms: vec![Box::new(crate::FuseAndCollapse::default())],
-            }),
+            Box::new(fuse_and_collapse()),
             // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
             Box::new(crate::threshold_elision::ThresholdElision),
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "fixpoint01",
                 limit: 100,
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
@@ -436,7 +464,7 @@ impl Optimizer {
             }),
             // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "fixpoint02",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::semijoin_idempotence::SemijoinIdempotence::default()),
@@ -508,7 +536,7 @@ impl Optimizer {
             //           Constant
             //             - ()
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "fixpoint01",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::column_knowledge::ColumnKnowledge::default()),
@@ -570,7 +598,7 @@ impl Optimizer {
             // Delete unnecessary maps.
             Box::new(crate::fusion::Fusion),
             Box::new(crate::Fixpoint {
-                name: "fixpoint",
+                name: "fixpoint01",
                 limit: 100,
                 transforms: vec![
                     Box::new(crate::canonicalize_mfp::CanonicalizeMfp),
