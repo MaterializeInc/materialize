@@ -14,7 +14,8 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_mysql_source = true
 
 #
-# Test various variants of integer types
+# Test the BLOB data type
+#
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -26,15 +27,30 @@ ALTER SYSTEM SET enable_mysql_source = true
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
+# needed for MySQL 5.7
+SET GLOBAL max_allowed_packet=67108864;
+
+# reconnect after setting the max_allowed_packet var
+$ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
+
+$ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
 # Insert data pre-snapshot
-CREATE TABLE t1 (f1 SMALLINT, f2 INTEGER, f3 BIGINT, f4 TINYINT);
+CREATE TABLE t1 (f1 BLOB, f2 TINYBLOB, f3 MEDIUMBLOB, f4 LONGBLOB) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t1 VALUES ('abc ', 'abc ', 'abc ', 'abc ');
 
-INSERT INTO t1 VALUES (-32768, -2147483648, -9223372036854775808, -128);
-INSERT INTO t1 VALUES (32767, 2147483647, 9223372036854775807, 127);
+# 4 bytes per character
+CREATE TABLE t2 (f1 LONGBLOB) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t2 VALUES (REPEAT('abcdefg x ', 1000));
+UPDATE t2 SET f1 = CONCAT(f1, CONCAT(f1, CONCAT(f1, CONCAT(f1, f1))));
+UPDATE t2 SET f1 = CONCAT(f1, CONCAT(f1, CONCAT(f1, CONCAT(f1, f1))));
+UPDATE t2 SET f1 = CONCAT(f1, CONCAT(f1, CONCAT(f1, CONCAT(f1, f1))));
+UPDATE t2 SET f1 = CONCAT(f1, CONCAT(f1, CONCAT(f1, CONCAT(f1, f1))));
+UPDATE t2 SET f1 = CONCAT(f1, CONCAT(f1, CONCAT(f1, CONCAT(f1, f1))));
+UPDATE t2 SET f1 = CONCAT(f1, f1);
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
@@ -47,11 +63,13 @@ true
 $ mysql-execute name=mysql
 INSERT INTO t1 SELECT * FROM t1;
 
+# MySQL does not have a proper boolean type
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3), pg_typeof(f4) FROM t1 LIMIT 1;
-smallint integer bigint smallint
+bytea bytea bytea bytea
 
 > SELECT * FROM t1;
--32768 -2147483648 -9223372036854775808 -128
-32767 2147483647 9223372036854775807 127
--32768 -2147483648 -9223372036854775808 -128
-32767 2147483647 9223372036854775807 127
+"abc " "abc " "abc " "abc "
+"abc " "abc " "abc " "abc "
+
+> SELECT length(f1) FROM t2;
+62500000

@@ -14,7 +14,8 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_mysql_source = true
 
 #
-# Test various variants of integer types
+# Test the BINARY data type
+#
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -31,10 +32,11 @@ CREATE DATABASE public;
 USE public;
 
 # Insert data pre-snapshot
-CREATE TABLE t1 (f1 SMALLINT, f2 INTEGER, f3 BIGINT, f4 TINYINT);
-
-INSERT INTO t1 VALUES (-32768, -2147483648, -9223372036854775808, -128);
-INSERT INTO t1 VALUES (32767, 2147483647, 9223372036854775807, 127);
+CREATE TABLE t1 (f1 BINARY(4), f2 VARBINARY(4));
+INSERT INTO t1 VALUES ('abc ', 'abc ');
+INSERT INTO t1 VALUES (HEX('ab'), HEX('ab'));
+INSERT INTO t1 VALUES ('abc ', 'abc ');
+INSERT INTO t1 VALUES ('a\0\0b', 'a\0\0b');
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
@@ -47,11 +49,16 @@ true
 $ mysql-execute name=mysql
 INSERT INTO t1 SELECT * FROM t1;
 
-> SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3), pg_typeof(f4) FROM t1 LIMIT 1;
-smallint integer bigint smallint
+# MySQL does not have a proper boolean type
+> SELECT pg_typeof(f1), pg_typeof(f2) FROM t1 LIMIT 1;
+bytea bytea
 
 > SELECT * FROM t1;
--32768 -2147483648 -9223372036854775808 -128
-32767 2147483647 9223372036854775807 127
--32768 -2147483648 -9223372036854775808 -128
-32767 2147483647 9223372036854775807 127
+"6162" "6162"
+"6162" "6162"
+"a\\x00\\x00b" "a\\x00\\x00b"
+"a\\x00\\x00b" "a\\x00\\x00b"
+"abc " "abc "
+"abc " "abc "
+"abc " "abc "
+"abc " "abc "

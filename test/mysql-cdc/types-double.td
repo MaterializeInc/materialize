@@ -35,7 +35,6 @@ USE public;
 # disable strict mode
 SET SESSION sql_mode=''
 
-# REAL in pg maps to FLOAT in MySQL
 CREATE TABLE t1 (f1 FLOAT, f2 DOUBLE);
 
 INSERT INTO t1 VALUES (NULL, NULL);
@@ -55,6 +54,11 @@ INSERT INTO t1 VALUES ('-1111111111111111111111111', '-1111111111111111111111111
 INSERT INTO t1 VALUES ('-11111111111111111111111111111', '-11111111111111111111111111111');
 INSERT INTO t1 VALUES ('-1111111111111111111111111111111', '-1111111111111111111111111111111');
 
+# REAL in pg maps to DOUBLE in MySQL
+CREATE TABLE t2 (f1 REAL);
+INSERT INTO t2 VALUES ('-Inf');
+INSERT INTO t2 VALUES ('-0.1111111111');
+
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
@@ -68,6 +72,10 @@ INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1), pg_typeof(f2) FROM t1 LIMIT 1;
 "real" "double precision"
+
+> SELECT pg_typeof(f1) FROM t2 LIMIT 1;
+"double precision"
+
 
 # Note that there is some expected loss of precision on the very large numbers
 
@@ -104,6 +112,10 @@ INSERT INTO t1 SELECT * FROM t1;
 0.000000000000000000000000000001 0.000000000000000000000000000001
 <null> <null>
 <null> <null>
+
+> SELECT * FROM t2;
+-0.1111111111
+0
 
 # reset MySQL config
 $ mysql-execute name=mysql
