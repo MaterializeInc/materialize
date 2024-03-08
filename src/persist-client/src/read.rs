@@ -984,12 +984,6 @@ where
     }
 }
 
-pub(crate) const STREAMING_SNAPSHOT_AND_FETCH_ENABLED: Config<bool> = Config::new(
-    "persist_streaming_snapshot_and_fetch_enabled",
-    false,
-    "use the new streaming consolidate during snapshot_and_fetch",
-);
-
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
@@ -1011,58 +1005,6 @@ where
     /// - Reuse any code we write to streaming-merge consolidate in
     ///   persist_source here.
     pub async fn snapshot_and_fetch(
-        &mut self,
-        as_of: Antichain<T>,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
-        if STREAMING_SNAPSHOT_AND_FETCH_ENABLED.get(&self.machine.applier.cfg) {
-            return self.snapshot_and_fetch_streaming(as_of).await;
-        }
-
-        let snap = self.snapshot(as_of).await?;
-
-        let mut contents = Vec::new();
-        let mut last_consolidate_len = 0;
-        let mut is_consolidated = true;
-        for part in snap {
-            let fetched_part = fetch_leased_part(
-                &part,
-                self.blob.as_ref(),
-                Arc::clone(&self.metrics),
-                &self.metrics.read.snapshot,
-                &self.machine.applier.shard_metrics,
-                &self.reader_id,
-                self.schemas.clone(),
-            )
-            .await;
-            self.process_returned_leased_part(part);
-            contents.extend(fetched_part);
-            // NB: FetchedPart streaming consolidates its output, but it's possible
-            // that decoding introduces duplicates again.
-            is_consolidated = false;
-
-            // If the size of contents has doubled since the last consolidated
-            // size, try consolidating it again.
-            if contents.len() >= last_consolidate_len * 2 {
-                consolidate_updates(&mut contents);
-                last_consolidate_len = contents.len();
-                is_consolidated = true
-            }
-        }
-
-        // Note that if there is only one part, it's consolidated in the loop
-        // above, and we don't consolidate it again here.
-        if !is_consolidated {
-            consolidate_updates(&mut contents);
-        }
-        Ok(contents)
-    }
-
-    /// Generates a [Self::snapshot], and fetches all of the batches it
-    /// contains.
-    ///
-    /// The output is consolidated. Furthermore, to keep memory usage down when
-    /// reading a snapshot that consolidates well, this consolidates as it goes.
-    async fn snapshot_and_fetch_streaming(
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
