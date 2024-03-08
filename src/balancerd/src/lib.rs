@@ -29,6 +29,8 @@ use axum::response::IntoResponse;
 use axum::{routing, Router};
 use bytes::BytesMut;
 use futures::stream::BoxStream;
+use mz_ore::cast::CastFrom;
+
 use futures::TryFutureExt;
 use hyper::StatusCode;
 use mz_build_info::{build_info, BuildInfo};
@@ -141,7 +143,7 @@ pub struct BalancerService {
     cfg: BalancerConfig,
     pub pgwire: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     pub https: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
-    internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    pub internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     _metrics: BalancerMetrics,
 }
 
@@ -310,6 +312,9 @@ impl Drop for GaugeGuard {
 struct ServerMetricsConfig {
     connection_status: IntCounterVec,
     active_connections: IntGaugeVec,
+    tenant_connections: IntGaugeVec,
+    tenant_connection_rx: IntCounterVec,
+    tenant_connection_tx: IntCounterVec,
 }
 
 impl ServerMetricsConfig {
@@ -324,9 +329,27 @@ impl ServerMetricsConfig {
             help: "Count of currently open network connections.",
             var_labels: ["source"],
         ));
+        let tenant_connections = registry.register(metric!(
+            name: "mz_balancer_tenant_connection_active",
+            help: "Count of opened network connections by tenant.",
+            var_labels: ["source",  "tenant"]
+        ));
+        let tenant_connection_rx = registry.register(metric!(
+            name: "mz_balancer_tenant_connection_rx",
+            help: "Number of bytes received from a client for a tenent.",
+            var_labels: ["source", "tenant"],
+        ));
+        let tenant_connection_tx = registry.register(metric!(
+            name: "mz_balancer_tenant_connection_tx",
+            help: "Number of bytes sent to a client for a tenent.",
+            var_labels: ["source", "tenant"],
+        ));
         Self {
             connection_status,
             active_connections,
+            tenant_connections,
+            tenant_connection_rx,
+            tenant_connection_tx,
         }
     }
 }
@@ -363,6 +386,25 @@ impl ServerMetrics {
             .into()
     }
 
+    fn tenant_connections(&self, tenant: &str) -> GaugeGuard {
+        self.inner
+            .tenant_connections
+            .with_label_values(&[self.source, tenant])
+            .into()
+    }
+
+    fn tenant_connections_rx(&self, tenant: &str) -> IntCounter {
+        self.inner
+            .tenant_connection_rx
+            .with_label_values(&[self.source, tenant])
+    }
+
+    fn tenant_connections_tx(&self, tenant: &str) -> IntCounter {
+        self.inner
+            .tenant_connection_tx
+            .with_label_values(&[self.source, tenant])
+    }
+
     fn status_label(is_ok: bool) -> &'static str {
         if is_ok {
             "success"
@@ -387,6 +429,7 @@ impl PgwireBalancer {
         params: BTreeMap<String, String>,
         resolver: &Resolver,
         tls_mode: Option<TlsMode>,
+        metrics: &ServerMetrics,
     ) -> Result<(), io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -424,26 +467,44 @@ impl PgwireBalancer {
                     .await;
             }
         };
+        let _active_guard = resolved
+            .tenant
+            .as_ref()
+            .map(|tenant| metrics.tenant_connections(tenant));
+        let Ok(mut mz_stream) =
+            Self::init_stream(conn, resolved.addr, resolved.password, params).await
+        else {
+            return Ok(());
+        };
 
-        if let Err(err) = Self::stream(conn, resolved.addr, resolved.password, params).await {
-            return conn
-                .send(ErrorResponse::fatal(
-                    SqlState::INVALID_PASSWORD,
-                    err.to_string(),
-                ))
-                .await;
+        let mut client_counter = CountingConn::new(conn.inner_mut());
+
+        // Now blindly shuffle bytes back and forth until closed.
+        // TODO: Limit total memory use.
+        // Ignore error returns because they are not actionable, and not even useful to record
+        // metrics of. For example, running psql in a shell then exiting with ctrl+D produces an
+        // error, even though it was an intended exit by the user. Those connections should not get
+        // recorded as errors, as that's probably a misleading metric.
+        let _ = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+        if let Some(tenant) = &resolved.tenant {
+            metrics
+                .tenant_connections_tx(tenant)
+                .inc_by(u64::cast_from(client_counter.written));
+            metrics
+                .tenant_connections_rx(tenant)
+                .inc_by(u64::cast_from(client_counter.read));
         }
 
         Ok(())
     }
 
     #[mz_ore::instrument(level = "debug")]
-    async fn stream<'a, A>(
+    async fn init_stream<'a, A>(
         conn: &'a mut FramedConn<A>,
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
-    ) -> Result<(), anyhow::Error>
+    ) -> Result<TcpStream, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
@@ -486,11 +547,7 @@ impl PgwireBalancer {
             client_stream.write_all(&maybe_auth_frame[0..nread]).await?;
         }
 
-        // Now blindly shuffle bytes back and forth until closed.
-        // TODO: Limit total memory use.
-        tokio::io::copy_bidirectional(client_stream, &mut mz_stream).await?;
-
-        Ok(())
+        Ok(mz_stream)
     }
 }
 
@@ -500,12 +557,13 @@ impl mz_server_core::Server for PgwireBalancer {
     fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
         let resolver = Arc::clone(&self.resolver);
-        let metrics = self.metrics.clone();
+        let inner_metrics = self.metrics.clone();
+        let outer_metrics = self.metrics.clone();
         let cancellation_resolver = self.cancellation_resolver.clone();
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
-            let active_guard = metrics.active_connections();
+            let active_guard = outer_metrics.active_connections();
             let result: Result<(), anyhow::Error> = async move {
                 let mut conn = Conn::Unencrypted(conn);
                 loop {
@@ -524,9 +582,9 @@ impl mz_server_core::Server for PgwireBalancer {
                                 params,
                                 &resolver,
                                 tls.map(|tls| tls.mode),
+                                &inner_metrics,
                             )
                             .await?;
-                            // TODO: Resolver lookup then begin relaying bytes.
                             conn.flush().await?;
                             return Ok(());
                         }
@@ -571,9 +629,84 @@ impl mz_server_core::Server for PgwireBalancer {
             }
             .await;
             drop(active_guard);
-            metrics.connection_status(result.is_ok()).inc();
+            outer_metrics.connection_status(result.is_ok()).inc();
             Ok(())
         })
+    }
+}
+
+// A struct that counts bytes exchanged.
+struct CountingConn<C> {
+    inner: C,
+    read: usize,
+    written: usize,
+}
+
+impl<C> CountingConn<C> {
+    fn new(inner: C) -> Self {
+        CountingConn {
+            inner,
+            read: 0,
+            written: 0,
+        }
+    }
+}
+
+impl<C> AsyncRead for CountingConn<C>
+where
+    C: AsyncRead + Unpin,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let counter = self.get_mut();
+        let pin = Pin::new(&mut counter.inner);
+        let bytes = buf.filled().len();
+        let poll = pin.poll_read(cx, buf);
+        let bytes = buf.filled().len() - bytes;
+        if let std::task::Poll::Ready(Ok(())) = poll {
+            counter.read += bytes
+        }
+        poll
+    }
+}
+
+impl<C> AsyncWrite for CountingConn<C>
+where
+    C: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        let counter = self.get_mut();
+        let pin = Pin::new(&mut counter.inner);
+        let poll = pin.poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(bytes)) = poll {
+            counter.written += bytes
+        }
+        poll
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        let counter = self.get_mut();
+        let pin = Pin::new(&mut counter.inner);
+        pin.poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        let counter = self.get_mut();
+        let pin = Pin::new(&mut counter.inner);
+        pin.poll_shutdown(cx)
     }
 }
 
@@ -622,8 +755,6 @@ async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &P
         secret_key,
     };
     msg.encode(&mut buf).expect("must encode");
-    // TODO: Is there a way to not use an Arc here by convincing rust that buf will outlive the
-    // spawn? Will awaiting the JoinHandle work?
     let buf = buf.freeze();
     for ip in all_ips {
         debug!("cancelling {suffix} to {ip}");
@@ -758,6 +889,7 @@ impl Resolver {
                 Ok(ResolvedAddr {
                     addr,
                     password: Some(password),
+                    tenant: Some(auth_session.tenant_id().to_string()),
                 })
             }
             Resolver::Static(addr) => {
@@ -765,6 +897,7 @@ impl Resolver {
                 Ok(ResolvedAddr {
                     addr,
                     password: None,
+                    tenant: None,
                 })
             }
         }
@@ -792,4 +925,5 @@ pub struct FronteggResolver {
 struct ResolvedAddr {
     addr: SocketAddr,
     password: Option<String>,
+    tenant: Option<String>,
 }

@@ -180,6 +180,7 @@ async fn test_balancer() {
         let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
         let balancer_pgwire_listen = balancer_server.pgwire.0.local_addr();
         let balancer_https_listen = balancer_server.https.0.local_addr();
+        let balancer_https_internal = balancer_server.internal_http.0.local_addr();
         task::spawn(|| "balancer", async {
             balancer_server.serve().await.unwrap();
         });
@@ -323,5 +324,22 @@ async fn test_balancer() {
             })
             .await
             .unwrap();
+
+        // Assert some metrics are being tracked.
+        let metrics_url = format!(
+            "http://{host}:{port}/metrics",
+            host = balancer_https_internal.ip(),
+            port = balancer_https_internal.port()
+        );
+        let resp = client
+            .get(&metrics_url)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert_contains!(&resp, "mz_balancer_tenant_connection_active");
+        assert_contains!(&resp, "mz_balancer_tenant_connection_rx");
     }
 }
