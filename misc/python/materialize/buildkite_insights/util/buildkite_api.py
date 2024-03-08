@@ -86,3 +86,20 @@ def fetch_builds(
         params["state"] = build_state
 
     return get(request_path, params, max_fetches=max_fetches)
+
+
+def fetch_builds_of_all_pipelines(
+    max_fetches: int | None,
+    items_per_page: int = 100,
+    include_retries: bool = True,
+) -> list[Any]:
+    params = {
+        "include_retried_jobs": str(include_retries).lower(),
+        "per_page": str(items_per_page),
+    }
+
+    return get(
+        "organizations/materialize/builds",
+        params,
+        max_fetches=max_fetches,
+    )

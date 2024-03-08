@@ -14,10 +14,7 @@ from materialize.buildkite_insights.util.data_io import write_results_to_file
 
 
 def main() -> None:
-    request_path = "organizations/materialize/builds"
-    params = {"include_retried_jobs": "true", "per_page": "100"}
-
-    result = buildkite_api.get(request_path, params, max_fetches=None)
+    result = buildkite_api.fetch_builds_of_all_pipelines(max_fetches=None)
     write_results_to_file(result, "data.json")
 
 
