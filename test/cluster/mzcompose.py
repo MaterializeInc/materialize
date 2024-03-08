@@ -328,8 +328,15 @@ def workflow_test_github_15531(c: Composition) -> None:
         -- table for slow-path peeks
         CREATE TABLE t2 (a int);
         INSERT INTO t2 VALUES (84);
+
+        -- Wait for the cluster to be ready.
+        SELECT * FROM t;
+        SELECT * FROM t2;
         """
     )
+
+    # Wait a bit to let the metrics refresh.
+    time.sleep(2)
 
     # obtain initial history size and dataflow count
     (
@@ -371,6 +378,9 @@ def workflow_test_github_15531(c: Composition) -> None:
             SELECT * FROM t2;
             """
         )
+
+    # Wait a bit to let the metrics refresh.
+    time.sleep(2)
 
     # Check that history size and dataflow count are well-behaved.
     # Dataflow count can plausibly be more than 1, if compaction is delayed.
