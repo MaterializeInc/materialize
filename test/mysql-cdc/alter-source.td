@@ -90,9 +90,7 @@ CREATE TABLE table_e (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_e VALUES (1, 'one');
 INSERT INTO table_e VALUES (2, 'two');
 
-# TODO: requires #24732 OR #24952
-# CREATE TABLE table_f (pk INTEGER PRIMARY KEY, f2 ENUM ('var0', 'var1'));
-CREATE TABLE table_f (pk INTEGER PRIMARY KEY, f2 TEXT);
+CREATE TABLE table_f (pk INTEGER PRIMARY KEY, f2 ENUM ('var0', 'var1'));
 INSERT INTO table_f VALUES (1, 'var0');
 INSERT INTO table_f VALUES (2, 'var1');
 
@@ -101,7 +99,9 @@ INSERT INTO table_g VALUES (1, 'one');
 INSERT INTO table_g VALUES (2, 'two');
 
 > CREATE SOURCE mz_source
-  FROM MYSQL CONNECTION mysql_conn
+  FROM MYSQL CONNECTION mysql_conn (
+   TEXT COLUMNS (public.table_f.f2)
+  )
   FOR SCHEMAS (public);
 
 > SHOW SUBSOURCES ON mz_source
@@ -118,9 +118,8 @@ table_g               subsource
 > SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"mysql\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"mysql\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"mysql\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"mysql\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"mysql\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"mysql\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"mysql\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
 
-# TODO enable if used with #24952
-# > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-# "\"mysql\".\"public\".\"table_f\".\"f2\""
+> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
+"\"public\".\"table_f\".\"f2\""
 
 #
 # Error checking
@@ -237,7 +236,7 @@ contains:cannot drop source "table_e": still depended upon by materialized view 
 # IF NOT EXISTS + CASCADE works
 > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e, table_f CASCADE;
 
-# TODO enable if used with #24952
+# TODO: #25882 (text column entry not cascaded)
 # TEXT COLUMNS removed from table_f
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 # <null>

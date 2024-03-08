@@ -606,7 +606,7 @@ DELETE FROM mixED_CAse;
 0
 
 # Reference exists in two schemas, so is not unambiguous
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+# TODO: #24797 (explicit schema definition required)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
@@ -618,7 +618,7 @@ DELETE FROM mixED_CAse;
 #   );
 # contains: invalid TEXT COLUMNS option value: table another_enum_table is ambiguous, consider specifying the schema
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+# TODO: #24797 (explicit schema definition required)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
@@ -627,7 +627,7 @@ DELETE FROM mixED_CAse;
 #   FOR TABLES (pk_table);
 # contains: invalid TEXT COLUMNS option value: column name 'foo' must have at least a table qualification
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+# TODO: #24797 (explicit schema definition required)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
@@ -636,7 +636,7 @@ DELETE FROM mixED_CAse;
 #   FOR TABLES (pk_table);
 # contains: invalid TEXT COLUMNS option value: qualified name did not have between 1 and 3 components: foo.bar.qux.qax
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+# TODO: #24797 (explicit schema definition required)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
@@ -645,7 +645,7 @@ DELETE FROM mixED_CAse;
 #   FOR TABLES (enum_table);
 # contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.enum_table.a
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+# TODO: #24797 (explicit schema definition required)
 # utf8_table is not part of mz_source_narrow publication
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
@@ -658,14 +658,14 @@ DELETE FROM mixED_CAse;
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+# TODO: #25883 (reference to unrelated table should fail)
 # ! CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
 #     TEXT COLUMNS [
-#       enum_table.a,
+#       public.enum_table.a,
 #       public.another_enum_table."колона",
-#       pk_table.pk
+#       public.pk_table.pk
 #     ]
 #   )
 #   FOR TABLES (
@@ -674,33 +674,30 @@ DELETE FROM mixED_CAse;
 #   );
 # contains:TEXT COLUMNS refers to table not currently being added
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+# TODO: #25884 (enum in text columns does not work)
 # > CREATE SOURCE enum_source
 #   IN CLUSTER cdc_cluster
 #   FROM MYSQL CONNECTION mysql_conn (
 #     TEXT COLUMNS [
-#       enum_table.a,
+#       public.enum_table.a,
 #       public.another_enum_table."колона"
 #     ]
 #   )
 #   FOR TABLES (
-#     "enum_table",
+#     public."enum_table",
 #     public.another_enum_table
 #   );
-
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+#
 # > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 # another_enum_table      subsource <null> <null>
 # enum_source             mysql     ${arg.default-replica-size} cdc_cluster
 # enum_source_progress    progress  <null> <null>
 # enum_table              subsource <null> <null>
-
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+#
 # > SELECT * FROM enum_table
 # var0
 # var1
-
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+#
 # > SELECT "колона" FROM another_enum_table
 # var2
 # var3
@@ -713,7 +710,7 @@ DELETE FROM mixED_CAse;
 $ mysql-execute name=mysql
 INSERT INTO pk_table VALUES (99999, 'abc');
 
-# TODO: #24732 (enum unsupported) / #24952 (text column)
+# TODO: #25884 (enum in text columns does not work)
 # > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;
 
