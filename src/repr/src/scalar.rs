@@ -3207,6 +3207,7 @@ impl ScalarType {
                 Datum::String(&"x".repeat(100)),
                 // Valid timezone.
                 Datum::String("JAPAN"),
+                Datum::String("1,2,3"),
             ])
         });
         static CHAR: Lazy<Row> = Lazy::new(|| {
@@ -3215,6 +3216,8 @@ impl ScalarType {
                 Datum::String("'"),
                 Datum::String("\""),
                 Datum::String("."),
+                Datum::String(","),
+                Datum::String("\t"),
             ])
         });
         static JSONB: Lazy<Row> = Lazy::new(|| {
