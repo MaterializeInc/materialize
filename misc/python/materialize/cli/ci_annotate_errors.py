@@ -169,7 +169,12 @@ def annotate_errors(
         if failures_on_main:
             text += ", " + failures_on_main
     else:
-        text = f"<details><summary><a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> succeeded with error logs"
+        action = (
+            "failed"
+            if os.getenv("BUILDKITE_COMMAND_EXIT_STATUS") != "0"
+            else "succeeded"
+        )
+        text = f"<details><summary><a href=\"#{os.getenv('BUILDKITE_JOB_ID') or ''}\">{suite_name}</a> {action} with known error logs"
         if failures_on_main:
             text += ", " + failures_on_main
         text += "</summary>\n"
