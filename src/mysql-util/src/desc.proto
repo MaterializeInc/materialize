@@ -31,6 +31,8 @@ message ProtoMySqlColumnMetaEnum {
 
 message ProtoMySqlColumnMetaJson {}
 
+message ProtoMySqlColumnMetaYear {}
+
 message ProtoMySqlColumnDesc {
     string name = 1;
     optional mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
@@ -38,6 +40,7 @@ message ProtoMySqlColumnDesc {
     oneof meta {
         ProtoMySqlColumnMetaEnum enum = 3;
         ProtoMySqlColumnMetaJson json = 4;
+        ProtoMySqlColumnMetaYear year = 5;
     }
 }
 

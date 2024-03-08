@@ -28,13 +28,13 @@ $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
-CREATE TABLE t1 (f1 JSON, f2 ENUM('small', 'medium', 'large'));
+CREATE TABLE t1 (f1 JSON, f2 ENUM('small', 'medium', 'large'), f3 YEAR);
 
-INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false, "nest": {"birds": ["seagull", "robin"]}}' AS JSON), 'large');
+INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false, "nest": {"birds": ["seagull", "robin"]}}' AS JSON), 'large', 2024);
 
 > CREATE SOURCE da
   FROM MYSQL CONNECTION mysqc (
-    TEXT COLUMNS (public.t1.f1, public.t1.f2)
+    TEXT COLUMNS (public.t1.f1, public.t1.f2, public.t1.f3)
   )
   FOR TABLES (public.t1);
 
@@ -50,6 +50,10 @@ INSERT INTO t1 SELECT * FROM t1;
 > SELECT f2 FROM t1;
 "large"
 "large"
+
+> SELECT f3 FROM t1;
+"2024"
+"2024"
 
 # verify JSON representation is consistent between snapshot and replication
 > SELECT f1 FROM t1;
