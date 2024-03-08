@@ -477,21 +477,29 @@ impl Optimizer {
             Box::new(crate::Fixpoint {
                 name: "fixpoint01",
                 limit: 100,
-                transforms: vec![
+                transforms: {
+                    let mut buf: Vec<Box<dyn Transform>> = Vec::new();
+
                     // Predicate pushdown sets the equivalence classes of joins.
-                    Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
-                    Box::new(crate::equivalence_propagation::EquivalencePropagation::default()),
+                    buf.push(Box::new(predicate_pushdown::PredicatePushdown::default()));
+                    if ctx.features.enable_equivalence_propagation {
+                        buf.push(Box::new(
+                            equivalence_propagation::EquivalencePropagation::default(),
+                        ));
+                    }
                     // Lifts the information `!isnull(col)`
-                    Box::new(crate::nonnullable::NonNullable),
+                    buf.push(Box::new(nonnullable::NonNullable));
                     // Lifts the information `col = literal`
                     // TODO (#6613): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate
                     // redundancy between the two transforms.
-                    Box::new(crate::column_knowledge::ColumnKnowledge::default()),
+                    buf.push(Box::new(column_knowledge::ColumnKnowledge::default()));
                     // Lifts the information `col1 = col2`
-                    Box::new(crate::demand::Demand::default()),
-                    Box::new(crate::FuseAndCollapse::default()),
-                ],
+                    buf.push(Box::new(demand::Demand::default()));
+                    buf.push(Box::new(FuseAndCollapse::default()));
+
+                    buf
+                },
             }),
             // 5. Reduce/Join simplifications.
             Box::new(crate::Fixpoint {
