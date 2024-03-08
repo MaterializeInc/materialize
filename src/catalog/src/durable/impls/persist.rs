@@ -125,11 +125,8 @@ pub(crate) enum Mode {
 /// Enum representing a potentially fenced epoch.
 #[derive(Debug)]
 enum PreOpenEpoch {
-    /// The current epoch CANNOT be fenced by a new epoch, it will just adopt any new epoch it sees.
-    /// Fencing can only occur after some data has been returned to a caller.
-    Unfenceable(Option<Epoch>),
-    /// The current epoch CAN be fenced by a new epoch.
-    Fenceable(Option<Epoch>),
+    /// The current epoch, if one exists, has not been fenced.
+    Unfenced(Option<Epoch>),
     /// The current epoch has been fenced.
     Fenced {
         current_epoch: Epoch,
@@ -141,20 +138,13 @@ impl PreOpenEpoch {
     /// Returns the current epoch if it is not fenced, otherwise returns an error.
     fn validate(&self) -> Result<Option<Epoch>, DurableCatalogError> {
         match self {
-            PreOpenEpoch::Unfenceable(epoch) | PreOpenEpoch::Fenceable(epoch) => Ok(epoch.clone()),
+            PreOpenEpoch::Unfenced(epoch) => Ok(epoch.clone()),
             PreOpenEpoch::Fenced {
                 current_epoch,
                 fence_epoch,
             } => Err(DurableCatalogError::Fence(format!(
                 "current catalog epoch {current_epoch} fenced by new catalog epoch {fence_epoch}",
             ))),
-        }
-    }
-
-    /// Mark this epoch as fenceable.
-    fn mark_fenceable(&mut self) {
-        if let PreOpenEpoch::Unfenceable(epoch) = self {
-            *self = PreOpenEpoch::Fenceable(epoch.clone());
         }
     }
 }
@@ -278,15 +268,14 @@ impl UnopenedPersistCatalogState {
             .listen(Antichain::from_elem(as_of))
             .await
             .expect("invalid usage");
-        // Until this unopened state has returned some data to the caller, it cannot be fenced.
-        let mut epoch = PreOpenEpoch::Unfenceable(None);
+        let mut epoch = PreOpenEpoch::Unfenced(None);
         let mut configs = BTreeMap::new();
         for StateUpdate { kind, ts: _, diff } in &snapshot {
             soft_assert_eq_or_log!(*diff, 1, "snapshot should be consolidated");
             if let Ok(kind) = kind.clone().try_into() {
                 match kind {
                     StateUpdateKind::Epoch(current_epoch) => {
-                        epoch = PreOpenEpoch::Unfenceable(Some(current_epoch));
+                        epoch = PreOpenEpoch::Unfenced(Some(current_epoch));
                     }
                     StateUpdateKind::Config(key, value) => {
                         configs.insert(key.key, value.value);
@@ -375,7 +364,7 @@ impl UnopenedPersistCatalogState {
             ?current_epoch,
             "fencing previous catalogs"
         );
-        self.epoch = PreOpenEpoch::Fenceable(Some(current_epoch));
+        self.epoch = PreOpenEpoch::Unfenced(Some(current_epoch));
         if matches!(mode, Mode::Writable) {
             self.compare_and_append(fence_updates).await?;
         }
@@ -467,8 +456,6 @@ impl UnopenedPersistCatalogState {
         let updates: Vec<StateUpdate<StateUpdateKindRaw>> =
             sync(&mut self.listen, &mut self.upper, target_upper).await;
         self.apply_updates(updates)?;
-        // Now that we've synced with the persist shard, we can be fenced out.
-        self.epoch.mark_fenceable();
 
         Ok(())
     }
@@ -487,7 +474,7 @@ impl UnopenedPersistCatalogState {
             if let Ok(kind) = kind.clone().try_into() {
                 match (kind, diff) {
                     (StateUpdateKind::Epoch(epoch), 1) => match self.epoch {
-                        PreOpenEpoch::Fenceable(Some(current_epoch)) => {
+                        PreOpenEpoch::Unfenced(Some(current_epoch)) => {
                             if epoch > current_epoch {
                                 self.epoch = PreOpenEpoch::Fenced {
                                     current_epoch,
@@ -498,15 +485,11 @@ impl UnopenedPersistCatalogState {
                                 panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
                             }
                         }
-                        PreOpenEpoch::Fenceable(None) => {
-                            self.epoch = PreOpenEpoch::Fenceable(Some(epoch));
-                        }
-                        PreOpenEpoch::Unfenceable(_) => {
-                            self.epoch = PreOpenEpoch::Unfenceable(Some(epoch));
+                        PreOpenEpoch::Unfenced(None) => {
+                            self.epoch = PreOpenEpoch::Unfenced(Some(epoch));
                         }
                         PreOpenEpoch::Fenced { .. } => {}
                     },
-
                     (StateUpdateKind::Epoch(_), -1) => {
                         // Nothing to do, we're about to get fenced.
                     }
