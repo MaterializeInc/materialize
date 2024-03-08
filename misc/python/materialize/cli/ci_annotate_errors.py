@@ -514,7 +514,7 @@ def get_job_state() -> str:
     build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
     job_id = os.getenv("BUILDKITE_JOB_ID")
     url = f"organizations/materialize/pipelines/{pipeline_slug}/builds/{build_number}"
-    build = generic_api.fetch(url, {})
+    build = generic_api.get(url, {})
     for job in build["jobs"]:
         if job["id"] == job_id:
             return job["state"]

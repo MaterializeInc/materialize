@@ -11,7 +11,7 @@
 
 from typing import Any
 
-from materialize.buildkite_insights.buildkite_api.generic_api import get
+from materialize.buildkite_insights.buildkite_api import generic_api
 
 
 def get_builds(
@@ -34,7 +34,7 @@ def get_builds(
     if build_state is not None:
         params["state"] = build_state
 
-    return get(request_path, params, max_fetches=max_fetches)
+    return generic_api.get_multiple(request_path, params, max_fetches=max_fetches)
 
 
 def get_builds_of_all_pipelines(
@@ -47,7 +47,7 @@ def get_builds_of_all_pipelines(
         "per_page": str(items_per_page),
     }
 
-    return get(
+    return generic_api.get_multiple(
         "organizations/materialize/builds",
         params,
         max_fetches=max_fetches,

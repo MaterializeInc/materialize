@@ -17,7 +17,7 @@ import requests
 BUILDKITE_API_URL = "https://api.buildkite.com/v2"
 
 
-def fetch(request_path: str, params: dict[str, str]) -> Any:
+def get(request_path: str, params: dict[str, str]) -> Any:
     headers = {}
     token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
 
@@ -31,7 +31,7 @@ def fetch(request_path: str, params: dict[str, str]) -> Any:
     return r.json()
 
 
-def get(
+def get_multiple(
     request_path: str, params: dict[str, str], max_fetches: int | None
 ) -> list[Any]:
     results = []
@@ -40,7 +40,7 @@ def get(
 
     fetch_count = 0
     while True:
-        result = fetch(request_path, params)
+        result = get(request_path, params)
         fetch_count += 1
 
         if not result:

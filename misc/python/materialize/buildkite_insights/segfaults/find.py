@@ -22,7 +22,7 @@ def main() -> None:
     for build in data:
         request_path = f"organizations/materialize/pipelines/{build['pipeline']['slug']}/builds/{build['number']}/artifacts"
         params = {"per_page": "100"}
-        result = generic_api.get(request_path, params, max_fetches=None)
+        result = generic_api.get_multiple(request_path, params, max_fetches=None)
         for artifact in result:
             # Some core files are corrupted, probably because they get dumped during shutdown, ignore them
             if (
