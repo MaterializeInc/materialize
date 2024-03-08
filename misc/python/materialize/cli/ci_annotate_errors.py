@@ -71,9 +71,6 @@ PANIC_IN_SERVICE_START_RE = re.compile(
 # Example 2: [pod/environmentd-0/environmentd] Unknown collection identifier u2082
 SERVICES_LOG_LINE_RE = re.compile(rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) (?P<msg>.*)$")
 
-PANIC_WITHOUT_SERVICE_START_RE = re.compile(rb"^thread '.*' panicked at ")
-PANIC_ENDED_RE = re.compile(rb"note: Some details are omitted")
-
 # Expected failures, don't report them
 IGNORE_RE = re.compile(
     rb"""
@@ -184,7 +181,6 @@ def annotate_errors(
         text += "\n" + "\n".join(f"* {error}" for error in known_errors)
     if not unknown_errors:
         text += "\n</details>"
-    print(text)
     add_annotation_raw(style=style, markdown=text)
 
 
@@ -293,8 +289,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     annotate_errors(unknown_errors, known_errors, get_failures_on_main())
 
     if unknown_errors:
-        print(f"+++ Failing test because of {len(unknown_errors)} unknown error(s):")
-        print(unknown_errors)
+        print(f"+++ Failing test because of {len(unknown_errors)} unknown error(s)")
 
     # No need for rest of the logic as no error logs were found, but since
     # this script was called the test still failed, so showing the current
@@ -349,8 +344,6 @@ def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
                 error_logs.extend(_collect_errors_in_logs(data, log_file_name))
                 data.seek(0)
                 error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
-                data.seek(0)
-                error_logs.extend(_collect_loose_panics_in_logs(data, log_file_name))
 
     return error_logs
 
@@ -399,33 +392,6 @@ def _collect_service_panics_in_logs(data: Any, log_file_name: str) -> list[Error
                         ErrorLog(panic_start + b" " + match.group("msg"), log_file_name)
                     )
     assert not open_panics, f"Panic log never finished: {open_panics}"
-
-    return collected_panics
-
-
-def _collect_loose_panics_in_logs(data: Any, log_file_name: str) -> list[ErrorLog]:
-    collected_panics = []
-
-    open_panic: bytes | None = None
-
-    for line in iter(data.readline, b""):
-        line = line.rstrip(b"\n")
-        if PANIC_WITHOUT_SERVICE_START_RE.match(line):
-            assert open_panic is None, "A panic is already pending"
-            open_panic = line
-        elif open_panic is not None:
-            open_panic += b"\n" + line
-            if PANIC_ENDED_RE.search(line):
-                assert open_panic is not None
-                if IGNORE_RE.search(open_panic):
-                    open_panic = None
-                    continue
-                collected_panics.append(
-                    ErrorLog(open_panic + b" " + line, log_file_name)
-                )
-                open_panic = None
-
-    assert open_panic is None, f"Panic log never finished: {open_panic}"
 
     return collected_panics
 
