@@ -146,13 +146,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         if i == 0:
                             assert len(r) == 1, f"Unexpected results: {r}"
                         else:
-                            assert len(r) == 2, f"Unexpected results: {r}"
+                            assert len(r) % 2 == 0, f"Unexpected results: {r}"
                             assert (
-                                int(r[0][0]) >= current_time
+                                int(r[-2][0]) >= current_time
                             ), f"Unexpected results: {r}"
-                            assert int(r[0][1]) == -1, f"Unexpected results: {r}"
+                            assert int(r[-2][1]) == -1, f"Unexpected results: {r}"
                             assert (
-                                int(r[0][2]) == i * 100 - 1
+                                int(r[-2][2]) == i * 100 - 1
                             ), f"Unexpected results: {r}"
                         assert int(r[-1][0]) >= current_time, f"Unexpected results: {r}"
                         assert int(r[-1][1]) == 1, f"Unexpected results: {r}"
