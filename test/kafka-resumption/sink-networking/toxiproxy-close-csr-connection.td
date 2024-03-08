@@ -7,9 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ http-request method=POST url=http://toxiproxy:8474/proxies/csr/toxics content-type=application/json
-{
-  "name": "csr",
-  "type": "limit_data",
-  "attributes": { "bytes": 0 }
-}
+> select 1
+1
+#$ http-request method=POST url=http://toxiproxy:8474/proxies/csr/toxics content-type=application/json
+#{
+#  "name": "csr",
+#  "type": "limit_data",
+#  "attributes": { "bytes": 0 }
+#}

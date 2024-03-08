@@ -22,9 +22,14 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=applic
 }
 
 $ kafka-create-topic topic=input
-$ kafka-ingest topic=input format=bytes
+$ kafka-ingest topic=input format=bytes repeat=1000000000
 Rochester,NY,14618
 New York,NY,10004
+
+$ kafka-create-topic topic=input2
+$ kafka-ingest topic=input2 format=bytes repeat=1000000000
+Rochester,NY,14618,0
+New York,NY,10004,0
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
@@ -36,26 +41,21 @@ New York,NY,10004
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
 
+> CREATE SOURCE input2 (city, state, zip, x)
+  FROM KAFKA CONNECTION kafka_conn1 (TOPIC 'testdrive-input2-${testdrive.seed}')
+  FORMAT CSV WITH 3 COLUMNS
+  INCLUDE OFFSET
+
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL 'http://toxiproxy:8081/'
   );
 
-> CREATE SINK output FROM input
+> CREATE SINK output2 FROM input2
   INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK output2 FROM input
-  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output2-byo-sink-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-> CREATE SINK output3 FROM input
-  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output3-byo-sink-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-> CREATE SINK output4 FROM input
-  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output4-byo-sink-${testdrive.seed}')
+> CREATE SINK output FROM input
+  INTO KAFKA CONNECTION kafka_conn2 (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

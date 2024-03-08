@@ -14,7 +14,7 @@ ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 
 $ kafka-create-topic topic=thetopic
 
-$ kafka-ingest topic=thetopic format=bytes
+$ kafka-ingest topic=thetopic format=bytes repeat=1000000000
 one
 
 > DROP CLUSTER IF EXISTS sc;
