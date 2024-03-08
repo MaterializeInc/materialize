@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::instrument;
+use mz_repr::optimize::OverrideFrom;
 use mz_sql::plan::{self, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;
@@ -22,7 +23,7 @@ use crate::coord::{
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::optimize::{Optimize, OverrideFrom};
+use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
 use crate::util::ResultExt;
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
@@ -167,12 +168,14 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
-        let id = self.allocate_transient_id()?;
+        let view_id = self.allocate_transient_id()?;
+        let sink_id = self.allocate_transient_id()?;
         let conn_id = session.conn_id().clone();
         let up_to = up_to
             .as_ref()
             .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr.clone(), session))
             .transpose()?;
+        let debug_name = format!("subscribe-{}", sink_id);
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster_id).config.features());
 
@@ -180,10 +183,12 @@ impl Coordinator {
         let mut optimizer = optimize::subscribe::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
-            id,
+            view_id,
+            sink_id,
             conn_id,
             *with_snapshot,
             up_to,
+            debug_name,
             optimizer_config,
         );
 

@@ -153,27 +153,25 @@ impl Optimize<Index> for Optimizer {
         df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-        for desc in df_desc.objects_to_build.iter_mut() {
-            prep_relation_expr(&mut desc.plan, ExprPrepStyle::Index)?;
-        }
-
-        let mut index_desc = IndexDesc {
+        let index_desc = IndexDesc {
             on_id: index.on,
             key: index.keys.clone(),
         };
-
-        for key in index_desc.key.iter_mut() {
-            prep_scalar_expr(key, ExprPrepStyle::Index)?;
-        }
-
         df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
+
+        // Prepare expressions in the assembled dataflow.
+        let style = ExprPrepStyle::Index;
+        df_desc.visit_children(
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
+        )?;
 
         // Optimize the dataflow across views, and any other ways that appeal.
         let mut df_meta = mz_transform::optimize_dataflow(
             &mut df_desc,
             &df_builder,
             &mz_transform::EmptyStatisticsOracle,
-            self.config.enable_eager_delta_joins,
+            &self.config.features,
         )?;
 
         if self.config.mode == OptimizeMode::Explain {
@@ -221,12 +219,7 @@ impl Optimize<GlobalMirPlan> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = Plan::finalize_dataflow(
-            df_desc,
-            self.config.enable_consolidate_after_union_negate,
-            self.config.enable_reduce_mfp_fusion,
-        )
-        .map_err(OptimizerError::Internal)?;
+        let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);

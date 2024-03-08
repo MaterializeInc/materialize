@@ -67,7 +67,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
-use mz_repr::optimize::OptimizerFeatureOverrides;
+use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
@@ -194,25 +194,11 @@ pub struct OptimizerConfig {
     /// This means that it will not consider catalog items (more specifically
     /// indexes) with [`GlobalId`] greater or equal than the one provided here.
     pub replan: Option<GlobalId>,
-    /// Reoptimize imported views when building and optimizing a
-    /// [`DataflowDescription`] in the global MIR optimization phase.
-    pub reoptimize_imported_views: bool,
-    /// Enable fast path optimization.
-    pub enable_fast_path: bool,
-    /// Enable consolidation of unions that happen immediately after negate.
-    ///
-    /// The refinement happens in the LIR ⇒ LIR phase.
-    pub enable_consolidate_after_union_negate: bool,
-    /// An exclusive upper bound on the number of results we may return from a
-    /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
-    /// [`peek::Optimizer`].
-    pub persist_fast_path_limit: usize,
-    /// Bound from [`SystemVars::enable_new_outer_join_lowering`].
-    pub enable_new_outer_join_lowering: bool,
-    /// Bound from [`SystemVars::enable_eager_delta_joins`].
-    pub enable_eager_delta_joins: bool,
-    /// Bound from [`SystemVars::enable_reduce_mfp_fusion`].
-    pub enable_reduce_mfp_fusion: bool,
+    /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
+    /// Enforced if `timing` is set.
+    pub no_fast_path: bool,
+    /// Optimizer feature flags.
+    pub features: OptimizerFeatures,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,22 +214,10 @@ impl From<&SystemVars> for OptimizerConfig {
         Self {
             mode: OptimizeMode::Execute,
             replan: None,
-            reoptimize_imported_views: false,
-            enable_fast_path: true, // Always enable fast path if available.
-            enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
-            persist_fast_path_limit: vars.persist_fast_path_limit(),
-            enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
-            enable_eager_delta_joins: vars.enable_eager_delta_joins(),
-            enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
+            no_fast_path: false,
+            features: OptimizerFeatures::from(vars),
         }
     }
-}
-
-/// A trait used to implement layered config construction.
-pub trait OverrideFrom<T> {
-    /// Override the configuration represented by [`Self`] with values
-    /// from the given `layer`.
-    fn override_from(self, layer: &T) -> Self;
 }
 
 /// [`OptimizerConfig`] overrides coming from an optional `T`.
@@ -259,18 +233,10 @@ where
     }
 }
 
-/// [`OptimizerConfig`] overrides coming from a [`OptimizerFeatureOverrides`].
+/// Override [`OptimizerConfig::features`] from [`OptimizerFeatureOverrides`].
 impl OverrideFrom<OptimizerFeatureOverrides> for OptimizerConfig {
     fn override_from(mut self, overrides: &OptimizerFeatureOverrides) -> Self {
-        if let Some(feature_value) = overrides.reoptimize_imported_views {
-            self.reoptimize_imported_views = feature_value;
-        }
-        if let Some(feature_value) = overrides.enable_new_outer_join_lowering {
-            self.enable_new_outer_join_lowering = feature_value;
-        }
-        if let Some(feature_value) = overrides.enable_eager_delta_joins {
-            self.enable_eager_delta_joins = feature_value;
-        }
+        self.features = self.features.override_from(overrides);
         self
     }
 }
@@ -285,18 +251,10 @@ impl OverrideFrom<ExplainContext> for OptimizerConfig {
         // Override general parameters.
         self.mode = OptimizeMode::Explain;
         self.replan = ctx.replan;
-        self.enable_fast_path = !ctx.config.no_fast_path;
+        self.no_fast_path = ctx.config.no_fast_path;
 
         // Override feature flags that can be enabled in the EXPLAIN config.
-        if let Some(explain_flag) = ctx.config.reoptimize_imported_views {
-            self.reoptimize_imported_views = explain_flag;
-        }
-        if let Some(explain_flag) = ctx.config.enable_new_outer_join_lowering {
-            self.enable_new_outer_join_lowering = explain_flag;
-        }
-        if let Some(explain_flag) = ctx.config.enable_eager_delta_joins {
-            self.enable_eager_delta_joins = explain_flag;
-        }
+        self.features = self.features.override_from(&ctx.config.features);
 
         // Return the final result.
         self
@@ -306,7 +264,7 @@ impl OverrideFrom<ExplainContext> for OptimizerConfig {
 impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
     fn from(config: &OptimizerConfig) -> Self {
         Self {
-            enable_new_outer_join_lowering: config.enable_new_outer_join_lowering,
+            enable_new_outer_join_lowering: config.features.enable_new_outer_join_lowering,
         }
     }
 }
@@ -334,6 +292,12 @@ pub enum OptimizerError {
     },
     #[error("internal optimizer error: {0}")]
     Internal(String),
+}
+
+impl From<String> for OptimizerError {
+    fn from(msg: String) -> Self {
+        Self::Internal(msg)
+    }
 }
 
 impl OptimizerError {

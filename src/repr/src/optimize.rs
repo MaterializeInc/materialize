@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// A macro for feature flags managed by the optimizer.
 macro_rules! optimizer_feature_flags {
     ({ $($feature:ident: $type:ty,)* }) => {
-        #[derive(Clone, Debug)]
+        #[derive(Clone, Debug, Default)]
         pub struct OptimizerFeatures {
             $(pub $feature: $type),*
         }
@@ -34,8 +34,18 @@ macro_rules! optimizer_feature_flags {
             }
         }
 
+        /// An [`OverrideFrom`] implementation that updates
+        /// [`OptimizerFeatures`] using [`OptimizerFeatureOverrides`] values.
+        impl OverrideFrom<OptimizerFeatureOverrides> for OptimizerFeatures {
+            fn override_from(mut self, overrides: &OptimizerFeatureOverrides) -> Self {
+                $(if let Some(feature_value) = overrides.$feature {
+                    self.$feature = feature_value;
+                })*
+                self
+            }
+        }
 
-        /// Synthesize `OptimizerFeatureOverrides ⇒ BTreeMap<String, String>`
+        /// An `OptimizerFeatureOverrides ⇒ BTreeMap<String, String>`
         /// conversion.
         ///
         /// WARNING: changing the definition of item might break catalog
@@ -59,8 +69,7 @@ macro_rules! optimizer_feature_flags {
             }
         }
 
-        /// Synthesize `BTreeMap<String, String> ⇒ OptimizerFeatureOverrides`
-        /// conversion.
+        /// A `BTreeMap<String, String> ⇒ OptimizerFeatureOverrides` conversion.
         ///
         /// WARNING: changing the definition of item might break catalog
         /// re-hydration for some catalog items (such as entries for `CREATE
@@ -82,13 +91,31 @@ macro_rules! optimizer_feature_flags {
 }
 
 optimizer_feature_flags!({
+    // Enable consolidation of unions that happen immediately after negate.
+    //
+    // The refinement happens in the LIR ⇒ LIR phase.
     enable_consolidate_after_union_negate: bool,
-    persist_fast_path_limit: usize,
-    reoptimize_imported_views: bool,
-    enable_new_outer_join_lowering: bool,
+    // Bound from `SystemVars::enable_eager_delta_joins`.
     enable_eager_delta_joins: bool,
+    // Bound from `SystemVars::enable_new_outer_join_lowering`.
+    enable_new_outer_join_lowering: bool,
+    // Bound from `SystemVars::enable_reduce_mfp_fusion`.
     enable_reduce_mfp_fusion: bool,
+    // An exclusive upper bound on the number of results we may return from a
+    // Persist fast-path peek. Required by the `create_fast_path_plan` call in
+    // `peek::Optimizer`.
+    persist_fast_path_limit: usize,
+    // Reoptimize imported views when building and optimizing a
+    // `DataflowDescription` in the global MIR optimization phase.
+    reoptimize_imported_views: bool,
 });
+
+/// A trait used to implement layered config construction.
+pub trait OverrideFrom<T> {
+    /// Override the configuration represented by [`Self`] with values
+    /// from the given `layer`.
+    fn override_from(self, layer: &T) -> Self;
+}
 
 /// A trait that handles conversion of feature flags.
 trait OptimizerFeatureType {

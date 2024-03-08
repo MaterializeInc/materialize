@@ -17,6 +17,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::Datum;
 use mz_repr::Row;
 use mz_sql::ast::ExplainStage;
@@ -42,7 +43,7 @@ use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
-use crate::optimize::{self, Optimize, OverrideFrom};
+use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, CollectionIdBundle, ExecuteContext, TimestampProvider};
@@ -391,12 +392,12 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let exported_sink_id = if let ExplainContext::None = explain_ctx {
+        let sink_id = if let ExplainContext::None = explain_ctx {
             self.catalog_mut().allocate_user_id().await?
         } else {
             self.allocate_transient_id()?
         };
-        let internal_view_id = self.allocate_transient_id()?;
+        let view_id = self.allocate_transient_id()?;
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
@@ -406,8 +407,8 @@ impl Coordinator {
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
-            exported_sink_id,
-            internal_view_id,
+            sink_id,
+            view_id,
             column_names.clone(),
             non_null_assertions.clone(),
             refresh_schedule.clone(),
@@ -445,7 +446,7 @@ impl Coordinator {
                                 CreateMaterializedViewStage::Explain(
                                     CreateMaterializedViewExplain {
                                         validity,
-                                        exported_sink_id,
+                                        sink_id,
                                         plan,
                                         df_meta,
                                         explain_ctx,
@@ -454,7 +455,7 @@ impl Coordinator {
                             } else {
                                 CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
                                     validity,
-                                    exported_sink_id,
+                                    sink_id,
                                     plan,
                                     resolved_ids,
                                     local_mir_plan,
@@ -479,7 +480,7 @@ impl Coordinator {
                                 CreateMaterializedViewStage::Explain(
                                     CreateMaterializedViewExplain {
                                         validity,
-                                        exported_sink_id,
+                                        sink_id,
                                         plan,
                                         df_meta: Default::default(),
                                         explain_ctx,
@@ -503,7 +504,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateMaterializedViewFinish {
-            exported_sink_id,
+            sink_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -560,7 +561,7 @@ impl Coordinator {
                 .into_iter()
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
             std::iter::once(catalog::Op::CreateItem {
-                id: exported_sink_id,
+                id: sink_id,
                 oid: self.catalog_mut().allocate_oid()?,
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
@@ -590,10 +591,10 @@ impl Coordinator {
                 // Save plan structures.
                 coord
                     .catalog_mut()
-                    .set_optimized_plan(exported_sink_id, global_mir_plan.df_desc().clone());
+                    .set_optimized_plan(sink_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(exported_sink_id, global_lir_plan.df_desc().clone());
+                    .set_physical_plan(sink_id, global_lir_plan.df_desc().clone());
 
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
@@ -605,13 +606,12 @@ impl Coordinator {
                 coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
 
                 // Return a metainfo with rendered notices.
-                let df_meta =
-                    coord
-                        .catalog()
-                        .render_notices(df_meta, notice_ids, Some(exported_sink_id));
+                let df_meta = coord
+                    .catalog()
+                    .render_notices(df_meta, notice_ids, Some(sink_id));
                 coord
                     .catalog_mut()
-                    .set_dataflow_metainfo(exported_sink_id, df_meta.clone());
+                    .set_dataflow_metainfo(sink_id, df_meta.clone());
 
                 // Announce the creation of the materialized view source.
                 coord
@@ -620,7 +620,7 @@ impl Coordinator {
                     .create_collections(
                         None,
                         vec![(
-                            exported_sink_id,
+                            sink_id,
                             CollectionDescription {
                                 desc: output_desc,
                                 data_source: DataSource::Other(DataSourceOther::Compute),
@@ -634,7 +634,7 @@ impl Coordinator {
 
                 coord
                     .initialize_storage_read_policies(
-                        vec![exported_sink_id],
+                        vec![sink_id],
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;
@@ -754,7 +754,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateMaterializedViewExplain {
-            exported_sink_id,
+            sink_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -778,7 +778,7 @@ impl Coordinator {
         let expr_humanizer = {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
-                exported_sink_id => TransientItem::new(
+                sink_id => TransientItem::new(
                     Some(full_name.to_string()),
                     Some(full_name.item.to_string()),
                     Some(column_names.iter().map(|c| c.to_string()).collect()),

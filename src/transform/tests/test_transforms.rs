@@ -256,7 +256,6 @@ fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, St
         types: flags.remove("types"),
         redacted: false,
         join_impls: false,
-        no_fast_path: false,
         raw_plans: false,
         ..ExplainConfig::default()
     };

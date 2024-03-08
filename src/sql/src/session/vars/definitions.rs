@@ -22,6 +22,7 @@ use mz_ore::cast::{self, CastFrom};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ident;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -2105,3 +2106,16 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
 );
+
+impl From<&super::SystemVars> for OptimizerFeatures {
+    fn from(vars: &super::SystemVars) -> Self {
+        Self {
+            enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
+            enable_eager_delta_joins: vars.enable_eager_delta_joins(),
+            enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
+            enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
+            persist_fast_path_limit: vars.persist_fast_path_limit(),
+            reoptimize_imported_views: false,
+        }
+    }
+}

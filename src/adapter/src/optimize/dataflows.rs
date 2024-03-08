@@ -21,8 +21,8 @@ use maplit::{btreemap, btreeset};
 
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_types::sinks::ComputeSinkDesc;
+use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
+
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
@@ -39,7 +39,6 @@ use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::CatalogRole;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_transform::dataflow::DataflowMetainfo;
 use tracing::warn;
 
 use crate::catalog::CatalogState;
@@ -101,8 +100,6 @@ pub struct DataflowBuilder<'a> {
     ///
     /// Bound from [`OptimizerConfig::replan`].
     pub replan: Option<GlobalId>,
-    /// Bound from [`OptimizerConfig::enable_eager_delta_joins`].
-    enable_eager_delta_joins: bool,
     /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
 }
@@ -152,12 +149,10 @@ pub fn dataflow_import_id_bundle<P>(
 
 impl<'a> DataflowBuilder<'a> {
     pub fn new(catalog: &'a CatalogState, compute: ComputeInstanceSnapshot) -> Self {
-        let system_vars = catalog.system_config();
         Self {
             catalog,
             compute,
             replan: None,
-            enable_eager_delta_joins: system_vars.enable_eager_delta_joins(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
@@ -168,7 +163,6 @@ impl<'a> DataflowBuilder<'a> {
     // optimizer is using a DataflowBuilder instance.
     pub(super) fn with_config(mut self, config: &OptimizerConfig) -> Self {
         self.replan = config.replan;
-        self.enable_eager_delta_joins = config.enable_eager_delta_joins;
         self
     }
 
@@ -260,48 +254,6 @@ impl<'a> DataflowBuilder<'a> {
         Ok(())
     }
 
-    /// Builds a dataflow description for the sink with the specified name,
-    /// ID, source, and output connection.
-    ///
-    /// For as long as this dataflow is active, `id` can be used to reference
-    /// the sink (primarily to drop it, at the moment).
-    pub fn build_sink_dataflow(
-        &mut self,
-        name: String,
-        id: GlobalId,
-        sink_description: ComputeSinkDesc,
-    ) -> Result<(DataflowDesc, DataflowMetainfo), OptimizerError> {
-        let mut dataflow = DataflowDesc::new(name);
-        let dataflow_metainfo =
-            self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
-        Ok((dataflow, dataflow_metainfo))
-    }
-
-    /// Like `build_sink_dataflow`, but builds the sink dataflow into the
-    /// existing dataflow description instead of creating one from scratch.
-    pub fn build_sink_dataflow_into(
-        &mut self,
-        dataflow: &mut DataflowDesc,
-        id: GlobalId,
-        sink_description: ComputeSinkDesc,
-    ) -> Result<DataflowMetainfo, OptimizerError> {
-        self.import_into_dataflow(&sink_description.from, dataflow)?;
-        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(plan, ExprPrepStyle::Index)?;
-        }
-        dataflow.export_sink(id, sink_description);
-
-        // Optimize the dataflow across views, and any other ways that appeal.
-        let dataflow_metainfo = mz_transform::optimize_dataflow(
-            dataflow,
-            self,
-            &mz_transform::EmptyStatisticsOracle,
-            self.enable_eager_delta_joins,
-        )?;
-
-        Ok(dataflow_metainfo)
-    }
-
     // Re-optimize the imported view plans using the current optimizer
     // configuration if reoptimization is requested.
     pub fn maybe_reoptimize_imported_views(
@@ -309,8 +261,8 @@ impl<'a> DataflowBuilder<'a> {
         df_desc: &mut DataflowDesc,
         config: &OptimizerConfig,
     ) -> Result<(), OptimizerError> {
-        if !config.reoptimize_imported_views {
-            return Ok(()); // Do nothing is not explicitly requested.
+        if !config.features.reoptimize_imported_views {
+            return Ok(()); // Do nothing if not explicitly requested.
         }
 
         let mut view_optimizer = view::Optimizer::new(config.clone());

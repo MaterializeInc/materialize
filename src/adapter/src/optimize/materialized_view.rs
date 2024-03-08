@@ -27,7 +27,6 @@
 
 use std::sync::Arc;
 
-use mz_compute_types::dataflows::BuildDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_expr::refresh_schedule::RefreshSchedule;
@@ -42,7 +41,7 @@ use timely::progress::Antichain;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
-    prep_relation_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
+    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
@@ -57,9 +56,9 @@ pub struct Optimizer {
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported materialized view sink.
-    exported_sink_id: GlobalId,
+    sink_id: GlobalId,
     /// A transient GlobalId to be used when constructing the dataflow.
-    internal_view_id: GlobalId,
+    view_id: GlobalId,
     /// The resulting column names.
     column_names: Vec<ColumnName>,
     /// Output columns that are asserted to be not null in the `CREATE VIEW`
@@ -77,8 +76,8 @@ impl Optimizer {
     pub fn new(
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
-        exported_sink_id: GlobalId,
-        internal_view_id: GlobalId,
+        sink_id: GlobalId,
+        view_id: GlobalId,
         column_names: Vec<ColumnName>,
         non_null_assertions: Vec<usize>,
         refresh_schedule: Option<RefreshSchedule>,
@@ -89,8 +88,8 @@ impl Optimizer {
             typecheck_ctx: empty_context(),
             catalog,
             compute_instance,
-            exported_sink_id,
-            internal_view_id,
+            sink_id,
+            view_id,
             column_names,
             non_null_assertions,
             refresh_schedule,
@@ -202,15 +201,11 @@ impl Optimize<LocalMirPlan> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
-        df_builder.import_view_into_dataflow(&self.internal_view_id, &expr, &mut df_desc)?;
+        df_builder.import_view_into_dataflow(&self.view_id, &expr, &mut df_desc)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-        for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
-            prep_relation_expr(plan, ExprPrepStyle::Index)?;
-        }
-
         let sink_description = ComputeSinkDesc {
-            from: self.internal_view_id,
+            from: self.view_id,
             from_desc: rel_desc.clone(),
             connection: ComputeSinkConnection::Persist(PersistSinkConnection {
                 value_desc: rel_desc,
@@ -221,11 +216,20 @@ impl Optimize<LocalMirPlan> for Optimizer {
             non_null_assertions: self.non_null_assertions.clone(),
             refresh_schedule: self.refresh_schedule.clone(),
         };
+        df_desc.export_sink(self.sink_id, sink_description);
 
-        let df_meta = df_builder.build_sink_dataflow_into(
+        // Prepare expressions in the assembled dataflow.
+        let style = ExprPrepStyle::Index;
+        df_desc.visit_children(
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
+        )?;
+
+        let df_meta = mz_transform::optimize_dataflow(
             &mut df_desc,
-            self.exported_sink_id,
-            sink_description,
+            &df_builder,
+            &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
+            &self.config.features,
         )?;
 
         if self.config.mode == OptimizeMode::Explain {
@@ -255,12 +259,7 @@ impl Optimize<GlobalMirPlan> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = Plan::finalize_dataflow(
-            df_desc,
-            self.config.enable_consolidate_after_union_negate,
-            self.config.enable_reduce_mfp_fusion,
-        )
-        .map_err(OptimizerError::Internal)?;
+        let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);

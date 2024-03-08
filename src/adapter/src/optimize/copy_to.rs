@@ -229,7 +229,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 return Err(OptimizerError::Internal(msg.to_string()));
             }
         };
-        let sink_desc = ComputeSinkDesc {
+        let sink_description = ComputeSinkDesc {
             from_desc: self.copy_to_context.desc.clone(),
             from: self.select_id,
             connection,
@@ -241,8 +241,10 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             // No `REFRESH` for copy_to.
             refresh_schedule: None,
         };
-        df_desc.export_sink(self.select_id, sink_desc);
+        df_desc.export_sink(self.select_id, sink_description);
 
+        // Prepare expressions in the assembled dataflow.
+        //
         // Resolve all unmaterializable function calls except mz_now(), because
         // we don't yet have a timestamp.
         let style = ExprPrepStyle::OneShot {
@@ -281,7 +283,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &mut df_desc,
             &df_builder,
             &*stats,
-            self.config.enable_eager_delta_joins,
+            &self.config.features,
         )?;
 
         if self.config.mode == OptimizeMode::Explain {
@@ -316,12 +318,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = Plan::finalize_dataflow(
-            df_desc,
-            self.config.enable_consolidate_after_union_negate,
-            self.config.enable_reduce_mfp_fusion,
-        )
-        .map_err(OptimizerError::Internal)?;
+        let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);

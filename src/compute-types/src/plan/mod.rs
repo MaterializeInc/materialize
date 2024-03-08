@@ -23,6 +23,7 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{ColumnType, Diff, GlobalId, Row};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
@@ -788,16 +789,15 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     )]
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-        enable_consolidate_after_union_negate: bool,
-        enable_reduce_mfp_fusion: bool,
+        features: &OptimizerFeatures,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
-        let mut dataflow = Self::lower_dataflow(desc, enable_reduce_mfp_fusion)?;
+        let mut dataflow = Self::lower_dataflow(desc, features)?;
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
 
-        if enable_consolidate_after_union_negate {
+        if features.enable_consolidate_after_union_negate {
             Self::refine_union_negate_consolidation(&mut dataflow);
         }
 
@@ -850,9 +850,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     )]
     fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-        enable_reduce_mfp_fusion: bool,
+        features: &OptimizerFeatures,
     ) -> Result<DataflowDescription<Self>, String> {
-        let context = lowering::Context::new(desc.debug_name.clone(), enable_reduce_mfp_fusion);
+        let context = lowering::Context::new(desc.debug_name.clone(), features);
         let dataflow = context.lower(desc)?;
 
         mz_repr::explain::trace_plan(&dataflow);

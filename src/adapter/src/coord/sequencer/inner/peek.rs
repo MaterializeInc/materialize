@@ -20,6 +20,7 @@ use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::optimize::OverrideFrom;
 use mz_repr::{Datum, GlobalId, Row, RowArena, Timestamp};
 use mz_sql::catalog::{CatalogCluster, SessionCatalog};
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -53,7 +54,7 @@ use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
-use crate::optimize::{self, Optimize, OverrideFrom};
+use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 

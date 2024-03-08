@@ -46,6 +46,7 @@ use mz_ore::str::{bracketed, separated, Indent};
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
 use crate::explain::text::{text_string, DisplayText};
+use crate::optimize::OptimizerFeatureOverrides;
 use crate::{ColumnType, GlobalId, ScalarType};
 
 pub mod dot;
@@ -192,15 +193,8 @@ pub struct ExplainConfig {
     pub types: bool,
     /// Show MFP pushdown information.
     pub filter_pushdown: bool,
-    // -------------
-    // Feature flags
-    // -------------
-    /// Re-optimize view imported directly in DataflowDescriptions.
-    pub reoptimize_imported_views: Option<bool>,
-    /// Enable outer join lowering implemented in #22347 and #22348.
-    pub enable_new_outer_join_lowering: Option<bool>,
-    /// Enable the eager delta join planning implemented in #23318.
-    pub enable_eager_delta_joins: Option<bool>,
+    /// Optimizer feature flags.
+    pub features: OptimizerFeatureOverrides,
 }
 
 impl Default for ExplainConfig {
@@ -225,9 +219,7 @@ impl Default for ExplainConfig {
             subtree_size: false,
             timing: false,
             types: false,
-            reoptimize_imported_views: None,
-            enable_new_outer_join_lowering: None,
-            enable_eager_delta_joins: None,
+            features: Default::default(),
         }
     }
 }
@@ -900,9 +892,7 @@ mod tests {
             subtree_size: false,
             timing: true,
             types: false,
-            reoptimize_imported_views: None,
-            enable_new_outer_join_lowering: None,
-            enable_eager_delta_joins: None,
+            features: Default::default(),
         };
         let context = ExplainContext {
             env,
