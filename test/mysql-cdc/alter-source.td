@@ -66,7 +66,7 @@ contains:mz_source is a mysql source, which does not support ALTER SOURCE.
 ! ALTER SOURCE mz_source DROP SUBSOURCE table_a;
 contains:mz_source is a mysql source, which does not support ALTER SOURCE.
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 # Re-populate tables for rest of test.
 
@@ -116,9 +116,6 @@ table_e               subsource
 table_f               subsource
 table_g               subsource
 
-# Show all tablestodo this should be splittable
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"mysql\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"mysql\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"mysql\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"mysql\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"mysql\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"mysql\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"mysql\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"public\".\"table_f\".\"f2\""
@@ -158,7 +155,7 @@ table_g               subsource
 # ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_too;
 # contains:SOURCE "mz_source_too" is not a subsource of "mz_source"
 #
-# > DROP SOURCE mz_source_too;
+# > DROP SOURCE mz_source_too CASCADE;
 #
 # ! ALTER SOURCE mz_source DROP SUBSOURCE dne;
 # contains:unknown catalog item 'dne'

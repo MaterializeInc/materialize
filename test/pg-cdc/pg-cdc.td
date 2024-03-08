@@ -172,7 +172,7 @@ ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000
 pk_table subsource
 test_slot_source_progress progress
 
-> DROP SOURCE test_slot_source
+> DROP SOURCE test_slot_source CASCADE
 
 # TODO: enable once we land #24586
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
@@ -343,13 +343,6 @@ id             replication_slot         timeline_id
 u<SUPPRESSED>  materialize<SUPPRESSED>  <SUPPRESSED>
 
 $ unset-regex
-
-# Cannot drop subsources independent of primary source
-! DROP SOURCE conflict_table
-contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
-
-! DROP SOURCE conflict_table CASCADE
-contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 #
 # Perform sanity checks of the initial snapshot
@@ -567,7 +560,7 @@ true
 > SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
 true
 
-> DROP SOURCE large_cluster_source;
+> DROP SOURCE large_cluster_source CASCADE;
 
 #
 # Remove all data on the Postgres side
@@ -813,7 +806,7 @@ another_source          postgres  ${arg.default-replica-size} cdc_cluster
 another_source_progress progress  <null> <null>
 another_table           subsource <null> <null>
 
-> DROP SOURCE another_source
+> DROP SOURCE another_source CASCADE
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA conflict_schema CASCADE;

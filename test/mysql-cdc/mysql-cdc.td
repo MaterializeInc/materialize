@@ -147,7 +147,7 @@ ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 1000
 pk_table subsource
 test_slot_source_progress progress
 
-> DROP SOURCE test_slot_source
+> DROP SOURCE test_slot_source CASCADE;
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 0
@@ -176,7 +176,7 @@ ROLLBACK;
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'test_slot_source';
 running
 
-> DROP SOURCE test_slot_source
+> DROP SOURCE test_slot_source CASCADE;
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET mysql_source_snapshot_lock_wait_timeout = 3600
@@ -318,13 +318,6 @@ running
 1
 
 # There is no such thing like mz_internal.mz_mysql_sources because MySQL does not have replication slots.
-
-# Cannot drop subsources independent of primary source
-! DROP SOURCE conflict_table
-contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
-
-! DROP SOURCE conflict_table CASCADE
-contains: SOURCE "conflict_table" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
 
 #
 # Perform sanity checks of the initial snapshot
@@ -546,7 +539,7 @@ true
 > SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_source_pk_table';
 true
 
-> DROP SOURCE large_cluster_source;
+> DROP SOURCE large_cluster_source CASCADE;
 
 #
 # Remove all data on the Postgres side
@@ -726,7 +719,8 @@ another_source          mysql  ${arg.default-replica-size} cdc_cluster
 another_source_progress progress  <null> <null>
 another_table           subsource <null> <null>
 
-> DROP SOURCE another_source
+> DROP SOURCE another_source CASCADE;
 
 $ mysql-execute name=mysql
 DROP SCHEMA conflict_schema;
+DROP SCHEMA another_schema;

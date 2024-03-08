@@ -18,5 +18,5 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
   COMPUTE ADDRESSES ['clusterd1:2102'],
   WORKERS 1))
 
-> DROP SOURCE IF EXISTS counter
+> DROP SOURCE IF EXISTS counter CASCADE
 > CREATE SOURCE counter IN CLUSTER drop FROM LOAD GENERATOR COUNTER (TICK INTERVAL '10s');

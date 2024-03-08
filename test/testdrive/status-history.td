@@ -166,7 +166,7 @@ SELECT id FROM mz_sinks WHERE name = 'kafka_sink_2'
 "<TIMESTAMP> UTC" ${sink_id} running <null> <null>
 "<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 
-> DROP SOURCE kafka_source
+> DROP SOURCE kafka_source CASCADE
 
 > SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id}' ORDER BY occurred_at DESC LIMIT 3;
 "<TIMESTAMP> UTC" ${source_id} dropped <null> <null>

@@ -47,7 +47,7 @@ ALTER TABLE public.t1 RENAME mysql.t1;
 ! SELECT count(*) FROM t1;
 contains:table was dropped
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 $ mysql-execute name=mysql
 DROP TABLE mysql.t1;

@@ -63,7 +63,7 @@ INSERT INTO irrelevant_table VALUES ('ab');
 2
 
 # Recreate the source and views to verify the irrelevant_table is part of the publication
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
@@ -100,3 +100,5 @@ INSERT INTO irrelevant_table VALUES ('gh');
 > SELECT * FROM base_table;
 1
 2
+
+> DROP SOURCE irrelevant_table CASCADE;

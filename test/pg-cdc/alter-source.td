@@ -71,7 +71,7 @@ INSERT INTO table_a VALUES (9, 'nine');
 !ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 contains:another subsource already refers to postgres.public.table_a
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 # Re-populate tables for rest of test.
 
@@ -129,28 +129,24 @@ table_e               subsource
 table_f               subsource
 table_g               subsource
 
-# Show all tablestodo this should be splittable
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"postgres\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"postgres\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"postgres\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"postgres\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"postgres\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"postgres\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
-
-> SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_f\".\"f2\""
-
 #
 # Error checking
 #
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_progress
-contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
+contains:SOURCE "mz_source_progress" is not a subsource of "mz_source"
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE table_a, mz_source_progress
-contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
+contains:SOURCE "mz_source_progress" is not a subsource of "mz_source"
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_progress, table_a
-contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
+contains:SOURCE "mz_source_progress" is not a subsource of "mz_source"
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source;
 contains:SOURCE "mz_source" is not a subsource of "mz_source"
+
+! DROP SOURCE table_f;
+contains:SOURCE "table_f" is a subsource which must be dropped using ALTER SOURCE...DROP SUBSOURCE
 
 > CREATE TABLE mz_table (a int);
 
@@ -169,7 +165,7 @@ contains:SOURCE "t_a" is not a subsource of "mz_source"
 ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_too;
 contains:SOURCE "mz_source_too" is not a subsource of "mz_source"
 
-> DROP SOURCE mz_source_too;
+> DROP SOURCE mz_source_too CASCADE;
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE dne;
 contains:unknown catalog item 'dne'
@@ -261,17 +257,15 @@ table_g               subsource
 
 > SHOW MATERIALIZED VIEWS
 
-# PG sources must retain at least one subsource, if nothing else than for parsing reasons, i.e.
-# empty input for subsources is invalid.
-! ALTER SOURCE mz_source DROP SUBSOURCE table_g;
-contains:SOURCE "mz_source" must retain at least one non-progress subsource
+> ALTER SOURCE mz_source DROP SUBSOURCE table_g;
 
-# Show that all table definitions have been updated
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE') FROM (SHOW CREATE SOURCE mz_source);
-"{\"postgres\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\"}"
+> SHOW SUBSOURCES ON mz_source
+mz_source_progress    progress
 
 #
 # Add subsources
+
+> ALTER SOURCE mz_source ADD SUBSOURCE table_g;
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_g;
 contains:another subsource already refers to postgres.public.table_g
@@ -331,8 +325,7 @@ true
 > SELECT error IS NULL FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 true
 
-> ALTER SOURCE mz_source DROP SUBSOURCE table_a;
-
+> DROP SOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 
 > SELECT * FROM table_a;
@@ -350,7 +343,7 @@ INSERT INTO table_a VALUES (4, 'four');
 2
 3
 
-> ALTER SOURCE mz_source DROP SUBSOURCE table_a;
+> DROP SOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 
 > SELECT * FROM table_a;
@@ -364,7 +357,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f3 int DEFAULT 1 NOT NULL;
 INSERT INTO table_a VALUES (5, 'five', 5);
 
-> ALTER SOURCE mz_source DROP SUBSOURCE table_a;
+> DROP SOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 
 > SELECT * FROM table_a;

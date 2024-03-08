@@ -519,7 +519,7 @@ SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-
 > SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 1
 
-> DROP SOURCE webhook_bytes;
+> DROP SOURCE webhook_bytes CASCADE;
 
 > SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 0

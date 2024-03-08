@@ -72,7 +72,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 1 1 one
 2 1 two
 
-> DROP SOURCE "mz_source";
+> DROP SOURCE "mz_source" CASCADE;
 > DROP CONNECTION mysql_conn;
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
@@ -102,7 +102,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 1 one
 2 1 two
-> DROP SOURCE "mz_source";
+> DROP SOURCE "mz_source" CASCADE;
 > DROP CONNECTION mysql_conn;
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
@@ -123,7 +123,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 1 one
 2 1 two
-> DROP SOURCE "mz_source";
+> DROP SOURCE "mz_source" CASCADE;
 > DROP CONNECTION mysql_conn;
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
@@ -158,7 +158,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 1 one
 2 1 two
-> DROP SOURCE "mz_source";
+> DROP SOURCE "mz_source" CASCADE;
 > DROP CONNECTION mysql_conn;
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
@@ -194,7 +194,7 @@ DELETE FROM numbers WHERE number = 2;
 # > SELECT * FROM "numbers";
 # 1 1 one
 # 2 1 two
-# > DROP SOURCE "mz_source";
+# > DROP SOURCE "mz_source" CASCADE;
 # > DROP CONNECTION mysql_conn;
 # $ mysql-execute name=mysql
 # DELETE FROM numbers WHERE number = 2;
@@ -215,7 +215,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 1 one
 2 1 two
-> DROP SOURCE "mz_source";
+> DROP SOURCE "mz_source" CASCADE;
 > DROP CONNECTION mysql_conn;
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
@@ -252,7 +252,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 1 one
 2 1 two
-> DROP SOURCE "mz_source";
+> DROP SOURCE "mz_source" CASCADE;
 > DROP CONNECTION mysql_conn;
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
@@ -274,7 +274,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 1 one
 2 1 two
-> DROP SOURCE "mz_source";
+> DROP SOURCE "mz_source" CASCADE;
 > DROP CONNECTION mysql_conn;
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
@@ -313,7 +313,7 @@ INSERT INTO numbers VALUES (2, true, 'two');
 > SELECT * FROM "numbers";
 1 1 one
 2 1 two
-> DROP SOURCE "mz_source";
+> DROP SOURCE "mz_source" CASCADE;
 > DROP CONNECTION mysql_conn;
 $ mysql-execute name=mysql
 DELETE FROM numbers WHERE number = 2;
@@ -338,7 +338,7 @@ DELETE FROM numbers WHERE number = 2;
 # > SELECT * FROM "numbers";
 # 1 1 one
 # 2 1 two
-# > DROP SOURCE "mz_source";
+# > DROP SOURCE "mz_source" CASCADE;
 # > DROP CONNECTION mysql_conn;
 # $ mysql-execute name=mysql
 # DELETE FROM numbers WHERE number = 2;

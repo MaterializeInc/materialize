@@ -74,7 +74,7 @@ class DropSubsource(Check):
                   DROP SUBSOURCE t3;
 
                 > ALTER SOURCE mz_source_ss
-                  ADD SUBSOURCE t3;
+                  ADD SUBSOURCE t3 WITH (TEXT COLUMNS (t3.f1));
                 """,
             ]
         ]
@@ -83,11 +83,9 @@ class DropSubsource(Check):
         return Testdrive(
             dedent(
                 """
-            ! DROP SOURCE t2;
-            contains: SOURCE \"t2\" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
-
+            # Cannot be dropped directly because it contains a text columns reference
             ! DROP SOURCE t3;
-            contains: SOURCE \"t3\" is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE
+            contains:is a subsource
             """
             )
         )

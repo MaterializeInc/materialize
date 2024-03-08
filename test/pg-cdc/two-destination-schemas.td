@@ -43,7 +43,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SCHEMA schema1;
 > CREATE SCHEMA schema2;
 
-> DROP SOURCE IF EXISTS mz_source;
+> DROP SOURCE IF EXISTS mz_source CASCADE;
 
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -71,6 +71,6 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE t1;
 DROP TABLE t2;
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 > DROP SCHEMA schema1 CASCADE;
 > DROP SCHEMA schema2 CASCADE;
