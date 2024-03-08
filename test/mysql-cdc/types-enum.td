@@ -34,7 +34,7 @@ USE public;
 CREATE TABLE enum_type (f1 ENUM ('val1', 'val2'));
 INSERT INTO enum_type VALUES ('val1'), ('val2');
 
-# TODO: #24732 (enum unsupported)
+# TODO: #25881 (enum unsupported)
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
