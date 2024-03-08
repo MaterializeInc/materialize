@@ -98,19 +98,19 @@ class AncestorImageResolutionBase:
 
     def _get_override_commit_instead_of_version(
         self,
-        latest_published_version: MzVersion,
+        version: MzVersion,
     ) -> str | None:
         """
-        If a commit specifies a mz version as prerequisite (to avoid regressions) that is newer than the
-        provided latest version (i.e., prerequisite not satisfied by the latest version), then return
-        that commit's hash if the commit contained in the current state.
+        If a commit specifies a mz version as prerequisite (to avoid regressions) that is newer than the provided
+        version (i.e., prerequisite not satisfied by the latest version), then return that commit's hash if the commit
+        contained in the current state.
         Otherwise, return none.
         """
         for (
             commit_hash,
             min_required_mz_version,
         ) in self.ancestor_overrides.items():
-            if latest_published_version >= min_required_mz_version:
+            if version >= min_required_mz_version:
                 continue
 
             if git.contains_commit(commit_hash):
@@ -121,18 +121,30 @@ class AncestorImageResolutionBase:
 
     def _resolve_image_tag_of_previous_release(
         self, context_prefix: str, previous_minor: bool
-    ):
+    ) -> tuple[str, str]:
         tagged_release_version = git.get_tagged_release_version(version_type=MzVersion)
         assert tagged_release_version is not None
         previous_release_version = get_previous_published_version(
             tagged_release_version, previous_minor=previous_minor
         )
+
+        override_commit = self._get_override_commit_instead_of_version(
+            previous_release_version
+        )
+
+        if override_commit is not None:
+            # use the commit instead of the previous release
+            return (
+                commit_to_image_tag(override_commit),
+                f"commit override instead of previous release ({previous_release_version})",
+            )
+
         return (
             version_to_image_tag(previous_release_version),
             f"{context_prefix} {tagged_release_version}",
         )
 
-    def _resolve_image_tag_of_latest_release(self, context: str):
+    def _resolve_image_tag_of_latest_release(self, context: str) -> tuple[str, str]:
         latest_published_version = get_latest_published_version()
         override_commit = self._get_override_commit_instead_of_version(
             latest_published_version
@@ -154,7 +166,7 @@ class AncestorImageResolutionBase:
         self,
         context_when_image_of_commit_exists: str,
         context_when_falling_back_to_latest: str,
-    ):
+    ) -> tuple[str, str]:
         common_ancestor_commit = buildkite.get_merge_base()
         if image_of_commit_exists(common_ancestor_commit):
             return (
