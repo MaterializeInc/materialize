@@ -1021,7 +1021,7 @@ async fn purify_create_source(
                 .find(|option| option.name == MySqlConfigOptionName::TextColumns)
             {
                 text_cols_option.value = Some(WithOptionValue::Sequence(
-                    mysql::normalize_column_refs(text_columns, &mysql_catalog),
+                    mysql::normalize_column_refs(text_columns, &mysql_catalog)?,
                 ));
             }
             if let Some(ignore_cols_option) = options
@@ -1029,7 +1029,7 @@ async fn purify_create_source(
                 .find(|option| option.name == MySqlConfigOptionName::IgnoreColumns)
             {
                 ignore_cols_option.value = Some(WithOptionValue::Sequence(
-                    mysql::normalize_column_refs(ignore_columns, &mysql_catalog),
+                    mysql::normalize_column_refs(ignore_columns, &mysql_catalog)?,
                 ));
             }
 

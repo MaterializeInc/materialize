@@ -12,7 +12,7 @@ use std::sync::Arc;
 use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::ReferencedSubsources;
+use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
 use mz_storage_types::errors::{ContextCreationError, CsrConnectError};
 
 use crate::names::{FullItemName, PartialItemName};
@@ -242,6 +242,8 @@ pub enum MySqlSourcePurificationError {
     UnrecognizedTypes { cols: Vec<(String, String, String)> },
     #[error("duplicated column name references in table {0}: {1:?}")]
     DuplicatedColumnNames(String, Vec<String>),
+    #[error("TEXT COLUMNS refers to columns not currently being added")]
+    DanglingTextColumns { items: Vec<UnresolvedItemName> },
     #[error("Invalid MySQL table reference: {0}")]
     InvalidTableReference(String),
     #[error("No tables found")]
@@ -255,6 +257,10 @@ pub enum MySqlSourcePurificationError {
 impl MySqlSourcePurificationError {
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::DanglingTextColumns { items } => Some(format!(
+                "the following columns are referenced but not added: {}",
+                itertools::join(items, ", ")
+            )),
             Self::ReplicationSettingsError(settings) => Some(format!(
                 "Invalid MySQL system replication settings: {}",
                 itertools::join(

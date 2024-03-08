@@ -658,23 +658,21 @@ DELETE FROM mixED_CAse;
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
 
-# TODO: #25883 (reference to unrelated table should fail)
-# ! CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [
-#       public.enum_table.a,
-#       public.another_enum_table."колона",
-#       public.pk_table.pk
-#     ]
-#   )
-#   FOR TABLES (
-#     "enum_table",
-#     public.another_enum_table
-#   );
-# contains:TEXT COLUMNS refers to table not currently being added
+! CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [
+      public.enum_table.a,
+      public.another_enum_table."колона",
+      public.pk_table.pk
+    ]
+  )
+  FOR TABLES (
+    public."enum_table",
+    public.another_enum_table
+  );
+contains:TEXT COLUMNS refers to columns not currently being added
 
-# TODO: #25884 (enum in text columns does not work)
 > CREATE SOURCE enum_source
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn (
@@ -710,7 +708,6 @@ var3
 $ mysql-execute name=mysql
 INSERT INTO pk_table VALUES (99999, 'abc');
 
-# TODO: #25884 (enum in text columns does not work)
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;
 

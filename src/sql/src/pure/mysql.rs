@@ -23,7 +23,7 @@ use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 use crate::catalog::SubsourceCatalog;
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
-use crate::pure::MySqlConfigOptionName;
+use crate::pure::{MySqlConfigOptionName, MySqlSourcePurificationError};
 
 use super::RequestedSubsource;
 
@@ -194,20 +194,24 @@ pub(super) fn map_column_refs<'a>(
 pub(super) fn normalize_column_refs<'a>(
     cols: Vec<UnresolvedItemName>,
     catalog: &'a SubsourceCatalog<&'a MySqlTableDesc>,
-) -> Vec<WithOptionValue<Aug>> {
-    let mut seq: Vec<_> = cols
+) -> Result<Vec<WithOptionValue<Aug>>, MySqlSourcePurificationError> {
+    let (seq, unknown): (Vec<_>, Vec<_>) = cols.into_iter().partition(|name| {
+        let (column_name, qual) = name.0.split_last().expect("non-empty");
+        match catalog.resolve(UnresolvedItemName::qualified(qual)) {
+            Ok((_, desc)) => desc.columns.iter().any(|n| &n.name == column_name.as_str()),
+            Err(_) => false,
+        }
+    });
+
+    if !unknown.is_empty() {
+        return Err(MySqlSourcePurificationError::DanglingTextColumns { items: unknown });
+    }
+
+    let mut seq: Vec<_> = seq
         .into_iter()
-        .filter(|name| {
-            let (column_name, qual) = name.0.split_last().expect("non-empty");
-            match catalog.resolve(UnresolvedItemName::qualified(qual)) {
-                Ok((_, desc)) => desc.columns.iter().any(|n| &n.name == column_name.as_str()),
-                Err(_) => false,
-            }
-        })
         .map(WithOptionValue::UnresolvedItemName)
         .collect();
-
     seq.sort();
     seq.dedup();
-    seq
+    Ok(seq)
 }
