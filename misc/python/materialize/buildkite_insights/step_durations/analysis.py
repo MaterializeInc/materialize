@@ -13,6 +13,10 @@ import argparse
 
 import pandas as pd
 
+from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
+from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
+    BUILDKITE_BUILD_STATES,
+)
 from materialize.buildkite_insights.cache import builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
     FETCH_MODE_AUTO,
@@ -29,37 +33,6 @@ from materialize.buildkite_insights.step_durations.build_step import (
 OUTPUT_TYPE_TXT = "txt"
 OUTPUT_TYPE_TXT_SHORT = "txt-short"
 OUTPUT_TYPE_CSV = "csv"
-
-
-BUILDKITE_BUILD_STATES = [
-    "running",
-    "scheduled",
-    "passed",
-    "failing",
-    "failed",
-    "blocked",
-    "canceled",
-    "canceling",
-    "skipped",
-    "not_run",
-    "finished",
-]
-
-MZ_PIPELINES = [
-    "cleanup",
-    "coverage",
-    "deploy",
-    "deploy-lsp",
-    "deploy-mz",
-    "deploy-website",
-    "license",
-    "nightlies",
-    "release-qualification",
-    "security",
-    "sql-logic-tests",
-    "tests",
-    "www",
-]
 
 
 def print_data(
