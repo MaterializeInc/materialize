@@ -96,3 +96,6 @@ $ mysql-execute name=mysql
 
 ! SELECT * FROM access_not_granted;
 contains:unknown catalog item 'access_not_granted'
+
+$ mysql-execute name=mysql
+DROP SCHEMA other;

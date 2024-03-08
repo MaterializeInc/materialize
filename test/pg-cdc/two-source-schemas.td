@@ -62,7 +62,7 @@ contains:table t1 is ambiguous, consider specifying the schema
 1
 1
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
 
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -80,4 +80,4 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA schema1 CASCADE;
 DROP SCHEMA schema2 CASCADE;
 
-> DROP SOURCE mz_source;
+> DROP SOURCE mz_source CASCADE;
