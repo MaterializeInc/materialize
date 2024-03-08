@@ -212,8 +212,8 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1 + 1 , f2 FROM v1 WHERE f1 + 1 = f3;
 ----
 Explained Query:
-  Distinct project=[(#0 + 1), #1] // { arity: 2 }
-    Project (#0, #1) // { arity: 2 }
+  Distinct project=[#1, #0] // { arity: 2 }
+    Project (#1, #2) // { arity: 2 }
       Filter (#2 = (#0 + 1)) // { arity: 3 }
         ReadIndex on=v1 v1_primary_idx=[*** full scan ***] // { arity: 3 }
 

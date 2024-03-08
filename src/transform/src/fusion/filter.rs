@@ -13,10 +13,11 @@
 //!
 //! ```rust
 //! use mz_expr::{MirRelationExpr, MirScalarExpr};
-//! use mz_repr::{typecheck, ColumnType, Datum, RelationType, ScalarType};
-//! use mz_repr::optimizer::OptimizerFeatures;
-//! use mz_transform::{Transform, TransformCtx};
+//! use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use mz_repr::optimize::OptimizerFeatures;
+//! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
+//!
 //! use mz_transform::fusion::filter::Filter;
 //!
 //! let input = MirRelationExpr::constant(vec![], RelationType::new(vec![

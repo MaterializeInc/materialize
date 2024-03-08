@@ -155,35 +155,28 @@ where
 ///
 /// To add a new feature flag, do the following steps:
 ///
-/// 1. To make the flag available to all stages in our [`Optimize`] pipelines:
-///    1. Add the flag as an [`OptimizerConfig`] field.
+/// 1. To make the flag available to all stages in our [`Optimize`] pipelines
+///    and allow engineers to set a system-wide override:
+///    1. Add the flag to the `optimizer_feature_flags!(...)` macro call.
+///    2. Add the flag to the `feature_flags!(...)` macro call and extend the
+///       `From<&SystemVars>` implementation for [`OptimizerFeatures`].
 ///
-/// 2. To allow engineers to set a system-wide override for this feature flag:
-///    1. Add the flag to the `feature_flags!(...)` macro call.
-///    2. Extend the `From<&SystemVars>` implementation for [`OptimizerConfig`].
-///
-/// 3. To enable `EXPLAIN ... WITH(...)` overrides which will allow engineers to
+/// 2. To enable `EXPLAIN ... WITH(...)` overrides which will allow engineers to
 ///    inspect plan differences before deploying the optimizer changes:
-///    1. Add the flag as a [`mz_repr::explain::ExplainConfig`] field.
-///    2. Add the flag to the `ExplainPlanOptionName` definition.
-///    3. Add the flag to the `generate_extracted_config!(ExplainPlanOption,
+///    1. Add the flag to the `ExplainPlanOptionName` definition.
+///    2. Add the flag to the `generate_extracted_config!(ExplainPlanOption,
 ///       ...)` macro call.
-///    4. Extend the `TryFrom<ExplainPlanOptionExtracted>` implementation for
+///    3. Extend the `TryFrom<ExplainPlanOptionExtracted>` implementation for
 ///       [`mz_repr::explain::ExplainConfig`].
-///    5. Extend the `OverrideFrom<ExplainContext>` implementation for
-///       [`OptimizerConfig`].
 ///
-/// 4. To enable `CLUSTER ... FEATURES(...)` overrides which will allow
+/// 3. To enable `CLUSTER ... FEATURES(...)` overrides which will allow
 ///    engineers to experiment with runtime differences before deploying the
 ///    optimizer changes:
-///    1. Add the flag to the `optimizer_feature_flags!(...)` macro call.
-///    2. Add the flag to the `ClusterFeatureName` definition.
-///    3. Add the flag to the `generate_extracted_config!(ClusterFeature, ...)`
+///    1. Add the flag to the `ClusterFeatureName` definition.
+///    2. Add the flag to the `generate_extracted_config!(ClusterFeature, ...)`
 ///       macro call.
-///    4. Extend the `let optimizer_feature_overrides = ...` call in
+///    3. Extend the `let optimizer_feature_overrides = ...` call in
 ///       `plan_create_cluster`.
-///    4. Extend the `OverrideFrom<OptimizerFeatureOverrides>` implementation
-///       for [`OptimizerConfig`].
 #[derive(Clone, Debug)]
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.

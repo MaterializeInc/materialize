@@ -2105,6 +2105,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_equivalence_propagation,
+        desc: "Enable the EquivalencePropagation transform in the optimizer",
+        default: true, // TODO(aalexandrov): revert this to false
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2112,6 +2119,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
         Self {
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
+            enable_equivalence_propagation: vars.enable_equivalence_propagation(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),

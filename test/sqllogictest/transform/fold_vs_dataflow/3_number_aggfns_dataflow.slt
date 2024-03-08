@@ -54,12 +54,11 @@ FROM t_using_dataflow_rendering;
 ----
 Explained Query:
   Return
-    Project (#0..=#17, #30..=#35)
-      Map ((#18 / bigint_to_real(case when (#19 = 0) then null else #19 end)), (#20 / bigint_to_double(case when (#21 = 0) then null else #21 end)), (#22 / bigint_to_numeric(case when (#23 = 0) then null else #23 end)), (#24 / bigint_to_real(case when (#25 = 0) then null else #25 end)), (#26 / bigint_to_double(case when (#27 = 0) then null else #27 end)), (#28 / bigint_to_numeric(case when (#29 = 0) then null else #29 end)))
+    Project (#0..=#17, #24..=#29)
+      Map ((#0 / bigint_to_real(case when (#18 = 0) then null else #18 end)), (#1 / bigint_to_double(case when (#19 = 0) then null else #19 end)), (#2 / bigint_to_numeric(case when (#20 = 0) then null else #20 end)), (#3 / bigint_to_real(case when (#21 = 0) then null else #21 end)), (#4 / bigint_to_double(case when (#22 = 0) then null else #22 end)), (#5 / bigint_to_numeric(case when (#23 = 0) then null else #23 end)))
         Union
-          Project (#0..=#17, #0, #18, #1, #19, #2, #20, #3, #21, #4, #22, #5, #23)
-            Get l0
-          Map (null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, 0, null, 0, null, 0, null, 0, null, 0)
+          Get l0
+          Map (null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0)
             Union
               Negate
                 Project ()

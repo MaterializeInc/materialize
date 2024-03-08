@@ -614,7 +614,7 @@ SELECT f1, f2, f1 + f2 FROM c0;
 ----
 Explained Query:
   Return // { arity: 3, types: "(integer, integer, integer)" }
-    Map ((#0 + #1)) // { arity: 3, types: "(integer, integer, integer)" }
+    Map (8) // { arity: 3, types: "(integer, integer, integer)" }
       Get l0 // { arity: 2, types: "(integer, integer)" }
   With Mutually Recursive [recursion_limit=1]
     cte l0 =

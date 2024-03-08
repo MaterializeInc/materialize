@@ -30,6 +30,9 @@
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
 //! use mz_ore::id_gen::IdGen;
 //! use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use mz_repr::optimize::OptimizerFeatures;
+//! use mz_transform::{typecheck, Transform, TransformCtx};
+//! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
 //!
@@ -60,22 +63,12 @@
 //!        predicate012.clone(),
 //!    ]);
 //!
-//! use mz_transform::{Transform, TransformCtx};
-//! use mz_transform::dataflow::DataflowMetainfo;
-//! PredicatePushdown::default().transform(&mut expr, &mut TransformCtx {
-//!   indexes: &mz_transform::EmptyIndexOracle,
-//!   stats: &mz_transform::EmptyStatisticsOracle,
-//!   global_id: None,
-//!   features: &mz_repr::optimizer::OptimizerFeatures {
-//!       enable_consolidate_after_union_negate: false,
-//!       enable_eager_delta_joins: false,
-//!       enable_new_outer_join_lowering: false,
-//!       enable_reduce_mfp_fusion: false,
-//!       persist_fast_path_limit: 0,
-//!       reoptimize_imported_views: false,
-//!   },
-//!   df_meta: &mut DataflowMetainfo::default(),
-//! });
+//! let features = OptimizerFeatures::default();
+//! let typecheck_ctx = typecheck::empty_context();
+//! let mut df_meta = DataflowMetainfo::default();
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+//!
+//! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
 //! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);
 //! let expected_expr = MirRelationExpr::join(

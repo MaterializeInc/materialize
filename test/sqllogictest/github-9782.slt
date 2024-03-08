@@ -87,7 +87,7 @@ Explained Query:
                         Project (#1, #2) // { arity: 2 }
                           Get l0 // { arity: 3 }
             Get l1 // { arity: 3 }
-            Filter (#0 = #1) AND (#0 = #2) // { arity: 3 }
+            Filter (#0 = #1) // { arity: 3 }
               Get l0 // { arity: 3 }
   With
     cte l1 =

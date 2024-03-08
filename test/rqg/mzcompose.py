@@ -196,7 +196,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
     participants: list[Service] = [
         Materialized(
             name="mz_this",
-            ports=["16875:6875", "16877:6877"],
+            ports=["16875:6875", "16876:6876", "16877:6877", "16878:6878"],
             image=f"materialize/materialized:{args.this_tag}"
             if args.this_tag
             else None,
@@ -227,7 +227,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     image=f"materialize/materialized:{args.other_tag}"
                     if args.other_tag
                     else None,
-                    ports=["26875:6875", "26877:6877"],
+                    ports=["26875:6875", "26876:6876", "26877:6877", "26878:6878"],
                     use_default_volumes=False,
                 )
             )
