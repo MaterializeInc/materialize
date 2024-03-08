@@ -1096,6 +1096,7 @@ steps:
 
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
+        skip: "flaky until #25865 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-small
