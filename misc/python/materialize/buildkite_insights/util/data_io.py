@@ -51,13 +51,13 @@ def read_results_from_file(file_path: str) -> list[Any]:
         return data
 
 
-def exists_file_with_recent_data(file_path: str) -> bool:
+def exists_file_with_recent_data(file_path: str, time_delta_in_hours: int = 10) -> bool:
     if not os.path.isfile(file_path):
         return False
 
     modification_date_as_sec_since_epoch = os.path.getmtime(file_path)
     modification_date = datetime.utcfromtimestamp(modification_date_as_sec_since_epoch)
 
-    max_modification_date = datetime.now() - timedelta(hours=8)
+    max_modification_date = datetime.now() - timedelta(hours=time_delta_in_hours)
 
     return modification_date > max_modification_date
