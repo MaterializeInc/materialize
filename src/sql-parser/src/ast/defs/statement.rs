@@ -1732,6 +1732,7 @@ pub enum ClusterFeatureName {
     ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
+    EnableEquivalencePropagation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
