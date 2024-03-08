@@ -1769,7 +1769,7 @@ async fn test_auth_deduplication() {
         None,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
-        Some(Duration::from_secs(1)),
+        None,
     )
     .unwrap();
 
@@ -1823,6 +1823,9 @@ async fn test_auth_deduplication() {
     let pg_client_1 = client_1_result.unwrap();
     let pg_client_2 = client_2_result.unwrap();
 
+    // We should have de-duplicated the request and only actually sent 1.
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 1);
+
     let frontegg_user_client_1 = pg_client_1
         .query_one("SELECT current_user", &[])
         .await
@@ -1836,9 +1839,6 @@ async fn test_auth_deduplication() {
         .unwrap()
         .get::<_, String>(0);
     assert_eq!(frontegg_user_client_2, frontegg_user);
-
-    // We should have de-duplicated the request and only actually sent 1.
-    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 1);
 
     // Wait for a refresh to occur.
     frontegg_server.wait_for_auth(10);
