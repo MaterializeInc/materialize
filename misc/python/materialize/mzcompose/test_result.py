@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from materialize import MZ_ROOT
 from materialize.ui import CommandFailureCausedUIError, UIError
 
+PEM_CONTENT_RE = r"-----BEGIN ([A-Z ]+)-----[^-]+-----END [A-Z ]+-----"
+PEM_CONTENT_REPLACEMENT = r"<\1>"
+
 
 @dataclass
 class TestResult:
@@ -113,7 +116,7 @@ def try_determine_errors_from_cmd_execution(
 def determine_error_from_docker_compose_failure(
     e: CommandFailureCausedUIError, output: str | None
 ) -> TestFailureDetails:
-    command = " ".join([str(x) for x in e.cmd])
+    command = to_sanitized_command_str(e.cmd)
     return TestFailureDetails(
         f"Docker compose failed: {command}",
         details=output,
@@ -139,3 +142,8 @@ def extract_error_chunks_from_output(output: str) -> list[str]:
     error_chunks = error_output.split("^^^ +++")
 
     return [chunk.strip() for chunk in error_chunks if len(chunk.strip()) > 0]
+
+
+def to_sanitized_command_str(cmd: list[str]) -> str:
+    command_str = " ".join([str(x) for x in cmd])
+    return re.sub(PEM_CONTENT_RE, PEM_CONTENT_REPLACEMENT, command_str)
