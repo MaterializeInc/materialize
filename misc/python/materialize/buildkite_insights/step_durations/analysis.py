@@ -130,7 +130,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
-    parser.add_argument("--build-step-key", action="append", type=str)
+    parser.add_argument("--build-step-key", action="append", default=[], type=str)
     parser.add_argument(
         "--fetch",
         choices=[FETCH_MODE_AUTO, FETCH_MODE_NO, FETCH_MODE_YES],
@@ -161,9 +161,7 @@ if __name__ == "__main__":
         [
             BuildStepMatcher(build_step_key, None)
             for build_step_key in args.build_step_key
-        ]
-        if args.build_step_key is not None
-        else [],
+        ],
         args.fetch,
         args.max_fetches,
         args.branch if args.branch != "*" else None,
