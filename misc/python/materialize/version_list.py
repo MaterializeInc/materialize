@@ -127,6 +127,18 @@ class AncestorImageResolutionBase:
         previous_release_version = get_previous_published_version(
             tagged_release_version, previous_minor=previous_minor
         )
+
+        override_commit = self._get_override_commit_instead_of_version(
+            previous_release_version
+        )
+
+        if override_commit is not None:
+            # use the commit instead of the previous release
+            return (
+                commit_to_image_tag(override_commit),
+                f"commit override instead of previous release ({previous_release_version})",
+            )
+
         return (
             version_to_image_tag(previous_release_version),
             f"{context_prefix} {tagged_release_version}",
