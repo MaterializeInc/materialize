@@ -675,32 +675,32 @@ DELETE FROM mixED_CAse;
 # contains:TEXT COLUMNS refers to table not currently being added
 
 # TODO: #25884 (enum in text columns does not work)
-# > CREATE SOURCE enum_source
-#   IN CLUSTER cdc_cluster
-#   FROM MYSQL CONNECTION mysql_conn (
-#     TEXT COLUMNS [
-#       public.enum_table.a,
-#       public.another_enum_table."колона"
-#     ]
-#   )
-#   FOR TABLES (
-#     public."enum_table",
-#     public.another_enum_table
-#   );
-#
-# > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
-# another_enum_table      subsource <null> <null>
-# enum_source             mysql     ${arg.default-replica-size} cdc_cluster
-# enum_source_progress    progress  <null> <null>
-# enum_table              subsource <null> <null>
-#
-# > SELECT * FROM enum_table
-# var0
-# var1
-#
-# > SELECT "колона" FROM another_enum_table
-# var2
-# var3
+> CREATE SOURCE enum_source
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn (
+    TEXT COLUMNS [
+      public.enum_table.a,
+      public.another_enum_table."колона"
+    ]
+  )
+  FOR TABLES (
+    public."enum_table",
+    public.another_enum_table
+  );
+
+> SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
+another_enum_table      subsource <null> <null>
+enum_source             mysql     ${arg.default-replica-size} cdc_cluster
+enum_source_progress    progress  <null> <null>
+enum_table              subsource <null> <null>
+
+> SELECT * FROM enum_table
+var0
+var1
+
+> SELECT "колона" FROM another_enum_table
+var2
+var3
 
 #
 # Cleanup
@@ -711,7 +711,7 @@ $ mysql-execute name=mysql
 INSERT INTO pk_table VALUES (99999, 'abc');
 
 # TODO: #25884 (enum in text columns does not work)
-# > DROP SOURCE enum_source CASCADE;
+> DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;
 
 #

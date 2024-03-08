@@ -15,6 +15,7 @@ use std::num::NonZeroU64;
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
 use once_cell::sync::Lazy;
@@ -60,6 +61,37 @@ impl RustType<ProtoMySqlColumnRef> for MySqlColumnRef {
             table_name: proto.table_name,
             column_name: proto.column_name,
         })
+    }
+}
+
+pub struct IntoMySqlColumnRefError(String);
+
+impl fmt::Display for IntoMySqlColumnRefError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<UnresolvedItemName> for MySqlColumnRef {
+    type Error = IntoMySqlColumnRefError;
+
+    /// Convert an UnresolvedItemName into a MySqlColumnRef
+    fn try_from(item: UnresolvedItemName) -> Result<Self, Self::Error> {
+        let mut iter = item.0.into_iter();
+        match (iter.next(), iter.next(), iter.next()) {
+            (Some(schema_name), Some(table_name), Some(column_name)) => Ok(MySqlColumnRef {
+                // We need to be careful not to accidentally introduce postgres/mz-style
+                // quoting in the schema_name, table_name, or column_name fields, which
+                // happens if naively using the to_string()/fmt method on the Ident values.
+                schema_name: schema_name.into_string(),
+                table_name: table_name.into_string(),
+                column_name: column_name.into_string(),
+            }),
+            ref other => Err(IntoMySqlColumnRefError(format!(
+                "expected fully-qualified column name, got: {:?}",
+                other
+            ))),
+        }
     }
 }
 
