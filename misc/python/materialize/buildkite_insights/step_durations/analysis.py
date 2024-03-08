@@ -112,8 +112,9 @@ def main(
     build_state: str | None,
     output_type: str,
 ) -> None:
+    build_states = [build_state] if build_state is not None else None
     builds_data = builds_cache.get_or_query_builds(
-        pipeline_slug, fetch_mode, max_fetches, branch, build_state
+        pipeline_slug, fetch_mode, max_fetches, branch, build_states
     )
     step_outcomes = extract_build_step_outcomes(
         builds_data=builds_data,

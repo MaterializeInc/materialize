@@ -18,12 +18,12 @@ def get_builds(
     pipeline_slug: str,
     max_fetches: int | None,
     branch: str | None,
-    build_state: str | None,
+    build_states: list[str] | None,
     items_per_page: int = 100,
     include_retries: bool = True,
 ) -> list[Any]:
     request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
-    params = {
+    params: dict[str, Any] = {
         "include_retried_jobs": str(include_retries).lower(),
         "per_page": str(items_per_page),
     }
@@ -31,8 +31,8 @@ def get_builds(
     if branch is not None:
         params["branch"] = branch
 
-    if build_state is not None:
-        params["state"] = build_state
+    if build_states is not None and len(build_states) > 0:
+        params["state[]"] = build_states
 
     return generic_api.get_multiple(request_path, params, max_fetches=max_fetches)
 

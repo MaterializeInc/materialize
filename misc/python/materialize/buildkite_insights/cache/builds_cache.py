@@ -23,10 +23,10 @@ def get_or_query_builds(
     fetch_mode: str,
     max_fetches: int,
     branch: str | None,
-    build_state: str | None,
+    build_states: list[str] | None,
     items_per_page: int = 50,
 ) -> list[Any]:
-    meta_data = f"{branch}-{build_state}"
+    meta_data = f"{branch}-{build_states}"
     cache_file_path = _get_file_path_for_builds(
         pipeline_slug=pipeline_slug,
         meta_data=meta_data,
@@ -38,7 +38,7 @@ def get_or_query_builds(
         pipeline_slug=pipeline_slug,
         max_fetches=max_fetches,
         branch=branch,
-        build_state=build_state,
+        build_states=build_states,
         items_per_page=items_per_page,
     )
 
