@@ -638,38 +638,33 @@ explain with(arity, join implementations) select min(a) from t_pk where a betwee
 Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
-      Get l1 // { arity: 1 }
+      Get l0 // { arity: 1 }
       Map (null) // { arity: 1 }
         Union // { arity: 0 }
           Negate // { arity: 0 }
             Project () // { arity: 0 }
-              Get l1 // { arity: 1 }
+              Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
   With
-    cte l1 =
+    cte l0 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Join on=(#0 = #1) type=differential // { arity: 2 }
             implementation
-              %0:t_pk[#0]UKiif » %1[#0]Kiif
+              %0:t_pk[#0]UKiif » %1[#0]UKiif
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
                   ReadStorage materialize.public.t_pk // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
-              Union // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Get l0 // { arity: 2 }
-                Map (error("more than one record produced in subquery")) // { arity: 1 }
-                  Project () // { arity: 0 }
-                    Filter (#0 > 1) // { arity: 1 }
-                      Reduce aggregates=[count(*)] // { arity: 1 }
-                        Project () // { arity: 0 }
-                          Get l0 // { arity: 2 }
-    cte l0 =
-      Filter (#0 = 1308) // { arity: 2 }
-        ReadStorage materialize.public.t // { arity: 2 }
+              Map (error("more than one record produced in subquery")) // { arity: 1 }
+                Project () // { arity: 0 }
+                  Filter (#0 > 1) // { arity: 1 }
+                    Reduce aggregates=[count(*)] // { arity: 1 }
+                      Project () // { arity: 0 }
+                        Filter (#0 = 1308) // { arity: 2 }
+                          ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#0 = 1308))
@@ -684,38 +679,33 @@ explain with(arity, join implementations) select min(a) from t where a between 3
 Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
-      Get l1 // { arity: 1 }
+      Get l0 // { arity: 1 }
       Map (null) // { arity: 1 }
         Union // { arity: 0 }
           Negate // { arity: 0 }
             Project () // { arity: 0 }
-              Get l1 // { arity: 1 }
+              Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
   With
-    cte l1 =
+    cte l0 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
         Project (#0) // { arity: 1 }
           Join on=(#0 = #1) type=differential // { arity: 2 }
             implementation
-              %0:t[#0]Kiif » %1[#0]Kiif
+              %1[#0]UK » %0:t[#0]Kiif
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
                   ReadStorage materialize.public.t // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
-              Union // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Get l0 // { arity: 2 }
-                Map (error("more than one record produced in subquery")) // { arity: 1 }
-                  Project () // { arity: 0 }
-                    Filter (#0 > 1) // { arity: 1 }
-                      Reduce aggregates=[count(*)] // { arity: 1 }
-                        Project () // { arity: 0 }
-                          Get l0 // { arity: 2 }
-    cte l0 =
-      Filter (#0 = 1308) // { arity: 2 }
-        ReadStorage materialize.public.t // { arity: 2 }
+              Map (error("more than one record produced in subquery")) // { arity: 1 }
+                Project () // { arity: 0 }
+                  Filter (#0 > 1) // { arity: 1 }
+                    Reduce aggregates=[count(*)] // { arity: 1 }
+                      Project () // { arity: 0 }
+                        Filter (#0 = 1308) // { arity: 2 }
+                          ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 

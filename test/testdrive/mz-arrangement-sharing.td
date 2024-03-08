@@ -709,7 +709,7 @@ ReduceMinsMaxes
 "Arrange ReduceMinsMaxes"                     1
 "ArrangeAccumulable [val: empty]"             3
 "ArrangeBy[[Column(0), Column(2)]]"           1
-"ArrangeBy[[Column(0)]] [val: empty]"         2
+"ArrangeBy[[Column(0)]] [val: empty]"         1
 "ArrangeBy[[Column(0)]]-errors"              21
 "ArrangeBy[[Column(0)]]"                     41
 "ArrangeBy[[Column(1), Column(3)]]"           2
