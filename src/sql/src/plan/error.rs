@@ -37,6 +37,7 @@ use crate::catalog::{
 use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
+use crate::plan::ObjectType;
 use crate::pure::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
     LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
@@ -249,6 +250,11 @@ pub enum PlanError {
         /// The number of replicas that executing this command would have
         /// created
         hypothetical_replica_count: usize,
+    },
+    MismatchedObjectType {
+        name: PartialItemName,
+        is_type: ObjectType,
+        expected_type: ObjectType,
     },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
@@ -680,6 +686,28 @@ impl fmt::Display for PlanError {
             Self::CreateReplicaFailStorageObjects {..} => {
                 write!(f, "cannot create more than one replica of a cluster containing sources or sinks")
             },
+            Self::MismatchedObjectType {
+                name,
+                is_type,
+                expected_type,
+            } => {
+                write!(
+                    f,
+                    "{name} is {} {} not {} {}",
+                    if *is_type == ObjectType::Index {
+                        "an"
+                    } else {
+                        "a"
+                    },
+                    is_type.to_string().to_lowercase(),
+                    if *expected_type == ObjectType::Index {
+                        "an"
+                    } else {
+                        "a"
+                    },
+                    expected_type.to_string().to_lowercase()
+                )
+            }
         }
     }
 }

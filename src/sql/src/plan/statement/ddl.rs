@@ -4016,118 +4016,112 @@ fn plan_drop_item_inner(
     cascade: bool,
     allow_dropping_subsources: bool,
 ) -> Result<Option<GlobalId>, PlanError> {
-    Ok(
-        match resolve_item_or_type(scx, object_type, name, if_exists)? {
-            Some(catalog_item) => {
-                if catalog_item.id().is_system() {
-                    sql_bail!(
-                        "cannot drop {} {} because it is required by the database system",
-                        catalog_item.item_type(),
-                        scx.catalog.minimal_qualification(catalog_item.name()),
-                    );
-                }
-                let item_type = catalog_item.item_type();
+    let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
+        Ok(r) => r,
+        // Return a more helpful error on `DROP VIEW <materialized-view>`.
+        Err(PlanError::MismatchedObjectType {
+            name,
+            is_type: ObjectType::MaterializedView,
+            expected_type: ObjectType::View,
+        }) => {
+            return Err(PlanError::DropViewOnMaterializedView(name.to_string()));
+        }
+        e => e?,
+    };
 
-                // Return a more helpful error on `DROP VIEW <materialized-view>`.
-                if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView
-                {
-                    let name = scx
-                        .catalog
-                        .resolve_full_name(catalog_item.name())
-                        .to_string();
-                    return Err(PlanError::DropViewOnMaterializedView(name));
-                } else if object_type != item_type {
-                    sql_bail!(
-                        "\"{}\" is a {} not a {}",
-                        scx.catalog.resolve_full_name(catalog_item.name()),
-                        catalog_item.item_type(),
-                        format!("{object_type}").to_lowercase(),
-                    );
-                }
-
-                // Check if object is subsource if drop command doesn't allow dropping them, e.g. ALTER
-                // SOURCE can drop subsources, but DROP SOURCE cannot.
-                let primary_source = match item_type {
-                    CatalogItemType::Source => catalog_item
-                        .used_by()
-                        .iter()
-                        .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source),
-                    _ => None,
-                };
-
-                if let Some(source_id) = primary_source {
-                    // Progress collections can never get dropped independently.
-                    if Some(catalog_item.id()) == scx.catalog.get_item(source_id).progress_id() {
-                        return Err(PlanError::DropProgressCollection {
-                            progress_collection: scx
-                                .catalog
-                                .minimal_qualification(catalog_item.name())
-                                .to_string(),
-                            source: scx
-                                .catalog
-                                .minimal_qualification(scx.catalog.get_item(source_id).name())
-                                .to_string(),
-                        });
-                    }
-                    if !allow_dropping_subsources {
-                        return Err(PlanError::DropSubsource {
-                            subsource: scx
-                                .catalog
-                                .minimal_qualification(catalog_item.name())
-                                .to_string(),
-                            source: scx
-                                .catalog
-                                .minimal_qualification(scx.catalog.get_item(source_id).name())
-                                .to_string(),
-                        });
-                    }
-                }
-
-                if !cascade {
-                    let entry_id = catalog_item.id();
-                    // When this item gets dropped it will also drop its subsources, so we need to check the
-                    // users of those
-                    let mut dropped_items = catalog_item
-                        .subsources()
-                        .iter()
-                        .map(|id| scx.catalog.get_item(id))
-                        .collect_vec();
-                    dropped_items.push(catalog_item);
-
-                    for entry in dropped_items {
-                        for id in entry.used_by() {
-                            // The catalog_entry we're trying to drop will appear in the used_by list of
-                            // its subsources so we need to exclude it from cascade checking since it
-                            // will be dropped. Similarly, if we're dropping a subsource, the primary
-                            // source will show up in its dependents but should not prevent the drop.
-                            if id == &entry_id || Some(id) == primary_source {
-                                continue;
-                            }
-
-                            let dep = scx.catalog.get_item(id);
-                            if dependency_prevents_drop(object_type, dep) {
-                                return Err(PlanError::DependentObjectsStillExist {
-                                    object_type: catalog_item.item_type().to_string(),
-                                    object_name: scx
-                                        .catalog
-                                        .minimal_qualification(catalog_item.name())
-                                        .to_string(),
-                                    dependents: vec![(
-                                        dep.item_type().to_string(),
-                                        scx.catalog.minimal_qualification(dep.name()).to_string(),
-                                    )],
-                                });
-                            }
-                        }
-                        // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
-                        //  relies on entry. Unfortunately, we don't have that information readily available.
-                    }
-                }
-                Some(catalog_item.id())
+    Ok(match resolved {
+        Some(catalog_item) => {
+            if catalog_item.id().is_system() {
+                sql_bail!(
+                    "cannot drop {} {} because it is required by the database system",
+                    catalog_item.item_type(),
+                    scx.catalog.minimal_qualification(catalog_item.name()),
+                );
             }
-            None => None,
-        },
-    )
+            let item_type = catalog_item.item_type();
+
+            // Check if object is subsource if drop command doesn't allow dropping them, e.g. ALTER
+            // SOURCE can drop subsources, but DROP SOURCE cannot.
+            let primary_source = match item_type {
+                CatalogItemType::Source => catalog_item
+                    .used_by()
+                    .iter()
+                    .find(|id| scx.catalog.get_item(id).item_type() == CatalogItemType::Source),
+                _ => None,
+            };
+
+            if let Some(source_id) = primary_source {
+                // Progress collections can never get dropped independently.
+                if Some(catalog_item.id()) == scx.catalog.get_item(source_id).progress_id() {
+                    return Err(PlanError::DropProgressCollection {
+                        progress_collection: scx
+                            .catalog
+                            .minimal_qualification(catalog_item.name())
+                            .to_string(),
+                        source: scx
+                            .catalog
+                            .minimal_qualification(scx.catalog.get_item(source_id).name())
+                            .to_string(),
+                    });
+                }
+                if !allow_dropping_subsources {
+                    return Err(PlanError::DropSubsource {
+                        subsource: scx
+                            .catalog
+                            .minimal_qualification(catalog_item.name())
+                            .to_string(),
+                        source: scx
+                            .catalog
+                            .minimal_qualification(scx.catalog.get_item(source_id).name())
+                            .to_string(),
+                    });
+                }
+            }
+
+            if !cascade {
+                let entry_id = catalog_item.id();
+                // When this item gets dropped it will also drop its subsources, so we need to check the
+                // users of those
+                let mut dropped_items = catalog_item
+                    .subsources()
+                    .iter()
+                    .map(|id| scx.catalog.get_item(id))
+                    .collect_vec();
+                dropped_items.push(catalog_item);
+
+                for entry in dropped_items {
+                    for id in entry.used_by() {
+                        // The catalog_entry we're trying to drop will appear in the used_by list of
+                        // its subsources so we need to exclude it from cascade checking since it
+                        // will be dropped. Similarly, if we're dropping a subsource, the primary
+                        // source will show up in its dependents but should not prevent the drop.
+                        if id == &entry_id || Some(id) == primary_source {
+                            continue;
+                        }
+
+                        let dep = scx.catalog.get_item(id);
+                        if dependency_prevents_drop(object_type, dep) {
+                            return Err(PlanError::DependentObjectsStillExist {
+                                object_type: catalog_item.item_type().to_string(),
+                                object_name: scx
+                                    .catalog
+                                    .minimal_qualification(catalog_item.name())
+                                    .to_string(),
+                                dependents: vec![(
+                                    dep.item_type().to_string(),
+                                    scx.catalog.minimal_qualification(dep.name()).to_string(),
+                                )],
+                            });
+                        }
+                    }
+                    // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+                    //  relies on entry. Unfortunately, we don't have that information readily available.
+                }
+            }
+            Some(catalog_item.id())
+        }
+        None => None,
+    })
 }
 
 /// Does the dependency `dep` prevent a drop of a non-cascade query?
@@ -4448,29 +4442,18 @@ pub fn plan_alter_index_options(
         action: actions,
     }: AlterIndexStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let index_name = normalize::unresolved_item_name(index_name)?;
-    let entry = match scx.catalog.resolve_item(&index_name) {
-        Ok(index) => index,
-        Err(_) if if_exists => {
+    let object_type = ObjectType::Index;
+    let id = match resolve_item_or_type(scx, object_type, index_name.clone(), if_exists)? {
+        Some(entry) => entry.id(),
+        None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: index_name.to_string(),
-                object_type: ObjectType::Index,
+                object_type,
             });
 
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Index,
-            }));
+            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
         }
-        Err(e) => return Err(e.into()),
     };
-    if entry.item_type() != CatalogItemType::Index {
-        sql_bail!(
-            "\"{}\" is a {} not a index",
-            scx.catalog.resolve_full_name(entry.name()),
-            entry.item_type()
-        )
-    }
-    let id = entry.id();
 
     match actions {
         AlterIndexAction::ResetOptions(options) => {
@@ -4717,10 +4700,6 @@ pub fn plan_alter_item_set_cluster(
 
     match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
         Some(entry) => {
-            let catalog_object_type: ObjectType = entry.item_type().into();
-            if catalog_object_type != object_type {
-                sql_bail!("Cannot modify {} as {object_type}", entry.item_type());
-            }
             let current_cluster = entry.cluster_id();
             let Some(current_cluster) = current_cluster else {
                 sql_bail!("No cluster associated with {name}");
@@ -4877,24 +4856,24 @@ pub fn plan_alter_item_rename(
     to_item_name: Ident,
     if_exists: bool,
 ) -> Result<Plan, PlanError> {
-    match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
+    let resolved = match resolve_item_or_type(scx, object_type, name.clone(), if_exists) {
+        Ok(r) => r,
+        // Return a more helpful error on `DROP VIEW <materialized-view>`.
+        Err(PlanError::MismatchedObjectType {
+            name,
+            is_type: ObjectType::MaterializedView,
+            expected_type: ObjectType::View,
+        }) => {
+            return Err(PlanError::AlterViewOnMaterializedView(name.to_string()));
+        }
+        e => e?,
+    };
+
+    match resolved {
         Some(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
             let item_type = entry.item_type();
 
-            // Return a more helpful error on `ALTER VIEW <materialized-view>`.
-            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
-                return Err(PlanError::AlterViewOnMaterializedView(
-                    full_name.to_string(),
-                ));
-            } else if object_type != item_type {
-                sql_bail!(
-                    "\"{}\" is a {} not a {}",
-                    full_name,
-                    entry.item_type(),
-                    format!("{object_type}").to_lowercase()
-                )
-            }
             let proposed_name = QualifiedItemName {
                 qualifiers: entry.name().qualifiers.clone(),
                 item: to_item_name.clone().into_string(),
@@ -5100,29 +5079,19 @@ pub fn plan_alter_secret(
         if_exists,
         value,
     } = stmt;
-    let name = normalize::unresolved_item_name(name)?;
-    let entry = match scx.catalog.resolve_item(&name) {
-        Ok(secret) => secret,
-        Err(_) if if_exists => {
+    let object_type = ObjectType::Secret;
+    let id = match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
+        Some(entry) => entry.id(),
+        None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: name.to_string(),
-                object_type: ObjectType::Secret,
+                object_type,
             });
 
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Secret,
-            }));
+            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
         }
-        Err(e) => return Err(e.into()),
     };
-    if entry.item_type() != CatalogItemType::Secret {
-        sql_bail!(
-            "\"{}\" is a {} not a secret",
-            scx.catalog.resolve_full_name(entry.name()),
-            entry.item_type()
-        )
-    }
-    let id = entry.id();
+
     let secret_as = query::plan_secret_as(scx, value)?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
@@ -5352,21 +5321,8 @@ pub fn plan_alter_sink(
         action: _,
     } = stmt;
 
-    let sink_name = normalize::unresolved_item_name(sink_name)?;
-    let entry = match scx.catalog.resolve_item(&sink_name) {
-        Ok(sink) => sink,
-        Err(_) if if_exists => {
-            bail_unsupported!("ALTER SINK");
-        }
-        Err(e) => return Err(e.into()),
-    };
-    if entry.item_type() != CatalogItemType::Sink {
-        sql_bail!(
-            "\"{}\" is a {} not a sink",
-            scx.catalog.resolve_full_name(entry.name()),
-            entry.item_type()
-        )
-    }
+    let object_type = ObjectType::Sink;
+    let _ = resolve_item_or_type(scx, object_type, sink_name, if_exists)?;
 
     bail_unsupported!("ALTER SINK");
 }
@@ -5393,29 +5349,18 @@ pub fn plan_alter_source(
         if_exists,
         action,
     } = stmt;
-    let source_name = normalize::unresolved_item_name(source_name)?;
-    let entry = match scx.catalog.resolve_item(&source_name) {
-        Ok(source) => source,
-        Err(_) if if_exists => {
+    let object_type = ObjectType::Source;
+    let entry = match resolve_item_or_type(scx, object_type, source_name.clone(), if_exists)? {
+        Some(entry) => entry,
+        None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: source_name.to_string(),
-                object_type: ObjectType::Source,
+                object_type,
             });
 
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Source,
-            }));
+            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
         }
-        Err(e) => return Err(e.into()),
     };
-    if entry.item_type() != CatalogItemType::Source {
-        sql_bail!(
-            "\"{}\" is a {} not a source",
-            scx.catalog.resolve_full_name(entry.name()),
-            entry.item_type()
-        )
-    }
-    let id = entry.id();
 
     let action = match action {
         AlterSourceAction::SetOptions(options) => {
@@ -5487,7 +5432,10 @@ pub fn plan_alter_source(
         },
     };
 
-    Ok(Plan::AlterSource(AlterSourcePlan { id, action }))
+    Ok(Plan::AlterSource(AlterSourcePlan {
+        id: entry.id(),
+        action,
+    }))
 }
 
 pub fn describe_alter_system_set(
@@ -5788,8 +5736,20 @@ pub(crate) fn resolve_item_or_type<'a>(
         ObjectType::Type => scx.catalog.resolve_type(&name),
         _ => scx.catalog.resolve_item(&name),
     };
+
     match catalog_item {
-        Ok(item) => Ok(Some(item)),
+        Ok(item) => {
+            let is_type = ObjectType::from(item.item_type());
+            if object_type == is_type {
+                Ok(Some(item))
+            } else {
+                Err(PlanError::MismatchedObjectType {
+                    name: scx.catalog.minimal_qualification(item.name()),
+                    is_type,
+                    expected_type: object_type,
+                })
+            }
+        }
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e.into()),
     }

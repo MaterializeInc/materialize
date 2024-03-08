@@ -155,7 +155,7 @@ contains:SOURCE "mz_source" is a not a subsource of "mz_source"
 > CREATE TABLE mz_table (a int);
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE mz_table;
-contains:"materialize.public.mz_table" is a table not a source
+contains:mz_table is a table not a source
 
 > DROP TABLE mz_table;
 
