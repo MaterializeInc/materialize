@@ -12,12 +12,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::anyhow;
 use derivative::Derivative;
+use hibitset::BitSet;
 use itertools::Itertools;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
-use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::collections::CollectionExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
@@ -107,14 +108,6 @@ impl<'a> Transaction<'a> {
             system_privileges,
         }: Snapshot,
     ) -> Result<Transaction, CatalogError> {
-        let oids: HashSet<_> = databases
-            .values()
-            .map(|value| value.oid)
-            .chain(schemas.values().map(|value| value.oid))
-            .chain(roles.values().map(|value| value.oid))
-            .chain(items.values().map(|value| value.oid))
-            .chain(introspection_sources.values().map(|value| value.oid))
-            .collect();
         Ok(Transaction {
             durable_catalog,
             databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
@@ -637,7 +630,11 @@ impl<'a> Transaction<'a> {
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
     /// object.
     fn allocate_oids(&mut self, amount: u64) -> Result<Vec<u32>, CatalogError> {
-        let allocated_oids: HashSet<_> = self
+        if amount > u32::MAX.into() {
+            return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
+        }
+
+        let allocated_oids: BitSet = self
             .databases
             .items()
             .values()
@@ -653,9 +650,6 @@ impl<'a> Transaction<'a> {
             )
             .collect();
 
-        if amount > u32::MAX.into() {
-            return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
-        }
         let current_id: u32 = self
             .id_allocator
             .items()
@@ -670,7 +664,7 @@ impl<'a> Transaction<'a> {
             .expect("we should never persist an oid outside of user OID range");
         let mut oids = Vec::new();
         while oids.len() < u64_to_usize(amount) {
-            if !allocated_oids.contains(&current_oid.0) {
+            if !allocated_oids.contains(current_oid.0) {
                 oids.push(current_oid.0);
             }
             current_oid += 1;

@@ -19,6 +19,7 @@ derivative = "2.2.0"
 differential-dataflow = "0.12.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
+hibitset = { version = "0.6.4d }
 itertools = "0.10.5"
 once_cell = "1.16.0"
 mz-adapter-types = { path = "../adapter-types" }
