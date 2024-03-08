@@ -376,6 +376,129 @@ impl Factorizer for WorstCaseFactorizer {
     }
 }
 
+impl crate::analysis::Analysis for Cardinality {
+    type Value = SymExp;
+
+    fn announce_dependencies(builder: &mut crate::analysis::DerivedBuilder) {
+        builder.require(crate::analysis::Arity);
+        builder.require(crate::analysis::UniqueKeys);
+    }
+
+    fn derive(
+        &self,
+        expr: &MirRelationExpr,
+        index: usize,
+        results: &[Self::Value],
+        depends: &crate::analysis::Derived,
+    ) -> Self::Value {
+        use crate::analysis::{Arity, SubtreeSize, UniqueKeys};
+        use MirRelationExpr::*;
+
+        let sizes = depends
+            .as_view()
+            .results::<SubtreeSize>()
+            .expect("SubtreeSize analysis results missing");
+        let arity = depends
+            .as_view()
+            .results::<Arity>()
+            .expect("Arity analysis results missing");
+        let keys = depends
+            .as_view()
+            .results::<UniqueKeys>()
+            .expect("UniqueKeys analysis results missing");
+
+        match expr {
+            Constant { rows, .. } => SymExp::from(rows.as_ref().map_or_else(|_| 0, |v| v.len())),
+            Get { id, .. } => match id {
+                Id::Local(id) => match depends.bindings().get(id) {
+                    Some(value) => results[*value].clone(),
+                    None => SymExp::symbolic(FactorizerVariable::Unknown),
+                },
+                Id::Global(id) => SymbolicExpression::symbolic(FactorizerVariable::Id(*id)),
+            },
+            Let { .. } | Project { .. } | Map { .. } | ArrangeBy { .. } | Negate { .. } => {
+                results[index - 1].clone()
+            }
+            LetRec { .. } =>
+            // TODO(mgree): implement a recurrence-based approach (or at least identify common idioms, e.g. transitive closure)
+            {
+                SymbolicExpression::symbolic(FactorizerVariable::Unknown)
+            }
+            Union { base: _, inputs: _ } => {
+                let inputs = depends
+                    .children_of_rev(index, expr.children().count())
+                    .map(|off| results[off].clone())
+                    .collect();
+                SymbolicExpression::sum(inputs)
+            }
+            FlatMap { func, .. } => {
+                let input = &results[index - 1];
+                self.factorize.flat_map(func, input)
+            }
+            Filter { predicates, .. } => {
+                let input = &results[index - 1];
+                let keys = depends.results::<UniqueKeys>().expect("UniqueKeys missing");
+                let keys = &keys[index - 1];
+                self.factorize.filter(predicates, keys, input)
+            }
+            Join {
+                equivalences,
+                implementation,
+                inputs,
+                ..
+            } => {
+                let mut input_results = Vec::with_capacity(inputs.len());
+
+                // maps a column to the index in `inputs` that it belongs to
+                let mut unique_columns = BTreeMap::new();
+                let mut key_offset = 0;
+
+                let mut offset = 1;
+                for idx in 0..inputs.len() {
+                    let input = &results[index - offset];
+                    input_results.push(input);
+
+                    let arity = arity[index - offset];
+                    let keys = &keys[index - offset];
+                    for key in keys {
+                        if key.len() == 1 {
+                            unique_columns.insert(key_offset + key[0], idx);
+                        }
+                    }
+                    key_offset += arity;
+
+                    offset += &sizes[index - offset];
+                }
+
+                self.factorize
+                    .join(equivalences, implementation, unique_columns, input_results)
+            }
+            Reduce {
+                group_key,
+                expected_group_size,
+                ..
+            } => {
+                let input = &results[index - 1];
+                self.factorize.reduce(group_key, expected_group_size, input)
+            }
+            TopK {
+                group_key,
+                limit,
+                expected_group_size,
+                ..
+            } => {
+                let input = &results[index - 1];
+                self.factorize
+                    .topk(group_key, limit, expected_group_size, input)
+            }
+            Threshold { .. } => {
+                let input = &results[index - 1];
+                self.factorize.threshold(input)
+            }
+        }
+    }
+}
+
 impl Attribute for Cardinality {
     type Value = SymExp;
 
