@@ -316,7 +316,7 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
 ) -> Result<u64, CatalogError> {
     // 1. Use the V1 to deserialize the contents of the current snapshot.
     let snapshot: Vec<_> = unopened_catalog_state
-        .snapshot
+        .trace
         .iter()
         .map(|update| {
             soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated, {update:?}");

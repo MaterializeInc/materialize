@@ -1171,11 +1171,18 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
-        let key = proto::IdAllocKey {
-            name: id_type.to_string(),
-        };
-        self.with_snapshot(|snapshot| {
-            Ok(snapshot.id_allocator.get(&key).expect("must exist").next_id)
+        self.with_trace(|trace| {
+            Ok(trace
+                .into_iter()
+                .rev()
+                .filter_map(|update| match &update.kind {
+                    StateUpdateKind::IdAllocator(key, value) if key.name == id_type => {
+                        Some(value.next_id)
+                    }
+                    _ => None,
+                })
+                .next()
+                .expect("must exist"))
         })
         .await
     }
@@ -1185,13 +1192,17 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         &mut self,
     ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
         let value = self
-            .with_snapshot(|snapshot| {
-                Ok(snapshot
-                    .configs
-                    .get(&proto::ConfigKey {
-                        key: PERSIST_TXN_TABLES.to_string(),
+            .with_trace(|trace| {
+                Ok(trace
+                    .into_iter()
+                    .rev()
+                    .filter_map(|update| match &update.kind {
+                        StateUpdateKind::Config(key, value) if key.key == PERSIST_TXN_TABLES => {
+                            Some(value.value)
+                        }
+                        _ => None,
                     })
-                    .map(|value| value.value))
+                    .next())
             })
             .await?;
         value
