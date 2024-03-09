@@ -124,7 +124,7 @@ Return
             Negate
               Join on=(#2 = integer_to_bigint(#0))
                 Get l1
-                Distinct project=[#2]
+                Distinct project=[integer_to_bigint(#0)]
                   Get l0
           Get l1
       Filter (#1 = 100)
@@ -173,7 +173,7 @@ Return
             Negate
               Join on=(#2 = integer_to_bigint(#0))
                 Get l1
-                Distinct project=[#2]
+                Distinct project=[integer_to_bigint(#0)]
                   Get l0
           Get l1
       Filter (#1 = 100)
