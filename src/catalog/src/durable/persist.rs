@@ -27,8 +27,8 @@ use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{
-    soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log, soft_assert_or_log,
-    soft_panic_or_log,
+    soft_assert_eq_no_log, soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log,
+    soft_assert_or_log, soft_panic_or_log,
 };
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
@@ -396,7 +396,7 @@ impl UnopenedPersistCatalogState {
             upper: self.upper,
             epoch: current_epoch,
             // Initialize empty in-memory state.
-            snapshot: Snapshot::empty(),
+            snapshot: Vec::new(),
             audit_logs: LargeCollectionStartupCache::new_open(),
             storage_usage_events: LargeCollectionStartupCache::new_open(),
             metrics: self.metrics,
@@ -415,9 +415,14 @@ impl UnopenedPersistCatalogState {
             }
             txn
         } else {
-            soft_assert_no_log!(
-                catalog.snapshot.is_empty(),
-                "snapshot should not contain anything for an uninitialized catalog: {:?}",
+            soft_assert_eq_no_log!(
+                catalog
+                    .snapshot
+                    .iter()
+                    .filter(|(kind, _, _)| !matches!(kind, StateUpdateKind::Epoch(_)))
+                    .count(),
+                0,
+                "trace should not contain any updates for an uninitialized catalog: {:?}",
                 catalog.snapshot
             );
             let mut txn = catalog.transaction().await?;
@@ -813,8 +818,10 @@ pub struct PersistCatalogState {
     upper: Timestamp,
     /// The epoch of this catalog.
     epoch: Epoch,
-    /// A cache of the entire catalogs state.
-    snapshot: Snapshot,
+    /// A cache of the entire catalog state.
+    ///
+    /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
+    snapshot: Vec<(StateUpdateKind, Timestamp, Diff)>,
     /// A cache of audit logs that is only populated during startup.
     audit_logs: LargeCollectionStartupCache<proto::AuditLogKey>,
     /// A cache of storage usage events that is only populated during startup.
@@ -947,6 +954,78 @@ impl PersistCatalogState {
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate>,
     ) -> Result<(), DurableCatalogError> {
+        let mut updates: Vec<_> = updates.into_iter().collect();
+
+        // Updates must be applied in timestamp order. Within a timestamp retractions must be
+        // applied before insertions, or we might end up retracting the wrong value.
+        updates.sort_by(|a, b| a.ts.cmp(&b.ts).then(a.diff.cmp(&b.diff)));
+
+        for StateUpdate { kind, ts, diff } in updates {
+            if diff != 1 && diff != -1 {
+                panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
+            }
+
+            if let Some(collection_type) = kind.collection_type() {
+                self.metrics
+                    .collection_entries
+                    .with_label_values(&[&collection_type.to_string()])
+                    .add(diff);
+            }
+
+            debug!("applying catalog update: ({kind:?}, {ts:?}, {diff:?})");
+            match kind {
+                StateUpdateKind::AuditLog(key, ()) => {
+                    self.audit_logs.push((key, diff));
+                }
+                StateUpdateKind::Epoch(epoch) => {
+                    if epoch > self.epoch {
+                        soft_assert_eq_or_log!(diff, 1);
+                        return Err(DurableCatalogError::Fence(format!(
+                            "current catalog epoch {} fenced by new catalog epoch {}",
+                            self.epoch, epoch
+                        )));
+                    }
+                }
+                StateUpdateKind::StorageUsage(key, ()) => {
+                    self.storage_usage_events.push((key, diff));
+                }
+                _ => self.snapshot.push((kind, ts, diff)),
+            }
+        }
+        self.consolidate();
+        Ok(())
+    }
+
+    fn consolidate(&mut self) {
+        let new_ts = self
+            .snapshot
+            .last()
+            .map(|(_, ts, _)| *ts)
+            .unwrap_or_else(Timestamp::minimum);
+        for (_, ts, _) in &mut self.snapshot {
+            *ts = new_ts;
+        }
+        differential_dataflow::consolidation::consolidate_updates(&mut self.snapshot);
+    }
+
+    /// Execute and return the results of `f` on the current catalog trace.
+    ///
+    /// Will return an error if the catalog has been fenced out.
+    async fn with_trace<T>(
+        &mut self,
+        f: impl FnOnce(&Vec<(StateUpdateKind, Timestamp, Diff)>) -> Result<T, CatalogError>,
+    ) -> Result<T, CatalogError> {
+        self.sync_to_current_upper().await?;
+        f(&self.snapshot)
+    }
+
+    /// Execute and return the results of `f` on the current catalog snapshot.
+    ///
+    /// Will return an error if the catalog has been fenced out.
+    async fn with_snapshot<T>(
+        &mut self,
+        f: impl FnOnce(Snapshot) -> Result<T, CatalogError>,
+    ) -> Result<T, CatalogError> {
         fn apply<K, V>(map: &mut BTreeMap<K, V>, key: K, value: V, diff: Diff)
         where
             K: Ord,
@@ -969,113 +1048,76 @@ impl PersistCatalogState {
             }
         }
 
-        let mut updates: Vec<_> = updates
-            .into_iter()
-            .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
-            .collect();
+        self.with_trace(|trace| {
+            let mut snapshot = Snapshot::empty();
+            for (kind, ts, diff) in trace.clone() {
+                if diff != 1 && diff != -1 {
+                    panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
+                }
 
-        // Consolidation is required for correctness. It guarantees that for a single key, there is
-        // at most a single retraction and a single insertion per timestamp. Otherwise, we would
-        // need to match the retractions and insertions up by value and manually figure out what the
-        // end value should be.
-        differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-        // Updates must be applied in timestamp order. Within a timestamp retractions must be
-        // applied before insertions or we might end up retracting the wrong value.
-        updates.sort_by(|(_, ts1, diff1), (_, ts2, diff2)| ts1.cmp(ts2).then(diff1.cmp(diff2)));
-
-        for (kind, ts, diff) in updates {
-            if diff != 1 && diff != -1 {
-                panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
-            }
-
-            if let Some(collection_type) = kind.collection_type() {
-                self.metrics
-                    .collection_entries
-                    .with_label_values(&[&collection_type.to_string()])
-                    .add(diff);
-            }
-
-            debug!("applying catalog update: ({kind:?}, {ts:?}, {diff:?})");
-            match kind {
-                StateUpdateKind::AuditLog(key, ()) => {
-                    self.audit_logs.push((key, diff));
-                }
-                StateUpdateKind::Cluster(key, value) => {
-                    apply(&mut self.snapshot.clusters, key, value, diff);
-                }
-                StateUpdateKind::ClusterReplica(key, value) => {
-                    apply(&mut self.snapshot.cluster_replicas, key, value, diff);
-                }
-                StateUpdateKind::Comment(key, value) => {
-                    apply(&mut self.snapshot.comments, key, value, diff);
-                }
-                StateUpdateKind::Config(key, value) => {
-                    apply(&mut self.snapshot.configs, key, value, diff);
-                }
-                StateUpdateKind::Database(key, value) => {
-                    apply(&mut self.snapshot.databases, key, value, diff);
-                }
-                StateUpdateKind::DefaultPrivilege(key, value) => {
-                    apply(&mut self.snapshot.default_privileges, key, value, diff);
-                }
-                StateUpdateKind::Epoch(epoch) => {
-                    if epoch > self.epoch {
-                        soft_assert_eq_or_log!(diff, 1);
-                        return Err(DurableCatalogError::Fence(format!(
-                            "current catalog epoch {} fenced by new catalog epoch {}",
-                            self.epoch, epoch
-                        )));
+                match kind {
+                    StateUpdateKind::AuditLog(_key, ()) => {
+                        // Ignore for snapshots.
+                    }
+                    StateUpdateKind::Cluster(key, value) => {
+                        apply(&mut snapshot.clusters, key, value, diff);
+                    }
+                    StateUpdateKind::ClusterReplica(key, value) => {
+                        apply(&mut snapshot.cluster_replicas, key, value, diff);
+                    }
+                    StateUpdateKind::Comment(key, value) => {
+                        apply(&mut snapshot.comments, key, value, diff);
+                    }
+                    StateUpdateKind::Config(key, value) => {
+                        apply(&mut snapshot.configs, key, value, diff);
+                    }
+                    StateUpdateKind::Database(key, value) => {
+                        apply(&mut snapshot.databases, key, value, diff);
+                    }
+                    StateUpdateKind::DefaultPrivilege(key, value) => {
+                        apply(&mut snapshot.default_privileges, key, value, diff);
+                    }
+                    StateUpdateKind::Epoch(_epoch) => {
+                        // Ignore for snapshots.
+                    }
+                    StateUpdateKind::IdAllocator(key, value) => {
+                        apply(&mut snapshot.id_allocator, key, value, diff);
+                    }
+                    StateUpdateKind::IntrospectionSourceIndex(key, value) => {
+                        apply(&mut snapshot.introspection_sources, key, value, diff);
+                    }
+                    StateUpdateKind::Item(key, value) => {
+                        apply(&mut snapshot.items, key, value, diff);
+                    }
+                    StateUpdateKind::Role(key, value) => {
+                        apply(&mut snapshot.roles, key, value, diff);
+                    }
+                    StateUpdateKind::Schema(key, value) => {
+                        apply(&mut snapshot.schemas, key, value, diff);
+                    }
+                    StateUpdateKind::Setting(key, value) => {
+                        apply(&mut snapshot.settings, key, value, diff);
+                    }
+                    StateUpdateKind::StorageUsage(_key, ()) => {
+                        // Ignore for snapshots.
+                    }
+                    StateUpdateKind::SystemConfiguration(key, value) => {
+                        apply(&mut snapshot.system_configurations, key, value, diff);
+                    }
+                    StateUpdateKind::SystemObjectMapping(key, value) => {
+                        apply(&mut snapshot.system_object_mappings, key, value, diff);
+                    }
+                    StateUpdateKind::SystemPrivilege(key, value) => {
+                        apply(&mut snapshot.system_privileges, key, value, diff);
+                    }
+                    StateUpdateKind::Timestamp(key, value) => {
+                        apply(&mut snapshot.timestamps, key, value, diff);
                     }
                 }
-                StateUpdateKind::IdAllocator(key, value) => {
-                    apply(&mut self.snapshot.id_allocator, key, value, diff);
-                }
-                StateUpdateKind::IntrospectionSourceIndex(key, value) => {
-                    apply(&mut self.snapshot.introspection_sources, key, value, diff);
-                }
-                StateUpdateKind::Item(key, value) => {
-                    apply(&mut self.snapshot.items, key, value, diff);
-                }
-                StateUpdateKind::Role(key, value) => {
-                    apply(&mut self.snapshot.roles, key, value, diff);
-                }
-                StateUpdateKind::Schema(key, value) => {
-                    apply(&mut self.snapshot.schemas, key, value, diff);
-                }
-                StateUpdateKind::Setting(key, value) => {
-                    apply(&mut self.snapshot.settings, key, value, diff);
-                }
-                StateUpdateKind::StorageUsage(key, ()) => {
-                    self.storage_usage_events.push((key, diff));
-                }
-                StateUpdateKind::SystemConfiguration(key, value) => {
-                    apply(&mut self.snapshot.system_configurations, key, value, diff);
-                }
-                StateUpdateKind::SystemObjectMapping(key, value) => {
-                    apply(&mut self.snapshot.system_object_mappings, key, value, diff);
-                }
-                StateUpdateKind::SystemPrivilege(key, value) => {
-                    apply(&mut self.snapshot.system_privileges, key, value, diff);
-                }
-                StateUpdateKind::Timestamp(key, value) => {
-                    apply(&mut self.snapshot.timestamps, key, value, diff);
-                }
             }
-        }
-
-        Ok(())
-    }
-
-    /// Execute and return the results of `f` on the current catalog snapshot.
-    ///
-    /// Will return an error if the catalog has been fenced out.
-    async fn with_snapshot<T>(
-        &mut self,
-        f: impl FnOnce(&Snapshot) -> Result<T, CatalogError>,
-    ) -> Result<T, CatalogError> {
-        self.sync_to_current_upper().await?;
-        f(&self.snapshot)
+            f(snapshot)
+        })
+        .await
     }
 
     /// Open a read handle to the catalog.
@@ -1140,11 +1182,18 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
-        let key = proto::IdAllocKey {
-            name: id_type.to_string(),
-        };
-        self.with_snapshot(|snapshot| {
-            Ok(snapshot.id_allocator.get(&key).expect("must exist").next_id)
+        self.with_trace(|trace| {
+            Ok(trace
+                .into_iter()
+                .rev()
+                .filter_map(|(kind, _, _)| match kind {
+                    StateUpdateKind::IdAllocator(key, value) if key.name == id_type => {
+                        Some(value.next_id)
+                    }
+                    _ => None,
+                })
+                .next()
+                .expect("must exist"))
         })
         .await
     }
@@ -1154,13 +1203,17 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         &mut self,
     ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
         let value = self
-            .with_snapshot(|snapshot| {
-                Ok(snapshot
-                    .configs
-                    .get(&proto::ConfigKey {
-                        key: PERSIST_TXN_TABLES.to_string(),
+            .with_trace(|trace| {
+                Ok(trace
+                    .into_iter()
+                    .rev()
+                    .filter_map(|(kind, _, _)| match kind {
+                        StateUpdateKind::Config(key, value) if key.key == PERSIST_TXN_TABLES => {
+                            Some(value.value)
+                        }
+                        _ => None,
                     })
-                    .map(|value| value.value))
+                    .next())
             })
             .await?;
         value
@@ -1174,7 +1227,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
-        self.with_snapshot(|snapshot| Ok(snapshot.clone())).await
+        self.with_snapshot(Ok).await
     }
 }
 
