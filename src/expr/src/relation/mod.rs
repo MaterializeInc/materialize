@@ -1822,18 +1822,16 @@ impl MirRelationExpr {
     }
 
     /// Computes the size (total number of nodes) and maximum depth of a MirRelationExpr for
-    /// debug printing purposes. Might grow the stack to a size proportional to the maximum depth.
+    /// debug printing purposes.
     pub fn debug_size_and_depth(&self) -> (usize, usize) {
         let mut size = 0;
         let mut max_depth = 0;
-        fn dfs(expr: &MirRelationExpr, size: &mut usize, max_depth: &mut usize, cur_depth: usize) {
-            mz_ore::stack::maybe_grow(|| {
-                *size += 1;
-                *max_depth = max(*max_depth, cur_depth);
-                expr.visit_children(|child| dfs(child, size, max_depth, cur_depth + 1));
-            });
+        let mut todo = vec![(self, 1)];
+        while let Some((expr, depth)) = todo.pop() {
+            size += 1;
+            max_depth = max(max_depth, depth);
+            todo.extend(expr.children().map(|c| (c, depth + 1)));
         }
-        dfs(self, &mut size, &mut max_depth, 1);
         (size, max_depth)
     }
 
