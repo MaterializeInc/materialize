@@ -61,17 +61,24 @@ pub struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
 
 impl StateUpdate {
     /// Convert a [`TransactionBatch`] to a list of [`StateUpdate`]s at timestamp `ts`.
-    pub(crate) fn from_txn_batch(txn_batch: TransactionBatch, ts: Timestamp) -> Vec<StateUpdate> {
+    pub(crate) fn from_txn_batch_ts(
+        txn_batch: TransactionBatch,
+        ts: Timestamp,
+    ) -> impl Iterator<Item = StateUpdate> {
+        Self::from_txn_batch(txn_batch).map(move |(kind, diff)| StateUpdate { kind, ts, diff })
+    }
+
+    /// Convert a [`TransactionBatch`] to a list of [`StateUpdate`]s and [`Diff`]s.
+    pub(crate) fn from_txn_batch(
+        txn_batch: TransactionBatch,
+    ) -> impl Iterator<Item = (StateUpdateKind, Diff)> {
         fn from_batch<K, V>(
             batch: Vec<(K, V, Diff)>,
-            ts: Timestamp,
             kind: fn(K, V) -> StateUpdateKind,
-        ) -> impl Iterator<Item = StateUpdate> {
-            batch.into_iter().map(move |(k, v, diff)| StateUpdate {
-                kind: kind(k, v),
-                ts,
-                diff,
-            })
+        ) -> impl Iterator<Item = (StateUpdateKind, Diff)> {
+            batch
+                .into_iter()
+                .map(move |(k, v, diff)| (kind(k, v), diff))
         }
         let TransactionBatch {
             databases,
@@ -93,35 +100,30 @@ impl StateUpdate {
             audit_log_updates,
             storage_usage_updates,
         } = txn_batch;
-        let databases = from_batch(databases, ts, StateUpdateKind::Database);
-        let schemas = from_batch(schemas, ts, StateUpdateKind::Schema);
-        let items = from_batch(items, ts, StateUpdateKind::Item);
-        let comments = from_batch(comments, ts, StateUpdateKind::Comment);
-        let roles = from_batch(roles, ts, StateUpdateKind::Role);
-        let clusters = from_batch(clusters, ts, StateUpdateKind::Cluster);
-        let cluster_replicas = from_batch(cluster_replicas, ts, StateUpdateKind::ClusterReplica);
+        let databases = from_batch(databases, StateUpdateKind::Database);
+        let schemas = from_batch(schemas, StateUpdateKind::Schema);
+        let items = from_batch(items, StateUpdateKind::Item);
+        let comments = from_batch(comments, StateUpdateKind::Comment);
+        let roles = from_batch(roles, StateUpdateKind::Role);
+        let clusters = from_batch(clusters, StateUpdateKind::Cluster);
+        let cluster_replicas = from_batch(cluster_replicas, StateUpdateKind::ClusterReplica);
         let introspection_sources = from_batch(
             introspection_sources,
-            ts,
             StateUpdateKind::IntrospectionSourceIndex,
         );
-        let id_allocators = from_batch(id_allocator, ts, StateUpdateKind::IdAllocator);
-        let configs = from_batch(configs, ts, StateUpdateKind::Config);
-        let settings = from_batch(settings, ts, StateUpdateKind::Setting);
-        let timestamps = from_batch(timestamps, ts, StateUpdateKind::Timestamp);
+        let id_allocators = from_batch(id_allocator, StateUpdateKind::IdAllocator);
+        let configs = from_batch(configs, StateUpdateKind::Config);
+        let settings = from_batch(settings, StateUpdateKind::Setting);
+        let timestamps = from_batch(timestamps, StateUpdateKind::Timestamp);
         let system_object_mappings =
-            from_batch(system_gid_mapping, ts, StateUpdateKind::SystemObjectMapping);
-        let system_configurations = from_batch(
-            system_configurations,
-            ts,
-            StateUpdateKind::SystemConfiguration,
-        );
-        let default_privileges =
-            from_batch(default_privileges, ts, StateUpdateKind::DefaultPrivilege);
-        let system_privileges = from_batch(system_privileges, ts, StateUpdateKind::SystemPrivilege);
-        let audit_logs = from_batch(audit_log_updates, ts, StateUpdateKind::AuditLog);
+            from_batch(system_gid_mapping, StateUpdateKind::SystemObjectMapping);
+        let system_configurations =
+            from_batch(system_configurations, StateUpdateKind::SystemConfiguration);
+        let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
+        let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
+        let audit_logs = from_batch(audit_log_updates, StateUpdateKind::AuditLog);
         let storage_usage_updates =
-            from_batch(storage_usage_updates, ts, StateUpdateKind::StorageUsage);
+            from_batch(storage_usage_updates, StateUpdateKind::StorageUsage);
 
         databases
             .chain(schemas)
@@ -141,7 +143,6 @@ impl StateUpdate {
             .chain(system_privileges)
             .chain(audit_logs)
             .chain(storage_usage_updates)
-            .collect()
     }
 }
 
