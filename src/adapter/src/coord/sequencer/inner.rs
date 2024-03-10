@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use maplit::{btreemap, btreeset};
+use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -66,8 +66,8 @@ use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOptionName, ConnectionOption, ConnectionOptionName,
-    CreateSourceConnection, CreateSourceSubsource, DeferredItemName, PgConfigOption,
-    PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
+    CreateSourceConnection, DeferredItemName, PgConfigOption, PgConfigOptionName, Statement,
+    TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
@@ -3198,7 +3198,7 @@ impl Coordinator {
         let mut connections = VecDeque::new();
         connections.push_front(entry.id());
 
-        let mut sources = BTreeMap::new();
+        let mut source_descs = BTreeMap::new();
         let mut sinks = BTreeMap::new();
 
         while let Some(id) = connections.pop_front() {
@@ -3207,15 +3207,15 @@ impl Coordinator {
                 match entry.item_type() {
                     CatalogItemType::Connection => connections.push_back(*id),
                     CatalogItemType::Source => {
-                        let ingestion =
-                            match &entry.source().expect("known to be source").data_source {
-                                DataSourceDesc::Ingestion(ingestion) => ingestion
-                                    .clone()
-                                    .into_inline_connection(self.catalog().state()),
-                                _ => unreachable!("only ingestions reference connections"),
-                            };
+                        let desc = match &entry.source().expect("known to be source").data_source {
+                            DataSourceDesc::Ingestion(ingestion) => ingestion
+                                .desc
+                                .clone()
+                                .into_inline_connection(self.catalog().state()),
+                            _ => unreachable!("only ingestions reference connections"),
+                        };
 
-                        sources.insert(*id, ingestion);
+                        source_descs.insert(*id, desc);
                     }
                     CatalogItemType::Sink => {
                         let export = entry.sink().expect("known to be sink");
@@ -3232,12 +3232,11 @@ impl Coordinator {
             }
         }
 
-        if !sources.is_empty() {
+        if !source_descs.is_empty() {
             self.controller
                 .storage
-                .alter_collection(sources)
-                .await
-                .expect("altering collection after txn must succeed");
+                .alter_ingestion_source_desc(source_descs)
+                .await;
         }
 
         if !sinks.is_empty() {
@@ -3447,6 +3446,21 @@ impl Coordinator {
                     cur_source.is_retained_metrics_object,
                 );
 
+                let desc = match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => ingestion
+                        .desc
+                        .clone()
+                        .into_inline_connection(self.catalog().state()),
+                    _ => unreachable!("already verified of type ingestion"),
+                };
+
+                let descs = btreemap! {id => desc};
+
+                self.controller
+                    .storage
+                    .check_alter_ingestion_source_desc(&descs)
+                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+
                 // CASCADE
                 let drops = self.catalog().object_dependents(
                     &to_drop.iter().cloned().map(ObjectId::Item).collect(),
@@ -3482,6 +3496,12 @@ impl Coordinator {
                 self.catalog_transact(Some(session), ops).await?;
                 // Dropping the source from the catalog handles the storage
                 // controller state.
+
+                // Commit the new desc to storage.
+                self.controller
+                    .storage
+                    .alter_ingestion_source_desc(descs)
+                    .await;
             }
             plan::AlterSourceAction::AddSubsourceExports {
                 subsources,
@@ -3607,27 +3627,51 @@ impl Coordinator {
 
                 let source_compaction_window = source.custom_logical_compaction_window;
 
+                // Get new ingestion description for storage.
+                let desc = match &source.data_source {
+                    DataSourceDesc::Ingestion(ingestion) => ingestion
+                        .desc
+                        .clone()
+                        .into_inline_connection(self.catalog().state()),
+                    _ => unreachable!("already verified of type ingestion"),
+                };
+
+                let descs = btreemap! {id => desc};
+
+                self.controller
+                    .storage
+                    .check_alter_ingestion_source_desc(&descs)
+                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+
+                // Redefine source. This must be done before we create any new
+                // subsources so that it has the right ingestion.
+                let mut ops = vec![catalog::Op::UpdateItem {
+                    id,
+                    // Look this up again so we don't have to hold an immutable reference to the
+                    // entry for so long.
+                    name: self.catalog.get_entry(&id).name().clone(),
+                    to_item: CatalogItem::Source(source),
+                }];
+
                 let CreateSourceInner {
-                    mut ops,
+                    ops: new_ops,
                     sources,
                     if_not_exists_ids,
                 } = self.create_source_inner(session, subsources).await?;
+
+                ops.extend(new_ops.into_iter());
 
                 assert!(
                     if_not_exists_ids.is_empty(),
                     "IF NOT EXISTS not supported for ALTER SOURCE...ADD SUBSOURCES"
                 );
 
-                // Redefine source.
-                ops.push(catalog::Op::UpdateItem {
-                    id,
-                    // Look this up again so we don't have to hold an immutable reference to the
-                    // entry for so long.
-                    name: self.catalog.get_entry(&id).name().clone(),
-                    to_item: CatalogItem::Source(source),
-                });
-
                 self.catalog_transact(Some(session), ops).await?;
+
+                self.controller
+                    .storage
+                    .alter_ingestion_source_desc(descs)
+                    .await;
 
                 let mut source_ids = Vec::with_capacity(sources.len());
                 let mut collections = Vec::with_capacity(sources.len());

@@ -71,7 +71,7 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
+use mz_storage_types::sources::{IngestionDescription, SourceData, SourceDesc, SourceExport};
 use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -721,53 +721,52 @@ where
         self.execute_collections(to_execute).await
     }
 
-    fn check_alter_collection(
+    fn check_alter_ingestion_source_desc(
         &mut self,
-        collections: &BTreeMap<GlobalId, IngestionDescription>,
+        collections: &BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError> {
-        for (id, ingestion) in collections {
-            self.check_alter_collection_inner(*id, ingestion.clone())?;
+        for (id, desc) in collections {
+            let data_source = &self.collection(*id)?.description.data_source;
+            match &data_source {
+                DataSource::Ingestion(cur_ingestion) => {
+                    cur_ingestion.desc.alter_compatible(*id, desc)?;
+                }
+                o => {
+                    tracing::info!(
+                        "{id:?} inalterable because its data source is {:?} and not an ingestion",
+                        o
+                    );
+                    return Err(StorageError::InvalidAlter { id: *id });
+                }
+            }
         }
+
         Ok(())
     }
 
-    async fn alter_collection(
-        &mut self,
-        collections: BTreeMap<GlobalId, IngestionDescription>,
-    ) -> Result<(), StorageError> {
-        self.check_alter_collection(&collections)
-            .expect("error avoided by calling check_alter_collection first");
+    async fn alter_ingestion_source_desc(&mut self, collections: BTreeMap<GlobalId, SourceDesc>) {
+        self.check_alter_ingestion_source_desc(&collections)
+            .expect("error avoided by calling check_alter_ingestion_source_desc first");
 
-        for (id, ingestion) in collections {
-            // Describe the ingestion in terms of collection metadata.
-            let description = self
-                .enrich_ingestion(id, ingestion.clone())
-                .expect("verified valid in check_alter_collection_inner");
-
+        for (id, desc) in collections {
             let collection = self.collection_mut(id).expect("validated exists");
-            let new_source_exports = match &mut collection.description.data_source {
-                DataSource::Ingestion(active_ingestion) => {
-                    // Determine which IDs we're adding.
-                    let new_source_exports: Vec<_> = description
-                        .source_exports
-                        .keys()
-                        .filter(|id| !active_ingestion.source_exports.contains_key(id))
-                        .cloned()
-                        .collect();
-                    *active_ingestion = ingestion;
-
-                    new_source_exports
-                }
+            let curr_ingestion = match &mut collection.description.data_source {
+                DataSource::Ingestion(active_ingestion) => active_ingestion,
                 _ => unreachable!("verified collection refers to ingestion"),
             };
 
-            // Ensure this new collection's since is aligned with the dependencies.
-            // This will likely place its since beyond its upper which is OK because
-            // its snapshot will catch it up with the rest of the source, i.e. we
-            // will never see its upper at a state beyond 0 and less than its since.
-            for _id in new_source_exports {
-                todo!("this should be removed");
-            }
+            // No change.
+            if curr_ingestion.desc == desc {
+                continue;
+            } else {
+                curr_ingestion.desc = desc
+            };
+
+            let ingestion = curr_ingestion.clone();
+
+            let description = self
+                .enrich_ingestion(id, ingestion)
+                .expect("verified valid in check_alter_ingestion_source_desc_inner");
 
             // Fetch the client for this ingestion's instance.
             let client = self
@@ -780,8 +779,6 @@ where
                 description,
             }]));
         }
-
-        Ok(())
     }
 
     fn export(&self, id: GlobalId) -> Result<&ExportState<Self::Timestamp>, StorageError> {
@@ -2899,70 +2896,6 @@ where
             self.finalizable_shards.remove(&shard);
             self.finalized_shards.insert(shard);
         }
-    }
-
-    /// Determines if an `ALTER` is valid.
-    fn check_alter_collection_inner(
-        &self,
-        id: GlobalId,
-        mut ingestion: IngestionDescription,
-    ) -> Result<(), StorageError> {
-        // Check that the client exists.
-        self.clients
-            .get(&ingestion.instance_id)
-            .ok_or(StorageError::IngestionInstanceMissing {
-                storage_instance_id: ingestion.instance_id,
-                ingestion_id: id,
-            })?;
-
-        // Take a cloned copy of the description because we are going to treat it as a "scratch
-        // space".
-        let mut collection_description = self.collection(id)?.description.clone();
-
-        // Get the previous storage dependencies; we need these to understand if something has
-        // changed in what we depend upon.
-        let prev_storage_dependencies = collection_description.get_storage_dependency();
-
-        // We cannot know the metadata of exports yet to be created, so we have
-        // to remove them. However, we know that adding source exports is
-        // compatible, so still OK to proceed.
-        ingestion
-            .source_exports
-            .retain(|id, _| self.collection(*id).is_ok());
-
-        // Describe the ingestion in terms of collection metadata.
-        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
-
-        // Check compatibility between current and new ingestions and install new ingestion in
-        // collection description.
-        match &mut collection_description.data_source {
-            DataSource::Ingestion(cur_ingestion) => {
-                let prev_ingestion = self.enrich_ingestion(id, cur_ingestion.clone())?;
-                prev_ingestion.alter_compatible(id, &described_ingestion)?;
-
-                *cur_ingestion = ingestion;
-            }
-            o => {
-                tracing::info!(
-                    "{id:?} inalterable because its data source is {:?} and not an ingestion",
-                    o
-                );
-                return Err(StorageError::InvalidAlter { id });
-            }
-        };
-
-        let new_storage_dependencies = collection_description.get_storage_dependency();
-
-        if prev_storage_dependencies != new_storage_dependencies {
-            tracing::info!(
-                    "{id:?} inalterable because its storage dependencies have changed: were {:?} but are now {:?}",
-                    prev_storage_dependencies,
-                    new_storage_dependencies
-                );
-            return Err(StorageError::InvalidAlter { id });
-        }
-
-        Ok(())
     }
 
     /// For each element of `collections`, install a read hold on all of the
