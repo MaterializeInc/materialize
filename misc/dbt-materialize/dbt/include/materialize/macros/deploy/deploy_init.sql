@@ -317,4 +317,3 @@ WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
 {% endif %}
 
 {% endmacro %}
-
