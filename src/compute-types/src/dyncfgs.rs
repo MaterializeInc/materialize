@@ -59,6 +59,13 @@ pub const ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING: Config<bool> = Config::new(
     "Enable logging of the hydration status of compute operators.",
 );
 
+/// Enable usage of a pre-correction stash in the `persist_sink`.
+pub const ENABLE_PERSIST_SINK_STASH: Config<bool> = Config::new(
+    "enable_compute_persist_sink_stash",
+    true,
+    "Enable usage of a pre-correction stash in the compute `persist_sink`.",
+);
+
 /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
 pub const DATAFLOW_MAX_INFLIGHT_BYTES: Config<Option<usize>> = Config::new(
     "compute_dataflow_max_inflight_bytes",
@@ -101,6 +108,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_CHUNKED_STACK)
         .add(&ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING)
+        .add(&ENABLE_PERSIST_SINK_STASH)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)

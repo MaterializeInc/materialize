@@ -17,6 +17,7 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use mz_compute_types::dyncfgs::ENABLE_PERSIST_SINK_STASH;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
@@ -170,6 +171,7 @@ where
     let shard_id = target.data_shard;
 
     let operator_name = format!("persist_sink {}", sink_id);
+    let enable_stash = ENABLE_PERSIST_SINK_STASH.get(&compute_state.worker_config);
 
     if sink_id.is_user() {
         trace!(
@@ -210,6 +212,7 @@ where
         &passthrough_desired_stream,
         &persist_collection.inner,
         Arc::clone(&persist_clients),
+        enable_stash,
     );
 
     let (append_frontier_stream, append_token) = append_batches(
@@ -574,6 +577,7 @@ fn write_batches<G>(
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
+    enable_stash: bool,
 ) -> (Stream<G, BatchOrData>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -625,7 +629,7 @@ where
         // Contains updates from `desired` at times beyond `desired`'s frontier, by time. The idea
         // is to only move updates into `correction` that have a chance of being emitted shortly,
         // to keep the amount of updates we need to consolidate small.
-        let mut desired_stash = BTreeMap::new();
+        let mut desired_stash = enable_stash.then(BTreeMap::new);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -709,7 +713,7 @@ where
                 }
                 Some(event) = desired_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract desired rows into the stash. They are moved into
                             // `correction` in response to frontier advancements.
                             if sink_id.is_user() && !data.is_empty() {
@@ -727,26 +731,37 @@ where
                                     persist_frontier
                                 );
                             }
-                            for (d, t, r) in data {
-                                desired_stash.entry(t).or_insert_with(Vec::new).push((d, r));
+
+                            if let Some(stash) = &mut desired_stash {
+                                for (d, t, r) in data {
+                                    stash.entry(t).or_insert_with(Vec::new).push((d, r));
+                                }
+                            } else {
+                                correction.with_correction_buffer(
+                                    sink_metrics,
+                                    sink_worker_metrics,
+                                    |buffer| buffer.append(&mut data),
+                                );
                             }
 
                             continue;
                         }
                         Event::Progress(frontier) => {
                             // Extract desired rows as positive contributions to `correction`.
-                            desired_stash.retain(|time, data| {
-                                if !frontier.less_equal(time) {
-                                    correction.with_correction_buffer(
-                                        sink_metrics,
-                                        sink_worker_metrics,
-                                        |buffer| buffer.extend(data.drain(..).map(|(d, r)| (d, *time, r))),
-                                    );
-                                    false
-                                } else {
-                                    true
-                                }
-                            });
+                            if let Some(stash) = &mut desired_stash {
+                                stash.retain(|time, data| {
+                                    if !frontier.less_equal(time) {
+                                        correction.with_correction_buffer(
+                                            sink_metrics,
+                                            sink_worker_metrics,
+                                            |buffer| buffer.extend(data.drain(..).map(|(d, r)| (d, *time, r))),
+                                        );
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                });
+                            }
 
                             desired_frontier = frontier;
                         }
