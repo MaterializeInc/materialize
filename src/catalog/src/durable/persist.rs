@@ -179,7 +179,9 @@ pub struct UnopenedPersistCatalogState {
     /// Catalog shard ID.
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
-    pub(crate) snapshot: Vec<StateUpdate<StateUpdateKindRaw>>,
+    ///
+    /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
+    pub(crate) snapshot: Vec<(StateUpdateKindRaw, Timestamp, Diff)>,
     /// The current upper of the persist shard.
     pub(crate) upper: Timestamp,
     /// The epoch of the catalog, if one exists. This information is also included in `snapshot`,
@@ -273,6 +275,7 @@ impl UnopenedPersistCatalogState {
         let as_of = as_of(&mut read_handle, upper);
         let snapshot: Vec<_> = snapshot_binary(&mut read_handle, as_of, &metrics)
             .await
+            .map(|StateUpdate { kind, ts, diff }| (kind, ts, diff))
             .collect();
         let listen = read_handle
             .listen(Antichain::from_elem(as_of))
@@ -280,7 +283,7 @@ impl UnopenedPersistCatalogState {
             .expect("invalid usage");
         let mut epoch = FenceableEpoch::Unfenced(None);
         let mut configs = BTreeMap::new();
-        for StateUpdate { kind, ts: _, diff } in &snapshot {
+        for (kind, _, diff) in &snapshot {
             soft_assert_eq_or_log!(*diff, 1, "snapshot should be consolidated");
             if let Ok(kind) = kind.clone().try_into() {
                 match kind {
@@ -414,10 +417,10 @@ impl UnopenedPersistCatalogState {
             metrics: self.metrics,
         };
         catalog.metrics.collection_entries.reset();
-        let updates = self
-            .snapshot
-            .into_iter()
-            .map(|update| update.try_into().expect("kind decoding error"));
+        let updates = self.snapshot.into_iter().map(|(kind, ts, diff)| {
+            let kind = kind.try_into().expect("kind decoding error");
+            StateUpdate { kind, ts, diff }
+        });
         catalog.apply_updates(updates)?;
 
         let txn = if is_initialized {
@@ -444,8 +447,8 @@ impl UnopenedPersistCatalogState {
 
         if read_only {
             let (txn_batch, _) = txn.into_parts();
-            // The upper here doesn't matter because we are only apply the updates in memory.
-            let updates = StateUpdate::from_txn_batch(txn_batch, catalog.upper);
+            // The upper here doesn't matter because we are only applying the updates in memory.
+            let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
             catalog.apply_updates(updates)?;
         } else {
             txn.commit().await?;
@@ -550,8 +553,8 @@ impl UnopenedPersistCatalogState {
         updates: Vec<StateUpdate<StateUpdateKindRaw>>,
     ) -> Result<(), DurableCatalogError> {
         for update in updates {
-            let StateUpdate { kind, ts, diff } = &update;
-            if *diff != 1 && *diff != -1 {
+            let StateUpdate { kind, ts, diff } = update;
+            if diff != 1 && diff != -1 {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
@@ -597,27 +600,22 @@ impl UnopenedPersistCatalogState {
                 }
             }
 
-            self.snapshot.push(update);
+            self.snapshot.push((kind, ts, diff));
         }
         Ok(())
     }
 
     #[mz_ore::instrument]
     pub(crate) fn consolidate(&mut self) {
-        let snapshot = std::mem::take(&mut self.snapshot);
-        let ts = snapshot
+        let new_ts = self
+            .snapshot
             .last()
-            .map(|update| update.ts)
+            .map(|(_, ts, _)| *ts)
             .unwrap_or_else(Timestamp::minimum);
-        let mut updates = snapshot
-            .into_iter()
-            .map(|update| (update.kind, update.diff))
-            .collect();
-        differential_dataflow::consolidation::consolidate(&mut updates);
-        self.snapshot = updates
-            .into_iter()
-            .map(|(kind, diff)| StateUpdate { kind, ts, diff })
-            .collect();
+        for (_, ts, _) in &mut self.snapshot {
+            *ts = new_ts;
+        }
+        differential_dataflow::consolidation::consolidate_updates(&mut self.snapshot);
     }
 
     /// Open a read handle to the catalog.
@@ -905,18 +903,31 @@ impl PersistCatalogState {
     /// iff the current global upper of the catalog is `current_upper`.
     async fn compare_and_append(
         &mut self,
-        updates: Vec<StateUpdate>,
-        current_upper: Timestamp,
-        next_upper: Timestamp,
+        updates: Vec<(StateUpdateKind, Diff)>,
     ) -> Result<(), CatalogError> {
+        let updates = updates
+            .into_iter()
+            .map(|(kind, diff)| StateUpdate {
+                kind,
+                ts: self.upper,
+                diff,
+            })
+            .collect();
+        let next_upper = self.upper.step_forward();
         compare_and_append(
             &mut self.since_handle,
             &mut self.write_handle,
             updates,
-            current_upper,
+            self.upper,
             next_upper,
         )
-        .await
+        .await?;
+        debug!(
+            "write successful, upper advanced from {:?} to {:?}",
+            self.upper, next_upper
+        );
+        self.sync(next_upper).await?;
+        Ok(())
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -1293,21 +1304,17 @@ impl DurableCatalogState for PersistCatalogState {
                 .into());
             }
 
-            let current_upper = catalog.upper.clone();
-            let next_upper = current_upper.step_forward();
-
-            let updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
+            let updates = StateUpdate::from_txn_batch(txn_batch).collect();
             debug!("committing updates: {updates:?}");
 
             if matches!(catalog.mode, Mode::Writable) {
-                catalog
-                    .compare_and_append(updates, current_upper, next_upper)
-                    .await?;
-                debug!(
-                    "commit successful, upper advanced from {current_upper:?} to {next_upper:?}",
-                );
-                catalog.sync(next_upper).await?;
+                catalog.compare_and_append(updates).await?;
             } else if matches!(catalog.mode, Mode::Savepoint) {
+                let ts = catalog.upper;
+                let updates =
+                    updates
+                        .into_iter()
+                        .map(|(kind, diff)| StateUpdate { kind, ts, diff });
                 catalog.apply_updates(updates)?;
             }
 
@@ -1748,11 +1755,10 @@ impl UnopenedPersistCatalogState {
     ) -> Result<impl IntoIterator<Item = StateUpdate> + '_, CatalogError> {
         self.sync_to_current_upper().await?;
         self.consolidate();
-        Ok(self
-            .snapshot
-            .iter()
-            .cloned()
-            .map(|update| update.try_into().expect("kind decoding error")))
+        Ok(self.snapshot.iter().cloned().map(|(kind, ts, diff)| {
+            let kind = kind.try_into().expect("kind decoding error");
+            StateUpdate { kind, ts, diff }
+        }))
     }
 
     /// Increment `self.epoch` and return the updates needed to make this change durable.
