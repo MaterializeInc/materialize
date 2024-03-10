@@ -10,6 +10,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -621,6 +622,11 @@ where
         // only modified by updates received from either the `desired` or `persist` inputs.
         let mut correction = CorrectionBuffer(Vec::new());
 
+        // Contains updates from `desired` at times beyond `desired`'s frontier, by time. The idea
+        // is to only move updates into `correction` that have a chance of being emitted shortly,
+        // to keep the amount of updates we need to consolidate small.
+        let mut desired_stash = BTreeMap::new();
+
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
         // determines batch descriptions for all writers.
@@ -703,8 +709,9 @@ where
                 }
                 Some(event) = desired_input.next() => {
                     match event {
-                        Event::Data(_cap, mut data) => {
-                            // Extract desired rows as positive contributions to `correction`.
+                        Event::Data(_cap, data) => {
+                            // Extract desired rows into the stash. They are moved into
+                            // `correction` in response to frontier advancements.
                             if sink_id.is_user() && !data.is_empty() {
                                 trace!(
                                     "persist_sink {sink_id}/{shard_id}: \
@@ -720,11 +727,27 @@ where
                                     persist_frontier
                                 );
                             }
-                            correction.with_correction_buffer(sink_metrics, sink_worker_metrics, |buffer| buffer.append(&mut data));
+                            for (d, t, r) in data {
+                                desired_stash.entry(t).or_insert_with(Vec::new).push((d, r));
+                            }
 
                             continue;
                         }
                         Event::Progress(frontier) => {
+                            // Extract desired rows as positive contributions to `correction`.
+                            desired_stash.retain(|time, data| {
+                                if !frontier.less_equal(time) {
+                                    correction.with_correction_buffer(
+                                        sink_metrics,
+                                        sink_worker_metrics,
+                                        |buffer| buffer.extend(data.drain(..).map(|(d, r)| (d, *time, r))),
+                                    );
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+
                             desired_frontier = frontier;
                         }
                     }
@@ -733,7 +756,11 @@ where
                     match event {
                         Event::Data(_cap, mut data) => {
                             // Extract persist rows as negative contributions to `correction`.
-                            correction.with_correction_buffer(sink_metrics, sink_worker_metrics, |buffer| buffer.extend(data.drain(..).map(|(d, t, r)| (d, t, -r))));
+                            correction.with_correction_buffer(
+                                sink_metrics,
+                                sink_worker_metrics,
+                                |buffer| buffer.extend(data.drain(..).map(|(d, t, r)| (d, t, -r))),
+                            );
 
                             continue;
                         }
@@ -811,7 +838,11 @@ where
                     // attempt to write out new updates. Otherwise, we might
                     // spend a lot of time "consolidating" the same updates
                     // over and over again, with no changes.
-                    correction.with_correction_buffer(sink_metrics, sink_worker_metrics, consolidate_updates);
+                    correction.with_correction_buffer(
+                        sink_metrics,
+                        sink_worker_metrics,
+                        consolidate_updates,
+                    );
 
                     // `correction` starts large as it diffs the initial snapshots,
                     // but in steady state contains substantially fewer updates.
@@ -824,7 +855,11 @@ where
                     // pattern to require a linear number of updates rather than
                     // a constant number.
                     if correction.0.len() < correction.0.capacity() / 4 {
-                        correction.with_correction_buffer(sink_metrics, sink_worker_metrics, Vec::shrink_to_fit);
+                        correction.with_correction_buffer(
+                            sink_metrics,
+                            sink_worker_metrics,
+                            Vec::shrink_to_fit,
+                        );
                     }
                 }
 
@@ -842,7 +877,8 @@ where
 
                     let (batch_lower, batch_upper) = batch_description;
 
-                    let mut to_append = correction.0
+                    let mut to_append = correction
+                        .0
                         .iter()
                         .filter(|(_, time, _)| {
                             batch_lower.less_equal(time) && !batch_upper.less_equal(time)
