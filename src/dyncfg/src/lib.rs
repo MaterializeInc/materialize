@@ -119,19 +119,6 @@ impl<T: ConfigType> Config<T> {
         &self.default
     }
 
-    /// Adds this config to the given set.
-    ///
-    /// Names are required to be unique within a set, but each set is entirely
-    /// independent. The same `Config` may be registered to multiple
-    /// [ConfigSet]s and thus have independent values (e.g. imagine a units test
-    /// executing concurrently in the same process).
-    ///
-    /// Panics if a config with the same name has previously been registered to
-    /// this set.
-    pub fn register(&self, set: &mut ConfigSet) -> T {
-        T::get(T::shared(self, set).expect("config should be registered to set"))
-    }
-
     /// Returns the latest value of this config within the given set.
     ///
     /// Panics if this config was not previously registered to the set.
@@ -198,8 +185,13 @@ pub struct ConfigSet {
 impl ConfigSet {
     /// Adds the given config to this set.
     ///
-    /// An alias for [Config::register], but taking and returning `Self` to
-    /// allow for easy chaining.
+    /// Names are required to be unique within a set, but each set is entirely
+    /// independent. The same `Config` may be registered to multiple
+    /// [`ConfigSet`]s and thus have independent values (e.g. imagine a unit
+    /// test executing concurrently in the same process).
+    ///
+    /// Panics if a config with the same name has been previously registered
+    /// to this set.
     pub fn add<T: ConfigType>(mut self, config: &Config<T>) -> Self {
         let config = ConfigEntry {
             name: config.name,
