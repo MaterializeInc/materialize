@@ -162,7 +162,7 @@ pub trait ConfigType: Sized {
     fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>>;
 
     /// Converts this type to its type-erased enum equivalent.
-    fn to_val(val: &Self) -> ConfigVal;
+    fn to_val(val: Self) -> ConfigVal;
 
     /// Retrieves the current config value of this type from a value of its
     /// corresponding sharable type.
@@ -196,8 +196,8 @@ impl ConfigSet {
         let config = ConfigEntry {
             name: config.name,
             desc: config.desc,
-            default: T::to_val(&Into::<T>::into(config.default.clone())),
-            val: T::to_val(&Into::<T>::into(config.default.clone())),
+            default: T::to_val(config.default.clone().into()),
+            val: T::to_val(config.default.clone().into()),
         };
         if let Some(prev) = self.configs.insert(config.name.to_owned(), config) {
             panic!("{} registered twice", prev.name);
@@ -353,8 +353,8 @@ mod impls {
                 x => panic!("expected bool value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::Bool(Arc::new((*val).into()))
+        fn to_val(val: Self) -> ConfigVal {
+            ConfigVal::Bool(Arc::new(AtomicBool::from(val)))
         }
         fn set(x: &Self::Shared, val: Self) {
             x.store(val, SeqCst);
@@ -375,8 +375,8 @@ mod impls {
                 x => panic!("expected u32 value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::U32(Arc::new((*val).into()))
+        fn to_val(val: Self) -> ConfigVal {
+            ConfigVal::U32(Arc::new(AtomicU32::from(val)))
         }
         fn set(x: &Self::Shared, val: Self) {
             x.store(val, SeqCst);
@@ -397,8 +397,8 @@ mod impls {
                 x => panic!("expected usize value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::Usize(Arc::new((*val).into()))
+        fn to_val(val: Self) -> ConfigVal {
+            ConfigVal::Usize(Arc::new(AtomicUsize::from(val)))
         }
         fn set(x: &Self::Shared, val: Self) {
             x.store(val, SeqCst);
@@ -419,8 +419,8 @@ mod impls {
                 x => panic!("expected usize value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::OptUsize(Arc::new(RwLock::new(*val)))
+        fn to_val(val: Self) -> ConfigVal {
+            ConfigVal::OptUsize(Arc::new(RwLock::new(val)))
         }
         fn set(x: &Self::Shared, val: Self) {
             *x.write().expect("lock poisoned") = val;
@@ -441,8 +441,8 @@ mod impls {
                 x => panic!("expected String value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::String(Arc::new(RwLock::new(val.clone())))
+        fn to_val(val: Self) -> ConfigVal {
+            ConfigVal::String(Arc::new(RwLock::new(val)))
         }
         fn set(x: &Self::Shared, val: Self) {
             *x.write().expect("lock poisoned") = val;
@@ -463,8 +463,8 @@ mod impls {
                 x => panic!("expected Duration value got {:?}", x),
             }
         }
-        fn to_val(val: &Self) -> ConfigVal {
-            ConfigVal::Duration(Arc::new(RwLock::new(val.clone())))
+        fn to_val(val: Self) -> ConfigVal {
+            ConfigVal::Duration(Arc::new(RwLock::new(val)))
         }
         fn set(x: &Self::Shared, val: Self) {
             *x.write().expect("lock poisoned") = val;
