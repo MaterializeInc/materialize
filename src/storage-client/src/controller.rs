@@ -37,7 +37,7 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::sources::{IngestionDescription, SourceData, SourceDesc};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -336,20 +336,29 @@ pub trait StorageController: Debug {
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Check that the collection associated with `id` can be altered to represent the given
-    /// `ingestion`.
+    /// Check that the ingestion associated with each `id` can use the
+    /// correlated [`SourceDesc`].
     ///
-    /// Note that this check is optimistic and its return of `Ok(())` does not guarantee that
-    /// subsequent calls to `alter_collection` are guaranteed to succeed.
-    fn check_alter_collection(
+    /// Note that this check is optimistic and its return of `Ok(())` does not
+    /// guarantee that subsequent calls to `alter_ingestion_source_desc` are
+    /// guaranteed to succeed.
+    ///
+    /// # Panics
+    /// - If `id` is not correlated to a collection with an
+    ///   [`IngestionDescription`].
+    fn check_alter_ingestion_source_desc(
         &mut self,
-        collections: &BTreeMap<GlobalId, IngestionDescription>,
+        collections: &BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
-    /// Alter the identified collection to use the described ingestion.
-    async fn alter_collection(
+    /// Alters each identified collection to use the correlated [`SourceDesc`].
+    ///
+    /// Note that this does not change the `SourceDesc` of the dataflow if it is
+    /// running. However, the next time that the source runs, it will be run
+    /// with the updated `SourceDesc`.
+    async fn alter_ingestion_source_desc(
         &mut self,
-        collections: BTreeMap<GlobalId, IngestionDescription>,
+        collections: BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.

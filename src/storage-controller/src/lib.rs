@@ -71,7 +71,7 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
+use mz_storage_types::sources::{IngestionDescription, SourceData, SourceDesc, SourceExport};
 use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -670,63 +670,51 @@ where
         self.execute_collections(to_execute).await
     }
 
-    fn check_alter_collection(
+    fn check_alter_ingestion_source_desc(
         &mut self,
-        collections: &BTreeMap<GlobalId, IngestionDescription>,
+        collections: &BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        for (id, ingestion) in collections {
-            self.check_alter_collection_inner(*id, ingestion.clone())?;
+        for (id, desc) in collections {
+            let data_source = &self.collection(*id)?.description.data_source;
+            match &data_source {
+                DataSource::Ingestion(cur_ingestion) => {
+                    cur_ingestion.desc.alter_compatible(*id, desc)?;
+                }
+                o => {
+                    tracing::info!(
+                        "{id:?} inalterable because its data source is {:?} and not an ingestion",
+                        o
+                    );
+                    Err(AlterError { id: *id })?;
+                }
+            }
         }
+
         Ok(())
     }
 
-    async fn alter_collection(
+    async fn alter_ingestion_source_desc(
         &mut self,
-        collections: BTreeMap<GlobalId, IngestionDescription>,
+        collections: BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        self.check_alter_collection(&collections)
-            .expect("error avoided by calling check_alter_collection first");
+        self.check_alter_ingestion_source_desc(&collections)
+            .expect("error avoided by calling check_alter_ingestion_source_desc first");
 
-        for (id, ingestion) in collections {
-            // Describe the ingestion in terms of collection metadata.
-            let description = self
-                .enrich_ingestion(id, ingestion.clone())
-                .expect("verified valid in check_alter_collection_inner");
-
+        let mut to_execute = BTreeSet::new();
+        for (id, desc) in collections {
             let collection = self.collection_mut(id).expect("validated exists");
-            let new_source_exports = match &mut collection.description.data_source {
-                DataSource::Ingestion(active_ingestion) => {
-                    // Determine which IDs we're adding.
-                    let new_source_exports: Vec<_> = description
-                        .source_exports
-                        .keys()
-                        .filter(|id| !active_ingestion.source_exports.contains_key(id))
-                        .cloned()
-                        .collect();
-                    *active_ingestion = ingestion;
-
-                    new_source_exports
-                }
+            let curr_ingestion = match &mut collection.description.data_source {
+                DataSource::Ingestion(active_ingestion) => active_ingestion,
                 _ => unreachable!("verified collection refers to ingestion"),
             };
 
-            for _id in new_source_exports {
-                todo!("refactor alter collection");
+            if curr_ingestion.desc != desc {
+                curr_ingestion.desc = desc;
+                to_execute.insert(id);
             }
-
-            // Fetch the client for this ingestion's instance.
-            let client = self
-                .clients
-                .get_mut(&description.instance_id)
-                .expect("verified exists");
-
-            client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
-                id,
-                description,
-            }]));
         }
 
-        Ok(())
+        self.execute_collections(to_execute).await
     }
 
     fn export(
@@ -2892,55 +2880,6 @@ where
             self.finalizable_shards.remove(&id);
             self.finalized_shards.insert(id);
         }
-    }
-
-    /// Determines if an `ALTER` is valid.
-    fn check_alter_collection_inner(
-        &self,
-        id: GlobalId,
-        mut ingestion: IngestionDescription,
-    ) -> Result<(), StorageError<T>> {
-        // Check that the client exists.
-        self.clients
-            .get(&ingestion.instance_id)
-            .ok_or(StorageError::IngestionInstanceMissing {
-                storage_instance_id: ingestion.instance_id,
-                ingestion_id: id,
-            })?;
-
-        // Take a cloned copy of the description because we are going to treat it as a "scratch
-        // space".
-        let mut collection_description = self.collection(id)?.description.clone();
-
-        // We cannot know the metadata of exports yet to be created, so we have
-        // to remove them. However, we know that adding source exports is
-        // compatible, so still OK to proceed.
-        ingestion
-            .source_exports
-            .retain(|id, _| self.collection(*id).is_ok());
-
-        // Describe the ingestion in terms of collection metadata.
-        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
-
-        // Check compatibility between current and new ingestions and install new ingestion in
-        // collection description.
-        match &mut collection_description.data_source {
-            DataSource::Ingestion(cur_ingestion) => {
-                let prev_ingestion = self.enrich_ingestion(id, cur_ingestion.clone())?;
-                prev_ingestion.alter_compatible(id, &described_ingestion)?;
-
-                *cur_ingestion = ingestion;
-            }
-            o => {
-                tracing::info!(
-                    "{id:?} inalterable because its data source is {:?} and not an ingestion",
-                    o
-                );
-                return Err(StorageError::InvalidAlter(AlterError { id }));
-            }
-        };
-
-        Ok(())
     }
 
     /// Fast-forward a collection's since as far as its dependencies, and then
