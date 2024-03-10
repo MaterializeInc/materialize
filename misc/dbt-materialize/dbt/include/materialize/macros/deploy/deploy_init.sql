@@ -54,7 +54,7 @@
             FROM mz_objects
             JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
             JOIN mz_databases ON mz_databases.id = mz_schemas.database_id
-            WHERE mz_schemas.name = lower(trim('{{ deploy_schema }}'))
+            WHERE mz_schemas.name = {{ dbt.string_literal(deploy_schema) }}
                 AND mz_objects.id LIKE 'u%'
                 AND mz_databases.name = current_database()
         {% endset %}
@@ -103,28 +103,28 @@
                 SELECT mz_indexes.id
                 FROM mz_indexes
                 JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
+                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
 
                 UNION ALL
 
                 SELECT mz_materialized_views.id
                 FROM mz_materialized_views
                 JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
+                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
 
                 UNION ALL
 
                 SELECT mz_sources.id
                 FROM mz_sources
                 JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
+                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
 
                 UNION ALL
 
                 SELECT mz_sinks.id
                 FROM mz_sinks
                 JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
+                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
             )
 
             SELECT count(*)
@@ -161,7 +161,7 @@
         {% set cluster_configuration %}
             SELECT managed, size, replication_factor
             FROM mz_clusters
-            WHERE name = lower(trim('{{ cluster }}'))
+            WHERE name = {{ dbt.string_literal(cluster) }}
         {% endset %}
 
         {% set cluster_config_results = run_query(cluster_configuration) %}
@@ -179,7 +179,7 @@
 
             {% set create_cluster %}
                 CREATE CLUSTER {{ deploy_cluster }} (
-                    SIZE = '{{ size }}',
+                    SIZE = {{ dbt.string_literal(size) }},
                     REPLICATION FACTOR = {{ replication_factor }}
                 );
             {% endset %}
@@ -205,7 +205,7 @@ SELECT
   'ON '     || object_type      || 's ' ||
   'TO '     || grantee
 FROM mz_internal.mz_show_default_privileges
-WHERE database = current_database() AND schema = lower(trim('{{ from }}'))
+WHERE database = current_database() AND schema = {{ dbt.string_literal(from) }}
     AND object_owner <> 'none' AND grantee <> 'none'
 {% endset %}
 
@@ -224,11 +224,11 @@ WITH schema_privledge AS (
     FROM mz_schemas s
     JOIN mz_databases d ON s.database_id = d.id
     WHERE d.name = current_database()
-        AND s.name = trim(lower('{{ to }}'))
+        AND s.name = {{ dbt.string_literal(to) }}
 )
 
 SELECT 'REVOKE '    || s.privilege_type || ' ' ||
-       'ON SCHEMA ' || quote_ident('{{ to }}') || ' ' ||
+       'ON SCHEMA ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
        'FROM '      || quote_ident(grantee.name)
 FROM schema_privledge AS s
 JOIN mz_roles AS grantee ON s.grantee = grantee.id
@@ -248,11 +248,11 @@ WITH schema_privledge AS (
     FROM mz_schemas s
     JOIN mz_databases d ON s.database_id = d.id
     WHERE d.name = current_database()
-        AND s.name = trim(lower('{{ from }}'))
+        AND s.name = {{ dbt.string_literal(from) }}
 )
 
 SELECT 'GRANT '     || s.privilege_type || ' ' ||
-       'ON SCHEMA ' || quote_ident('{{ to }}') || ' ' ||
+       'ON SCHEMA ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
        'TO '        || quote_ident(grantee.name)
 FROM schema_privledge AS s
 JOIN mz_roles AS grantee ON s.grantee = grantee.id
@@ -275,11 +275,11 @@ WITH schema_privledge AS (
     FROM mz_schemas s
     JOIN mz_databases d ON s.database_id = d.id
     WHERE d.name = current_database()
-        AND s.name = trim(lower('{{ to }}'))
+        AND s.name = {{ dbt.string_literal(to) }}
 )
 
 SELECT 'REVOKE '     || s.privilege_type || ' ' ||
-       'ON CLUSTER ' || quote_ident('{{ to }}') || ' ' ||
+       'ON CLUSTER ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
        'FROM '       || quote_ident(grantee.name)
 FROM schema_privledge AS s
 JOIN mz_roles AS grantee ON s.grantee = grantee.id
@@ -298,11 +298,11 @@ WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
 WITH cluster_privledge AS (
     SELECT mz_internal.mz_aclexplode(privileges).*
     FROM mz_clusters
-    WHERE name = trim(lower('{{ from }}'))
+    WHERE name = {{ dbt.string_literal(from) }}
 )
 
 SELECT 'GRANT '      || c.privilege_type || ' ' ||
-       'ON CLUSTER ' || quote_ident('{{ to }}') || ' ' ||
+       'ON CLUSTER ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
        'TO '         || quote_ident(grantee.name)
 FROM cluster_privledge AS c
 JOIN mz_roles AS grantee ON c.grantee = grantee.id

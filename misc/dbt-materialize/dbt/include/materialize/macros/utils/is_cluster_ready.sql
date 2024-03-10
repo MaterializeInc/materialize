@@ -31,7 +31,7 @@ WITH total_replicas AS (
 SELECT COALESCE(replicas, 0) AS replicas
 FROM mz_clusters
 LEFT JOIN total_replicas ON mz_clusters.id = cluster_id
-WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
 {%- endset -%}
 
 {%- set result = run_query(cluster_exists) %}
@@ -58,7 +58,7 @@ WITH dataflows AS (
     FROM mz_indexes
     JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
     JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
 
     UNION ALL
 
@@ -70,7 +70,7 @@ WITH dataflows AS (
     FROM mz_materialized_views
     JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
     JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
 
     UNION ALL
 
@@ -82,7 +82,7 @@ WITH dataflows AS (
     FROM mz_sources
     JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
     JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
 
     UNION ALL
 
@@ -94,7 +94,7 @@ WITH dataflows AS (
     FROM mz_sinks
     JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
     JOIN mz_cluster_replicas ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
 
 ),
 
@@ -120,7 +120,7 @@ ready_replicas AS (
     SELECT mz_cluster_replicas.id AS replica_id
     FROM mz_cluster_replicas
     JOIN mz_clusters ON mz_clusters.id = mz_cluster_replicas.cluster_id
-    WHERE mz_clusters.name = '{{ cluster }}'
+    WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
 
     EXCEPT
 

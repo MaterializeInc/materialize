@@ -16,7 +16,7 @@
 {% macro set_cluster_ci_tag(cluster, ci_tag=env_var('CI_TAG', '')) %}
     {% if ci_tag != '' %}
         {% set ci_comment %}
-            COMMENT ON CLUSTER {{ cluster }} IS '{{ ci_tag }}';
+            COMMENT ON CLUSTER "{{ cluster }}" IS {{ dbt.string_literal(ci_tag) }};
         {% endset %}
         {{ run_query(ci_comment) }}
     {% endif %}
@@ -25,7 +25,7 @@
 {% macro set_schema_ci_tag(schema, ci_tag=env_var('CI_TAG', '')) %}
     {% if ci_tag != '' %}
         {% set ci_comment %}
-            COMMENT ON SCHEMA {{ schema }} IS '{{ ci_tag }}';
+            COMMENT ON SCHEMA "{{ schema }}" IS {{ dbt.string_literal(ci_tag) }};
         {% endset %}
         {{ run_query(ci_comment) }}
     {% endif %}
@@ -37,10 +37,10 @@
     {% endif %}
 
     {% set query %}
-        SELECT comment = '{{ ci_tag }}', comment
+        SELECT comment = {{ dbt.string_literal(ci_tag) }}, comment
         FROM mz_internal.mz_comments
         JOIN mz_clusters USING (id)
-        WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+        WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
     {% endset %}
     {% set results = run_query(query) %}
     {% if execute %}
@@ -65,11 +65,11 @@
     {% endif %}
 
     {% set query %}
-        SELECT comment = '{{ ci_tag }}', comment
+        SELECT comment = {{ dbt.string_literal(ci_tag) }}, comment
         FROM mz_internal.mz_comments c
         JOIN mz_schemas s ON c.id = s.id
         JOIN mz_databases d ON s.database_id = d.id
-        WHERE s.name = lower(trim('{{ schema }}'))
+        WHERE s.name = {{ dbt.string_literal(schema) }}
             AND d.name = current_database()
     {% endset %}
     {% set results = run_query(query) %}
