@@ -71,7 +71,9 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceConnection, SourceData, SourceExport};
+use mz_storage_types::sources::{
+    IngestionDescription, SourceConnection, SourceData, SourceDesc, SourceExport,
+};
 use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
@@ -981,64 +983,152 @@ where
         Ok(())
     }
 
-    fn check_alter_collection(
+    fn check_alter_ingestion_source_desc(
         &mut self,
-        collections: &BTreeMap<GlobalId, IngestionDescription>,
+        collections: &BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        for (id, ingestion) in collections {
-            self.check_alter_collection_inner(*id, ingestion.clone())?;
+        for (id, desc) in collections {
+            let data_source = &self.collection(*id)?.description.data_source;
+            match &data_source {
+                DataSource::Ingestion(cur_ingestion) => {
+                    cur_ingestion.desc.alter_compatible(*id, desc)?;
+
+                    // Ensure updated `SourceDesc` contains reference to all
+                    // current external references.
+                    for export_id in cur_ingestion
+                        .source_exports
+                        .keys()
+                        .filter(|export| *export != id)
+                    {
+                        let collection = self
+                            .collection(*export_id)
+                            .map_err(|_| AlterError { id: *id })?;
+
+                        let external_reference = match &collection.description.data_source {
+                            DataSource::IngestionExport {
+                                external_reference, ..
+                            } => external_reference,
+                            o => {
+                                tracing::warn!(
+                                    "{export_id:?} not DataSource::IngestionExport but {o:#?}",
+                                );
+                                return Err(AlterError { id: *id })?;
+                            }
+                        };
+
+                        if desc
+                            .connection
+                            .output_idx_for_name(external_reference)
+                            .is_none()
+                        {
+                            tracing::warn!(
+                                "subsource {export_id} of {id} refers to \
+                                {external_reference:?}, which is missing from \
+                                updated SourceDesc \n{desc:#?}"
+                            );
+                            Err(AlterError { id: *id })?
+                        }
+                    }
+                }
+                o => {
+                    tracing::info!(
+                        "{id:?} inalterable because its data source is {:?} and not an ingestion",
+                        o
+                    );
+                    Err(AlterError { id: *id })?;
+                }
+            }
         }
+
         Ok(())
     }
 
-    async fn alter_collection(
+    async fn alter_ingestion_source_desc(
         &mut self,
-        collections: BTreeMap<GlobalId, IngestionDescription>,
+        collections: BTreeMap<GlobalId, SourceDesc>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        self.check_alter_collection(&collections)
-            .expect("error avoided by calling check_alter_collection first");
+        self.check_alter_ingestion_source_desc(&collections)?;
 
-        for (id, ingestion) in collections {
-            // Describe the ingestion in terms of collection metadata.
-            let description = self
-                .enrich_ingestion(id, ingestion.clone())
-                .expect("verified valid in check_alter_collection_inner");
-
-            let collection = self.collections.get_mut(&id).expect("validated exists");
-            let new_source_exports = match &mut collection.description.data_source {
-                DataSource::Ingestion(active_ingestion) => {
-                    // Determine which IDs we're adding.
-                    let new_source_exports: Vec<_> = description
-                        .source_exports
-                        .keys()
-                        .filter(|id| !active_ingestion.source_exports.contains_key(id))
-                        .cloned()
-                        .collect();
-                    *active_ingestion = ingestion;
-
-                    new_source_exports
-                }
+        // The set of collections that we should execute after modifying the
+        // source descs.
+        let mut ingestions_to_execute = BTreeSet::new();
+        for (id, desc) in collections {
+            let collection = self.collection(id).expect("validated exists");
+            let curr_ingestion = match &collection.description.data_source {
+                DataSource::Ingestion(active_ingestion) => active_ingestion,
                 _ => unreachable!("verified collection refers to ingestion"),
             };
 
-            // This is wrong but is being deprecated in a subsequent commit;
-            // here only to appease the borrow checker.
-            for id in new_source_exports {
-                self.install_collection_dependency_read_holds(id)?;
+            // This circuitous pattern is because of lifetime rules––we cannot
+            // both borrow a mutable reference to the parent collection and
+            // immutable references to the exports.
+            if curr_ingestion.desc != desc {
+                // Generate new source exports because they might have changed.
+                let mut source_exports = BTreeMap::new();
+                // Each source includes a `0` output index export "for the
+                // primary source", whether it's used or not.
+                source_exports.insert(
+                    id,
+                    SourceExport {
+                        output_index: 0,
+                        storage_metadata: (),
+                    },
+                );
+
+                // Get the updated output indices for each source export.
+                //
+                // light thinking: this could be simpler if the output indices
+                // were determined in rendering, e.g. `SourceExport` had an
+                // `Option<UnresolvedItemName>` instead of a `usize` and we
+                // looked up its output index when we were aligning the
+                // rendering outputs.
+                for export_id in curr_ingestion.source_exports.keys() {
+                    if *export_id == id {
+                        // Already inserted above
+                        continue;
+                    }
+
+                    let DataSource::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                    } = &self.collection(*export_id)?.description.data_source
+                    else {
+                        panic!("source exports must be DataSource::IngestionExport")
+                    };
+
+                    let output_index = desc
+                        .connection
+                        .output_idx_for_name(external_reference)
+                        .ok_or(StorageError::MissingSubsourceReference {
+                            ingestion_id: *ingestion_id,
+                            reference: external_reference.clone(),
+                        })?;
+
+                    source_exports.insert(
+                        *export_id,
+                        SourceExport {
+                            output_index,
+                            storage_metadata: (),
+                        },
+                    );
+                }
+
+                // Update the `SourceDesc` and the source exports
+                // simultaneously.
+                let collection = self.collections.get_mut(&id).expect("validated exists");
+                let curr_ingestion = match &mut collection.description.data_source {
+                    DataSource::Ingestion(curr_ingestion) => curr_ingestion,
+                    _ => unreachable!("verified collection refers to ingestion"),
+                };
+                curr_ingestion.desc = desc;
+                curr_ingestion.source_exports = source_exports;
+                ingestions_to_execute.insert(id);
             }
-
-            // Fetch the client for this ingestion's instance.
-            let client = self
-                .clients
-                .get_mut(&description.instance_id)
-                .expect("verified exists");
-
-            client.send(StorageCommand::RunIngestions(vec![RunIngestionCommand {
-                id,
-                description,
-            }]));
         }
 
+        for _id in ingestions_to_execute {
+            todo!("run ingestions");
+        }
         Ok(())
     }
 
@@ -3237,70 +3327,6 @@ where
             self.finalizable_shards.remove(&id);
             self.finalized_shards.insert(id);
         }
-    }
-
-    /// Determines if an `ALTER` is valid.
-    fn check_alter_collection_inner(
-        &self,
-        id: GlobalId,
-        mut ingestion: IngestionDescription,
-    ) -> Result<(), StorageError<T>> {
-        // Check that the client exists.
-        self.clients
-            .get(&ingestion.instance_id)
-            .ok_or(StorageError::IngestionInstanceMissing {
-                storage_instance_id: ingestion.instance_id,
-                ingestion_id: id,
-            })?;
-
-        // Take a cloned copy of the description because we are going to treat it as a "scratch
-        // space".
-        let mut collection_description = self.collection(id)?.description.clone();
-
-        // Get the previous storage dependencies; we need these to understand if something has
-        // changed in what we depend upon.
-        let prev_storage_dependencies = collection_description.get_storage_dependencies();
-
-        // We cannot know the metadata of exports yet to be created, so we have
-        // to remove them. However, we know that adding source exports is
-        // compatible, so still OK to proceed.
-        ingestion
-            .source_exports
-            .retain(|id, _| self.collection(*id).is_ok());
-
-        // Describe the ingestion in terms of collection metadata.
-        let described_ingestion = self.enrich_ingestion(id, ingestion.clone())?;
-
-        // Check compatibility between current and new ingestions and install new ingestion in
-        // collection description.
-        match &mut collection_description.data_source {
-            DataSource::Ingestion(cur_ingestion) => {
-                let prev_ingestion = self.enrich_ingestion(id, cur_ingestion.clone())?;
-                prev_ingestion.alter_compatible(id, &described_ingestion)?;
-
-                *cur_ingestion = ingestion;
-            }
-            o => {
-                tracing::info!(
-                    "{id:?} inalterable because its data source is {:?} and not an ingestion",
-                    o
-                );
-                return Err(StorageError::InvalidAlter(AlterError { id }));
-            }
-        };
-
-        let new_storage_dependencies = collection_description.get_storage_dependencies();
-
-        if prev_storage_dependencies != new_storage_dependencies {
-            tracing::info!(
-                    "{id:?} inalterable because its storage dependencies have changed: were {:?} but are now {:?}",
-                    prev_storage_dependencies,
-                    new_storage_dependencies
-                );
-            return Err(StorageError::InvalidAlter(AlterError { id }));
-        }
-
-        Ok(())
     }
 
     /// Converts an `IngestionDescription<()>` into `IngestionDescription<CollectionMetadata>`.
