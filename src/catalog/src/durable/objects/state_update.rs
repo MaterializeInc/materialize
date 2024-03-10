@@ -48,6 +48,23 @@ where
     }
 }
 
+/// Trait for objects that can be converted to/from a [`StateUpdateKind`].
+pub(crate) trait TryIntoStateUpdateKind: IntoStateUpdateKindRaw {
+    type Error: Debug;
+
+    fn try_into(self) -> Result<StateUpdateKind, <Self as TryIntoStateUpdateKind>::Error>;
+}
+impl<T: IntoStateUpdateKindRaw + TryInto<StateUpdateKind>> TryIntoStateUpdateKind for T
+where
+    <T as TryInto<StateUpdateKind>>::Error: Debug,
+{
+    type Error = <T as TryInto<StateUpdateKind>>::Error;
+
+    fn try_into(self) -> Result<StateUpdateKind, <T as TryInto<StateUpdateKind>>::Error> {
+        <T as TryInto<StateUpdateKind>>::try_into(self)
+    }
+}
+
 /// A single update to the catalog state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
@@ -180,7 +197,7 @@ impl TryFrom<StateUpdate<StateUpdateKindRaw>> for StateUpdate<StateUpdateKind> {
 
     fn try_from(update: StateUpdate<StateUpdateKindRaw>) -> Result<Self, Self::Error> {
         Ok(StateUpdate {
-            kind: update.kind.try_into()?,
+            kind: TryInto::try_into(update.kind)?,
             ts: update.ts,
             diff: update.diff,
         })
