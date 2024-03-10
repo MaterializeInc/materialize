@@ -129,15 +129,19 @@ impl<T: ConfigType> Config<T> {
     /// the more important "noun" and also that rustfmt would maybe work better
     /// on this ordering.
     pub fn get(&self, set: &ConfigSet) -> T {
-        T::get(T::shared(self, set).expect("config should be registered to set"))
+        T::get(self.shared(set))
     }
 
     /// Returns the shared value of this config in the given set.
     ///
     /// This allows users to amortize the name lookup with
     /// `Self::get_from_shared`.
-    pub fn shared(&self, set: &ConfigSet) -> Arc<T::Shared> {
-        Arc::clone(T::shared(self, set).expect("config should be registered to set"))
+    pub fn shared<'a>(&self, set: &'a ConfigSet) -> &'a Arc<T::Shared> {
+        let entry = set
+            .configs
+            .get(self.name)
+            .expect("config should be registered to set");
+        T::from_val(&entry.val)
     }
 
     /// [Self::get] except from a previously looked up shared value returned by
@@ -156,10 +160,10 @@ pub trait ConfigType: Sized {
     /// LaunchDarkly) and config value retrievers.
     type Shared;
 
-    /// Extracts the sharable value for a config of this type from a set.
+    /// Converts a type-erased enum value to this type.
     ///
-    /// External users likely want [Config::shared] instead.
-    fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>>;
+    /// Panics if the enum's variant does not match this type.
+    fn from_val<'a>(val: &'a ConfigVal) -> &'a Arc<Self::Shared>;
 
     /// Converts this type to its type-erased enum equivalent.
     fn to_val(val: Self) -> ConfigVal;
@@ -340,16 +344,15 @@ mod impls {
     use mz_ore::cast::CastFrom;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-    use crate::{proto_config_val, Config, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64};
+    use crate::{proto_config_val, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64};
 
     impl ConfigType for bool {
         type Default = bool;
         type Shared = AtomicBool;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::Bool(x) => Some(x),
+        fn from_val<'a>(val: &'a ConfigVal) -> &'a Arc<Self::Shared> {
+            match val {
+                ConfigVal::Bool(x) => x,
                 x => panic!("expected bool value got {:?}", x),
             }
         }
@@ -368,10 +371,9 @@ mod impls {
         type Default = u32;
         type Shared = AtomicU32;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::U32(x) => Some(x),
+        fn from_val<'a>(val: &'a ConfigVal) -> &'a Arc<Self::Shared> {
+            match val {
+                ConfigVal::U32(x) => x,
                 x => panic!("expected u32 value got {:?}", x),
             }
         }
@@ -390,10 +392,9 @@ mod impls {
         type Default = usize;
         type Shared = AtomicUsize;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::Usize(x) => Some(x),
+        fn from_val<'a>(val: &'a ConfigVal) -> &'a Arc<Self::Shared> {
+            match val {
+                ConfigVal::Usize(x) => x,
                 x => panic!("expected usize value got {:?}", x),
             }
         }
@@ -412,10 +413,9 @@ mod impls {
         type Default = Option<usize>;
         type Shared = RwLock<Option<usize>>;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::OptUsize(x) => Some(x),
+        fn from_val<'a>(val: &'a ConfigVal) -> &'a Arc<Self::Shared> {
+            match val {
+                ConfigVal::OptUsize(x) => x,
                 x => panic!("expected usize value got {:?}", x),
             }
         }
@@ -434,10 +434,9 @@ mod impls {
         type Default = &'static str;
         type Shared = RwLock<String>;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::String(x) => Some(x),
+        fn from_val<'a>(val: &'a ConfigVal) -> &'a Arc<Self::Shared> {
+            match val {
+                ConfigVal::String(x) => x,
                 x => panic!("expected String value got {:?}", x),
             }
         }
@@ -456,10 +455,9 @@ mod impls {
         type Default = Duration;
         type Shared = RwLock<Duration>;
 
-        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
-            match entry.val() {
-                ConfigVal::Duration(x) => Some(x),
+        fn from_val<'a>(val: &'a ConfigVal) -> &'a Arc<Self::Shared> {
+            match val {
+                ConfigVal::Duration(x) => x,
                 x => panic!("expected Duration value got {:?}", x),
             }
         }
@@ -550,14 +548,11 @@ mod tests {
         assert_eq!(STRING.get(&configs), "a");
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(3));
 
-        bool::set(bool::shared(&BOOL, &configs).unwrap(), false);
-        usize::set(usize::shared(&USIZE, &configs).unwrap(), 2);
-        <Option<usize>>::set(<Option<usize>>::shared(&OPT_USIZE, &configs).unwrap(), None);
-        String::set(String::shared(&STRING, &configs).unwrap(), "b".to_owned());
-        Duration::set(
-            Duration::shared(&DURATION, &configs).unwrap(),
-            Duration::from_nanos(4),
-        );
+        bool::set(BOOL.shared(&configs), false);
+        usize::set(USIZE.shared(&configs), 2);
+        <Option<usize>>::set(OPT_USIZE.shared(&configs), None);
+        String::set(STRING.shared(&configs), "b".to_owned());
+        Duration::set(DURATION.shared(&configs), Duration::from_nanos(4));
         assert_eq!(BOOL.get(&configs), false);
         assert_eq!(USIZE.get(&configs), 2);
         assert_eq!(OPT_USIZE.get(&configs), None);
@@ -569,14 +564,14 @@ mod tests {
     fn config_set() {
         let c0 = ConfigSet::default().add(&USIZE);
         assert_eq!(USIZE.get(&c0), 1);
-        usize::set(usize::shared(&USIZE, &c0).unwrap(), 2);
+        usize::set(USIZE.shared(&c0), 2);
         assert_eq!(USIZE.get(&c0), 2);
 
         // Each ConfigSet is independent, even if they contain the same set of
         // configs.
         let c1 = ConfigSet::default().add(&USIZE);
         assert_eq!(USIZE.get(&c1), 1);
-        usize::set(usize::shared(&USIZE, &c1).unwrap(), 3);
+        usize::set(USIZE.shared(&c1), 3);
         assert_eq!(USIZE.get(&c1), 3);
         assert_eq!(USIZE.get(&c0), 2);
 
@@ -607,7 +602,7 @@ mod tests {
         };
         let u2 = {
             let c = ConfigSet::default().add(&USIZE).add(&DURATION);
-            usize::set(usize::shared(&USIZE, &c).unwrap(), 2);
+            usize::set(USIZE.shared(&c), 2);
             let mut x = ConfigUpdates::default();
             for e in c.entries() {
                 x.add(e);
