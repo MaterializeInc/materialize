@@ -450,6 +450,73 @@ impl UnopenedPersistCatalogState {
         Ok(Box::new(catalog))
     }
 
+    #[mz_ore::instrument]
+    async fn current_upper(&mut self) -> Timestamp {
+        current_upper(&mut self.write_handle).await
+    }
+
+    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
+    /// iff the current global upper of the catalog is `current_upper`.
+    #[mz_ore::instrument]
+    pub(crate) async fn compare_and_append<T: IntoStateUpdateKindRaw>(
+        &mut self,
+        updates: Vec<(T, Diff)>,
+    ) -> Result<(), CatalogError> {
+        let updates = updates
+            .into_iter()
+            .map(|(kind, diff)| StateUpdate {
+                kind,
+                ts: self.upper,
+                diff,
+            })
+            .collect();
+        let next_upper = self.upper.step_forward();
+        compare_and_append(
+            &mut self.since_handle,
+            &mut self.write_handle,
+            updates,
+            self.upper,
+            next_upper,
+        )
+        .await?;
+        self.sync(next_upper).await?;
+        Ok(())
+    }
+
+    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
+    /// catalog state up to, and including, `as_of`.
+    #[mz_ore::instrument]
+    async fn snapshot_unconsolidated(&mut self) -> Vec<StateUpdate<StateUpdateKind>> {
+        let current_upper = self.current_upper().await;
+
+        let mut snapshot = Vec::new();
+        let mut read_handle = self.read_handle().await;
+        let as_of = as_of(&read_handle, current_upper);
+        let mut stream = Box::pin(
+            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
+            read_handle
+                .snapshot_and_stream(Antichain::from_elem(as_of))
+                .await
+                .expect("we have advanced the restart_as_of by the since"),
+        );
+        while let Some(update) = stream.next().await {
+            snapshot.push(update)
+        }
+        read_handle.expire().await;
+        snapshot
+            .into_iter()
+            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+            .map(|state_update| state_update.try_into().expect("kind decoding error"))
+            .collect()
+    }
+
+    /// Listen and apply all updates that are currently in persist.
+    #[mz_ore::instrument]
+    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
+        let upper = self.current_upper().await;
+        self.sync(upper).await
+    }
+
     /// Listen and apply all updates up to `target_upper`.
     #[mz_ore::instrument]
     pub(crate) async fn sync(
@@ -522,40 +589,6 @@ impl UnopenedPersistCatalogState {
         Ok(())
     }
 
-    /// Listen and apply all updates that are currently in persist.
-    #[mz_ore::instrument]
-    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
-        let upper = self.current_upper().await;
-        self.sync(upper).await
-    }
-
-    /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
-    /// catalog state up to, and including, `as_of`.
-    #[mz_ore::instrument]
-    async fn snapshot_unconsolidated(&mut self) -> Vec<StateUpdate<StateUpdateKind>> {
-        let current_upper = self.current_upper().await;
-
-        let mut snapshot = Vec::new();
-        let mut read_handle = self.read_handle().await;
-        let as_of = as_of(&read_handle, current_upper);
-        let mut stream = Box::pin(
-            // We use `snapshot_and_stream` because it guarantees unconsolidated output.
-            read_handle
-                .snapshot_and_stream(Antichain::from_elem(as_of))
-                .await
-                .expect("we have advanced the restart_as_of by the since"),
-        );
-        while let Some(update) = stream.next().await {
-            snapshot.push(update)
-        }
-        read_handle.expire().await;
-        snapshot
-            .into_iter()
-            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
-            .map(|state_update| state_update.try_into().expect("kind decoding error"))
-            .collect()
-    }
-
     #[mz_ore::instrument]
     pub(crate) fn consolidate(&mut self) {
         let snapshot = std::mem::take(&mut self.trace);
@@ -599,11 +632,6 @@ impl UnopenedPersistCatalogState {
         !self.configs.is_empty()
     }
 
-    #[mz_ore::instrument]
-    async fn current_upper(&mut self) -> Timestamp {
-        current_upper(&mut self.write_handle).await
-    }
-
     /// Get the current value of config `key`.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
@@ -619,34 +647,6 @@ impl UnopenedPersistCatalogState {
     #[mz_ore::instrument]
     pub(crate) async fn get_user_version(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_current_config(USER_VERSION_KEY).await
-    }
-
-    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
-    /// iff the current global upper of the catalog is `current_upper`.
-    #[mz_ore::instrument]
-    pub(crate) async fn compare_and_append<T: IntoStateUpdateKindRaw>(
-        &mut self,
-        updates: Vec<(T, Diff)>,
-    ) -> Result<(), CatalogError> {
-        let updates = updates
-            .into_iter()
-            .map(|(kind, diff)| StateUpdate {
-                kind,
-                ts: self.upper,
-                diff,
-            })
-            .collect();
-        let next_upper = self.upper.step_forward();
-        compare_and_append(
-            &mut self.since_handle,
-            &mut self.write_handle,
-            updates,
-            self.upper,
-            next_upper,
-        )
-        .await?;
-        self.sync(next_upper).await?;
-        Ok(())
     }
 }
 
