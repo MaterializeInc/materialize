@@ -6094,6 +6094,7 @@ dependencies = [
  "mz-rocksdb-types",
  "mz-secrets",
  "mz-service",
+ "mz-sql-parser",
  "mz-ssh-util",
  "mz-stash-types",
  "mz-timely-util",

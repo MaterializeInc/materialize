@@ -85,7 +85,7 @@ use mz_storage_types::sources::envelope::{
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
 use mz_storage_types::sources::mysql::{
-    MySqlColumnRef, MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
+    MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
 };
 use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
@@ -1002,8 +1002,8 @@ pub fn plan_create_source(
             };
             let MySqlConfigOptionExtracted {
                 details,
-                text_columns: text_cols,
-                ignore_columns: ignore_cols,
+                text_columns,
+                ignore_columns,
                 seen: _,
             } = options.clone().try_into()?;
 
@@ -1031,47 +1031,14 @@ pub fn plan_create_source(
                 available_subsources.insert(name, index + 1);
             }
 
-            let mut text_columns = vec![];
-            for name in text_cols {
-                // We already verified that this is a fully-qualified column name during purification
-                // but we double check to be sure
-                if name.0.len() != 3 {
-                    tracing::error!(
-                        name = %name,
-                        "internal error: Expected fully qualified mysql column name"
-                    );
-                    sql_bail!(
-                        "internal error: Expected fully qualified mysql column name, got {}",
-                        name
-                    );
-                }
-                text_columns.push(MySqlColumnRef {
-                    schema_name: name.0[0].to_string(),
-                    table_name: name.0[1].to_string(),
-                    column_name: name.0[2].to_string(),
-                });
-            }
-
-            let mut ignore_columns = vec![];
-            for name in ignore_cols {
-                // We already verified that this is a fully-qualified column name during purification
-                // but we double check to be sure
-                if name.0.len() != 3 {
-                    tracing::error!(
-                        name = %name,
-                        "internal error: Expected fully qualified mysql column name"
-                    );
-                    sql_bail!(
-                        "internal error: Expected fully qualified mysql column name, got {}",
-                        name
-                    );
-                }
-                ignore_columns.push(MySqlColumnRef {
-                    schema_name: name.0[0].to_string(),
-                    table_name: name.0[1].to_string(),
-                    column_name: name.0[2].to_string(),
-                });
-            }
+            let text_columns = text_columns
+                .into_iter()
+                .map(|name| name.try_into().map_err(|e| sql_err!("{}", e)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ignore_columns = ignore_columns
+                .into_iter()
+                .map(|name| name.try_into().map_err(|e| sql_err!("{}", e)))
+                .collect::<Result<Vec<_>, _>>()?;
 
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
