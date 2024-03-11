@@ -1523,7 +1523,7 @@ impl<'a> Transaction<'a> {
 }
 
 /// Describes a set of changes to apply as the result of a catalog transaction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
@@ -1563,45 +1563,7 @@ pub struct TransactionBatch {
 
 impl TransactionBatch {
     pub fn is_empty(&self) -> bool {
-        let TransactionBatch {
-            databases,
-            schemas,
-            items,
-            comments,
-            roles,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            timestamps,
-            system_gid_mapping,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-            audit_log_updates,
-            storage_usage_updates,
-        } = self;
-
-        databases.is_empty()
-            && schemas.is_empty()
-            && items.is_empty()
-            && comments.is_empty()
-            && roles.is_empty()
-            && clusters.is_empty()
-            && cluster_replicas.is_empty()
-            && introspection_sources.is_empty()
-            && id_allocator.is_empty()
-            && configs.is_empty()
-            && settings.is_empty()
-            && timestamps.is_empty()
-            && system_gid_mapping.is_empty()
-            && system_configurations.is_empty()
-            && default_privileges.is_empty()
-            && system_privileges.is_empty()
-            && audit_log_updates.is_empty()
-            && storage_usage_updates.is_empty()
+        self == &Self::default()
     }
 }
 
