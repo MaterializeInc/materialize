@@ -2121,8 +2121,6 @@ where
             txns_client.clone(),
             Arc::clone(&self.txns_metrics),
             *txns_id,
-            Arc::new(RelationDesc::empty()),
-            Arc::new(UnitSchema),
         )
         .await;
 
@@ -2299,8 +2297,6 @@ where
             txns_client.clone(),
             Arc::clone(&txns_metrics),
             txns_id,
-            Arc::new(RelationDesc::empty()),
-            Arc::new(UnitSchema),
         )
         .await;
         let persist_table_worker = persist_handles::PersistTableWriteWorker::new_txns(
@@ -2310,7 +2306,9 @@ where
         );
         let txns = match persist_txn_tables {
             PersistTxnTablesImpl::Lazy => {
-                let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
+                let txns_read =
+                    TxnsRead::start::<SourceData, (), TxnsCodecRow>(txns_client.clone(), txns_id)
+                        .await;
                 PersistTxns::EnabledLazy {
                     txns_read,
                     txns_client,
