@@ -102,14 +102,6 @@ where
             loop {
                 // Validate that the involved data shards are all registered.
                 let () = handle.txns_cache.update_ge(&txns_upper).await;
-                for (data_id, _) in self.writes.iter() {
-                    assert!(
-                        handle.txns_cache.registered_at(data_id, &commit_ts),
-                        "{} should be registered to commit at {:?}",
-                        data_id,
-                        commit_ts
-                    );
-                }
 
                 // txns_upper is the (inclusive) minimum timestamp at which we
                 // could possibly write. If our requested commit timestamp is before
@@ -131,7 +123,19 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 for (data_id, updates) in self.writes.iter() {
-                    let mut data_write = handle.datas.take_write(data_id).await;
+                    let (key_schema, val_schema) = handle
+                        .txns_cache
+                        .data_schemas_at(data_id, &commit_ts)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{} should be registered to commit at {:?}",
+                                data_id, commit_ts
+                            )
+                        });
+                    let mut data_write = handle
+                        .datas
+                        .take_write(data_id, key_schema, val_schema)
+                        .await;
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
@@ -161,11 +165,11 @@ where
                             batch_raw.hashed(),
                             updates.len()
                         );
-                        let update = C::encode(TxnsEntry::Append(
-                            *data_id,
-                            T::encode(&commit_ts),
-                            batch_raw,
-                        ));
+                        let update = C::encode(TxnsEntry::Append {
+                            data_id: *data_id,
+                            ts: T::encode(&commit_ts),
+                            batch: batch_raw,
+                        });
                         (data_write, batch, update)
                     })
                 }
@@ -186,7 +190,11 @@ where
                     .read_cache()
                     .filter_retractions(&txns_upper, self.tidy.retractions.iter())
                     .map(|(batch_raw, (ts, data_id))| {
-                        C::encode(TxnsEntry::Append(*data_id, *ts, batch_raw.clone()))
+                        C::encode(TxnsEntry::Append {
+                            data_id: *data_id,
+                            ts: *ts,
+                            batch: batch_raw.clone(),
+                        })
                     })
                     .collect::<Vec<_>>();
                 txns_updates.extend(
@@ -397,7 +405,7 @@ mod tests {
         cache.update_gt(&2).await;
         // Manually delete the register from unapplied registers since there's no event to signal
         // that it's been deleted.
-        cache.unapplied_registers.retain(|(d, _)| d != &d0);
+        cache.unapplied_registers.retain(|(x, _)| x.data_id != d0);
         assert_eq!(cache.min_unapplied_ts(), &2);
         assert_eq!(cache.unapplied().count(), 1);
 

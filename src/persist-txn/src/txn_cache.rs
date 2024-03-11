@@ -89,7 +89,7 @@ pub struct TxnsCacheState<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64> 
     /// timestamps are not unique.
     ///
     /// Invariant: Values are sorted by timestamp.
-    pub(crate) unapplied_batches: BTreeMap<usize, (ShardId, Vec<u8>, T)>,
+    pub(crate) unapplied_batches: BTreeMap<usize, (DataIdSchema<K::Schema, V::Schema>, Vec<u8>, T)>,
     /// An index into `unapplied_batches` keyed by the serialized batch.
     batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
@@ -97,7 +97,7 @@ pub struct TxnsCacheState<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64> 
     /// The registers and forgets needing application as of the current progress.
     ///
     /// Invariant: Values are sorted by timestamp.
-    pub(crate) unapplied_registers: VecDeque<(ShardId, T)>,
+    pub(crate) unapplied_registers: VecDeque<(DataIdSchema<K::Schema, V::Schema>, T)>,
 
     /// Invariant: Contains the minimum write time (if any) for each value in
     /// `self.datas`.
@@ -163,28 +163,50 @@ where
         self.txns_id
     }
 
+    /// Returns the schemas of the data shard registered to the txns set at the
+    /// given timestamp.
+    ///
+    /// Specifically, a data shard is registered at a timestamp `ts` if it has a
+    /// `register_ts <= ts` but no `forget_ts >= ts`.
+    pub fn data_schemas_at(
+        &self,
+        data_id: &ShardId,
+        ts: &T,
+    ) -> Option<(&Arc<K::Schema>, &Arc<V::Schema>)> {
+        self.assert_only_data_id(data_id);
+        let Some(data_times) = self.datas.get(data_id) else {
+            return None;
+        };
+        data_times
+            .registered
+            .iter()
+            .find_map(|x| x.contains(ts).then(|| (&x.key_schema, &x.val_schema)))
+    }
+
     /// Returns whether the data shard was registered to the txns set at the
     /// given timestamp.
     ///
     /// Specifically, a data shard is registered at a timestamp `ts` if it has a
     /// `register_ts <= ts` but no `forget_ts >= ts`.
     pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
-        self.assert_only_data_id(data_id);
-        let Some(data_times) = self.datas.get(data_id) else {
-            return false;
-        };
-        data_times.registered.iter().any(|x| x.contains(ts))
+        self.data_schemas_at(data_id, ts).is_some()
     }
 
     /// Returns the set of all data shards registered to the txns set at the
     /// given timestamp. See [Self::registered_at].
-    pub(crate) fn all_registered_at(&self, ts: &T) -> Vec<ShardId> {
+    pub(crate) fn all_registered_at(&self, ts: &T) -> Vec<DataIdSchema<K::Schema, V::Schema>> {
         assert_eq!(self.only_data_id, None);
         assert!(self.progress_exclusive >= *ts);
         self.datas
-            .iter()
-            .filter(|(_, data_times)| data_times.registered.iter().any(|x| x.contains(ts)))
-            .map(|(data_id, _)| *data_id)
+            .keys()
+            .flat_map(|data_id| {
+                self.data_schemas_at(data_id, ts)
+                    .map(|(key_schema, val_schema)| DataIdSchema {
+                        data_id: *data_id,
+                        key_schema: Arc::clone(key_schema),
+                        val_schema: Arc::clone(val_schema),
+                    })
+            })
             .collect()
     }
 
@@ -339,16 +361,18 @@ where
     }
 
     /// Returns the operations needing application as of the current progress.
-    pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied, &T)> {
+    pub(crate) fn unapplied(
+        &self,
+    ) -> impl Iterator<Item = (&DataIdSchema<K::Schema, V::Schema>, Unapplied, &T)> {
         assert_eq!(self.only_data_id, None);
         let registers = self
             .unapplied_registers
             .iter()
-            .map(|(data_id, ts)| (data_id, Unapplied::RegisterForget, ts));
+            .map(|(x, ts)| (x, Unapplied::RegisterForget, ts));
         let batches = self
             .unapplied_batches
             .values()
-            .map(|(data_id, batch, ts)| (data_id, Unapplied::Batch(batch), ts));
+            .map(|(x, batch, ts)| (x, Unapplied::Batch(batch), ts));
         // This will emit registers and forgets before batches at the same timestamp. Currently,
         // this is fine because for a single data shard you can't combine registers, forgets, and
         // batches at the same timestamp. In the future if we allow combining these operations in
@@ -412,12 +436,19 @@ where
         entries.sort_by(|(a, _, _), (b, _, _)| a.ts::<T>().cmp(&b.ts::<T>()));
         for (e, t, d) in entries {
             match e {
-                TxnsEntry::Register(data_id, ts) => {
+                TxnsEntry::Register {
+                    data_id,
+                    ts,
+                    key_schema,
+                    val_schema,
+                } => {
                     let ts = T::decode(ts);
                     debug_assert!(ts <= t);
-                    self.push_register(data_id, ts, d, t);
+                    let key_schema = <K::Schema>::decode(key_schema);
+                    let val_schema = <V::Schema>::decode(val_schema);
+                    self.push_register(data_id, ts, d, t, key_schema, val_schema);
                 }
-                TxnsEntry::Append(data_id, ts, batch) => {
+                TxnsEntry::Append { data_id, ts, batch } => {
                     let ts = T::decode(ts);
                     debug_assert!(ts <= t);
                     self.push_append(data_id, batch, ts, d)
@@ -427,7 +458,15 @@ where
         self.progress_exclusive = progress;
     }
 
-    fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64, compacted_ts: T) {
+    fn push_register(
+        &mut self,
+        data_id: ShardId,
+        ts: T,
+        diff: i64,
+        compacted_ts: T,
+        key_schema: K::Schema,
+        val_schema: V::Schema,
+    ) {
         self.assert_only_data_id(&data_id);
         // Since we keep the original non-advanced timestamp around, retractions
         // necessarily might be for times in the past, so `|| diff < 0`.
@@ -439,8 +478,16 @@ where
         }
 
         // The shard has not compacted past the register/forget ts, so it may not have been applied.
+        let (key_schema, val_schema) = (Arc::new(key_schema), Arc::new(val_schema));
         if ts == compacted_ts {
-            self.unapplied_registers.push_back((data_id, ts.clone()));
+            self.unapplied_registers.push_back((
+                DataIdSchema {
+                    data_id,
+                    key_schema: Arc::clone(&key_schema),
+                    val_schema: Arc::clone(&val_schema),
+                },
+                ts.clone(),
+            ));
         }
 
         if diff == 1 {
@@ -458,7 +505,8 @@ where
             entry.registered.push_back(DataRegistered {
                 register_ts: ts,
                 forget_ts: None,
-                _phantom: std::marker::PhantomData,
+                key_schema,
+                val_schema,
             });
         } else if diff == -1 {
             debug!(
@@ -499,9 +547,17 @@ where
             self.next_batch_id += 1;
             let prev = self.batch_idx.insert(batch.clone(), idx);
             assert_eq!(prev, None);
+            let (key_schema, val_schema) = self
+                .data_schemas_at(&data_id, &ts)
+                .expect("data shard is registered");
+            let data_id_schema = DataIdSchema {
+                data_id,
+                key_schema: Arc::clone(key_schema),
+                val_schema: Arc::clone(val_schema),
+            };
             let prev = self
                 .unapplied_batches
-                .insert(idx, (data_id, batch, ts.clone()));
+                .insert(idx, (data_id_schema, batch, ts.clone()));
             assert_eq!(prev, None);
             let times = self.datas.get_mut(&data_id).expect("data is initialized");
             if times.writes.is_empty() {
@@ -524,7 +580,7 @@ where
                 .unapplied_batches
                 .remove(&idx)
                 .expect("invariant violation: batch index should exist");
-            debug_assert_eq!(data_id, prev.0);
+            debug_assert_eq!(data_id, prev.0.data_id);
             debug_assert_eq!(batch, prev.1);
             // Insertion timestamp should be less equal retraction timestamp.
             debug_assert!(prev.2 <= ts);
@@ -930,7 +986,11 @@ pub(crate) struct DataRegistered<KS, VS, T> {
     /// The inclusive time at which the data shard was removed from the txns
     /// set, or None if it hasn't yet been removed.
     pub(crate) forget_ts: Option<T>,
-    _phantom: std::marker::PhantomData<fn() -> (KS, VS)>,
+
+    /// The Schema of this data shard's keys.
+    key_schema: KS,
+    /// The Schema of this data shard's val.
+    val_schema: VS,
 }
 
 impl<KS, VS, T: Timestamp + TotalOrder> DataRegistered<KS, VS, T> {
@@ -1023,6 +1083,7 @@ pub(crate) enum Unapplied<'a> {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use mz_persist_client::{PersistClient, ShardIdSchema};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use DataListenNext::*;
@@ -1118,7 +1179,7 @@ mod tests {
 
         // Register a data shard. We're able to read before and at the register
         // ts.
-        cache.push_register(d0, 4, 1, 4);
+        cache.push_register(d0, 4, 1, 4, StringSchema, UnitSchema);
         cache.progress_exclusive = 5;
         assert_eq!(cache.data_snapshot(d0, 3), ds(d0, None, 3, 5));
         assert_eq!(cache.data_snapshot(d0, 4), ds(d0, None, 4, 5));
@@ -1137,7 +1198,7 @@ mod tests {
         // An unrelated batch doesn't change the answer. Neither does retracting
         // the batch.
         let other = ShardId::new();
-        cache.push_register(other, 7, 1, 7);
+        cache.push_register(other, 7, 1, 7, StringSchema, UnitSchema);
         cache.push_append(other, vec![0xB0], 7, 1);
         cache.push_append(d0, vec![0xA0], 7, -1);
         cache.progress_exclusive = 8;
@@ -1171,7 +1232,7 @@ mod tests {
 
         // Register a data shard. The paired snapshot would advance the physical
         // upper, so we're able to read at the register ts.
-        cache.push_register(d0, 4, 1, 4);
+        cache.push_register(d0, 4, 1, 4, StringSchema, UnitSchema);
         cache.progress_exclusive = 5;
         // assert_eq!(cache.data_listen_next(&d0, 4), ReadDataTo(5));
         // assert_eq!(cache.data_listen_next(&d0, 5), WaitForTxnsProgress);
@@ -1191,7 +1252,7 @@ mod tests {
         // An unrelated batch is another empty space guarantee. Ditto retracting
         // the batch.
         let other = ShardId::new();
-        cache.push_register(other, 7, 1, 7);
+        cache.push_register(other, 7, 1, 7, StringSchema, UnitSchema);
         cache.push_append(other, vec![0xB0], 7, 1);
         cache.push_append(d0, vec![0xA0], 7, -1);
         cache.progress_exclusive = 8;
@@ -1259,7 +1320,8 @@ mod tests {
                 dt.registered.push_back(DataRegistered {
                     register_ts: *x,
                     forget_ts: None,
-                    _phantom: std::marker::PhantomData::<fn() -> (StringSchema, UnitSchema)>,
+                    key_schema: StringSchema,
+                    val_schema: UnitSchema,
                 })
             }
             dt.writes = write_ts.into_iter().cloned().collect();
@@ -1345,8 +1407,26 @@ mod tests {
         // With the bug, this panics via an internal sanity assertion.
         cache.push_entries(
             vec![
-                (TxnsEntry::Register(d0, u64::encode(&2)), 2, -1),
-                (TxnsEntry::Register(d0, u64::encode(&1)), 2, 1),
+                (
+                    TxnsEntry::Register {
+                        data_id: d0,
+                        ts: u64::encode(&2),
+                        key_schema: Bytes::new(),
+                        val_schema: Bytes::new(),
+                    },
+                    2,
+                    -1,
+                ),
+                (
+                    TxnsEntry::Register {
+                        data_id: d0,
+                        ts: u64::encode(&1),
+                        key_schema: Bytes::new(),
+                        val_schema: Bytes::new(),
+                    },
+                    2,
+                    1,
+                ),
             ],
             3,
         );

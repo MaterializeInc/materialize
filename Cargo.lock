@@ -5396,6 +5396,7 @@ dependencies = [
  "mz-lowertest",
  "mz-ore",
  "mz-persist",
+ "mz-persist-txn",
  "mz-persist-types",
  "mz-pgtz",
  "mz-proto",
