@@ -481,19 +481,21 @@ def get_failures_on_main() -> str | None:
     )
 
     if not builds_data:
-        print(f"Got no finished builds of pipeline {pipeline_slug} and step {step_key}")
+        print(f"Got no finished builds of pipeline {pipeline_slug}")
         return None
     else:
-        print(
-            f"Fetched {len(builds_data)} finished builds of pipeline {pipeline_slug} and step {step_key}"
-        )
+        print(f"Fetched {len(builds_data)} finished builds of pipeline {pipeline_slug}")
 
+    build_step_matcher = BuildStepMatcher(step_key, parallel_job)
     last_build_step_outcomes = extract_build_step_outcomes(
         builds_data,
-        selected_build_steps=[BuildStepMatcher(step_key, parallel_job)],
+        selected_build_steps=[build_step_matcher],
     )
 
     if not last_build_step_outcomes:
+        print(
+            f"The {len(builds_data)} last fetched builds do not contain a build step matching {build_step_matcher}"
+        )
         return None
 
     return (
