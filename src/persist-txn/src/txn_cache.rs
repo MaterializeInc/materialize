@@ -26,14 +26,14 @@ use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::{Codec64, StepForward};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::metrics::Metrics;
 use crate::txn_read::{DataListenNext, DataSnapshot};
-use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsDataSchema, TxnsEntry};
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -75,7 +75,7 @@ use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 /// unchanged and simply manipulating capabilities in response to data and txns
 /// shard progress. See [crate::operator::txns_progress].
 #[derive(Debug)]
-pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
+pub struct TxnsCacheState<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64> {
     txns_id: ShardId,
     /// Invariant: <= the minimum unapplied batch.
     /// Invariant: <= the minimum unapplied register.
@@ -93,7 +93,7 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     /// An index into `unapplied_batches` keyed by the serialized batch.
     batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
-    pub(crate) datas: BTreeMap<ShardId, DataTimes<T>>,
+    pub(crate) datas: BTreeMap<ShardId, DataTimes<Arc<K::Schema>, Arc<V::Schema>, T>>,
     /// The registers and forgets needing application as of the current progress.
     ///
     /// Invariant: Values are sorted by timestamp.
@@ -110,17 +110,38 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     /// TODO: It'd be nice to make this a compile time thing. I have some ideas,
     /// but they're decently invasive, so leave it for a followup.
     only_data_id: Option<ShardId>,
+
+    _phantom: std::marker::PhantomData<fn() -> (K, V)>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct DataIdSchema<KS, VS> {
+    pub(crate) data_id: ShardId,
+    pub(crate) key_schema: Arc<KS>,
+    pub(crate) val_schema: Arc<VS>,
 }
 
 /// A self-updating [TxnsCacheState].
 #[derive(Debug)]
-pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+pub struct TxnsCache<
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64,
+    C: TxnsCodec = TxnsCodecDefault,
+> {
     pub(crate) txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
     pub(crate) buf: Vec<(TxnsEntry, T, i64)>,
-    state: TxnsCacheState<T>,
+    state: TxnsCacheState<K, V, T>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState<T> {
+impl<K, V, T> TxnsCacheState<K, V, T>
+where
+    K: Codec,
+    K::Schema: TxnsDataSchema,
+    V: Codec,
+    V::Schema: TxnsDataSchema,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
     pub(crate) fn new(txns_id: ShardId, since_ts: T, only_data_id: Option<ShardId>) -> Self {
         TxnsCacheState {
             txns_id,
@@ -133,6 +154,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             unapplied_registers: VecDeque::new(),
             datas_min_write_ts: BinaryHeap::new(),
             only_data_id,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -436,6 +458,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             entry.registered.push_back(DataRegistered {
                 register_ts: ts,
                 forget_ts: None,
+                _phantom: std::marker::PhantomData,
             });
         } else if diff == -1 {
             debug!(
@@ -686,7 +709,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
+impl<K, V, T, C> TxnsCache<K, V, T, C>
+where
+    K: Codec,
+    K::Schema: TxnsDataSchema,
+    V: Codec,
+    V::Schema: TxnsDataSchema,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    C: TxnsCodec,
+{
     pub(crate) async fn init(
         init_ts: T,
         txns_read: ReadHandle<C::Key, C::Val, T, i64>,
@@ -846,21 +877,25 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> Deref for TxnsCache<T, C> {
-    type Target = TxnsCacheState<T>;
+impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, C: TxnsCodec> Deref
+    for TxnsCache<K, V, T, C>
+{
+    type Target = TxnsCacheState<K, V, T>;
     fn deref(&self) -> &Self::Target {
         &self.state
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> DerefMut for TxnsCache<T, C> {
+impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, C: TxnsCodec> DerefMut
+    for TxnsCache<K, V, T, C>
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct DataTimes<T> {
+pub(crate) struct DataTimes<KS, VS, T> {
     /// The times at which the data shard was in the txns set.
     ///
     /// Invariants:
@@ -869,14 +904,14 @@ pub(crate) struct DataTimes<T> {
     /// - These are in increasing order.
     /// - These are non-overlapping intervals.
     /// - Everything in writes is in one of these intervals.
-    pub(crate) registered: VecDeque<DataRegistered<T>>,
+    pub(crate) registered: VecDeque<DataRegistered<KS, VS, T>>,
     /// Invariant: These are in increasing order.
     ///
     /// Invariant: Each of these is >= self.since_ts.
     pub(crate) writes: VecDeque<T>,
 }
 
-impl<T> Default for DataTimes<T> {
+impl<KS, VS, T> Default for DataTimes<KS, VS, T> {
     fn default() -> Self {
         Self {
             registered: Default::default(),
@@ -886,7 +921,7 @@ impl<T> Default for DataTimes<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct DataRegistered<T> {
+pub(crate) struct DataRegistered<KS, VS, T> {
     /// The inclusive time at which the data shard was added to the txns set.
     ///
     /// If this time has been advanced by compaction, writes might be at times
@@ -895,16 +930,17 @@ pub(crate) struct DataRegistered<T> {
     /// The inclusive time at which the data shard was removed from the txns
     /// set, or None if it hasn't yet been removed.
     pub(crate) forget_ts: Option<T>,
+    _phantom: std::marker::PhantomData<fn() -> (KS, VS)>,
 }
 
-impl<T: Timestamp + TotalOrder> DataRegistered<T> {
+impl<KS, VS, T: Timestamp + TotalOrder> DataRegistered<KS, VS, T> {
     pub(crate) fn contains(&self, ts: &T) -> bool {
         &self.register_ts <= ts && self.forget_ts.as_ref().map_or(true, |x| ts <= x)
     }
 }
 
-impl<T: Timestamp + TotalOrder> DataTimes<T> {
-    pub(crate) fn last_reg(&self) -> &DataRegistered<T> {
+impl<KS: Debug, VS: Debug, T: Timestamp + TotalOrder> DataTimes<KS, VS, T> {
+    pub(crate) fn last_reg(&self) -> &DataRegistered<KS, VS, T> {
         self.registered.back().expect("at least one registration")
     }
 
@@ -988,7 +1024,7 @@ pub(crate) enum Unapplied<'a> {
 #[cfg(test)]
 mod tests {
     use mz_persist_client::{PersistClient, ShardIdSchema};
-    use mz_persist_types::codec_impls::VecU8Schema;
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema, VecU8Schema};
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
@@ -997,7 +1033,7 @@ mod tests {
 
     use super::*;
 
-    impl TxnsCache<u64, TxnsCodecDefault> {
+    impl TxnsCache<String, (), u64, TxnsCodecDefault> {
         pub(crate) async fn expect_open(
             init_ts: u64,
             txns: &TxnsHandle<String, (), u64, i64>,
@@ -1223,6 +1259,7 @@ mod tests {
                 dt.registered.push_back(DataRegistered {
                     register_ts: *x,
                     forget_ts: None,
+                    _phantom: std::marker::PhantomData::<fn() -> (StringSchema, UnitSchema)>,
                 })
             }
             dt.writes = write_ts.into_iter().cloned().collect();
@@ -1282,9 +1319,12 @@ mod tests {
             )
             .await
             .expect("txns schema shouldn't change");
-        let mut cache =
-            TxnsCache::<_, TxnsCodecDefault>::from_read(txns_read, Antichain::from_elem(10), None)
-                .await;
+        let mut cache = TxnsCache::<String, (), _, TxnsCodecDefault>::from_read(
+            txns_read,
+            Antichain::from_elem(10),
+            None,
+        )
+        .await;
         cache.update_gt(&15).await;
         let snap = cache.data_snapshot(d0, 12);
         assert_eq!(snap.latest_write, None);

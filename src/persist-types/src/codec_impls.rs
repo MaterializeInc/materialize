@@ -35,7 +35,7 @@ use crate::stats::{BytesStats, OptionStats, PrimitiveStats, StatsFn, StructStats
 use crate::{Codec, Codec64, Opaque};
 
 /// An implementation of [Schema] for [()].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct UnitSchema;
 
 impl PartEncoder<'_, ()> for UnitSchema {
@@ -169,7 +169,7 @@ impl<X, T: Data> SimpleSchema<X, T> {
 }
 
 /// An implementation of [Schema] for [String].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StringSchema;
 
 impl Schema<String> for StringSchema {
@@ -211,7 +211,7 @@ impl Codec for String {
 }
 
 /// An implementation of [Schema] for [`Vec<u8>`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct VecU8Schema;
 
 impl Schema<Vec<u8>> for VecU8Schema {

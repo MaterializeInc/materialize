@@ -33,7 +33,7 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::txn_cache::{TxnsCache, TxnsCacheState};
-use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsDataSchema, TxnsEntry};
 
 /// A token exchangeable for a data shard snapshot.
 ///
@@ -290,15 +290,19 @@ pub struct TxnsRead<T> {
 
 impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
     /// Starts the task worker and returns a handle for communicating with it.
-    pub async fn start<C>(client: PersistClient, txns_id: ShardId) -> Self
+    pub async fn start<K, V, C>(client: PersistClient, txns_id: ShardId) -> Self
     where
+        K: Codec,
+        K::Schema: TxnsDataSchema,
+        V: Codec,
+        V::Schema: TxnsDataSchema,
         T: TotalOrder + StepForward,
         C: TxnsCodec + 'static,
     {
         let (tx, rx) = mpsc::unbounded_channel();
 
         let (mut subscribe_task, cache) =
-            TxnsSubscribeTask::<T, C>::open(&client, txns_id, None, tx.clone()).await;
+            TxnsSubscribeTask::<T, C>::open::<K, V>(&client, txns_id, None, tx.clone()).await;
 
         let mut task = TxnsReadTask {
             cache,
@@ -311,7 +315,7 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
             mz_ore::task::spawn(|| "persist-txn::read_task", async move { task.run().await });
 
         let subscribe_task = mz_ore::task::spawn(|| "persist-txn::subscribe_task", async move {
-            subscribe_task.run().await
+            subscribe_task.run::<K, V>().await
         });
 
         TxnsRead {
@@ -498,9 +502,9 @@ impl<T: Timestamp + Lattice + Codec64> WaitTs<T> {
 }
 
 #[derive(Debug)]
-struct TxnsReadTask<T: Timestamp + Lattice + Codec64> {
+struct TxnsReadTask<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64> {
     rx: mpsc::UnboundedReceiver<TxnsReadCmd<T>>,
-    cache: TxnsCacheState<T>,
+    cache: TxnsCacheState<K, V, T>,
     pending_waits_by_ts: BTreeSet<(WaitTs<T>, Uuid)>,
     pending_waits_by_id: BTreeMap<Uuid, PendingWait<T>>,
 }
@@ -541,8 +545,12 @@ impl<T: Timestamp + Lattice + Codec64> PendingWait<T> {
     }
 }
 
-impl<T> TxnsReadTask<T>
+impl<K, V, T> TxnsReadTask<K, V, T>
 where
+    K: Codec,
+    K::Schema: TxnsDataSchema,
+    V: Codec,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
 {
     async fn run(&mut self) {
@@ -662,12 +670,18 @@ where
     /// the same time because the cache is initialized with a `since_ts`, which
     /// we get from the same [ReadHandle] that we use to initialize the
     /// [Subscribe].
-    pub async fn open(
+    pub async fn open<K, V>(
         client: &PersistClient,
         txns_id: ShardId,
         only_data_id: Option<ShardId>,
         tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
-    ) -> (Self, TxnsCacheState<T>) {
+    ) -> (Self, TxnsCacheState<K, V, T>)
+    where
+        K: Codec,
+        K::Schema: TxnsDataSchema,
+        V: Codec,
+        V::Schema: TxnsDataSchema,
+    {
         let (txns_key_schema, txns_val_schema) = C::schemas();
         let txns_read: ReadHandle<<C as TxnsCodec>::Key, <C as TxnsCodec>::Val, T, i64> = client
             .open_leased_reader(
@@ -701,7 +715,13 @@ where
         (subscribe_task, state)
     }
 
-    async fn run(&mut self) {
+    async fn run<K, V>(&mut self)
+    where
+        K: Codec,
+        K::Schema: TxnsDataSchema,
+        V: Codec,
+        V::Schema: TxnsDataSchema,
+    {
         loop {
             let events = self.txns_subscribe.next(None).await;
             for event in events {
@@ -721,7 +741,7 @@ where
                         }
                     }
                     ListenEvent::Updates(parts) => {
-                        TxnsCache::<T, C>::fetch_parts(
+                        TxnsCache::<K, V, T, C>::fetch_parts(
                             self.only_data_id.clone(),
                             &mut self.txns_subscribe,
                             parts,

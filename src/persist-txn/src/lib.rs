@@ -214,7 +214,7 @@ use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::stats::PartStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
-use mz_persist_types::codec_impls::VecU8Schema;
+use mz_persist_types::codec_impls::{StringSchema, UnitSchema, VecU8Schema};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
@@ -370,6 +370,12 @@ impl TxnsCodec for TxnsCodecDefault {
         Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }
 }
+
+pub trait TxnsDataSchema: Debug + PartialEq {}
+
+impl TxnsDataSchema for UnitSchema {}
+
+impl TxnsDataSchema for StringSchema {}
 
 /// Helper for common logging for compare_and_append-ing a small amount of data.
 #[instrument(level = "debug", fields(shard=%txns_or_data_write.shard_id(), ts=?new_upper))]
