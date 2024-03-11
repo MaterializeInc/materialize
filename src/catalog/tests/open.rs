@@ -402,9 +402,9 @@ async fn test_persist_open() {
     let persist_openable_state1 =
         test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).boxed();
     let persist_openable_state3 =
-        test_persist_backed_catalog_state(persist_client, organization_id).await;
+        test_persist_backed_catalog_state(persist_client, organization_id).boxed();
     test_open(
         persist_openable_state1,
         persist_openable_state2,
@@ -415,8 +415,8 @@ async fn test_persist_open() {
 
 async fn test_open(
     openable_state1: impl OpenableDurableCatalogState,
-    openable_state2: impl OpenableDurableCatalogState,
-    openable_state3: impl OpenableDurableCatalogState,
+    openable_state2: BoxFuture<'_, impl OpenableDurableCatalogState>,
+    openable_state3: BoxFuture<'_, impl OpenableDurableCatalogState>,
 ) {
     let (snapshot, audit_log) = {
         let mut state = Box::new(openable_state1)
@@ -441,7 +441,7 @@ async fn test_open(
     };
     // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
     {
-        let mut state = Box::new(openable_state2)
+        let mut state = Box::new(openable_state2.await)
             .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
@@ -453,7 +453,7 @@ async fn test_open(
     }
     // Reopen the catalog a third time for good measure.
     {
-        let mut state = Box::new(openable_state3)
+        let mut state = Box::new(openable_state3.await)
             .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
