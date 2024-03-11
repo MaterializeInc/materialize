@@ -10,5 +10,3 @@
 > DROP SINK output CASCADE;
 
 > DROP SOURCE largeinput CASCADE;
-
-$ http-request method=DELETE url=http://toxiproxy:8474/proxies/kafka content-type=application/json

@@ -7,20 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
-{
-  "name": "kafka",
-  "listen": "0.0.0.0:9093",
-  "upstream": "kafka:9092"
-}
-
 $ kafka-create-topic topic=largeinput
 $ kafka-ingest topic=largeinput format=bytes
 A,B,0
 
+# The test intentionally does not go through toxiproxy.
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-# The source intentionally does not go through toxiproxy.
 > CREATE SOURCE largeinput (city, state, zip)
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-largeinput-${testdrive.seed}')
   FORMAT CSV WITH 3 COLUMNS

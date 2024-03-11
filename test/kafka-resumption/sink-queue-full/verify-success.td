@@ -10,4 +10,5 @@
 > SELECT status FROM mz_internal.mz_sink_statuses
 running
 
-> SELECT * FROM mz_internal.mz_sink_status_history WHERE status = 'stalled'
+# Exclude history from other tests, so only look at currently existing sinks
+> SELECT * FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_sink_status_history.sink_id = mz_sinks.id WHERE status = 'stalled';
