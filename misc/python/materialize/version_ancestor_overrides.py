@@ -24,17 +24,23 @@ Commits must be ordered descending by their date.
 def get_ancestor_overrides_for_performance_regressions(
     scenario_class: type[Any],
 ) -> dict[str, MzVersion]:
+    scenario_class_name = scenario_class.__name__
+
     # Git revisions that are based on commits listed as keys require at least the version specified in the value.
     # Note that specified versions do not necessarily need to be already published.
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if "OptbenchTPCH" in scenario_class_name:
+        # PR#24155 (equivalence propagation) significantly increased wallclock for OptbenchTPCH
+        min_ancestor_mz_version_per_commit[
+            "3cfaa8207faa7df087942cd44311a3e7b4534c25"
+        ] = MzVersion.parse_mz("v0.92.0")
+
     # add legacy entries
     min_ancestor_mz_version_per_commit.update(
         {
             # insert newer commits at the top
-            # PR#24155 (equivalence propagation) significantly increased wallclock for OptbenchTPCH
-            "3cfaa8207faa7df087942cd44311a3e7b4534c25": MzVersion.parse_mz("v0.92.0"),
             # PR#25502 (JoinFusion across MFPs) increased number of messages
             "62ea182963be5b956e13115b8ad39f7835fc4351": MzVersion.parse_mz("v0.91.0"),
             # PR#24906 (Compute operator hydration status logging) increased number of messages against v0.88.1
@@ -50,6 +56,7 @@ def get_ancestor_overrides_for_performance_regressions(
     )
 
     return min_ancestor_mz_version_per_commit
+
 
 """
 Git revisions that are based on commits listed as keys require at least the version specified in the value.
