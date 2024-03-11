@@ -476,7 +476,7 @@ def get_failures_on_main() -> str | None:
         pipeline_slug=pipeline_slug,
         max_fetches=1,
         branch="main",
-        build_state="finished",
+        build_states=["finished"],
         items_per_page=5,
     )
 

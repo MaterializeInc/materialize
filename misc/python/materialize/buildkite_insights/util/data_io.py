@@ -38,26 +38,37 @@ def ensure_temp_dir_exists() -> None:
     )
 
 
-def write_results_to_file(results: list[Any], output_file_path: str) -> None:
+def write_results_to_file(
+    results: list[Any], output_file_path: str, quiet_mode: bool = False
+) -> None:
     with open(output_file_path, "w") as f:
         json.dump(results, f, ensure_ascii=False, indent=4)
-        print(f"Written data to {output_file_path}")
+        if not quiet_mode:
+            print(f"Written data to {output_file_path}")
 
 
-def read_results_from_file(file_path: str) -> list[Any]:
+def read_results_from_file(file_path: str, quiet_mode: bool = False) -> list[Any]:
     with open(file_path) as f:
         data = json.load(f)
-        print(f"Loaded data from {file_path}")
+        if not quiet_mode:
+            print(f"Loaded data from {file_path}")
         return data
 
 
-def exists_file_with_recent_data(file_path: str, time_delta_in_hours: int = 10) -> bool:
+def exists_file_with_recent_data(
+    file_path: str, max_allowed_cache_age_in_hours: int | None
+) -> bool:
     if not os.path.isfile(file_path):
         return False
+
+    if max_allowed_cache_age_in_hours is None:
+        return True
 
     modification_date_as_sec_since_epoch = os.path.getmtime(file_path)
     modification_date = datetime.utcfromtimestamp(modification_date_as_sec_since_epoch)
 
-    max_modification_date = datetime.now() - timedelta(hours=time_delta_in_hours)
+    max_modification_date = datetime.now() - timedelta(
+        hours=max_allowed_cache_age_in_hours
+    )
 
     return modification_date > max_modification_date

@@ -17,7 +17,7 @@ import requests
 BUILDKITE_API_URL = "https://api.buildkite.com/v2"
 
 
-def get(request_path: str, params: dict[str, str]) -> Any:
+def get(request_path: str, params: dict[str, Any]) -> Any:
     headers = {}
     token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
 
@@ -32,7 +32,7 @@ def get(request_path: str, params: dict[str, str]) -> Any:
 
 
 def get_multiple(
-    request_path: str, params: dict[str, str], max_fetches: int | None
+    request_path: str, params: dict[str, Any], max_fetches: int | None
 ) -> list[Any]:
     results = []
 

@@ -27,19 +27,27 @@ def get_or_query_data(
     cache_file_path: str,
     fetch_action: Callable[[], list[Any]],
     fetch_mode: str,
+    max_allowed_cache_age_in_hours: int | None = 10,
+    add_to_cache_if_not_present: bool = True,
+    quiet_mode: bool = False,
 ) -> list[Any]:
     ensure_temp_dir_exists()
 
     no_fetch = fetch_mode == FETCH_MODE_NO
 
-    if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(cache_file_path):
+    if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(
+        cache_file_path, max_allowed_cache_age_in_hours
+    ):
         no_fetch = True
 
     if no_fetch:
-        print(f"Using existing data: {cache_file_path}")
-        return read_results_from_file(cache_file_path)
+        if not quiet_mode:
+            print(f"Using existing data: {cache_file_path}")
+        return read_results_from_file(cache_file_path, quiet_mode=quiet_mode)
 
     fetched_data = fetch_action()
 
-    write_results_to_file(fetched_data, cache_file_path)
+    if add_to_cache_if_not_present:
+        write_results_to_file(fetched_data, cache_file_path, quiet_mode=quiet_mode)
+
     return fetched_data
