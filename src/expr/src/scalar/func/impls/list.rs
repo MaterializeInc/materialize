@@ -88,7 +88,7 @@ impl LazyUnaryFunc for CastListToJsonb {
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
-            return Ok(Datum::Null);
+            return Ok(Datum::JsonNull);
         }
         let mut row = Row::default();
         row.packer().push_list_with(|packer| {
@@ -101,12 +101,12 @@ impl LazyUnaryFunc for CastListToJsonb {
         Ok(temp_storage.push_unary_row(row))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::Jsonb.nullable(input_type.nullable)
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Jsonb.nullable(false)
     }
 
     fn propagates_nulls(&self) -> bool {
-        true
+        false
     }
 
     fn introduces_nulls(&self) -> bool {

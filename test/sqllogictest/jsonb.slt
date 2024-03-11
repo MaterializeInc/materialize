@@ -1055,7 +1055,7 @@ SELECT to_jsonb(1.234::FLOAT)
 query T
 SELECT to_jsonb(null::int[])
 ----
-NULL
+null
 
 query T
 SELECT to_jsonb(array[1]::int[])
@@ -1090,7 +1090,7 @@ SELECT to_jsonb(array[row(1, 2), row(3, 4)])
 query T
 SELECT to_jsonb(null::int list)
 ----
-NULL
+null
 
 query T
 SELECT to_jsonb(list[1]::int list)
@@ -2070,3 +2070,35 @@ query T
 SELECT '{}'::JSONB #> '{-9223372036854775808}';
 ----
 NULL
+
+# Regression tests for #25899.
+
+statement ok
+SELECT NULL AS c2, pg_catalog.jsonb_object_agg(subq_2.c2, mz_internal.mz_normalize_schema_name(NULL)) AS c3 FROM (SELECT subq_1.c9 AS c2 FROM (SELECT subq_0.c0 AS c9 FROM LATERAL (SELECT 89 AS c0) AS subq_0) AS subq_1) AS subq_2;
+
+statement ok
+create table t3(x int[]);
+
+statement ok
+insert into t3 values (null::int[]);
+
+query T
+SELECT * FROM (SELECT to_jsonb(x) as y from t3) where y is not null;
+----
+null
+
+query T
+SELECT * FROM (SELECT to_jsonb(x) as y from t3);
+----
+null
+
+# Result type should be non-nullable (i.e., no `?` after `jsonb`)
+query T multiline
+explain with(types) SELECT * FROM (SELECT to_jsonb(x) as y from t3);
+----
+Explained Query:
+  Project (#1) // { types: "(jsonb)" }
+    Map (arraytojsonb(#0)) // { types: "(integer[]?, jsonb)" }
+      ReadStorage materialize.public.t3 // { types: "(integer[]?)" }
+
+EOF

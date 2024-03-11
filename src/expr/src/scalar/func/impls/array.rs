@@ -187,7 +187,7 @@ impl LazyUnaryFunc for CastArrayToJsonb {
 
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
-            return Ok(Datum::Null);
+            return Ok(Datum::JsonNull);
         }
         let a = a.unwrap_array();
         let elements = a.elements();
@@ -203,12 +203,12 @@ impl LazyUnaryFunc for CastArrayToJsonb {
         Ok(temp_storage.push_unary_row(row))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::Jsonb.nullable(input_type.nullable)
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Jsonb.nullable(false)
     }
 
     fn propagates_nulls(&self) -> bool {
-        true
+        false
     }
 
     fn introduces_nulls(&self) -> bool {
