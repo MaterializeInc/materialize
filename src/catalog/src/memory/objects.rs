@@ -65,7 +65,6 @@ use crate::durable;
 pub struct Database {
     pub name: String,
     pub id: DatabaseId,
-    #[serde(skip)]
     pub oid: u32,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
@@ -90,7 +89,6 @@ impl From<Database> for durable::Database {
 pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
-    #[serde(skip)]
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
     pub functions: BTreeMap<String, GlobalId>,
@@ -116,7 +114,6 @@ impl Schema {
 pub struct Role {
     pub name: String,
     pub id: RoleId,
-    #[serde(skip)]
     pub oid: u32,
     pub attributes: RoleAttributes,
     pub membership: RoleMembership,
@@ -324,7 +321,6 @@ pub struct CatalogEntry {
     #[serde(skip)]
     pub used_by: Vec<GlobalId>,
     pub id: GlobalId,
-    #[serde(skip)]
     pub oid: u32,
     pub name: QualifiedItemName,
     pub owner_id: RoleId,
