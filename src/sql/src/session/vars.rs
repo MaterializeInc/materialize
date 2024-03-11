@@ -1204,42 +1204,24 @@ impl SystemVars {
         let dyncfg_vars: Vec<_> = dyncfgs
             .entries()
             .map(|cfg| match cfg.default() {
-                ConfigVal::Bool(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <bool as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::U32(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <u32 as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::Usize(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <usize as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::OptUsize(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <Option<usize> as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::String(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <String as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
-                ConfigVal::Duration(default) => VarDefinition::new_runtime(
-                    cfg.name(),
-                    <Duration as ConfigType>::get(default),
-                    cfg.desc(),
-                    true,
-                ),
+                ConfigVal::Bool(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::U32(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::Usize(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::OptUsize(default) => {
+                    VarDefinition::new_runtime(cfg.name(), *default, cfg.desc(), true)
+                }
+                ConfigVal::String(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                }
+                ConfigVal::Duration(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), true)
+                }
             })
             .collect();
 
@@ -1857,29 +1839,19 @@ impl SystemVars {
         let mut updates = ConfigUpdates::default();
         for entry in self.dyncfgs.entries() {
             let name = UncasedStr::new(entry.name());
-            match entry.val() {
-                ConfigVal::Bool(x) => {
-                    <bool as ConfigType>::set(x, *self.expect_config_value::<bool>(name))
+            let val = match entry.val() {
+                ConfigVal::Bool(_) => bool::to_val(*self.expect_config_value(name)),
+                ConfigVal::U32(_) => u32::to_val(*self.expect_config_value(name)),
+                ConfigVal::Usize(_) => usize::to_val(*self.expect_config_value(name)),
+                ConfigVal::OptUsize(_) => Option::<usize>::to_val(*self.expect_config_value(name)),
+                ConfigVal::String(_) => {
+                    String::to_val(self.expect_config_value::<String>(name).clone())
                 }
-                ConfigVal::U32(x) => {
-                    <u32 as ConfigType>::set(x, *self.expect_config_value::<u32>(name))
-                }
-                ConfigVal::Usize(x) => {
-                    <usize as ConfigType>::set(x, *self.expect_config_value::<usize>(name))
-                }
-                ConfigVal::OptUsize(x) => <Option<usize> as ConfigType>::set(
-                    x,
-                    *self.expect_config_value::<Option<usize>>(name),
-                ),
-                ConfigVal::String(x) => {
-                    <String as ConfigType>::set(x, self.expect_config_value::<String>(name).clone())
-                }
-                ConfigVal::Duration(x) => {
-                    <Duration as ConfigType>::set(x, *self.expect_config_value::<Duration>(name))
-                }
+                ConfigVal::Duration(_) => Duration::to_val(*self.expect_config_value(name)),
             };
-            updates.add(entry);
+            updates.add_dynamic(entry.name(), val);
         }
+        updates.apply(&self.dyncfgs);
         updates
     }
 
