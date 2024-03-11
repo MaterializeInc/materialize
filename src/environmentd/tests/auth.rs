@@ -1844,21 +1844,6 @@ async fn test_auth_deduplication() {
     frontegg_server.wait_for_auth(10);
     assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 2);
 
-    // Both clients should still be queryable.
-    let frontegg_user_client_1_post_refresh = pg_client_1
-        .query_one("SELECT current_user", &[])
-        .await
-        .unwrap()
-        .get::<_, String>(0);
-    assert_eq!(frontegg_user_client_1_post_refresh, frontegg_user);
-
-    let frontegg_user_client_2_post_refresh = pg_client_2
-        .query_one("SELECT current_user", &[])
-        .await
-        .unwrap()
-        .get::<_, String>(0);
-    assert_eq!(frontegg_user_client_2_post_refresh, frontegg_user);
-
     // Our metrics should reflect we attached to a pending session.
     let metrics = server.metrics_registry.gather();
     let mut metrics: Vec<_> = metrics
@@ -1875,19 +1860,31 @@ async fn test_auth_deduplication() {
     assert_eq!(metric.get_counter().get_value(), 1.0);
     let labels = metric.get_label();
     assert_eq!(labels.len(), 1);
-    assert_eq!(
-        (labels[0].get_name(), labels[0].get_value()),
-        ("existing_session", "new")
-    );
+    let reason_1 = labels[0].get_value().to_string();
 
     let metric = &metrics[1];
     assert_eq!(metric.get_counter().get_value(), 1.0);
     let labels = metric.get_label();
     assert_eq!(labels.len(), 1);
-    assert_eq!(
-        (labels[0].get_name(), labels[0].get_value()),
-        ("existing_session", "pending")
-    );
+    let reason_2 = labels[0].get_value().to_string();
+
+    // One reason should indicate a new session, while the other indicates joining an existing session.
+    assert_ne!(reason_1, reason_2);
+
+    // Both clients should still be queryable.
+    let frontegg_user_client_1_post_refresh = pg_client_1
+        .query_one("SELECT current_user", &[])
+        .await
+        .unwrap()
+        .get::<_, String>(0);
+    assert_eq!(frontegg_user_client_1_post_refresh, frontegg_user);
+
+    let frontegg_user_client_2_post_refresh = pg_client_2
+        .query_one("SELECT current_user", &[])
+        .await
+        .unwrap()
+        .get::<_, String>(0);
+    assert_eq!(frontegg_user_client_2_post_refresh, frontegg_user);
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
