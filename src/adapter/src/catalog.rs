@@ -1111,7 +1111,9 @@ impl Catalog {
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
         &mut self,
-        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        // n.b. this is an option to prevent us from needing to build out a
+        // dummy impl of `StorageController` for tests.
+        mut storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
@@ -1149,7 +1151,7 @@ impl Catalog {
         let mut state = self.state.clone();
 
         match Self::transact_inner(
-            storage_controller,
+            &mut storage_controller,
             oracle_write_ts,
             session,
             ops,
@@ -1163,7 +1165,9 @@ impl Catalog {
         {
             Ok(()) => {}
             Err(e) => {
-                storage_controller.clear_provisional_state();
+                if let Some(c) = storage_controller.as_mut() {
+                    c.clear_provisional_state()
+                };
                 Err(e)?
             }
         };
@@ -1176,11 +1180,12 @@ impl Catalog {
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 
-        // Open a new tx so we can understand what impact the commit had on the
-        // storage controller's state.
-        let tx = storage.transaction().await?;
-        storage_controller.mark_state_synchronized(&tx);
-        drop(tx);
+        if let Some(c) = storage_controller.as_mut() {
+            // Open a new tx so we can understand what impact the commit had on the
+            // storage controller's state.
+            let tx = storage.transaction().await?;
+            c.mark_state_synchronized(&tx);
+        }
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
@@ -1213,7 +1218,7 @@ impl Catalog {
     /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
-        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        storage_controller: &mut Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
@@ -2971,13 +2976,14 @@ impl Catalog {
         }
 
         if dry_run_ops.is_empty() {
-            storage_controller
-                .provisionally_synchronize_state(
+            if let Some(c) = storage_controller {
+                c.provisionally_synchronize_state(
                     tx,
                     storage_collections_to_prepare,
                     storage_collections_to_drop,
                 )
                 .await?;
+            }
 
             Ok(())
         } else {
@@ -4362,6 +4368,7 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
+                    None,
                     mz_repr::Timestamp::MIN,
                     None,
                     vec![Op::CreateDatabase {
@@ -4597,6 +4604,7 @@ mod tests {
                 .expect("unable to parse view");
             catalog
                 .transact(
+                    None,
                     SYSTEM_TIME().into(),
                     None,
                     vec![Op::CreateItem {
