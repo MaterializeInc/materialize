@@ -82,7 +82,7 @@ dependencies of your query don't have [indexes](/sql/create-index/) defined,
 you should consider creating one (or many). Check out the [optimization guide](/transform-data/optimization)
 for guidance on how to optimize query performance. For information on when
 to use a materialized view versus an index, check out the
-[materialized view](/sql/create-materialized-view/#details) docs.
+[materialized view reference documentation](/sql/create-materialized-view/#details) .
 
 If the dependencies of your query are indexed, you should confirm that the query
 is actually using the index! This information is available in the query plan,
