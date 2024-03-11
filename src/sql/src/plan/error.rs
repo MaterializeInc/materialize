@@ -582,7 +582,7 @@ impl fmt::Display for PlanError {
             Self::DropSubsource { subsource, source: _} => write!(f, "SOURCE {} is a subsource and must be dropped with ALTER SOURCE...DROP SUBSOURCE", subsource.quoted()),
             Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
             Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
-            Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is a not a subsource of {}", non_subsource.quoted(), source.quoted()),
+            Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is not a subsource of {}", non_subsource.quoted(), source.quoted()),
             Self::DependentObjectsStillExist {object_type, object_name, dependents} => {
                 let reason = match &dependents[..] {
                     [] => " because other objects depend on it".to_string(),
