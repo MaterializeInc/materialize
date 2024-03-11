@@ -27,6 +27,7 @@ def get_or_query_data(
     cache_file_path: str,
     fetch_action: Callable[[], list[Any]],
     fetch_mode: str,
+    max_allowed_cache_age_in_hours: int | None = 10,
     add_to_cache_if_not_present: bool = True,
     quiet_mode: bool = False,
 ) -> list[Any]:
@@ -34,7 +35,9 @@ def get_or_query_data(
 
     no_fetch = fetch_mode == FETCH_MODE_NO
 
-    if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(cache_file_path):
+    if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(
+        cache_file_path, max_allowed_cache_age_in_hours
+    ):
         no_fetch = True
 
     if no_fetch:

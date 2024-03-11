@@ -36,6 +36,7 @@ def get_or_query_annotations(
         cache_file_path,
         fetch_action,
         fetch_mode,
+        max_allowed_cache_age_in_hours=None,
         add_to_cache_if_not_present=add_to_cache_if_not_present,
         quiet_mode=quiet_mode,
     )
