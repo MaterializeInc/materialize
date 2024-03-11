@@ -1130,7 +1130,9 @@ impl Catalog {
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
         &mut self,
-        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        // n.b. this is an option to prevent us from needing to build out a
+        // dummy impl of `StorageController` for tests.
+        mut storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
@@ -1171,7 +1173,7 @@ impl Catalog {
         let mut state = self.state.clone();
 
         Self::transact_inner(
-            storage_controller,
+            &mut storage_controller,
             oracle_write_ts,
             session,
             ops,
@@ -1222,7 +1224,7 @@ impl Catalog {
     /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
-        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        storage_controller: &mut Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
@@ -2980,13 +2982,14 @@ impl Catalog {
         }
 
         if dry_run_ops.is_empty() {
-            storage_controller
-                .prepare_state(
+            if let Some(c) = storage_controller {
+                c.prepare_state(
                     tx,
                     storage_collections_to_create,
                     storage_collections_to_drop,
                 )
                 .await?;
+            }
 
             state.update_storage_metadata(tx);
 
@@ -4373,6 +4376,7 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
+                    None,
                     mz_repr::Timestamp::MIN,
                     None,
                     vec![Op::CreateDatabase {
@@ -4608,6 +4612,7 @@ mod tests {
                 .expect("unable to parse view");
             catalog
                 .transact(
+                    None,
                     SYSTEM_TIME().into(),
                     None,
                     vec![Op::CreateItem {

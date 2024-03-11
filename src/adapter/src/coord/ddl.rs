@@ -487,7 +487,7 @@ impl Coordinator {
             builtin_table_updates,
             audit_events,
         } = catalog
-            .transact(&mut *controller.storage, oracle_write_ts, conn, ops)
+            .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
             .await?;
 
         // Append our builtin table updates, then return the notify so we can run other tasks in
