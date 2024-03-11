@@ -44,6 +44,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
+use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -516,9 +517,9 @@ impl Catalog {
 
                         Builtin::Func(func) => {
                             // This OID is never used. `func` has a `Vec` of implementations and
-                            // each implementation has it's own OID. Those are the OIDs that are
+                            // each implementation has its own OID. Those are the OIDs that are
                             // actually used by the system.
-                            let oid = 0;
+                            let oid = INVALID_OID;
                             state.insert_item(
                                 id,
                                 oid,

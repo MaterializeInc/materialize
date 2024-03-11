@@ -11,6 +11,10 @@
 
 //! PostgreSQL OID constants.
 
+/// The OID 0 is reserved for any place in the code that requires an OID, however the OID should
+/// never actually be looked at or used.
+pub const INVALID_OID: u32 = 0;
+
 // PostgreSQL builtin type OIDs
 pub const TYPE_ANY_OID: u32 = 2276;
 pub const TYPE_ANYARRAY_OID: u32 = 2277;

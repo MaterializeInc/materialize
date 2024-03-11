@@ -51,6 +51,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
+use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
@@ -91,11 +92,6 @@ use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::index_sql;
 use crate::AdapterError;
-
-/// Temporary schema OIDs are never used, and it's therefore wasteful to go to the durable catalog
-/// to allocate a new OID for every temporary schema. Instead, we give them all the same invalid
-/// OID of 0. This matches the semantics of temporary schema [`GlobalId`]s which are all -1.
-const INVALID_TEMPORARY_SCHEMA_OID: u32 = 0;
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
 /// metadata to persistent storage. For persistent metadata see
@@ -1627,6 +1623,11 @@ impl CatalogState {
         conn_id: &ConnectionId,
         owner_id: RoleId,
     ) -> Result<(), Error> {
+        // Temporary schema OIDs are never used, and it's therefore wasteful to go to the durable
+        // catalog to allocate a new OID for every temporary schema. Instead, we give them all the
+        // same invalid OID. This matches the semantics of temporary schema `GlobalId`s which are
+        // all -1.
+        let oid = INVALID_OID;
         self.temporary_schemas.insert(
             conn_id.clone(),
             Schema {
@@ -1635,7 +1636,7 @@ impl CatalogState {
                     schema: MZ_TEMP_SCHEMA.into(),
                 },
                 id: SchemaSpecifier::Temporary,
-                oid: INVALID_TEMPORARY_SCHEMA_OID,
+                oid,
                 items: BTreeMap::new(),
                 functions: BTreeMap::new(),
                 types: BTreeMap::new(),
