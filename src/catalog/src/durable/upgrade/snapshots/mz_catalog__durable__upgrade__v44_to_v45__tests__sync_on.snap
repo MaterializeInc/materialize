@@ -1,5 +1,5 @@
 ---
-source: src/catalog/src/durable/upgrade/persist/v44_to_v45.rs
+source: src/catalog/src/durable/upgrade/v44_to_v45.rs
 expression: actions
 ---
 [
@@ -15,7 +15,7 @@ expression: actions
                         ),
                         value: Some(
                             ServerConfigurationValue {
-                                value: "off",
+                                value: "on",
                             },
                         ),
                     },
@@ -35,7 +35,7 @@ expression: actions
                         ),
                         value: Some(
                             ConfigValue {
-                                value: 0,
+                                value: 1,
                             },
                         ),
                     },

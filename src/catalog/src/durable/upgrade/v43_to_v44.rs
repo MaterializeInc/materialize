@@ -7,4 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-pub(crate) mod persist;
+use crate::durable::upgrade::MigrationAction;
+use crate::durable::upgrade::{objects_v43 as v43, objects_v44 as v44};
+
+/// No-op migration for updating a comment in the proto file.
+pub fn upgrade(
+    _snapshot: Vec<v43::StateUpdateKind>,
+) -> Vec<MigrationAction<v43::StateUpdateKind, v44::StateUpdateKind>> {
+    Vec::new()
+}
