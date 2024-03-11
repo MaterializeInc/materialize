@@ -95,30 +95,43 @@ this means that the index was correctly used. If that's not the case, consider:
 * Does the index's indexed expression (key) match up with how you're querying
   the data?
 
-#### Efficient data exploration
+#### Result filtering
 
-If you're looking to explore your unindexed data, there are two ways to do so
-efficiently:
-* Simple `LIMIT` queries of the format
-    ```sql
-    SELECT <columns list or *>
-    FROM <your source, materialized view or table>
-    LIMIT <25 or less>
-    ```
-    Note: this only applies to basic queries from a single source,
-materialized view or table, with no ordering, filters or offsets.\
-To verify that the query will return quickly, you can run `EXPLAIN PLAN`
-for the query, and it should start with `Explained Query (fast path)`.
+If you are just looking to validate data and don't want to deal with query
+optimization at this stage, you can improve the efficiency of validation
+queries by reducing the amount of data that Materialize needs to read. You can
+achieve this by adding `LIMIT` clauses or [temporal filters](https://materialize.com/docs/transform-data/patterns/temporal-filters/)
+to your queries.
 
-* Filter results on a timestamp column that correlates with the
-insertion or update time of each row.\
-For example, you would add a clause to your query like
-    ```sql
-    WHERE mz_now() <= event_ts + INTERVAL '1hr'
-    ```
-    Read more about this strategy in the
-[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
-docs.
+**`LIMIT` clause**
+
+Use the standard `LIMIT` clause to return at most the specified number of rows.
+It's important to note that this only applies to basic queries against **a
+single** source, materialized view or table, with no ordering, filters or
+offsets.
+
+```sql
+SELECT <column list or *>
+FROM <source, materialized view or table>
+LIMIT <25 or less>;
+```
+
+To verify whether the query will return quickly, use [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/)
+to get the execution plan for the query, and validate that it starts with
+`Explained Query (fast path)`.
+
+**Temporal filters**
+
+Use temporal flters to filter results on a timestamp column that correlates with
+the insertion or update time of each row. For example:
+
+```sql
+WHERE mz_now() <= event_ts + INTERVAL '1hr'
+```
+
+Materialize is able to “push down” temporal filters all the way down to its
+storage layer, skipping over old data that isn't relevant to the query. For
+more details on temporal filter pushdown, see the [reference documentation](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ### Other things to consider
 
