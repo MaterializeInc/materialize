@@ -229,12 +229,20 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError>;
+    #[mz_ore::instrument(level = "debug")]
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
+        if amount == 0 {
+            return Ok(Vec::new());
+        }
+        let mut txn = self.transaction().await?;
+        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
+        txn.commit().await?;
+        Ok(ids)
+    }
 
     /// Allocates and returns `amount` system [`GlobalId`]s.
     async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
         let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
-
         Ok(id.into_iter().map(GlobalId::System).collect())
     }
 

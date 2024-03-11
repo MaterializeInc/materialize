@@ -1334,20 +1334,9 @@ impl DurableCatalogState for PersistCatalogState {
 
         Ok(events)
     }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
-        if amount == 0 {
-            return Ok(Vec::new());
-        }
-        let mut txn = self.transaction().await?;
-        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit().await?;
-        Ok(ids)
-    }
 }
 
-/// Deterministically generate the a ID for the given `organization_id` and `seed`.
+/// Deterministically generate an ID for the given `organization_id` and `seed`.
 fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
     soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
