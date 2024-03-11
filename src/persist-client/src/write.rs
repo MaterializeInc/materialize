@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-    ProtoBatch, BATCH_DELETE_ENABLED,
+    MaybeDiff, ProtoBatch, BATCH_DELETE_ENABLED,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
@@ -479,6 +479,7 @@ where
         let desc = Description::new(lower, upper, since);
 
         let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
+        let mut diffs_sum = MaybeDiff::<D>::default();
         for batch in batches.iter() {
             let () = validate_truncate_batch(&batch.batch.desc, &desc)?;
             for run in batch.batch.runs() {
@@ -490,6 +491,7 @@ where
                 parts.extend_from_slice(run);
             }
             num_updates += batch.batch.len;
+            diffs_sum.add_encoded(batch.batch.diffs_sum);
         }
 
         let heartbeat_timestamp = (self.cfg.now)();
@@ -500,6 +502,7 @@ where
                     desc: desc.clone(),
                     parts,
                     len: num_updates,
+                    diffs_sum: diffs_sum.into_inner(),
                     runs,
                 },
                 &self.writer_id,

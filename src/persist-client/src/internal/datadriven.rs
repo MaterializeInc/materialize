@@ -101,6 +101,7 @@ impl<'a> DirectiveArgs<'a> {
         HollowBatch {
             desc,
             len,
+            diffs_sum: None,
             parts: keys
                 .iter()
                 .map(|x| HollowBatchPart {

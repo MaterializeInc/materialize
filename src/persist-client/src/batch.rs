@@ -386,6 +386,7 @@ where
     parts_written: usize,
 
     num_updates: usize,
+    diffs_sum: Option<D>,
     parts: BatchParts<T>,
 
     since: Antichain<T>,
@@ -445,6 +446,7 @@ where
             parts_written: 0,
             runs: Vec::new(),
             num_updates: 0,
+            diffs_sum: None,
             parts,
             shard_id,
             version,
@@ -508,6 +510,7 @@ where
                 desc,
                 parts,
                 len: self.num_updates,
+                diffs_sum: self.diffs_sum.map(|x| D::encode(&x)),
                 runs: self.runs,
             },
         );
@@ -951,6 +954,38 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         });
     }
     Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) struct MaybeDiff<D>(pub(crate) Option<D>);
+
+impl<D> Default for MaybeDiff<D> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<D: Semigroup> std::ops::AddAssign<D> for MaybeDiff<D> {
+    fn add_assign(&mut self, rhs: D) {
+        match self.0.as_mut() {
+            Some(x) => x.plus_equals(&rhs),
+            None => self.0 = Some(rhs),
+        }
+    }
+}
+
+impl<D: Semigroup + Codec64> MaybeDiff<D> {
+    pub(crate) fn into_inner(self) -> Option<[u8; 8]> {
+        self.0.map(|x| D::encode(&x))
+    }
+
+    pub(crate) fn add_encoded(&mut self, rhs: Option<[u8; 8]>) {
+        let rhs = match rhs {
+            Some(x) => D::decode(x),
+            None => return,
+        };
+        *self += rhs;
+    }
 }
 
 #[cfg(test)]
