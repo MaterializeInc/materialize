@@ -132,4 +132,5 @@ known_errors = [
     "function map_build(text list) does not exist",
     "timestamp cannot be NaN",
     "exceeded recursion limit of 2048",
+    "key cannot be null",  # expected, see #25941
 ]
