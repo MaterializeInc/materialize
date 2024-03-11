@@ -1824,15 +1824,10 @@ impl Coordinator {
 
         // Destructure Self so we can do some concurrent work.
         let Self {
-            controller,
             secrets_controller,
             catalog,
             ..
         } = self;
-
-        // Signal to the storage controller that it is now free to reconcile its
-        // state with what it has learned from the adapter.
-        let storage_reconcile_fut = controller.storage.reconcile_state();
 
         // Cleanup orphaned secrets. Errors during list() or delete() do not
         // need to prevent bootstrap from succeeding; we will retry next
@@ -1862,13 +1857,9 @@ impl Coordinator {
         };
 
         // Run all of our final steps concurrently.
-        futures::future::join_all([
-            storage_reconcile_fut,
-            builtin_updates_fut,
-            Box::pin(secrets_cleanup_fut),
-        ])
-        .instrument(info_span!("coord::bootstrap::final"))
-        .await;
+        futures::future::join_all([builtin_updates_fut, Box::pin(secrets_cleanup_fut)])
+            .instrument(info_span!("coord::bootstrap::final"))
+            .await;
 
         info!("coordinator init: bootstrap complete");
         Ok(())

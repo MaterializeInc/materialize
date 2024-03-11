@@ -1865,10 +1865,6 @@ where
         Ok(updated_frontiers)
     }
 
-    async fn reconcile_state(&mut self) {
-        // TODO(remove?)
-    }
-
     async fn inspect_persist_state(
         &self,
         id: GlobalId,

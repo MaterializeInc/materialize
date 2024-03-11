@@ -508,11 +508,6 @@ pub trait StorageController: Debug {
     /// be awaited to completion.
     async fn process(&mut self) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
 
-    /// Signal to the controller that the adapter has populated all of its
-    /// initial state and the controller can reconcile (i.e. drop) any unclaimed
-    /// resources.
-    async fn reconcile_state(&mut self);
-
     /// Exposes the internal state of the data shard for debugging and QA.
     ///
     /// We'll be thoughtful about making unnecessary changes, but the **output
