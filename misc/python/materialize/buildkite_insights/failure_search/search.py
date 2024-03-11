@@ -70,7 +70,52 @@ def highlight_match(annotation_text: str, search_value: str) -> str:
 
 
 def trim_match(annotation_text: str, search_value: str) -> str:
-    return annotation_text.strip()
+    # We do not care about multiple occurrences within an annotation and focus on the first one.
+
+    original_annotation_text = annotation_text.strip()
+    annotation_text = original_annotation_text.lower()
+    search_value = search_value.lower()
+
+    max_chars_before_match = 300
+    max_chars_after_match = 300
+
+    match_begin_index = annotation_text.index(search_value)
+    match_end_index = match_begin_index + len(search_value)
+
+    # identify cut-off point before first match
+    if match_begin_index > max_chars_before_match:
+        cut_off_index_begin = annotation_text.find(
+            " ", match_begin_index - max_chars_before_match
+        )
+
+        if cut_off_index_begin == -1:
+            cut_off_index_begin = match_begin_index - max_chars_before_match
+    else:
+        cut_off_index_begin = 0
+
+    # identify cut-off point after first match
+    if len(annotation_text) - match_end_index > 300:
+        cut_off_index_end = annotation_text.rfind(
+            " ", match_end_index, match_end_index + max_chars_after_match
+        )
+
+        if cut_off_index_end == -1:
+            cut_off_index_end = match_end_index + max_chars_after_match
+    else:
+        cut_off_index_end = len(annotation_text)
+
+    cut_annotation_text = original_annotation_text[
+        cut_off_index_begin:cut_off_index_end
+    ]
+    cut_annotation_text = cut_annotation_text.strip()
+
+    if cut_off_index_begin > 0:
+        cut_annotation_text = f"[...] {cut_annotation_text}"
+
+    if cut_off_index_end != len(original_annotation_text):
+        cut_annotation_text = f"{cut_annotation_text} [...]"
+
+    return cut_annotation_text
 
 
 def print_match(
