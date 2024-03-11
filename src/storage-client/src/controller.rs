@@ -128,8 +128,6 @@ pub struct CollectionDescription<T> {
 impl<T> CollectionDescription<T> {
     /// Returns IDs for all storage objects that this `CollectionDescription`
     /// depends on.
-    ///
-    /// TODO: @sean: This is where the remap shard would slot in.
     pub fn get_storage_dependencies(&self) -> Vec<GlobalId> {
         let mut result = Vec::new();
 
