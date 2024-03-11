@@ -267,7 +267,7 @@ where
     fn update_parameters(&mut self, config_params: StorageParameters) {
         // We serialize the dyncfg updates in StorageParameters, but configure
         // persist separately.
-        config_params.dyncfg_updates.apply(self.persist.cfg());
+        self.persist.cfg().apply_from(&config_params.dyncfg_updates);
 
         for client in self.clients.values_mut() {
             client.send(StorageCommand::UpdateConfiguration(config_params.clone()));

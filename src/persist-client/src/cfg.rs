@@ -24,6 +24,7 @@ use mz_postgres_client::PostgresClientKnobs;
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_CLAMP, NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
@@ -102,6 +103,9 @@ pub struct PersistConfig {
     ///
     /// TODO(cfg): Entirely replace dynamic with this.
     pub configs: ConfigSet,
+    /// Indicates whether `configs` has been synced at least once with an
+    /// upstream source.
+    configs_synced_once: Arc<watch::Sender<bool>>,
     /// Configurations that can be dynamically updated.
     pub dynamic: Arc<DynamicConfig>,
     /// Whether to physically and logically compact batches in blob storage.
@@ -166,11 +170,16 @@ impl PersistConfig {
     pub fn new(build_info: &BuildInfo, now: NowFn, configs: ConfigSet) -> Self {
         // Escape hatch in case we need to disable compaction.
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
+
+        // We create receivers on demand, so we drop the initial receiver.
+        let (configs_synced_once, _) = watch::channel(false);
+
         Self {
             build_version: build_info.semver_version(),
             is_cc_active: false,
             now,
             configs,
+            configs_synced_once: Arc::new(configs_synced_once),
             dynamic: Arc::new(DynamicConfig {
                 batch_builder_max_outstanding_parts: AtomicUsize::new(2),
                 compaction_heuristic_min_inputs: AtomicUsize::new(8),
@@ -212,6 +221,32 @@ impl PersistConfig {
         let mut updates = ConfigUpdates::default();
         updates.add(cfg, val);
         updates.apply(self)
+    }
+
+    /// Applies the provided updates to this configuration.
+    ///
+    /// You should prefer calling this method over mutating `self.configs`
+    /// directly, so that [`Self::configs_synced_once`] can be properly
+    /// maintained.
+    pub fn apply_from(&self, updates: &ConfigUpdates) {
+        updates.apply(&self.configs);
+        self.configs_synced_once.send_replace(true);
+    }
+
+    /// Resolves when `configs` has been synced at least once with an upstream
+    /// source, i.e., via [`Self::apply_from`].
+    ///
+    /// If `configs` has already been synced once at the time the method is
+    /// called, resolves immediately.
+    ///
+    /// Useful in conjunction with configuration parameters that cannot be
+    /// dynamically updated once set (e.g., PubSub).
+    pub async fn configs_synced_once(&self) {
+        self.configs_synced_once
+            .subscribe()
+            .wait_for(|synced| *synced)
+            .await
+            .expect("we have a borrow on sender so it cannot drop");
     }
 
     /// The minimum number of updates that justify writing out a batch in `persist_sink`'s
