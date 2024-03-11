@@ -18,6 +18,7 @@ import materialize.optbench
 import materialize.optbench.sql
 from materialize.feature_benchmark.action import Action
 from materialize.feature_benchmark.executor import Executor
+from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.measurement_source import (
     MeasurementSource,
     Timestamp,
@@ -93,6 +94,11 @@ class OptbenchTPCH(Scenario):
     """Run optbench TPCH for optimizer benchmarks"""
 
     QUERY = 1
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.20,  # increased because it's easy to regress
+        MeasurementType.MESSAGES: 0.10,
+        MeasurementType.MEMORY: 0.10,
+    }
 
     def init(self) -> list[Action]:
         return [OptbenchInit("tpch")]

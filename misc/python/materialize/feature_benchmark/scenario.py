@@ -10,6 +10,7 @@
 from math import ceil
 
 from materialize.feature_benchmark.action import Action, DummyAction, TdAction
+from materialize.feature_benchmark.measurement import MeasurementType
 from materialize.feature_benchmark.measurement_source import MeasurementSource
 from materialize.mz_version import MzVersion
 
@@ -19,6 +20,11 @@ BenchmarkingSequence = MeasurementSource | list[Action | MeasurementSource]
 class RootScenario:
     SCALE: float = 6
     FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenario
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.10,
+        MeasurementType.MESSAGES: 0.10,
+        MeasurementType.MEMORY: 0.10,
+    }
 
     def __init__(self, scale: float, mz_version: MzVersion, default_size: int) -> None:
         self._name = self.__class__.__name__
