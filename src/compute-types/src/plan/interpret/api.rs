@@ -250,7 +250,7 @@ where
         use Plan::*;
         rg.checked_recur(|_| {
             match expr {
-                Constant { rows, node_id: _ } => {
+                Constant { rows, lir_id: _ } => {
                     // Interpret the current node.
                     Ok(self.interpret.constant(&self.ctx, rows))
                 }
@@ -258,7 +258,7 @@ where
                     id,
                     keys,
                     plan,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Interpret the current node.
                     Ok(self.interpret.get(&self.ctx, id, keys, plan))
@@ -267,7 +267,7 @@ where
                     id,
                     value,
                     body,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Extend context with the `value` result.
                     let res_value = self.apply_rec(value, rg)?;
@@ -291,7 +291,7 @@ where
                     values,
                     limits,
                     body,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Make context recursive and extend it with `bottom` for each recursive
                     // binding. This corresponds to starting with the most optimistic value.
@@ -369,7 +369,7 @@ where
                     input,
                     mfp,
                     input_key_val,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -382,7 +382,7 @@ where
                     exprs,
                     mfp_after: mfp,
                     input_key,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -394,7 +394,7 @@ where
                 Join {
                     inputs,
                     plan,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs = inputs
@@ -410,7 +410,7 @@ where
                     plan,
                     input_key,
                     mfp_after,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -427,14 +427,14 @@ where
                 TopK {
                     input,
                     top_k_plan,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self.interpret.top_k(&self.ctx, input, top_k_plan))
                 }
-                Negate { input, node_id: _ } => {
+                Negate { input, lir_id: _ } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
@@ -443,7 +443,7 @@ where
                 Threshold {
                     input,
                     threshold_plan,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -453,7 +453,7 @@ where
                 Union {
                     inputs,
                     consolidate_output,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs = inputs
@@ -468,7 +468,7 @@ where
                     forms,
                     input_key,
                     input_mfp,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -530,7 +530,7 @@ where
         use Plan::*;
         rg.checked_recur(|_| {
             match expr {
-                Constant { rows, node_id: _ } => {
+                Constant { rows, lir_id: _ } => {
                     // Interpret the current node.
                     let result = self.interpret.constant(&self.ctx, rows);
                     // Mutate the current node using the given `action`.
@@ -542,7 +542,7 @@ where
                     id,
                     keys,
                     plan,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Interpret the current node.
                     let result = self.interpret.get(&self.ctx, id, keys, plan);
@@ -555,7 +555,7 @@ where
                     id,
                     value,
                     body,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Extend context with the `value` result.
                     let res_value = self.apply_rec(value, rg)?;
@@ -579,7 +579,7 @@ where
                     values,
                     limits,
                     body,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Make context recursive and extend it with `bottom` for each recursive
                     // binding. This corresponds to starting with the most optimistic value.
@@ -657,7 +657,7 @@ where
                     input,
                     mfp,
                     input_key_val,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -676,7 +676,7 @@ where
                     exprs,
                     mfp_after: mfp,
                     input_key,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -697,7 +697,7 @@ where
                 Join {
                     inputs,
                     plan,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs
@@ -717,7 +717,7 @@ where
                     plan,
                     input_key,
                     mfp_after,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -738,7 +738,7 @@ where
                 TopK {
                     input,
                     top_k_plan,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -749,7 +749,7 @@ where
                     // Pass the interpretation result up.
                     Ok(result)
                 }
-                Negate { input, node_id: _ } => {
+                Negate { input, lir_id: _ } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
@@ -762,7 +762,7 @@ where
                 Threshold {
                     input,
                     threshold_plan,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -778,7 +778,7 @@ where
                 Union {
                     inputs,
                     consolidate_output,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let inputs: Vec<_> = inputs
@@ -799,7 +799,7 @@ where
                     forms,
                     input_key,
                     input_mfp,
-                    node_id: _,
+                    lir_id: _,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;

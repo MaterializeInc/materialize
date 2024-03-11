@@ -24,7 +24,7 @@ use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, NodeId, Plan, ProtoLetRecLimit};
+use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, ProtoLetRecLimit};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -34,7 +34,7 @@ include!(concat!(
 /// A flat representation of LIR plans.
 ///
 /// In contrast to [`Plan`], which recursively contains its subplans, this type encodes references
-/// between nodes with their unique [`NodeId`]. Doing so has some benefits:
+/// between nodes with their unique [`LirId`]. Doing so has some benefits:
 ///
 ///  * Operations that visit all nodes in a [`FlatPlan`] have natural iterative implementations,
 ///    avoiding the risk of stack overflows.
@@ -55,9 +55,9 @@ include!(concat!(
 /// Validity of node references:
 ///
 ///  (1) The `root` ID is contained in the `nodes` map.
-///  (2) For each node in the `nodes` map, each [`NodeId`] contained within the node is contained
+///  (2) For each node in the `nodes` map, each [`LirId`] contained within the node is contained
 ///      in the `nodes` map.
-///  (3) Each [`NodeId`] contained withing `topological_order` is contained in the `nodes` map.
+///  (3) Each [`LirId`] contained withing `topological_order` is contained in the `nodes` map.
 ///
 /// Constrained recursive structure:
 ///
@@ -74,19 +74,19 @@ include!(concat!(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FlatPlan<T = mz_repr::Timestamp> {
     /// The nodes in the plan.
-    nodes: BTreeMap<NodeId, FlatPlanNode<T>>,
+    nodes: BTreeMap<LirId, FlatPlanNode<T>>,
     /// The ID of the root node.
-    root: NodeId,
+    root: LirId,
     /// The topological order of nodes (dependencies before dependants).
-    topological_order: Vec<NodeId>,
+    topological_order: Vec<LirId>,
 }
 
 /// A node in a [`FlatPlan`].
 ///
 /// Variants mostly match the ones of [`Plan`], except:
 ///
-///  * Recursive references are replaced with [`NodeId`]s.
-///  * The `node_id` fields are removed.
+///  * Recursive references are replaced with [`LirId`]s.
+///  * The `lir_id` fields are removed.
 ///  * The `Let` variant is removed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum FlatPlanNode<T = mz_repr::Timestamp> {
@@ -119,12 +119,12 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
         /// The local identifiers to be used, available to `body` as `Id::Local(id)`.
         ids: Vec<LocalId>,
         /// The collections that should be bound to `ids`.
-        values: Vec<NodeId>,
+        values: Vec<LirId>,
         /// Maximum number of iterations. See further info on the MIR `LetRec`.
         limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: NodeId,
+        body: LirId,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -133,7 +133,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// able to absorb this operator.
     Mfp {
         /// The input collection.
-        input: NodeId,
+        input: LirId,
         /// Linear operator to apply to each record.
         mfp: MapFilterProject,
         /// Whether the input is from an arrangement, and if so, whether we can seek to a specific
@@ -153,7 +153,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// cases. Instead, in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
         /// The input collection.
-        input: NodeId,
+        input: LirId,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Expressions that for each row prepare the arguments to `func`.
@@ -170,7 +170,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.
-        inputs: Vec<NodeId>,
+        inputs: Vec<LirId>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also any map, filter,
@@ -181,7 +181,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// Aggregation by key.
     Reduce {
         /// The input collection.
-        input: NodeId,
+        input: LirId,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -200,7 +200,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
         /// The input collection.
-        input: NodeId,
+        input: LirId,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of Top-K has several different strategies based on the properties of
@@ -211,7 +211,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
-        input: NodeId,
+        input: LirId,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -219,7 +219,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// proportional to the number of records with non-zero accumulation.
     Threshold {
         /// The input collection.
-        input: NodeId,
+        input: LirId,
         /// A plan for performing the threshold.
         ///
         /// The implementation of threshold has several different strategies based on the
@@ -234,7 +234,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// can be formed with `Union` followed by `Reduce` implementing the "distinct" operator.
     Union {
         /// The input collections.
-        inputs: Vec<NodeId>,
+        inputs: Vec<LirId>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
     },
@@ -246,7 +246,7 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     /// can be exported.
     ArrangeBy {
         /// The input collection.
-        input: NodeId,
+        input: LirId,
         /// A list of arrangement keys, and possibly a raw collection, that will be added to those
         /// of the input.
         ///
@@ -296,20 +296,20 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
         // current bindings, we replace the `Get` with an optional `Mfp` that references the
         // binding value instead.
 
-        let mut root = plan.node_id();
+        let mut root = plan.lir_id();
 
         // Stack of nodes to flatten.
         let mut todo: Vec<Plan<T>> = vec![plan];
         // Flat nodes produced so far.
         let mut nodes: BTreeMap<u64, FlatPlanNode<T>> = Default::default();
         // Bindings resulting from `Plan::Let` nodes.
-        let mut bindings: BTreeMap<LocalId, NodeId> = Default::default();
+        let mut bindings: BTreeMap<LocalId, LirId> = Default::default();
         // Node references to replace at the end.
-        let mut replacements: BTreeMap<NodeId, NodeId> = Default::default();
+        let mut replacements: BTreeMap<LirId, LirId> = Default::default();
         // A list remembering the order in which nodes were flattened.
         // Because nodes are flatten in right-to-left pre-order, reversing this list at the end
         // yields a valid topological order.
-        let mut flatten_order: Vec<NodeId> = Default::default();
+        let mut flatten_order: Vec<LirId> = Default::default();
 
         let mut insert_node = |id, node| {
             nodes.insert(id, node);
@@ -318,15 +318,15 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
 
         while let Some(plan) = todo.pop() {
             match plan {
-                Plan::Constant { rows, node_id } => {
+                Plan::Constant { rows, lir_id } => {
                     let node = Constant { rows };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
                 }
                 Plan::Get {
                     id,
                     keys,
                     plan,
-                    node_id,
+                    lir_id,
                 } => {
                     // If this `Get` references another node directly, remove it. If it contains an
                     // MFP, leave an `Mfp` node in its place.
@@ -334,7 +334,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                         if let Some(input_id) = bindings.get(&local_id) {
                             match plan {
                                 GetPlan::PassArrangements => {
-                                    replacements.insert(node_id, *input_id);
+                                    replacements.insert(lir_id, *input_id);
                                 }
                                 GetPlan::Arrangement(keys, row, mfp) => {
                                     let node = Mfp {
@@ -342,7 +342,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                                         mfp,
                                         input_key_val: Some((keys, row)),
                                     };
-                                    insert_node(node_id, node);
+                                    insert_node(lir_id, node);
                                 }
                                 GetPlan::Collection(mfp) => {
                                     let node = Mfp {
@@ -350,7 +350,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                                         mfp,
                                         input_key_val: None,
                                     };
-                                    insert_node(node_id, node);
+                                    insert_node(lir_id, node);
                                 }
                             }
                             continue;
@@ -358,17 +358,17 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     }
 
                     let node = Get { id, keys, plan };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
                 }
                 Plan::Let {
                     id,
                     value,
                     body,
-                    node_id,
+                    lir_id,
                 } => {
                     // Insert a binding for the value and replace the `Let` node with the body.
-                    bindings.insert(id, value.node_id());
-                    replacements.insert(node_id, body.node_id());
+                    bindings.insert(id, value.lir_id());
+                    replacements.insert(lir_id, body.lir_id());
 
                     todo.extend([*value, *body]);
                 }
@@ -377,15 +377,15 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     values,
                     limits,
                     body,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = LetRec {
                         ids,
-                        values: values.iter().map(|v| v.node_id()).collect(),
+                        values: values.iter().map(|v| v.lir_id()).collect(),
                         limits,
-                        body: body.node_id(),
+                        body: body.lir_id(),
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.extend(values);
                     todo.push(*body);
@@ -394,14 +394,14 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     input,
                     mfp,
                     input_key_val,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = Mfp {
-                        input: input.node_id(),
+                        input: input.lir_id(),
                         mfp,
                         input_key_val,
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.push(*input);
                 }
@@ -411,29 +411,29 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     exprs,
                     mfp_after,
                     input_key,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = FlatMap {
-                        input: input.node_id(),
+                        input: input.lir_id(),
                         func,
                         exprs,
                         mfp_after,
                         input_key,
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.push(*input);
                 }
                 Plan::Join {
                     inputs,
                     plan,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = Join {
-                        inputs: inputs.iter().map(|i| i.node_id()).collect(),
+                        inputs: inputs.iter().map(|i| i.lir_id()).collect(),
                         plan,
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.extend(inputs.into_iter());
                 }
@@ -443,63 +443,63 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     plan,
                     input_key,
                     mfp_after,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = Reduce {
-                        input: input.node_id(),
+                        input: input.lir_id(),
                         key_val_plan,
                         plan,
                         input_key,
                         mfp_after,
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.push(*input);
                 }
                 Plan::TopK {
                     input,
                     top_k_plan,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = TopK {
-                        input: input.node_id(),
+                        input: input.lir_id(),
                         top_k_plan,
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.push(*input);
                 }
-                Plan::Negate { input, node_id } => {
+                Plan::Negate { input, lir_id } => {
                     let node = Negate {
-                        input: input.node_id(),
+                        input: input.lir_id(),
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.push(*input);
                 }
                 Plan::Threshold {
                     input,
                     threshold_plan,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = Threshold {
-                        input: input.node_id(),
+                        input: input.lir_id(),
                         threshold_plan,
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.push(*input);
                 }
                 Plan::Union {
                     inputs,
                     consolidate_output,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = Union {
-                        inputs: inputs.iter().map(|i| i.node_id()).collect(),
+                        inputs: inputs.iter().map(|i| i.lir_id()).collect(),
                         consolidate_output,
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.extend(inputs.into_iter());
                 }
@@ -508,15 +508,15 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
                     forms,
                     input_key,
                     input_mfp,
-                    node_id,
+                    lir_id,
                 } => {
                     let node = ArrangeBy {
-                        input: input.node_id(),
+                        input: input.lir_id(),
                         forms,
                         input_key,
                         input_mfp,
                     };
-                    insert_node(node_id, node);
+                    insert_node(lir_id, node);
 
                     todo.push(*input);
                 }
@@ -524,7 +524,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
         }
 
         // Apply replacements.
-        let replace = |id: &mut NodeId| {
+        let replace = |id: &mut LirId| {
             // The replacement targets might have been replaced themselves, so iterate.
             while let Some(target_id) = replacements.get(id) {
                 *id = *target_id;
@@ -532,7 +532,7 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
         };
 
         for node in nodes.values_mut() {
-            for id in node.input_node_ids_mut() {
+            for id in node.input_lir_ids_mut() {
                 replace(id);
             }
         }
@@ -563,7 +563,7 @@ impl<T> CollectionPlan for FlatPlan<T> {
 
 impl<T> FlatPlan<T> {
     /// Return the ID of the root node.
-    pub fn root_id(&self) -> NodeId {
+    pub fn root_id(&self) -> LirId {
         self.root
     }
 
@@ -615,10 +615,10 @@ impl<T> FlatPlan<T> {
             .map(|((id, root_id), limit)| {
                 let mut value_nodes = BTreeMap::new();
                 let mut todo = vec![root_id];
-                while let Some(node_id) = todo.pop() {
-                    let node = nodes.remove(&node_id).expect("FlatPlan invariants");
-                    todo.extend(node.input_node_ids());
-                    value_nodes.insert(node_id, node);
+                while let Some(lir_id) = todo.pop() {
+                    let node = nodes.remove(&lir_id).expect("FlatPlan invariants");
+                    todo.extend(node.input_lir_ids());
+                    value_nodes.insert(lir_id, node);
                 }
 
                 let mut value_order = Vec::with_capacity(nodes.len());
@@ -652,7 +652,7 @@ impl<T> FlatPlan<T> {
     ///
     /// This allows consuming the plan without being required to uphold the [`FlatPlan`]
     /// invariants.
-    pub fn destruct(self) -> (BTreeMap<NodeId, FlatPlanNode<T>>, NodeId, Vec<NodeId>) {
+    pub fn destruct(self) -> (BTreeMap<LirId, FlatPlanNode<T>>, LirId, Vec<LirId>) {
         (self.nodes, self.root, self.topological_order)
     }
 }
@@ -730,7 +730,7 @@ impl<T: Clone> FlatPlanNode<T> {
 
 impl<T> FlatPlanNode<T> {
     /// Returns the IDs of input nodes to this node.
-    fn input_node_ids(&self) -> impl Iterator<Item = NodeId> {
+    fn input_lir_ids(&self) -> impl Iterator<Item = LirId> {
         use FlatPlanNode::*;
 
         let mut list = Vec::new();
@@ -760,7 +760,7 @@ impl<T> FlatPlanNode<T> {
     }
 
     /// Returns mutable references to the IDs of input nodes to this node.
-    fn input_node_ids_mut(&mut self) -> impl Iterator<Item = &mut NodeId> {
+    fn input_lir_ids_mut(&mut self) -> impl Iterator<Item = &mut LirId> {
         use FlatPlanNode::*;
 
         let mut list = None;
@@ -817,15 +817,15 @@ impl RustType<ProtoFlatPlan> for FlatPlan {
     }
 }
 
-impl ProtoMapEntry<NodeId, FlatPlanNode> for proto_flat_plan::ProtoNode {
-    fn from_rust(entry: (&NodeId, &FlatPlanNode)) -> Self {
+impl ProtoMapEntry<LirId, FlatPlanNode> for proto_flat_plan::ProtoNode {
+    fn from_rust(entry: (&LirId, &FlatPlanNode)) -> Self {
         Self {
             id: *entry.0,
             node: Some(entry.1.into_proto()),
         }
     }
 
-    fn into_rust(self) -> Result<(NodeId, FlatPlanNode), TryFromProtoError> {
+    fn into_rust(self) -> Result<(LirId, FlatPlanNode), TryFromProtoError> {
         Ok((self.id, self.node.into_rust_if_some("ProtoNode::node")?))
     }
 }

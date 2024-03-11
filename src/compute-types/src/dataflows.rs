@@ -105,13 +105,13 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
-        let mut node_ids = BTreeSet::new();
+        let mut lir_ids = BTreeSet::new();
 
         while let Some(plan) = plans.pop() {
-            let node_id = plan.node_id();
-            if !node_ids.insert(node_id) {
+            let lir_id = plan.lir_id();
+            if !lir_ids.insert(lir_id) {
                 return Err(format!(
-                    "duplicate `NodeId` in `DataflowDescription`: {node_id}"
+                    "duplicate `LirId` in `DataflowDescription`: {lir_id}"
                 ));
             }
             plans.extend(plan.children());

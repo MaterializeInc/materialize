@@ -22,7 +22,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::flat_plan::FlatPlan;
-use mz_compute_types::plan::NodeId;
+use mz_compute_types::plan::LirId;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
@@ -2046,7 +2046,7 @@ struct HydrationState {
     hydrated: bool,
     /// Operator-level hydration state.
     /// (lir_id, worker_id) -> hydrated
-    operators: BTreeMap<(NodeId, usize), bool>,
+    operators: BTreeMap<(LirId, usize), bool>,
     /// A channel through which introspection updates are delivered.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
@@ -2092,7 +2092,7 @@ impl HydrationState {
     }
 
     /// Update the given (lir_id, worker_id) pair as hydrated.
-    fn operator_hydrated(&mut self, lir_id: NodeId, worker_id: usize, hydrated: bool) {
+    fn operator_hydrated(&mut self, lir_id: LirId, worker_id: usize, hydrated: bool) {
         let retraction = self.row_for_operator(lir_id, worker_id);
         self.operators.insert((lir_id, worker_id), hydrated);
         let insertion = self.row_for_operator(lir_id, worker_id);
@@ -2121,7 +2121,7 @@ impl HydrationState {
     /// Return a `Row` reflecting the current hydration status of the identified operator.
     ///
     /// Returns `None` if the identified operator is not tracked.
-    fn row_for_operator(&self, lir_id: NodeId, worker_id: usize) -> Option<Row> {
+    fn row_for_operator(&self, lir_id: LirId, worker_id: usize) -> Option<Row> {
         self.operators.get(&(lir_id, worker_id)).map(|hydrated| {
             Row::pack_slice(&[
                 Datum::String(&self.collection_id.to_string()),
