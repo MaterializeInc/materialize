@@ -80,7 +80,9 @@ ways:
 Like in any other database, index design affects query performance. If the
 dependencies of your query don't have [indexes](/sql/create-index/) defined,
 you should consider creating one (or many). Check out the [optimization guide](/transform-data/optimization)
-for guidance on how to optimize query performance.
+for guidance on how to optimize query performance. For information on when
+to use a materialized view versus an index, check out the
+[materialized view reference documentation](/sql/create-materialized-view/#details) .
 
 If the dependencies of your query are indexed, you should confirm that the query
 is actually using the index! This information is available in the query plan,
@@ -93,11 +95,43 @@ this means that the index was correctly used. If that's not the case, consider:
 * Does the index's indexed expression (key) match up with how you're querying
   the data?
 
-#### Computation-intensive queries
+#### Result filtering
 
-Another thing to be aware of, in Materialize, aggregations like `COUNT(*)` and limit constraints that return more than 25 rows like `LIMIT 50` perform a computation across the full underlying dataset being queried, so can be resource intensive. If you want to execute these types of queries you should either:
-* Create a materialized view or index for these queries if you plan to issue them often
-* Use a large enough cluster to fit the full underlying dataset being queried
+If you are just looking to validate data and don't want to deal with query
+optimization at this stage, you can improve the efficiency of validation
+queries by reducing the amount of data that Materialize needs to read. You can
+achieve this by adding `LIMIT` clauses or [temporal filters](https://materialize.com/docs/transform-data/patterns/temporal-filters/)
+to your queries.
+
+**`LIMIT` clause**
+
+Use the standard `LIMIT` clause to return at most the specified number of rows.
+It's important to note that this only applies to basic queries against **a
+single** source, materialized view or table, with no ordering, filters or
+offsets.
+
+```sql
+SELECT <column list or *>
+FROM <source, materialized view or table>
+LIMIT <25 or less>;
+```
+
+To verify whether the query will return quickly, use [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/)
+to get the execution plan for the query, and validate that it starts with
+`Explained Query (fast path)`.
+
+**Temporal filters**
+
+Use temporal flters to filter results on a timestamp column that correlates with
+the insertion or update time of each row. For example:
+
+```sql
+WHERE mz_now() <= event_ts + INTERVAL '1hr'
+```
+
+Materialize is able to “push down” temporal filters all the way down to its
+storage layer, skipping over old data that isn't relevant to the query. For
+more details on temporal filter pushdown, see the [reference documentation](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ### Other things to consider
 
@@ -212,8 +246,7 @@ To troubleshoot and fix memory and CPU usage, follow the steps in the
 
 For guidance on how to reduce memory and CPU usage for this or another query,
 take a look at the [indexing and query optimization](#indexing-and-query-optimization)
-and [computation-intensive queries](#computation-intensive-queries) sections
-above.
+and [result filtering](#result-filtering) sections above.
 
 If your query was the root cause, you'll need to kill it for the cluster's
 memory or CPU to go down. If your query was causing an OOM, the cluster will
