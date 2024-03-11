@@ -3665,6 +3665,7 @@ dependencies = [
 name = "mz-adapter-types"
 version = "0.0.0"
 dependencies = [
+ "mz-dyncfg",
  "mz-ore",
  "mz-repr",
  "mz-storage-types",
@@ -4255,6 +4256,7 @@ dependencies = [
 name = "mz-dyncfgs"
 version = "0.0.0"
 dependencies = [
+ "mz-adapter-types",
  "mz-compute-types",
  "mz-dyncfg",
  "mz-persist-client",

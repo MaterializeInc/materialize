@@ -1035,10 +1035,9 @@ pub struct SystemVars {
     vars: BTreeMap<&'static UncasedStr, SystemVar>,
 
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    /// NB: This is intentionally disconnected from the one that is plumbed
-    /// around to various components. This is so we can explictly control and
-    /// reason about when changes to config values are propagated to the rest
-    /// of the system.
+    /// NB: This is intentionally disconnected from the one that is plumbed around to persist and
+    /// the controllers. This is so we can explictly control and reason about when changes to config
+    /// values are propagated to the rest of the system.
     dyncfgs: ConfigSet,
 }
 
@@ -1193,7 +1192,6 @@ impl SystemVars {
             &OPTIMIZER_ONESHOT_STATS_TIMEOUT,
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
             &WEBHOOK_CONCURRENT_REQUEST_LIMIT,
-            &ENABLE_STATEMENT_LIFECYCLE_LOGGING,
             &ENABLE_DEPENDENCY_READ_HOLD_ASSERTS,
             &TIMESTAMP_ORACLE_IMPL,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE,
@@ -1267,6 +1265,10 @@ impl SystemVars {
         vars.refresh_internal_state();
 
         vars
+    }
+
+    pub fn dyncfgs(&self) -> &ConfigSet {
+        &self.dyncfgs
     }
 
     pub fn set_unsafe(mut self, allow_unsafe: bool) -> Self {
@@ -2064,10 +2066,6 @@ impl SystemVars {
     /// Returns the `webhook_concurrent_request_limit` configuration parameter.
     pub fn webhook_concurrent_request_limit(&self) -> usize {
         *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
-    }
-
-    pub fn enable_statement_lifecycle_logging(&self) -> bool {
-        *self.expect_value(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
     }
 
     /// Returns the `timestamp_oracle` configuration parameter.
