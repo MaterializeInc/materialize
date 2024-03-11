@@ -1840,14 +1840,18 @@ impl SystemVars {
         for entry in self.dyncfgs.entries() {
             let name = UncasedStr::new(entry.name());
             let val = match entry.val() {
-                ConfigVal::Bool(_) => bool::to_val(*self.expect_config_value(name)),
-                ConfigVal::U32(_) => u32::to_val(*self.expect_config_value(name)),
-                ConfigVal::Usize(_) => usize::to_val(*self.expect_config_value(name)),
-                ConfigVal::OptUsize(_) => Option::<usize>::to_val(*self.expect_config_value(name)),
-                ConfigVal::String(_) => {
-                    String::to_val(self.expect_config_value::<String>(name).clone())
+                ConfigVal::Bool(_) => ConfigVal::from(*self.expect_config_value::<bool>(name)),
+                ConfigVal::U32(_) => ConfigVal::from(*self.expect_config_value::<u32>(name)),
+                ConfigVal::Usize(_) => ConfigVal::from(*self.expect_config_value::<usize>(name)),
+                ConfigVal::OptUsize(_) => {
+                    ConfigVal::from(*self.expect_config_value::<Option<usize>>(name))
                 }
-                ConfigVal::Duration(_) => Duration::to_val(*self.expect_config_value(name)),
+                ConfigVal::String(_) => {
+                    ConfigVal::from(self.expect_config_value::<String>(name).clone())
+                }
+                ConfigVal::Duration(_) => {
+                    ConfigVal::from(*self.expect_config_value::<Duration>(name))
+                }
             };
             updates.add_dynamic(entry.name(), val);
         }
