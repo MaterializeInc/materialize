@@ -1031,7 +1031,7 @@ where
             }
         }
 
-        let name = format!("LogOperationHydration ({lir_id})");
+        let name = format!("LogOperatorHydration ({lir_id})");
         stream.unary_frontier(Pipeline, &name, |_cap, _info| {
             let mut hydrated = false;
             logger.log(lir_id, hydrated);
