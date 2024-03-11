@@ -2942,12 +2942,15 @@ pub fn plan_create_index(
         if_not_exists,
     } = &mut stmt;
     let on = scx.get_item_by_resolved_name(on_name)?;
+    let on_item_type = on.item_type();
 
-    if CatalogItemType::View != on.item_type()
-        && CatalogItemType::MaterializedView != on.item_type()
-        && CatalogItemType::Source != on.item_type()
-        && CatalogItemType::Table != on.item_type()
-    {
+    if !matches!(
+        on_item_type,
+        CatalogItemType::View
+            | CatalogItemType::MaterializedView
+            | CatalogItemType::Source
+            | CatalogItemType::Table
+    ) {
         sql_bail!(
             "index cannot be created on {} because it is a {}",
             on_name.full_name_str(),
