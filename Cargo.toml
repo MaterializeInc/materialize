@@ -219,7 +219,7 @@ opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-ru
 # it into a release.
 # Also bumps lru to 0.12.0
 # Needs a more complex update to 2.0.0, with a custom TLS connector.
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
+launchdarkly-server-sdk = { git = "https://github.com/aalexandrov/rust-server-sdk", branch = "ld_mock"}
 
 # Waiting on https://github.com/AltSysrq/proptest/pull/264.
 proptest = { git = "https://github.com/MaterializeInc/proptest.git" }
