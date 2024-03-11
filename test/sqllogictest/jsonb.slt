@@ -1053,6 +1053,11 @@ SELECT to_jsonb(1.234::FLOAT)
 1.234
 
 query T
+SELECT to_jsonb(null::int)
+----
+NULL
+
+query T
 SELECT to_jsonb(null::int[])
 ----
 NULL
@@ -1066,6 +1071,16 @@ query T
 SELECT to_jsonb(array[1, 2]::int[])
 ----
 [1,2]
+
+query T
+SELECT to_jsonb(array[1, null]::int[])
+----
+[1,null]
+
+query T
+SELECT to_jsonb(array[null]::int[])
+----
+[null]
 
 query T
 SELECT to_jsonb(array[array[1, 2], array[3, 4]]::int[])
@@ -1123,10 +1138,10 @@ SELECT to_jsonb(list[row(1, 2), row(3, 4)])
 [{"f1":1,"f2":2},{"f1":3,"f2":4}]
 
 
-# query T
-# SELECT to_jsonb(1.234::DECIMAL)
-# ----
-# 1.234
+query T
+SELECT to_jsonb(1.234::DECIMAL)
+----
+1.234
 
 # query T
 # SELECT to_jsonb('10.1.0.0/16'::INET)
@@ -1138,40 +1153,40 @@ SELECT to_jsonb(list[row(1, 2), row(3, 4)])
 # ----
 # [[1.0,2.0],[3.0,4.0]]
 
-# query T
-# SELECT to_jsonb('2014-05-28 12:22:35.614298'::TIMESTAMP)
-# ----
-# "2014-05-28T12:22:35.614298"
+query T
+SELECT to_jsonb('2014-05-28 12:22:35.614298'::TIMESTAMP)
+----
+"2014-05-28 12:22:35.614298"
 
-# query T
-# SELECT to_jsonb('2014-05-28 12:22:35.614298-04'::TIMESTAMPTZ)
-# ----
-# "2014-05-28T12:22:35.614298-04:00"
+query T
+SELECT to_jsonb('2014-05-28 12:22:35.614298-04'::TIMESTAMPTZ)
+----
+"2014-05-28 16:22:35.614298+00"
 
-# query T
-# SELECT to_jsonb('2014-05-28 12:22:35.614298-04'::TIMESTAMP)
-# ----
-# "2014-05-28T12:22:35.614298"
+query T
+SELECT to_jsonb('2014-05-28 12:22:35.614298-04'::TIMESTAMP)
+----
+"2014-05-28 12:22:35.614298"
 
-# query T
-# SELECT to_jsonb('2014-05-28'::DATE)
-# ----
-# "2014-05-28"
+query T
+SELECT to_jsonb('2014-05-28'::DATE)
+----
+"2014-05-28"
 
-# query T
-# SELECT to_jsonb('00:00:00'::TIME)
-# ----
-# "00:00:00"
+query T
+SELECT to_jsonb('00:00:00'::TIME)
+----
+"00:00:00"
 
-# query T
-# SELECT to_jsonb('2h45m2s234ms'::INTERVAL)
-# ----
-# "02:45:02.234"
+query T
+SELECT to_jsonb('02:45:02.234'::INTERVAL)
+----
+"02:45:02.234"
 
-# query T
-# SELECT to_jsonb((1,2,'hello',NULL,NULL))
-# ----
-# {"f1":1.0,"f2":2.0,"f3":"hello","f4":null,"f5":null}
+query T
+SELECT to_jsonb((1,2,'hello',NULL,NULL))
+----
+{"f1":1,"f2":2,"f3":"hello","f4":null,"f5":null}
 
 ## jsonb_array_elements
 
@@ -1297,6 +1312,17 @@ query T
 SELECT jsonb_build_object('a',2,'b',4)
 ----
 {"a":2,"b":4}
+
+query T
+SELECT jsonb_build_object('a',null,'b',4)
+----
+{"a":null,"b":4}
+
+query error key cannot be null
+SELECT jsonb_build_object(null, null)
+
+query error key cannot be null
+SELECT jsonb_build_object(null, 1)
 
 query T
 SELECT jsonb_build_object(true,'val',1,0,1.3,2,date '2019-02-03' - date '2019-01-01',4)
@@ -1428,6 +1454,21 @@ query T
 SELECT jsonb_build_array()
 ----
 []
+
+query T
+SELECT jsonb_build_array(1, 2, 3)
+----
+[1,2,3]
+
+query T
+SELECT jsonb_build_array(1, 2, NULL)
+----
+[1,2,null]
+
+query T
+SELECT jsonb_build_array(NULL)
+----
+[null]
 
 query T
 SELECT jsonb_build_array('\x0001'::BYTEA)
@@ -1938,6 +1979,31 @@ query T
 SELECT to_jsonb(TIMESTAMP '1969-06-01 10:10:10.41');
 ----
 "1969-06-01 10:10:10.41"
+
+query T
+SELECT to_jsonb(LIST[null]::int[] list)
+----
+[null]
+
+query T
+SELECT to_jsonb(LIST[ARRAY[]::int[]]::int[] list)
+----
+[[]]
+
+query T
+SELECT to_jsonb(LIST[ARRAY[]::int[], NULL]::int[] list)
+----
+[[],null]
+
+query T
+SELECT to_jsonb(LIST[ARRAY[]::int[], NULL, ARRAY[2, 3]]::int[] list)
+----
+[[],null,[2,3]]
+
+query T
+SELECT to_jsonb(LIST[ARRAY[ARRAY[1, 2], ARRAY[3, 4]]]::int[] list)
+----
+[[[1,2],[3,4]]]
 
 # jsonb_agg
 

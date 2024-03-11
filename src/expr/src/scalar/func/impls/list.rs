@@ -93,7 +93,10 @@ impl LazyUnaryFunc for CastListToJsonb {
         let mut row = Row::default();
         row.packer().push_list_with(|packer| {
             for elem in a.unwrap_list().iter() {
-                let elem = self.cast_element.eval(&[elem], temp_storage)?;
+                let elem = match self.cast_element.eval(&[elem], temp_storage)? {
+                    Datum::Null => Datum::JsonNull,
+                    d => d,
+                };
                 packer.push(elem);
             }
             Ok::<_, EvalError>(())

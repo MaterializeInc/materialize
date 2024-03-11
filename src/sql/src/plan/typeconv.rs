@@ -896,14 +896,13 @@ pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 ///     converted to JSON by `to_jsonb`.
 ///   * Other types are converted to strings by their usual cast function an
 //      become JSON strings.
-///   * A `Datum::Null` of any type becomes a JSON null.
 pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     use ScalarType::*;
 
     match ecx.scalar_type(&expr) {
-        Bool | Jsonb | Numeric { .. } => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
-            func::CastJsonbOrNullToJsonb,
-        )),
+        Bool | Jsonb | Numeric { .. } => {
+            expr.call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb))
+        }
         Int16 | Int32 | Float32 | Float64 => plan_cast(
             ecx,
             CastContext::Explicit,
@@ -911,9 +910,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
             &Numeric { max_scale: None },
         )
         .expect("cast known to exist")
-        .call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
-            func::CastJsonbOrNullToJsonb,
-        )),
+        .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
@@ -972,9 +969,8 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
             expr.call_unary(func)
         }
-        _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb(
-            func::CastJsonbOrNullToJsonb,
-        )),
+        _ => to_string(ecx, expr)
+            .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
     }
 }
 

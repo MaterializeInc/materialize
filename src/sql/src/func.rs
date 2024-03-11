@@ -3069,8 +3069,12 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                     _ => val,
                 };
 
+                let json_null = HirScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
                 let key = typeconv::to_string(ecx, key);
-                let val = typeconv::to_jsonb(ecx, val);
+                let val = HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![typeconv::to_jsonb(ecx, val), json_null],
+                };
                 let e = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate {
                         field_names: vec![ColumnName::from("key"), ColumnName::from("val")],

@@ -256,7 +256,7 @@ message ProtoUnaryFunc {
 
         google.protobuf.Empty cast_string_to_jsonb = 3;
         google.protobuf.Empty cast_jsonb_to_string = 122;
-        google.protobuf.Empty cast_jsonb_or_null_to_jsonb = 123;
+        google.protobuf.Empty cast_jsonbable_to_jsonb = 123;
         google.protobuf.Empty cast_jsonb_to_int16 = 124;
         google.protobuf.Empty cast_jsonb_to_int32 = 13;
         google.protobuf.Empty cast_jsonb_to_int64 = 126;
@@ -833,5 +833,6 @@ message ProtoEvalError {
         string invalid_iana_timezone_id = 77;
         string pretty_error = 78;
         google.protobuf.Empty neg_limit = 79;
+        google.protobuf.Empty key_cannot_be_null = 80;
     }
 }
