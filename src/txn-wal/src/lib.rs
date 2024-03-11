@@ -213,7 +213,7 @@ use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
-use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
+use mz_persist_types::codec_impls::{ShardIdSchema, StringSchema};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
@@ -272,36 +272,27 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
 
 /// A reasonable default implementation of [TxnsCodec].
 ///
-/// This uses the "native" Codecs for `ShardId` and `Vec<u8>`, with the latter
-/// empty for [TxnsEntry::Register] and non-empty for [TxnsEntry::Append].
+/// This uses the "native" Codecs for `ShardId` and `String`, with the former a
+/// redundant copy of the data shard's id (for pushdown) and the latter the
+/// serde_json encoding of the full `TxnsEntry`.
 #[derive(Debug)]
 pub struct TxnsCodecDefault;
 
 impl TxnsCodec for TxnsCodecDefault {
     type Key = ShardId;
-    type Val = Vec<u8>;
+    type Val = String;
     fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema) {
-        (ShardIdSchema, VecU8Schema)
+        (ShardIdSchema, StringSchema)
     }
     fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
-        match e {
-            TxnsEntry::Register(data_id, ts) => (data_id, ts.to_vec()),
-            TxnsEntry::Append(data_id, ts, batch) => {
-                // Put the ts at the end to let decode truncate it off.
-                (data_id, batch.into_iter().chain(ts).collect())
-            }
-        }
+        let key = e.data_id();
+        let val = serde_json::to_string(&e).expect("valid json");
+        (*key, val)
     }
-    fn decode(key: Self::Key, mut val: Self::Val) -> TxnsEntry {
-        let mut ts = [0u8; 8];
-        let ts_idx = val.len().checked_sub(8).expect("ts encoded at end of val");
-        ts.copy_from_slice(&val[ts_idx..]);
-        val.truncate(ts_idx);
-        if val.is_empty() {
-            TxnsEntry::Register(key, ts)
-        } else {
-            TxnsEntry::Append(key, ts, val)
-        }
+    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry {
+        let ret: TxnsEntry = serde_json::from_str(&val).expect("valid TxnsEntry");
+        assert_eq!(ret.data_id(), &key);
+        ret
     }
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
         let stats = stats
