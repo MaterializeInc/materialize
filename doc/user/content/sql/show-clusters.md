@@ -38,15 +38,23 @@ default value.
 A system cluster named `mz_introspection` will be pre-installed in every
 environment. This cluster has several indexes installed to speed up common
 introspection queries, like `SHOW` commands and queries using the system
-catalog. It is recommended to switch to the `mz_introspection` cluster for
-improved performance when executing these statements.
+catalog.
+
+To take advantage of these indexes, Materialize will automatically re-route
+`SHOW` commands and queries using system catalog objects to the
+`mz_introspection` system cluster. You can disable this behavior in
+your session via the `auto_route_introspection_queries`
+[session variable](/sql/show/#other-session-variables).
 
 The following characteristics apply to the `mz_introspection` cluster:
 
   * You are **not** billed for this cluster.
   * You cannot create indexes or materialized views on this cluster.
   * You cannot drop this cluster.
-  * You can run `SELECT` or `SUBSCRIBE` statements on this cluster.
+  * You can run `SELECT` or `SUBSCRIBE` statements against [system catalog
+  objects](https://materialize.com/docs/sql/system-catalog/) on this cluster.
+  This includes queries with joins, as long as the query depends only on objects
+  in the system catalog.
 
 ### `mz_system` system cluster
 
