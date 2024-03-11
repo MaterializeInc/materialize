@@ -986,8 +986,8 @@ async fn purify_create_source(
             let tables = mz_mysql_util::schema_info(
                 &mut *conn,
                 &table_schema_request,
-                Some(&text_cols_map),
-                Some(&ignore_cols_map),
+                &text_cols_map,
+                &ignore_cols_map,
             )
             .await
             .map_err(|err| match err {

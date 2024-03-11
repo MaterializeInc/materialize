@@ -92,26 +92,24 @@ pub struct QualifiedTableRef<'a> {
 pub async fn schema_info<'a, Q>(
     conn: &mut Q,
     schema_request: &SchemaRequest<'a>,
-    text_columns: Option<&BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>>,
-    ignore_columns: Option<&BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>>,
+    text_columns: &BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>,
+    ignore_columns: &BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>>,
 ) -> Result<Vec<MySqlTableDesc>, MySqlError>
 where
     Q: Queryable,
 {
     // Verify there are no duplicates in text_columns and ignore_columns
-    if let (Some(text_columns), Some(ignore_columns)) = (text_columns, ignore_columns) {
-        for (table_ref, text_cols) in text_columns.iter() {
-            if let Some(ignore_cols) = ignore_columns.get(table_ref) {
-                let intersection: Vec<_> = text_cols.intersection(ignore_cols).collect();
-                if !intersection.is_empty() {
-                    Err(MySqlError::DuplicatedColumnNames {
-                        qualified_table_name: format!(
-                            "{:?}.{:?}",
-                            table_ref.schema_name, table_ref.table_name
-                        ),
-                        columns: intersection.iter().map(|s| (*s).to_string()).collect(),
-                    })?;
-                }
+    for (table_ref, text_cols) in text_columns.iter() {
+        if let Some(ignore_cols) = ignore_columns.get(table_ref) {
+            let intersection: Vec<_> = text_cols.intersection(ignore_cols).collect();
+            if !intersection.is_empty() {
+                Err(MySqlError::DuplicatedColumnNames {
+                    qualified_table_name: format!(
+                        "{:?}.{:?}",
+                        table_ref.schema_name, table_ref.table_name
+                    ),
+                    columns: intersection.iter().map(|s| (*s).to_string()).collect(),
+                })?;
             }
         }
     }
@@ -168,17 +166,13 @@ where
     let mut tables = vec![];
     let mut error_cols = vec![];
     for (table_name, schema_name) in table_rows {
-        let table_text_cols = text_columns.and_then(|m| {
-            m.get(&QualifiedTableRef {
-                schema_name: &schema_name,
-                table_name: &table_name,
-            })
+        let table_text_cols = text_columns.get(&QualifiedTableRef {
+            schema_name: &schema_name,
+            table_name: &table_name,
         });
-        let table_ignore_cols = ignore_columns.and_then(|m| {
-            m.get(&QualifiedTableRef {
-                schema_name: &schema_name,
-                table_name: &table_name,
-            })
+        let table_ignore_cols = ignore_columns.get(&QualifiedTableRef {
+            schema_name: &schema_name,
+            table_name: &table_name,
         });
 
         // NOTE: It's important that we order by ordinal_position ASC since we rely on this as

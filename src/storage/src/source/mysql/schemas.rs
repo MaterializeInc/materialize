@@ -40,8 +40,8 @@ where
                 .map(|(f, _)| (f.0.as_str(), f.1.as_str()))
                 .collect(),
         ),
-        Some(&text_column_map),
-        Some(&ignore_column_map),
+        &text_column_map,
+        &ignore_column_map,
     )
     .await?
     .into_iter()
@@ -83,7 +83,7 @@ fn verify_schema(
 }
 
 fn map_columns<'a>(
-    columns: &'a Vec<MySqlColumnRef>,
+    columns: &'a [MySqlColumnRef],
 ) -> BTreeMap<QualifiedTableRef<'a>, BTreeSet<&'a str>> {
     let mut column_map = BTreeMap::new();
     for column in columns {
