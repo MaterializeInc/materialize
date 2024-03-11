@@ -23,11 +23,11 @@ from junitparser.junitparser import Error, Failure, JUnitXml
 
 from materialize import ci_util, ui
 from materialize.buildkite import add_annotation_raw, get_artifact_url, truncate_str
+from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 from materialize.buildkite_insights.step_durations.build_step import (
     BuildStepMatcher,
     extract_build_step_outcomes,
 )
-from materialize.buildkite_insights.util.buildkite_api import fetch, fetch_builds
 
 CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
@@ -472,7 +472,7 @@ def get_failures_on_main() -> str | None:
     assert step_name is not None
 
     # This is only supposed to be invoked when the build step failed.
-    builds_data = fetch_builds(
+    builds_data = builds_api.get_builds(
         pipeline_slug=pipeline_slug,
         max_fetches=1,
         branch="main",
@@ -512,7 +512,7 @@ def get_job_state() -> str:
     build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
     job_id = os.getenv("BUILDKITE_JOB_ID")
     url = f"organizations/materialize/pipelines/{pipeline_slug}/builds/{build_number}"
-    build = fetch(url, {})
+    build = generic_api.get(url, {})
     for job in build["jobs"]:
         if job["id"] == job_id:
             return job["state"]

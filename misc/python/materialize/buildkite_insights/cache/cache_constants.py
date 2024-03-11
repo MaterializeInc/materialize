@@ -7,14 +7,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from materialize.buildkite_insights.buildkite_api import builds_api
-from materialize.buildkite_insights.util.data_io import write_results_to_file
 
 
-def main() -> None:
-    result = builds_api.get_builds_of_all_pipelines(max_fetches=None)
-    write_results_to_file(result, "data.json")
-
-
-if __name__ == "__main__":
-    main()
+FETCH_MODE_NO = "no"
+FETCH_MODE_YES = "yes"
+FETCH_MODE_AUTO = "auto"

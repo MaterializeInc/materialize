@@ -8,7 +8,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import hashlib
 import json
 import os
 import subprocess
@@ -21,16 +20,11 @@ PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
 
 
 def get_file_path(
+    file_prefix: str,
     pipeline_slug: str,
-    branch: str | None,
-    build_state: str | None,
-    max_fetches: int,
-    items_per_page: int,
+    params_hash: str,
 ) -> str:
-    max_entries = max_fetches * items_per_page
-    meta_data = f"{branch}-{build_state}-{max_entries}"
-    hash_value = hashlib.sha256(bytes(meta_data, encoding="utf-8")).hexdigest()[:8]
-    return f"{PATH_TO_TEMP_DIR}/builds-{pipeline_slug}-params-{hash_value}.json"
+    return f"{PATH_TO_TEMP_DIR}/{file_prefix}-{pipeline_slug}-params-{params_hash}.json"
 
 
 def ensure_temp_dir_exists() -> None:
@@ -57,13 +51,13 @@ def read_results_from_file(file_path: str) -> list[Any]:
         return data
 
 
-def exists_file_with_recent_data(file_path: str) -> bool:
+def exists_file_with_recent_data(file_path: str, time_delta_in_hours: int = 10) -> bool:
     if not os.path.isfile(file_path):
         return False
 
     modification_date_as_sec_since_epoch = os.path.getmtime(file_path)
     modification_date = datetime.utcfromtimestamp(modification_date_as_sec_since_epoch)
 
-    max_modification_date = datetime.now() - timedelta(hours=8)
+    max_modification_date = datetime.now() - timedelta(hours=time_delta_in_hours)
 
     return modification_date > max_modification_date

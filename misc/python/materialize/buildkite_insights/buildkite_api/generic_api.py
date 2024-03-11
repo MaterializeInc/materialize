@@ -17,7 +17,7 @@ import requests
 BUILDKITE_API_URL = "https://api.buildkite.com/v2"
 
 
-def fetch(request_path: str, params: dict[str, str]) -> Any:
+def get(request_path: str, params: dict[str, str]) -> Any:
     headers = {}
     token = os.getenv("BUILDKITE_CI_API_KEY") or os.getenv("BUILDKITE_TOKEN")
 
@@ -31,7 +31,7 @@ def fetch(request_path: str, params: dict[str, str]) -> Any:
     return r.json()
 
 
-def get(
+def get_multiple(
     request_path: str, params: dict[str, str], max_fetches: int | None
 ) -> list[Any]:
     results = []
@@ -40,7 +40,7 @@ def get(
 
     fetch_count = 0
     while True:
-        result = fetch(request_path, params)
+        result = get(request_path, params)
         fetch_count += 1
 
         if not result:
@@ -63,26 +63,3 @@ def get(
             break
 
     return results
-
-
-def fetch_builds(
-    pipeline_slug: str,
-    max_fetches: int | None,
-    branch: str | None,
-    build_state: str | None,
-    items_per_page: int = 100,
-    include_retries: bool = True,
-) -> list[Any]:
-    request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
-    params = {
-        "include_retried_jobs": str(include_retries).lower(),
-        "per_page": str(items_per_page),
-    }
-
-    if branch is not None:
-        params["branch"] = branch
-
-    if build_state is not None:
-        params["state"] = build_state
-
-    return get(request_path, params, max_fetches=max_fetches)

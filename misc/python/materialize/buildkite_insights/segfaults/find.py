@@ -11,22 +11,18 @@
 
 import time
 
-from materialize.buildkite_insights.util import buildkite_api
+from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 
 
 def main() -> None:
     # Used to find recent instances of https://github.com/MaterializeInc/materialize/issues/24644
     # 2 weeks ~ 2000 builds
-    data = buildkite_api.get(
-        "organizations/materialize/builds",
-        {"include_retried_jobs": "true", "per_page": "100"},
-        max_fetches=20,
-    )
+    data = builds_api.get_builds_of_all_pipelines(max_fetches=20)
 
     for build in data:
         request_path = f"organizations/materialize/pipelines/{build['pipeline']['slug']}/builds/{build['number']}/artifacts"
         params = {"per_page": "100"}
-        result = buildkite_api.get(request_path, params, max_fetches=None)
+        result = generic_api.get_multiple(request_path, params, max_fetches=None)
         for artifact in result:
             # Some core files are corrupted, probably because they get dumped during shutdown, ignore them
             if (
