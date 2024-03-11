@@ -1024,7 +1024,7 @@ pub(crate) enum Unapplied<'a> {
 #[cfg(test)]
 mod tests {
     use mz_persist_client::{PersistClient, ShardIdSchema};
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema, VecU8Schema};
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
@@ -1314,7 +1314,7 @@ mod tests {
             .open_leased_reader(
                 txns.txns_id(),
                 Arc::new(ShardIdSchema),
-                Arc::new(VecU8Schema),
+                Arc::new(StringSchema),
                 Diagnostics::for_tests(),
             )
             .await

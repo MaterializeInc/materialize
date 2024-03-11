@@ -5064,6 +5064,7 @@ dependencies = [
  "protobuf-src",
  "rand",
  "serde",
+ "serde_json",
  "timely",
  "tokio",
  "tracing",
