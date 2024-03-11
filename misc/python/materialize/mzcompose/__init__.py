@@ -66,6 +66,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_disk_cluster_replicas": "true",
     "enable_eager_delta_joins": "true",
     "enable_equivalence_propagation": "true",
+    "enable_explain_broken": "true",
     "enable_expressions_in_limit_syntax": "true",
     "enable_logical_compaction_window": "true",
     "enable_multi_worker_storage_persist_sink": "true",
