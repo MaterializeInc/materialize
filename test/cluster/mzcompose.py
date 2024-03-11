@@ -338,7 +338,8 @@ def workflow_test_github_15531(c: Composition) -> None:
     # Wait a bit to let the metrics refresh.
     time.sleep(2)
 
-    # obtain initial history size and dataflow count
+    # Obtain initial history size and dataflow count.
+    # Dataflow count can plausibly be more than 1, if compaction is delayed.
     (
         controller_command_count,
         controller_dataflow_count,
@@ -347,10 +348,16 @@ def workflow_test_github_15531(c: Composition) -> None:
     ) = find_command_history_metrics(c)
     assert controller_command_count > 0, "controller history cannot be empty"
     assert (
-        controller_dataflow_count == 1
-    ), "expected a single dataflow in controller history"
+        controller_dataflow_count > 0
+    ), "at least one dataflow expected in controller history"
+    assert (
+        controller_dataflow_count < 5
+    ), "more dataflows than expected in controller history"
     assert replica_command_count > 0, "replica history cannot be empty"
-    assert replica_dataflow_count == 1, "expected a single dataflow in replica history"
+    assert (
+        replica_dataflow_count > 0
+    ), "at least one dataflow expected in replica history"
+    assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
 
     # execute 400 fast- and slow-path peeks
     for _ in range(20):
