@@ -237,6 +237,7 @@ async fn test_items(openable_state: impl OpenableDurableCatalogState) {
     let items = [
         Item {
             id: GlobalId::User(100),
+            oid: 20_000,
             schema_id: SchemaId::User(1),
             name: "foo".to_string(),
             create_sql: "CREATE VIEW v AS SELECT 1".to_string(),
@@ -245,6 +246,7 @@ async fn test_items(openable_state: impl OpenableDurableCatalogState) {
         },
         Item {
             id: GlobalId::User(200),
+            oid: 20_001,
             schema_id: SchemaId::User(1),
             name: "bar".to_string(),
             create_sql: "CREATE MATERIALIZED VIEW mv AS SELECT 2".to_string(),
@@ -261,6 +263,7 @@ async fn test_items(openable_state: impl OpenableDurableCatalogState) {
     for item in &items {
         txn.insert_item(
             item.id,
+            item.oid,
             item.schema_id,
             &item.name,
             item.create_sql.clone(),

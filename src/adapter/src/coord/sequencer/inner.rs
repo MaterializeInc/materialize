@@ -205,7 +205,6 @@ impl Coordinator {
         } in plans
         {
             let name = plan.name.clone();
-            let source_oid = self.catalog_mut().allocate_oid()?;
             if matches!(
                 plan.source.data_source,
                 mz_sql::plan::DataSourceDesc::Ingestion(_)
@@ -243,7 +242,6 @@ impl Coordinator {
             let source = Source::new(source_id, plan, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
-                oid: source_oid,
                 name,
                 item: CatalogItem::Source(source.clone()),
                 owner_id: *session.current_role_id(),
@@ -459,11 +457,8 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let connection_oid = self.catalog_mut().allocate_oid()?;
-
         let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
-            oid: connection_oid,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
@@ -517,12 +512,8 @@ impl Coordinator {
         session: &mut Session,
         plan: plan::CreateDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let db_oid = self.catalog_mut().allocate_oid()?;
-        let schema_oid = self.catalog_mut().allocate_oid()?;
         let ops = vec![catalog::Op::CreateDatabase {
             name: plan.name.clone(),
-            oid: db_oid,
-            public_schema_oid: schema_oid,
             owner_id: *session.current_role_id(),
         }];
         match self.catalog_transact(Some(session), ops).await {
@@ -544,11 +535,9 @@ impl Coordinator {
         session: &mut Session,
         plan: plan::CreateSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog_mut().allocate_oid()?;
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
             schema_name: plan.schema_name.clone(),
-            oid,
             owner_id: *session.current_role_id(),
         };
         match self.catalog_transact(Some(session), vec![op]).await {
@@ -572,12 +561,7 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog_mut().allocate_oid()?;
-        let op = catalog::Op::CreateRole {
-            name,
-            oid,
-            attributes,
-        };
+        let op = catalog::Op::CreateRole { name, attributes };
         self.catalog_transact_conn(conn_id, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
@@ -611,10 +595,8 @@ impl Coordinator {
             custom_logical_compaction_window: table.compaction_window,
             is_retained_metrics_object: false,
         };
-        let table_oid = self.catalog_mut().allocate_oid()?;
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
-            oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
             owner_id: *ctx.session().current_role_id(),
@@ -683,7 +665,6 @@ impl Coordinator {
         let payload = self.extract_secret(session, &mut secret.secret_as)?;
 
         let id = self.catalog_mut().allocate_user_id().await?;
-        let oid = self.catalog_mut().allocate_oid()?;
         let secret = Secret {
             create_sql: secret.create_sql,
         };
@@ -692,7 +673,6 @@ impl Coordinator {
 
         let ops = vec![catalog::Op::CreateItem {
             id,
-            oid,
             name: name.clone(),
             item: CatalogItem::Secret(secret.clone()),
             owner_id: *session.current_role_id(),
@@ -739,7 +719,6 @@ impl Coordinator {
 
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
-        let oid = return_if_err!(self.catalog_mut().allocate_oid(), ctx);
 
         if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
             mz_ore::soft_assert_or_log!(
@@ -761,7 +740,6 @@ impl Coordinator {
 
         let ops = vec![catalog::Op::CreateItem {
             id,
-            oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
             owner_id: *ctx.session().current_role_id(),
@@ -870,10 +848,8 @@ impl Coordinator {
             resolved_ids,
         };
         let id = self.catalog_mut().allocate_user_id().await?;
-        let oid = self.catalog_mut().allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
-            oid,
             name: plan.name,
             item: CatalogItem::Type(typ),
             owner_id: *session.current_role_id(),

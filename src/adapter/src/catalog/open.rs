@@ -26,8 +26,7 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
-    IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
-    SystemObjectUniqueIdentifier,
+    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
 use mz_catalog::durable::{Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -45,7 +44,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
-use mz_pgrepr::oid::FIRST_USER_OID;
+use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -89,11 +88,11 @@ pub struct BuiltinMigrationMetadata {
         CatalogItemRebuilder,
     )>,
     pub introspection_source_index_updates:
-        BTreeMap<ClusterId, Vec<(LogVariant, String, GlobalId)>>,
+        BTreeMap<ClusterId, Vec<(LogVariant, String, GlobalId, u32)>>,
     // Used to update persisted on disk catalog state
     pub migrated_system_object_mappings: BTreeMap<GlobalId, SystemObjectMapping>,
     pub user_drop_ops: Vec<GlobalId>,
-    pub user_create_ops: Vec<(GlobalId, SchemaId, String)>,
+    pub user_create_ops: Vec<(GlobalId, SchemaId, u32, String)>,
 }
 
 impl BuiltinMigrationMetadata {
@@ -193,17 +192,17 @@ impl Catalog {
         async move {
             for builtin_role in BUILTIN_ROLES {
                 assert!(
-                is_reserved_name(builtin_role.name),
-                "builtin role {builtin_role:?} must start with one of the following prefixes {}",
-                BUILTIN_PREFIXES.join(", ")
-            );
+                    is_reserved_name(builtin_role.name),
+                    "builtin role {builtin_role:?} must start with one of the following prefixes {}",
+                    BUILTIN_PREFIXES.join(", ")
+                );
             }
             for builtin_cluster in BUILTIN_CLUSTERS {
                 assert!(
-                is_reserved_name(builtin_cluster.name),
-                "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
-                BUILTIN_PREFIXES.join(", ")
-            );
+                    is_reserved_name(builtin_cluster.name),
+                    "builtin cluster {builtin_cluster:?} must start with one of the following prefixes {}",
+                    BUILTIN_PREFIXES.join(", ")
+                );
             }
 
             let mut state = CatalogState {
@@ -228,7 +227,6 @@ impl Catalog {
                     now: config.now.clone(),
                     connection_context: config.connection_context,
                 },
-                oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
                 availability_zones: config.availability_zones,
                 system_configuration: {
@@ -256,12 +254,12 @@ impl Catalog {
             let databases = txn.get_databases();
             for mz_catalog::durable::Database {
                 id,
+                oid,
                 name,
                 owner_id,
                 privileges,
             } in databases
             {
-                let oid = state.allocate_oid()?;
                 state.database_by_id.insert(
                     id.clone(),
                     Database {
@@ -280,17 +278,13 @@ impl Catalog {
             let schemas = txn.get_schemas();
             for mz_catalog::durable::Schema {
                 id,
+                oid,
                 name,
                 database_id,
                 owner_id,
                 privileges,
             } in schemas
             {
-                let oid = if let Some(oid) = CatalogState::get_system_schema_oid(&name) {
-                    oid
-                } else {
-                    state.allocate_oid()?
-                };
                 let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                     Some(database_id) => {
                         let db = state
@@ -356,17 +350,13 @@ impl Catalog {
             let roles = txn.get_roles();
             for mz_catalog::durable::Role {
                 id,
+                oid,
                 name,
                 attributes,
                 membership,
                 vars,
             } in roles
             {
-                let oid = if let Some(role) = BUILTIN_ROLES.iter().find(|role| name == role.name) {
-                    role.oid
-                } else {
-                    state.allocate_oid()?
-                };
                 state.roles_by_name.insert(name.clone(), id);
                 state.roles_by_id.insert(
                     id,
@@ -490,16 +480,16 @@ impl Catalog {
                         }
                         Builtin::View(view) => {
                             let item = state
-                            .parse_item(
-                                id,
-                                view.create_sql(),
-                                None,
-                                false,
-                                None
-                            )
-                            .unwrap_or_else(|e| {
-                                panic!(
-                                    "internal error: failed to load bootstrap view:\n\
+                                .parse_item(
+                                    id,
+                                    view.create_sql(),
+                                    None,
+                                    false,
+                                    None,
+                                )
+                                .unwrap_or_else(|e| {
+                                    panic!(
+                                        "internal error: failed to load bootstrap view:\n\
                                     {}\n\
                                     error:\n\
                                     {:?}\n\n\
@@ -527,9 +517,9 @@ impl Catalog {
 
                         Builtin::Func(func) => {
                             // This OID is never used. `func` has a `Vec` of implementations and
-                            // each implementation has it's own OID. Those are the OIDs that are
+                            // each implementation has its own OID. Those are the OIDs that are
                             // actually used by the system.
-                            let oid = 0;
+                            let oid = INVALID_OID;
                             state.insert_item(
                                 id,
                                 oid,
@@ -580,18 +570,18 @@ impl Catalog {
                 config,
             } in clusters
             {
-                let introspection_source_index_gids = txn.get_introspection_source_indexes(id);
+                let introspection_source_index_ids = txn.get_introspection_source_indexes(id);
 
                 let AllocatedBuiltinSystemIds {
                     all_builtins: all_indexes,
                     new_builtins: new_indexes,
                     ..
                 } = Catalog::allocate_system_ids(&mut txn, BUILTINS::logs().collect(), |log| {
-                    introspection_source_index_gids
+                    introspection_source_index_ids
                         .get(log.name)
                         .cloned()
                         // We migrate introspection sources later so we can hardcode the fingerprint as ""
-                        .map(|id| SystemObjectUniqueIdentifier {
+                        .map(|(id, _oid)| SystemObjectUniqueIdentifier {
                             id,
                             fingerprint: "".to_string(),
                         })
@@ -599,13 +589,22 @@ impl Catalog {
 
                 let new_indexes = new_indexes
                     .iter()
-                    .map(|(log, index_id)| IntrospectionSourceIndex {
-                        cluster_id: id,
-                        name: log.name.to_string(),
-                        index_id: *index_id,
-                    })
+                    .map(|(log, index_id)| (id, log.name.to_string(), *index_id))
                     .collect();
-                txn.set_introspection_source_indexes(new_indexes)?;
+                let new_indexes: BTreeMap<_, _> = txn
+                    .insert_introspection_source_indexes(new_indexes)?
+                    .into_iter()
+                    .map(|introspection_source_index| (introspection_source_index.name, introspection_source_index.oid))
+                    .collect();
+
+                let all_indexes: Vec<_> = all_indexes.into_iter().map(|(log, id)| {
+                    // First look in existing indexes.
+                    let oid = introspection_source_index_ids.get(log.name).map(|(_id, oid)| oid);
+                    // Then look in new indexes.
+                    let oid = oid.or_else(|| new_indexes.get(log.name));
+                    let oid = oid.cloned().unwrap_or_else(|| panic!("log, {log:?}, with ID {id:?} must exist in one of the maps"));
+                    (log, id, oid)
+                }).collect();
 
                 if let mz_catalog::durable::ClusterVariant::Managed(managed) = &config.variant {
                     cluster_azs.insert(id, managed.availability_zones.clone());
@@ -671,23 +670,23 @@ impl Catalog {
                 match builtin {
                     Builtin::Index(index) => {
                         let mut item = state
-                        .parse_item(
-                            id,
-                            index.create_sql(),
-                            None,
-                            index.is_retained_metrics_object,
-                            if index.is_retained_metrics_object { Some(state.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
-                        )
-                        .unwrap_or_else(|e| {
-                            panic!(
-                                "internal error: failed to load bootstrap index:\n\
+                            .parse_item(
+                                id,
+                                index.create_sql(),
+                                None,
+                                index.is_retained_metrics_object,
+                                if index.is_retained_metrics_object { Some(state.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
+                            )
+                            .unwrap_or_else(|e| {
+                                panic!(
+                                    "internal error: failed to load bootstrap index:\n\
                                     {}\n\
                                     error:\n\
                                     {:?}\n\n\
                                     make sure that the schema name is specified in the builtin index's create sql statement.",
-                                index.name, e
-                            )
-                        });
+                                    index.name, e
+                                )
+                            });
                         let CatalogItem::Index(_) = &mut item else {
                             panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                         };
@@ -779,8 +778,8 @@ impl Catalog {
                 last_seen_version,
             ))
         }
-        .instrument(tracing::info_span!("catalog::initialize_state"))
-        .boxed()
+            .instrument(tracing::info_span!("catalog::initialize_state"))
+            .boxed()
     }
 
     /// Opens or creates a catalog that stores data at `path`.
@@ -1260,6 +1259,7 @@ impl Catalog {
                                         .expect("all variants have a name")
                                         .to_string(),
                                     new_id,
+                                    entry.oid(),
                                 ));
                         }
                     }
@@ -1284,9 +1284,12 @@ impl Catalog {
             let name = entry.name().clone();
             if id.is_user() {
                 let schema_id = name.qualifiers.schema_spec.clone().into();
-                migration_metadata
-                    .user_create_ops
-                    .push((new_id, schema_id, name.item.clone()));
+                migration_metadata.user_create_ops.push((
+                    new_id,
+                    schema_id,
+                    entry.oid(),
+                    name.item.clone(),
+                ));
             }
             let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
             migration_metadata.all_create_ops.push((
@@ -1352,7 +1355,7 @@ impl Catalog {
                 .get_mut(cluster_id)
                 .unwrap_or_else(|| panic!("invalid cluster {cluster_id}"))
                 .log_indexes;
-            for (variant, _name, new_id) in updates {
+            for (variant, _name, new_id, _oid) in updates {
                 log_indexes.remove(variant);
                 log_indexes.insert(variant.clone(), new_id.clone());
             }
@@ -1368,12 +1371,13 @@ impl Catalog {
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<(), Error> {
         txn.remove_items(migration_metadata.user_drop_ops.drain(..).collect())?;
-        for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
+        for (id, schema_id, oid, name) in migration_metadata.user_create_ops.drain(..) {
             let entry = state.get_entry(&id);
             let item = entry.item();
             let serialized_item = item.to_serialized();
             txn.insert_item(
                 id,
+                oid,
                 schema_id,
                 &name,
                 serialized_item,
@@ -1392,7 +1396,7 @@ impl Catalog {
                         cluster_id,
                         updates
                             .into_iter()
-                            .map(|(_variant, name, index_id)| (name, index_id)),
+                            .map(|(_variant, name, index_id, oid)| (name, index_id, oid)),
                     )
                 }),
         )?;
@@ -1479,7 +1483,6 @@ impl Catalog {
                     }));
                 }
             };
-            let oid = state.allocate_oid()?;
 
             // Enqueue any items waiting on this dependency.
             if let Some(dependent_items) = awaiting_id_dependencies.remove(&item.id) {
@@ -1501,7 +1504,7 @@ impl Catalog {
 
             state.insert_item(
                 item.id,
-                oid,
+                item.oid,
                 name,
                 catalog_item,
                 item.owner_id,
@@ -1513,6 +1516,7 @@ impl Catalog {
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
             let mz_catalog::durable::Item {
                 id,
+                oid: _,
                 schema_id,
                 name,
                 create_sql: _,
@@ -1541,6 +1545,7 @@ impl Catalog {
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
             let mz_catalog::durable::Item {
                 id,
+                oid: _,
                 schema_id,
                 name,
                 create_sql: _,
@@ -1666,12 +1671,13 @@ fn add_new_builtin_roles_migration(
     let role_names: BTreeSet<_> = txn.get_roles().map(|role| role.name).collect();
     for builtin_role in BUILTIN_ROLES {
         if !role_names.contains(builtin_role.name) {
-            txn.insert_role(
+            txn.insert_system_role(
                 builtin_role.id,
                 builtin_role.name.to_string(),
                 builtin_role.attributes.clone(),
                 RoleMembership::new(),
                 RoleVars::default(),
+                builtin_role.oid,
             )?;
         }
     }
@@ -1884,9 +1890,6 @@ mod builtin_migration_tests {
                 .await
                 .expect("cannot fail to allocate system ids"),
         };
-        let oid = catalog
-            .allocate_oid()
-            .expect("cannot fail to allocate oids");
         let database_id = catalog
             .resolve_database(DEFAULT_DATABASE_NAME)
             .expect("failed to resolve default database")
@@ -1903,7 +1906,6 @@ mod builtin_migration_tests {
                 None,
                 vec![Op::CreateItem {
                     id,
-                    oid,
                     name: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec,
@@ -1988,7 +1990,7 @@ mod builtin_migration_tests {
             assert_eq!(
                 convert_id_vec_to_name_vec(
                     migration_metadata.previous_materialized_view_ids,
-                    &name_mapping
+                    &name_mapping,
                 ),
                 test_case.expected_previous_materialized_view_names,
                 "{} test failed with wrong previous materialized view ids",
@@ -2026,7 +2028,7 @@ mod builtin_migration_tests {
                 migration_metadata
                     .user_create_ops
                     .into_iter()
-                    .map(|(_, _, name)| name)
+                    .map(|(_, _, _, name)| name)
                     .collect::<Vec<_>>(),
                 test_case.expected_user_create_ops,
                 "{} test failed with wrong user create ops",

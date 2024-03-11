@@ -1,6 +1,6 @@
 ---
 source: src/catalog/tests/debug.rs
-expression: trace
+expression: test_trace
 ---
 Trace {
     audit_log: CollectionTrace {
@@ -735,6 +735,7 @@ Trace {
                                 ),
                             },
                         ],
+                        oid: 20000,
                     },
                 ),
                 "2",
@@ -919,6 +920,18 @@ Trace {
             (
                 (
                     IdAllocKey {
+                        name: "oid",
+                    },
+                    IdAllocValue {
+                        next_id: 20002,
+                    },
+                ),
+                "2",
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
                         name: "replica",
                     },
                     IdAllocValue {
@@ -1061,6 +1074,7 @@ Trace {
                                 entries: [],
                             },
                         ),
+                        oid: 16661,
                     },
                 ),
                 "2",
@@ -1096,6 +1110,7 @@ Trace {
                                 entries: [],
                             },
                         ),
+                        oid: 16662,
                     },
                 ),
                 "2",
@@ -1131,6 +1146,7 @@ Trace {
                                 entries: [],
                             },
                         ),
+                        oid: 16663,
                     },
                 ),
                 "2",
@@ -1166,6 +1182,7 @@ Trace {
                                 entries: [],
                             },
                         ),
+                        oid: 16664,
                     },
                 ),
                 "2",
@@ -1201,6 +1218,7 @@ Trace {
                                 entries: [],
                             },
                         ),
+                        oid: 16944,
                     },
                 ),
                 "2",
@@ -1312,6 +1330,7 @@ Trace {
                                 ),
                             },
                         ],
+                        oid: 16656,
                     },
                 ),
                 "2",
@@ -1419,6 +1438,7 @@ Trace {
                                 ),
                             },
                         ],
+                        oid: 16657,
                     },
                 ),
                 "2",
@@ -1526,6 +1546,7 @@ Trace {
                                 ),
                             },
                         ],
+                        oid: 16658,
                     },
                 ),
                 "2",
@@ -1633,6 +1654,7 @@ Trace {
                                 ),
                             },
                         ],
+                        oid: 16659,
                     },
                 ),
                 "2",
@@ -1740,6 +1762,7 @@ Trace {
                                 ),
                             },
                         ],
+                        oid: 16660,
                     },
                 ),
                 "2",
@@ -1855,6 +1878,7 @@ Trace {
                                 ),
                             },
                         ],
+                        oid: 20001,
                     },
                 ),
                 "2",

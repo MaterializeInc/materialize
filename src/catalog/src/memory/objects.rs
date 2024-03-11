@@ -65,7 +65,6 @@ use crate::durable;
 pub struct Database {
     pub name: String,
     pub id: DatabaseId,
-    #[serde(skip)]
     pub oid: u32,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub schemas_by_id: BTreeMap<SchemaId, Schema>,
@@ -78,6 +77,7 @@ impl From<Database> for durable::Database {
     fn from(database: Database) -> durable::Database {
         durable::Database {
             id: database.id,
+            oid: database.oid,
             name: database.name,
             owner_id: database.owner_id,
             privileges: database.privileges.into_all_values().collect(),
@@ -89,7 +89,6 @@ impl From<Database> for durable::Database {
 pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
-    #[serde(skip)]
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
     pub functions: BTreeMap<String, GlobalId>,
@@ -102,6 +101,7 @@ impl Schema {
     pub fn into_durable_schema(self, database_id: Option<DatabaseId>) -> durable::Schema {
         durable::Schema {
             id: self.id.into(),
+            oid: self.oid,
             name: self.name.schema,
             database_id,
             owner_id: self.owner_id,
@@ -114,7 +114,6 @@ impl Schema {
 pub struct Role {
     pub name: String,
     pub id: RoleId,
-    #[serde(skip)]
     pub oid: u32,
     pub attributes: RoleAttributes,
     pub membership: RoleMembership,
@@ -135,6 +134,7 @@ impl From<Role> for durable::Role {
     fn from(role: Role) -> durable::Role {
         durable::Role {
             id: role.id,
+            oid: role.oid,
             name: role.name,
             attributes: role.attributes,
             membership: role.membership,
@@ -321,7 +321,6 @@ pub struct CatalogEntry {
     #[serde(skip)]
     pub used_by: Vec<GlobalId>,
     pub id: GlobalId,
-    #[serde(skip)]
     pub oid: u32,
     pub name: QualifiedItemName,
     pub owner_id: RoleId,
@@ -347,6 +346,7 @@ impl From<CatalogEntry> for durable::Item {
     fn from(entry: CatalogEntry) -> durable::Item {
         durable::Item {
             id: entry.id,
+            oid: entry.oid,
             schema_id: entry.name.qualifiers.schema_spec.into(),
             name: entry.name.item,
             create_sql: entry.item.into_serialized(),

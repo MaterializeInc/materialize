@@ -371,7 +371,6 @@ impl Coordinator {
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(*id))),
             std::iter::once(catalog::Op::CreateItem {
                 id,
-                oid: self.catalog_mut().allocate_oid()?,
                 name: name.clone(),
                 item: CatalogItem::View(View {
                     create_sql: create_sql.clone(),

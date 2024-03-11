@@ -643,10 +643,6 @@ impl Catalog {
             .err_into()
     }
 
-    pub fn allocate_oid(&mut self) -> Result<u32, Error> {
-        self.state.allocate_oid()
-    }
-
     /// Get the next system replica id without allocating it.
     pub async fn get_next_system_replica_id(&self) -> Result<u64, Error> {
         self.storage()
@@ -946,7 +942,6 @@ impl Catalog {
         for op in ops.iter() {
             if let Op::CreateItem {
                 id,
-                oid: _,
                 name,
                 item,
                 owner_id: _,
@@ -1193,12 +1188,7 @@ impl Catalog {
                     id,
                     cluster,
                 )?,
-                Op::CreateDatabase {
-                    name,
-                    oid,
-                    public_schema_oid,
-                    owner_id,
-                } => {
+                Op::CreateDatabase { name, owner_id } => {
                     let database_owner_privileges = vec![rbac::owner_privilege(
                         mz_sql::catalog::ObjectType::Database,
                         owner_id,
@@ -1245,9 +1235,9 @@ impl Catalog {
                     )
                     .collect();
 
-                    let database_id =
+                    let (database_id, database_oid) =
                         tx.insert_user_database(&name, owner_id, database_privileges.clone())?;
-                    let schema_id = tx.insert_user_schema(
+                    let (schema_id, schema_oid) = tx.insert_user_schema(
                         database_id,
                         DEFAULT_SCHEMA,
                         owner_id,
@@ -1272,7 +1262,7 @@ impl Catalog {
                         Database {
                             name: name.clone(),
                             id: database_id.clone(),
-                            oid,
+                            oid: database_oid,
                             schemas_by_id: BTreeMap::new(),
                             schemas_by_name: BTreeMap::new(),
                             owner_id,
@@ -1303,7 +1293,7 @@ impl Catalog {
                         state,
                         builtin_table_updates,
                         schema_id,
-                        public_schema_oid,
+                        schema_oid,
                         database_id,
                         DEFAULT_SCHEMA.to_string(),
                         owner_id,
@@ -1313,7 +1303,6 @@ impl Catalog {
                 Op::CreateSchema {
                     database_id,
                     schema_name,
-                    oid,
                     owner_id,
                 } => {
                     if is_reserved_name(&schema_name) {
@@ -1345,7 +1334,7 @@ impl Catalog {
                     let privileges: Vec<_> =
                         merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                             .collect();
-                    let schema_id = tx.insert_user_schema(
+                    let (schema_id, schema_oid) = tx.insert_user_schema(
                         database_id,
                         &schema_name,
                         owner_id,
@@ -1369,18 +1358,14 @@ impl Catalog {
                         state,
                         builtin_table_updates,
                         schema_id,
-                        oid,
+                        schema_oid,
                         database_id,
                         schema_name,
                         owner_id,
                         PrivilegeMap::from_mz_acl_items(privileges),
                     )?;
                 }
-                Op::CreateRole {
-                    name,
-                    oid,
-                    attributes,
-                } => {
+                Op::CreateRole { name, attributes } => {
                     if is_reserved_role_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedRoleName(name),
@@ -1388,7 +1373,7 @@ impl Catalog {
                     }
                     let membership = RoleMembership::new();
                     let vars = RoleVars::default();
-                    let id = tx.insert_user_role(
+                    let (id, oid) = tx.insert_user_role(
                         name.clone(),
                         attributes.clone(),
                         membership.clone(),
@@ -1453,10 +1438,10 @@ impl Catalog {
                         merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                             .collect();
 
-                    tx.insert_user_cluster(
+                    let introspection_sources = tx.insert_user_cluster(
                         id,
                         &name,
-                        introspection_sources.clone(),
+                        introspection_sources,
                         owner_id,
                         privileges.clone(),
                         config.clone().into(),
@@ -1476,7 +1461,7 @@ impl Catalog {
                     )?;
                     info!("create cluster {}", name);
                     let introspection_source_ids: Vec<GlobalId> =
-                        introspection_sources.iter().map(|(_, id)| *id).collect();
+                        introspection_sources.iter().map(|(_, id, _)| *id).collect();
                     state.insert_cluster(
                         id,
                         name.clone(),
@@ -1566,7 +1551,6 @@ impl Catalog {
                 }
                 Op::CreateItem {
                     id,
-                    oid,
                     name,
                     item,
                     owner_id,
@@ -1608,6 +1592,8 @@ impl Catalog {
                     )
                     .collect();
 
+                    let oid;
+
                     if item.is_temporary() {
                         if name.qualifiers.database_spec != ResolvedDatabaseSpecifier::Ambient
                             || name.qualifiers.schema_spec != SchemaSpecifier::Temporary
@@ -1616,6 +1602,7 @@ impl Catalog {
                                 ErrorKind::InvalidTemporarySchema,
                             )));
                         }
+                        oid = tx.allocate_oid()?;
                     } else {
                         if let Some(temp_id) =
                             item.uses().iter().find(|id| match state.try_get_entry(id) {
@@ -1640,7 +1627,7 @@ impl Catalog {
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = item.to_serialized();
-                        tx.insert_item(
+                        oid = tx.insert_user_item(
                             id,
                             schema_id,
                             &name.item,
@@ -3426,19 +3413,15 @@ pub enum Op {
     },
     CreateDatabase {
         name: String,
-        oid: u32,
-        public_schema_oid: u32,
         owner_id: RoleId,
     },
     CreateSchema {
         database_id: ResolvedDatabaseSpecifier,
         schema_name: String,
-        oid: u32,
         owner_id: RoleId,
     },
     CreateRole {
         name: String,
-        oid: u32,
         attributes: RoleAttributes,
     },
     CreateCluster {
@@ -3457,7 +3440,6 @@ pub enum Op {
     },
     CreateItem {
         id: GlobalId,
-        oid: u32,
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
@@ -4270,8 +4252,6 @@ mod tests {
                     None,
                     vec![Op::CreateDatabase {
                         name: "test".to_string(),
-                        oid: 1,
-                        public_schema_oid: 2,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
                 )
@@ -4514,7 +4494,6 @@ mod tests {
                             },
                             item: "v".to_string(),
                         },
-                        oid: 1,
                         id,
                         owner_id: MZ_SYSTEM_ROLE_ID,
                     }],
