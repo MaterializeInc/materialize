@@ -56,22 +56,27 @@ class ReproductionCodePrinter(BaseOutputPrinter):
 
         self.start_section("Minimal code for reproduction", collapsed=True)
         self.print_separator_line()
+
+        # evaluation strategy 1
         self.__print_setup_code_for_error(
             query_template, error.strategy1, table_column_selection, apply_row_filter
-        )
-        self.print_separator_line()
-        self.__print_setup_code_for_error(
-            query_template, error.strategy2, table_column_selection, apply_row_filter
         )
         self.print_separator_line()
         self.__print_query_of_error(
             query_template, error.strategy1, query_column_selection
         )
         self.print_separator_line()
+
+        # evaluation strategy 2
+        self.__print_setup_code_for_error(
+            query_template, error.strategy2, table_column_selection, apply_row_filter
+        )
+        self.print_separator_line()
         self.__print_query_of_error(
             query_template, error.strategy2, query_column_selection
         )
         self.print_separator_line()
+
         characteristics = self.__get_involved_characteristics(
             query_template, query_column_selection
         )
