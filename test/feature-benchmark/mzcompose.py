@@ -94,8 +94,12 @@ def make_aggregation_class() -> type[Aggregation]:
     return MinAggregation
 
 
-def make_comparator(name: str, type: MeasurementType) -> Comparator:
-    return RelativeThresholdComparator(name=name, type=type, threshold=0.10)
+def make_comparator(
+    name: str, type: MeasurementType, relative_threshold: float
+) -> Comparator:
+    return RelativeThresholdComparator(
+        name=name, type=type, threshold=relative_threshold
+    )
 
 
 default_timeout = "1800s"
@@ -127,7 +131,12 @@ def run_one_scenario(
     if args.measure_memory:
         measurement_types.append(MeasurementType.MEMORY)
 
-    comparators = [make_comparator(name=name, type=t) for t in measurement_types]
+    comparators = [
+        make_comparator(
+            name=name, type=t, relative_threshold=scenario_class.RELATIVE_THRESHOLD[t]
+        )
+        for t in measurement_types
+    ]
 
     common_seed = round(time.time())
 
