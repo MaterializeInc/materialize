@@ -100,6 +100,7 @@ pub async fn handle_sql(
     mut client: AuthedClient,
     Json(request): Json<SqlRequest>,
 ) -> impl IntoResponse {
+    let request = dbg!(request);
     let mut res = SqlResponse {
         results: Vec::new(),
     };
@@ -148,6 +149,7 @@ pub enum WebSocketAuth {
 }
 
 async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
+    dbg!("Entered run_ws");
     let mut client = match init_ws(state, user, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
@@ -172,6 +174,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
     // Successful auth, send startup messages.
     let mut msgs = Vec::new();
     let session = client.client.session();
+    dbg!("successful auth");
     for var in session.vars().notify_set() {
         msgs.push(WebSocketResponse::ParameterStatus(ParameterStatus {
             name: var.name().to_string(),
@@ -230,8 +233,16 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
         };
 
         let req: Result<SqlRequest, Error> = match msg {
-            Message::Text(data) => serde_json::from_str(&data).err_into(),
-            Message::Binary(data) => serde_json::from_slice(&data).err_into(),
+            Message::Text(data) => {
+                dbg!(&data); //  debug print the text data
+                let result = serde_json::from_str(&data).err_into();
+                dbg!(&result); // Debug print the deserialization result
+                result
+            },
+            Message::Binary(data) => {
+                dbg!(&data);
+                serde_json::from_slice(&data).err_into()
+            },
             // Handled automatically by the server.
             Message::Ping(_) => {
                 continue;
@@ -287,13 +298,14 @@ async fn run_ws_request(
     ws: &mut WebSocket,
 ) -> Result<(), Error> {
     let req = req?;
+    let req = dbg!(req); // Debug print the request
     execute_request(client, req, ws).await
 }
 
 /// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
 async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
     let msg = serde_json::to_string(&resp).unwrap();
-    let msg = Message::Text(msg);
+    let msg = dbg!(Message::Text(msg)); // Debug the message before sending
     ws.send(msg).await?;
 
     Ok(())
@@ -322,7 +334,7 @@ async fn forward_notices(
 
 /// A request to execute SQL over HTTP.
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(untagged)]
+#[serde(tag = "type")]
 pub enum SqlRequest {
     /// A simple query request.
     Simple {
@@ -335,9 +347,17 @@ pub enum SqlRequest {
         /// Queries to execute using the extended protocol.
         queries: Vec<ExtendedRequest>,
     },
+    /// A request to update the session with a new authentication token.
+    UpdateToken{ updatedtoken: String }, 
 }
 
-/// An request to execute a SQL query using the extended protocol.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UpdateTokenRequest {
+    #[serde(rename = "token")]
+    updatedtoken: String,
+}
+
+/// A request to execute a SQL query using the extended protocol.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExtendedRequest {
     /// A query string containing zero or one queries.
@@ -907,6 +927,7 @@ async fn execute_request<S: ResultSender>(
     request: SqlRequest,
     sender: &mut S,
 ) -> Result<(), Error> {
+    dbg!(&request);
     let client = &mut client.client;
 
     // This API prohibits executing statements with responses whose
@@ -959,6 +980,7 @@ async fn execute_request<S: ResultSender>(
     match request {
         SqlRequest::Simple { query } => {
             let stmts = parse(client, &query)?;
+            dbg!(&stmts);
             let mut stmt_group = Vec::with_capacity(stmts.len());
             for StatementParseResult { ast: stmt, sql } in stmts {
                 check_prohibited_stmts(sender, &stmt)?;
@@ -983,6 +1005,17 @@ async fn execute_request<S: ResultSender>(
                 stmt_groups.push(vec![(stmt, sql.to_string(), params)]);
             }
         }
+        SqlRequest::UpdateToken { updatedtoken } => {
+            dbg!(&updatedtoken); // Debug print the token for verification
+            println!("Received token to update: {}", updatedtoken);
+         
+            let result = update_session_token(&updatedtoken);
+            if let Err(e) = result {
+                // Handle error, e.g., log or return it
+                println!("Failed to update token: {}", e);
+                return Err(e);
+            }
+        }
     }
 
     for stmt_group in stmt_groups {
@@ -1004,6 +1037,12 @@ async fn execute_request<S: ResultSender>(
     Ok(())
 }
 
+fn update_session_token(updatedtoken: &str) -> Result<(), Error> {
+    // Your token update logic here
+    dbg!(&updatedtoken);
+    println!("Token updated to: {}", updatedtoken);
+    Ok(())
+}
 /// Executes a single statement in a [`SqlRequest`].
 async fn execute_stmt<S: ResultSender>(
     client: &mut SessionClient,
@@ -1012,6 +1051,7 @@ async fn execute_stmt<S: ResultSender>(
     sql: String,
     raw_params: Vec<Option<String>>,
 ) -> Result<StatementResult, Error> {
+    dbg!(&stmt);
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
         .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), sql, vec![])
@@ -1302,7 +1342,25 @@ fn is_txn_exit_stmt(stmt: &Statement<Raw>) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::WebSocketAuth;
+    use super::*; // Import everything from the outer module to use in tests
+
+    #[test]
+    fn test_update_token_serialization() {
+        let update_token_request = SqlRequest::UpdateToken {
+            updatedtoken: "example_token".to_string(),
+        };
+        
+        let serialized = serde_json::to_string(&update_token_request).expect("Failed to serialize");
+        println!("Serialized: {}", serialized);
+        
+        let deserialized: SqlRequest = serde_json::from_str(&serialized).expect("Failed to deserialize");
+        println!("Deserialized: {:?}", deserialized);
+        
+        match deserialized {
+            SqlRequest::UpdateToken { updatedtoken } => assert_eq!(updatedtoken, "example_token"),
+            _ => panic!("Deserialization did not yield an UpdateToken variant"),
+        }
+    }
 
     #[mz_ore::test]
     fn smoke_test_websocket_auth_parse() {
