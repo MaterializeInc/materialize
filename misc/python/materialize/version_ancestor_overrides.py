@@ -21,6 +21,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#24155 (equivalence propagation) significantly increased wallclock for OptbenchTPCH
+    "3cfaa8207faa7df087942cd44311a3e7b4534c25": MzVersion.parse_mz("v0.92.0"),
     # PR#25502 (JoinFusion across MFPs) increased number of messages
     "62ea182963be5b956e13115b8ad39f7835fc4351": MzVersion.parse_mz("v0.91.0"),
     # PR#24906 (Compute operator hydration status logging) increased number of messages against v0.88.1
