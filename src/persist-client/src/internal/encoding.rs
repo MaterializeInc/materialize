@@ -1239,6 +1239,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 key_lower: vec![],
                 stats: None,
                 ts_rewrite: None,
+                diffs_sum: None,
             })
         }));
         Ok(HollowBatch {
@@ -1259,6 +1260,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 key_lower: Bytes::copy_from_slice(&x.key_lower),
                 key_stats: x.stats.into_proto(),
                 ts_rewrite: x.ts_rewrite.as_ref().map(|x| x.into_proto()),
+                diffs_sum: x.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
             },
             BatchPart::Inline {
                 updates,
@@ -1269,6 +1271,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 key_lower: Bytes::new(),
                 key_stats: None,
                 ts_rewrite: ts_rewrite.as_ref().map(|x| x.into_proto()),
+                diffs_sum: None,
             },
         }
     }
@@ -1286,12 +1289,14 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     key_lower: proto.key_lower.into(),
                     stats: proto.key_stats.into_rust()?,
                     ts_rewrite,
+                    diffs_sum: proto.diffs_sum.map(i64::to_le_bytes),
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
                 assert_eq!(proto.encoded_size_bytes, 0);
                 assert_eq!(proto.key_lower.len(), 0);
                 assert!(proto.key_stats.is_none());
+                assert!(proto.diffs_sum.is_none());
                 let updates = LazyInlineBatchPart(x.into_rust()?);
                 Ok(BatchPart::Inline {
                     updates,
@@ -1597,6 +1602,7 @@ mod tests {
                 key_lower: vec![],
                 stats: None,
                 ts_rewrite: None,
+                diffs_sum: None,
             })],
             runs: vec![],
         };
@@ -1617,6 +1623,7 @@ mod tests {
             key_lower: vec![],
             stats: None,
             ts_rewrite: None,
+            diffs_sum: None,
         }));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }

@@ -1040,6 +1040,7 @@ mod tests {
                             key_lower: vec![],
                             stats: None,
                             ts_rewrite: None,
+                            diffs_sum: None,
                         })
                     })
                     .collect();
