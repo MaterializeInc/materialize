@@ -19,7 +19,7 @@ from materialize.docker import is_image_tag_of_version
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
 from materialize.version_ancestor_overrides import (
-    ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
+    get_ancestor_overrides_for_performance_regressions,
 )
 from materialize.version_list import (
     get_commits_of_accepted_regressions_between_versions,
@@ -156,7 +156,7 @@ def run_one_scenario(
 
         if tag == "common-ancestor":
             tag = resolve_ancestor_image_tag(
-                ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS
+                get_ancestor_overrides_for_performance_regressions(scenario_class)
             )
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
@@ -391,7 +391,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Build the list of scenarios to run
     root_scenario = globals()[args.root_scenario]
-    selected_scenarios = []
 
     if root_scenario.__subclasses__():
         selected_scenarios = sorted(
@@ -445,26 +444,57 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             break
 
     if len(scenarios_with_regressions) > 0:
-        regressions_justified, comment = _are_regressions_justified(
-            this_tag=args.this_tag, baseline_tag=args.other_tag
+        (
+            all_regressions_justified,
+            justified_regressions_infos,
+        ) = _are_regressions_justified(
+            scenarios_with_regressions,
+            this_tag=args.this_tag,
+            baseline_tag=args.other_tag,
         )
 
         print("+++ Regressions")
 
         print(
-            f"{'INFO' if regressions_justified else 'ERROR'}:"
+            f"{'INFO' if all_regressions_justified else 'ERROR'}:"
             f" The following scenarios have regressions:"
             f" {', '.join([scenario.__name__ for scenario in scenarios_with_regressions])}"
         )
 
-        if regressions_justified:
-            print(f"However, the regressions are accepted. {comment}")
-        else:
+        if all_regressions_justified:
+            print("All regressions are justified:")
+            print(justified_regressions_infos)
+        elif len(justified_regressions_infos) > 0:
+            print("Some regressions are justified:")
+            print(justified_regressions_infos)
+
+        if not all_regressions_justified:
             sys.exit(1)
 
 
 def _are_regressions_justified(
-    this_tag: str | None, baseline_tag: str | None
+    scenarios_with_regressions: list[type[Scenario]],
+    this_tag: str | None,
+    baseline_tag: str | None,
+) -> tuple[bool, str]:
+    all_regressions_justified = True
+    comments = []
+
+    for scenario_class in scenarios_with_regressions:
+        regressions_justified, comment = _is_regression_justified(
+            scenario_class, this_tag=this_tag, baseline_tag=baseline_tag
+        )
+
+        if regressions_justified:
+            comments.append(comment)
+        else:
+            all_regressions_justified = False
+
+    return all_regressions_justified, "\n".join(comments)
+
+
+def _is_regression_justified(
+    scenario_class: type[Scenario], this_tag: str | None, baseline_tag: str | None
 ) -> tuple[bool, str]:
     if (
         this_tag is None
@@ -481,18 +511,18 @@ def _are_regressions_justified(
     baseline_version = MzVersion.parse_mz(baseline_tag)
 
     commits_with_regressions = get_commits_of_accepted_regressions_between_versions(
-        ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
+        get_ancestor_overrides_for_performance_regressions(scenario_class),
         since_version_exclusive=baseline_version,
         to_version_inclusive=this_version,
     )
 
     if len(commits_with_regressions) == 0:
         return False, ""
-    else:
-        return (
-            True,
-            f"Accepted regressions were introduced with these commits: {commits_with_regressions}",
-        )
+
+    return (
+        True,
+        f"* {scenario_class.__name__}: Justified regressions were introduced with commits {commits_with_regressions}.",
+    )
 
 
 def _tag_references_release_version(image_tag: str | None) -> bool:
