@@ -12,13 +12,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::anyhow;
 use derivative::Derivative;
-use hibitset::BitSet;
 use itertools::Itertools;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
-use mz_ore::collections::CollectionExt;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::{soft_assert_no_log, soft_assert_or_log};
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
@@ -629,28 +628,62 @@ impl<'a> Transaction<'a> {
 
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any
     /// object.
+    #[mz_ore::instrument]
     fn allocate_oids(&mut self, amount: u64) -> Result<Vec<u32>, CatalogError> {
+        /// Struct representing an OID for a user object. Allocated OIDs can be recycled, so when we've
+        /// allocated [`u32::MAX`] we'll wrap back around to [`FIRST_USER_OID`].
+        struct UserOid(u32);
+
+        impl UserOid {
+            fn new(oid: u32) -> Result<UserOid, anyhow::Error> {
+                if oid < FIRST_USER_OID {
+                    Err(anyhow!("invalid user OID {oid}"))
+                } else {
+                    Ok(UserOid(oid))
+                }
+            }
+        }
+
+        impl std::ops::AddAssign<u32> for UserOid {
+            fn add_assign(&mut self, rhs: u32) {
+                let (res, overflow) = self.0.overflowing_add(rhs);
+                self.0 = if overflow { FIRST_USER_OID + res } else { res };
+            }
+        }
+
         if amount > u32::MAX.into() {
             return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
         }
 
-        let allocated_oids: BitSet = self
-            .databases
-            .items()
-            .values()
-            .map(|value| value.oid)
-            .chain(self.schemas.items().values().map(|value| value.oid))
-            .chain(self.roles.items().values().map(|value| value.oid))
-            .chain(self.items.items().values().map(|value| value.oid))
-            .chain(
-                self.introspection_sources
-                    .items()
-                    .values()
-                    .map(|value| value.oid),
-            )
-            .collect();
+        // This is potentially slow to do everytime we allocate an OID. A faster approach might be
+        // to have an ID allocator that is updated everytime an OID is allocated or de-allocated.
+        // However, benchmarking shows that this doesn't make a noticeable difference and the other
+        // approach requires making sure that allocator always stays in-sync which can be
+        // error-prone. If DDL starts slowing down, this is a good place to try and optimize.
+        let mut allocated_oids = HashSet::with_capacity(
+            self.databases.items().len()
+                + self.schemas.items().len()
+                + self.roles.items().len()
+                + self.items.items().len()
+                + self.introspection_sources.items().len(),
+        );
+        allocated_oids.extend(
+            self.databases
+                .items()
+                .values()
+                .map(|value| value.oid)
+                .chain(self.schemas.items().values().map(|value| value.oid))
+                .chain(self.roles.items().values().map(|value| value.oid))
+                .chain(self.items.items().values().map(|value| value.oid))
+                .chain(
+                    self.introspection_sources
+                        .items()
+                        .values()
+                        .map(|value| value.oid),
+                ),
+        );
 
-        let current_id: u32 = self
+        let start_oid: u32 = self
             .id_allocator
             .items()
             .get(&IdAllocKey {
@@ -660,16 +693,16 @@ impl<'a> Transaction<'a> {
             .next_id
             .try_into()
             .expect("we should never persist an oid outside of the u32 range");
-        let mut current_oid = UserOid::new(current_id)
+        let mut current_oid = UserOid::new(start_oid)
             .expect("we should never persist an oid outside of user OID range");
         let mut oids = Vec::new();
         while oids.len() < u64_to_usize(amount) {
-            if !allocated_oids.contains(current_oid.0) {
+            if !allocated_oids.contains(&current_oid.0) {
                 oids.push(current_oid.0);
             }
             current_oid += 1;
 
-            if current_oid.0 == current_id && oids.len() < u64_to_usize(amount) {
+            if current_oid.0 == start_oid && oids.len() < u64_to_usize(amount) {
                 // We've exhausted all possible OIDs and still don't have `amount`.
                 return Err(CatalogError::Catalog(SqlCatalogError::OidExhaustion));
             }
@@ -687,7 +720,7 @@ impl<'a> Transaction<'a> {
         assert_eq!(
             prev,
             Some(IdAllocValue {
-                next_id: current_id.into(),
+                next_id: start_oid.into(),
             })
         );
 
@@ -2140,25 +2173,4 @@ fn test_table_transaction() {
         .unwrap();
     let pending = table_txn.pending::<Vec<u8>, String>();
     assert!(pending.is_empty());
-}
-
-/// Struct representing an OID for a user object. Allocated OIDs can be recycled, so when we've
-/// allocated [`u32::MAX`] we'll wrap back around to [`FIRST_USER_OID`].
-struct UserOid(u32);
-
-impl UserOid {
-    fn new(oid: u32) -> Result<UserOid, anyhow::Error> {
-        if oid < FIRST_USER_OID {
-            Err(anyhow!("invalid user OID {oid}"))
-        } else {
-            Ok(UserOid(oid))
-        }
-    }
-}
-
-impl std::ops::AddAssign<u32> for UserOid {
-    fn add_assign(&mut self, rhs: u32) {
-        let (res, overflow) = self.0.overflowing_add(rhs);
-        self.0 = if overflow { FIRST_USER_OID + res } else { res };
-    }
 }

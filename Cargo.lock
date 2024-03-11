@@ -3826,7 +3826,6 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "futures",
- "hibitset",
  "insta",
  "itertools",
  "md-5",
