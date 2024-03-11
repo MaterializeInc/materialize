@@ -44,7 +44,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::now::to_datetime;
-use mz_pgrepr::oid::SCHEMA_SYSTEM_TEMP_SCHEMA_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -249,7 +248,7 @@ impl Catalog {
             let is_read_only = storage.is_read_only();
             let mut txn = storage.transaction().await?;
 
-            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID, SCHEMA_SYSTEM_TEMP_SCHEMA_OID)?;
+            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
             let databases = txn.get_databases();
             for mz_catalog::durable::Database {

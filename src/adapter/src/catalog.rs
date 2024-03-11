@@ -862,13 +862,12 @@ impl Catalog {
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub async fn create_temporary_schema(
+    pub fn create_temporary_schema(
         &mut self,
         conn_id: &ConnectionId,
         owner_id: RoleId,
     ) -> Result<(), Error> {
-        let oid = self.storage().await.allocate_oid().await?;
-        self.state.create_temporary_schema(conn_id, owner_id, oid)
+        self.state.create_temporary_schema(conn_id, owner_id)
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
