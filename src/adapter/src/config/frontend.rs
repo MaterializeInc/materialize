@@ -8,11 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
+use ld::{PollingDataSourceBuilder, ServiceEndpointsBuilder};
 use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
 use mz_sql::catalog::{CloudProvider, EnvironmentId};
@@ -98,8 +101,8 @@ impl Drop for SystemParameterFrontend {
 }
 
 fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
-    ld::ConfigBuilder::new(&sync_config.ld_sdk_key)
-        .event_processor(ld::EventProcessorBuilder::new().on_success({
+    let mut config_builder = ld::ConfigBuilder::new(&sync_config.ld_sdk_key).event_processor(
+        ld::EventProcessorBuilder::new().on_success({
             let last_cse_time_seconds = sync_config.metrics.last_cse_time_seconds.clone();
             Arc::new(move |result| {
                 if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
@@ -108,8 +111,22 @@ fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
                     tracing::warn!("Cannot convert time_from_server / 1000 from u128 to u64");
                 }
             })
-        }))
-        .build()
+        }),
+    );
+
+    if let Ok(url) = SocketAddr::from_str(sync_config.ld_sdk_key.as_str()) {
+        tracing::info!("Using polling endpoint http://{url}/polling");
+        config_builder = config_builder
+            .service_endpoints(
+                &ServiceEndpointsBuilder::new()
+                    .polling_base_url(format!("http://{url}/polling").as_str())
+                    .streaming_base_url(format!("http://{url}/streaming").as_str())
+                    .events_base_url(format!("http://{url}/events").as_str()),
+            )
+            .data_source(&PollingDataSourceBuilder::new());
+    }
+
+    config_builder.build()
 }
 
 async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client, anyhow::Error> {
