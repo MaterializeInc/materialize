@@ -59,9 +59,10 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+use tokio::sync::Notify;
 use tracing::error;
 
 use mz_proto::{ProtoType, RustType};
@@ -170,6 +171,21 @@ pub trait ConfigType: Into<ConfigVal> + Clone + Sized {
 #[derive(Clone, Default)]
 pub struct ConfigSet {
     configs: BTreeMap<String, ConfigEntry>,
+    /// Synchronization to allow updates to multiple configuration values to be
+    /// observed atomically.
+    ///
+    /// The `Mutex` is held when applying a batch of updates and when running
+    /// `with_updates_frozen` and `wait_for` closures. This ensures that these
+    /// closures never see a partial batch of updates.
+    ///
+    /// The `Notify` is signaled when a new batch of updates is applied.
+    /// Signaling the `Notify` and registering for notifications must be
+    /// performed while holding the `Mutex`.
+    ///
+    /// `configs` is not stored in the `Mutex` since the common case is
+    /// observing configuration values without taking the lock. `Notify` is not
+    /// stored in the `Mutex` to avoid lifetime issues.
+    update_sync: Arc<(Notify, Mutex<()>)>,
 }
 
 impl ConfigSet {
@@ -200,6 +216,64 @@ impl ConfigSet {
     /// Returns the configs currently registered to this set.
     pub fn entries(&self) -> impl Iterator<Item = &ConfigEntry> {
         self.configs.values()
+    }
+
+    /// Executes `f` with updates to configuration values frozen.
+    ///
+    /// This allows `f` to observe multiple configuration values atomically.
+    /// Specifically, updates from [`ConfigUpdates`] will never be partially
+    /// applied when `f` runs: either all updates from the batch will be applied
+    /// or none of them will.
+    ///
+    /// `f` should take care to execute quickly, as no further configuration
+    /// updates can be applied while `f` is executing.
+    pub fn with_updates_frozen<F>(&self, mut f: F)
+    where
+        F: FnMut(),
+    {
+        let (_notify, lock) = &*self.update_sync;
+
+        // Hold the lock while `f` executes to ensure no configuration updates
+        // are applied.
+        let _guard = lock.lock().expect("lock poisoned");
+        f()
+    }
+
+    /// Waits for a condition to become true, checking the condition after every
+    /// configuration update.
+    ///
+    /// The closure `f` is invoked once initially, then again periodically after
+    /// configuration updates occur, until the closure returns `true`. The
+    /// closure is not guaranteed to be invoked exactly once after every
+    /// configuration update.
+    ///
+    /// Similarly to [`Config::with_updates_frozen`], the closure `f` executes
+    /// with configuration updates frozen.
+    pub async fn wait_for<F>(&self, mut f: F)
+    where
+        F: FnMut() -> bool,
+    {
+        loop {
+            let (notify, lock) = &*self.update_sync;
+            let notified = {
+                // Hold the lock while `f` executes to ensure no configuration
+                // updates are applied.
+                let _guard = lock.lock().expect("lock poisoned");
+                if f() {
+                    // `f` indicated the condition was met. Exit.
+                    return;
+                }
+
+                // Register for notifications while holding the lock to ensure
+                // we don't miss a notification.
+                notify.notified()
+            };
+
+            // `f` indicated the condition was not met. Wait until new
+            // configuration values come in, then try again with another turn of
+            // the loop.
+            notified.await;
+        }
     }
 }
 
@@ -383,6 +457,18 @@ impl ConfigUpdates {
     /// Ditto for config type mismatches. However, this is unexpected usage at
     /// present and so is logged to Sentry.
     pub fn apply(&self, set: &ConfigSet) {
+        let (notify, lock) = &*set.update_sync;
+
+        // Hold the lock while applying updates to prevent `with_updates_frozen`
+        // and `wait_for` from running their closures.
+        let _guard = lock.lock().expect("lock poisoned");
+
+        // Signal waiters of the configuration update. We need to do this while
+        // holding the lock to avoid lost wakeups. We can signal before we apply
+        // the updates since the waiters won't be able to observe the updates
+        // until we release the lock.
+        notify.notify_waiters();
+
         for (name, ProtoConfigVal { val }) in self.updates.iter() {
             let Some(config) = set.configs.get(name) else {
                 error!("config update {} {:?} not known set: {:?}", name, val, set);
@@ -548,7 +634,10 @@ mod impls {
 
     impl std::fmt::Debug for ConfigSet {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let ConfigSet { configs } = self;
+            let ConfigSet {
+                configs,
+                update_sync: _,
+            } = self;
             f.debug_map()
                 .entries(configs.iter().map(|(name, val)| (name, val.val())))
                 .finish()
@@ -558,6 +647,10 @@ mod impls {
 
 #[cfg(test)]
 mod tests {
+    use std::pin::pin;
+
+    use futures::FutureExt;
+
     use super::*;
 
     const BOOL: Config<bool> = Config::new("bool", true, "");
@@ -660,5 +753,56 @@ mod tests {
         let c = ConfigSet::default().add(&USIZE);
         u1.apply(&c);
         assert_eq!(USIZE.get(&c), 2);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn config_set_wait_for() {
+        let configs = ConfigSet::default().add(&BOOL).add(&USIZE);
+
+        // Ensure that the default values are what we expect.
+        assert_eq!(BOOL.get(&configs), true);
+        assert_eq!(USIZE.get(&configs), 1);
+
+        // Ensure that waiting for a default value for `usize` returns immediately.
+        let wait_for_1 = configs.wait_for(|| USIZE.get(&configs) == 1);
+        assert!(wait_for_1.now_or_never().is_some());
+
+        // Now wait for the value of `usize` to become 3 in a background task.
+        let wait_for_3 = mz_ore::task::spawn(|| "config_set_wait_for", {
+            let configs = configs.clone();
+            async move {
+                configs.wait_for(|| USIZE.get(&configs) == 3).await;
+
+                // `usize` was set to 3 in the same update batch as `bool`
+                // was set to `false`, so when `wait_for` returns `bool`
+                // should also be `false`.
+                assert_eq!(BOOL.get(&configs), false);
+            }
+        })
+        .abort_on_drop();
+        let mut wait_for_3 = pin!(wait_for_3);
+
+        // The task should not return immediately.
+        assert!(wait_for_3.as_mut().now_or_never().is_none());
+
+        // Nor after 100ms.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(wait_for_3.as_mut().now_or_never().is_none());
+
+        // The task should not return after the value is updated to 2.
+        let mut updates = ConfigUpdates::default();
+        updates.add(&USIZE, 2);
+        updates.apply(&configs);
+        assert!(wait_for_3.as_mut().now_or_never().is_none());
+
+        // The task should return shortly after the value is updated to 3.
+        let mut updates = ConfigUpdates::default();
+        updates.add(&BOOL, false);
+        updates.add(&USIZE, 3);
+        updates.apply(&configs);
+        tokio::time::timeout(Duration::from_secs(5), wait_for_3)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

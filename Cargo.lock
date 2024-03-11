@@ -4257,6 +4257,7 @@ dependencies = [
 name = "mz-dyncfg"
 version = "0.0.0"
 dependencies = [
+ "futures",
  "mz-ore",
  "mz-proto",
  "proptest",
@@ -4265,6 +4266,7 @@ dependencies = [
  "prost-build",
  "protobuf-src",
  "serde",
+ "tokio",
  "tracing",
  "workspace-hack",
 ]
