@@ -95,7 +95,7 @@ pub struct TxnsCacheState<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64> 
     /// timestamps are not unique.
     ///
     /// Invariant: Values are sorted by timestamp.
-    pub(crate) unapplied_batches: BTreeMap<usize, (ShardId, Vec<u8>, T)>,
+    pub(crate) unapplied_batches: BTreeMap<usize, (DataIdSchema<K::Schema, V::Schema>, Vec<u8>, T)>,
     /// An index into `unapplied_batches` keyed by the serialized batch.
     batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
@@ -106,7 +106,7 @@ pub struct TxnsCacheState<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64> 
     /// The registers and forgets needing application as of the current progress.
     ///
     /// Invariant: Values are sorted by timestamp.
-    pub(crate) unapplied_registers: VecDeque<(ShardId, T)>,
+    pub(crate) unapplied_registers: VecDeque<(DataIdSchema<K::Schema, V::Schema>, T)>,
 
     /// If Some, this cache only tracks the indicated data shard as a
     /// performance optimization. When used, only some methods (in particular,
@@ -117,6 +117,13 @@ pub struct TxnsCacheState<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64> 
     only_data_id: Option<ShardId>,
 
     _phantom: std::marker::PhantomData<fn() -> (K, V)>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct DataIdSchema<KS, VS> {
+    pub(crate) data_id: ShardId,
+    pub(crate) key_schema: Arc<KS>,
+    pub(crate) val_schema: Arc<VS>,
 }
 
 /// A self-updating [TxnsCacheState].
@@ -195,6 +202,20 @@ where
         self.txns_id
     }
 
+    /// Returns the schemas of the data shard registered to the txns set at the
+    /// given timestamp.
+    pub fn data_schemas_at(
+        &self,
+        data_id: &ShardId,
+        ts: &T,
+    ) -> Option<(&Arc<K::Schema>, &Arc<V::Schema>)> {
+        self.assert_only_data_id(data_id);
+        let Some(data_times) = self.datas.get(data_id) else {
+            return None;
+        };
+        data_times.registered.iter().find_map(|x| x.contains(ts))
+    }
+
     /// Returns whether the data shard was registered to the txns set as of the
     /// current progress.
     ///
@@ -219,13 +240,24 @@ where
 
     /// Returns the set of all data shards registered to the txns set as of the
     /// current progress. See [Self::registered_at_progress].
-    pub(crate) fn all_registered_at_progress(&self, ts: &T) -> Vec<ShardId> {
+    pub(crate) fn all_registered_at_progress(
+        &self,
+        ts: &T,
+    ) -> Vec<DataIdSchema<K::Schema, V::Schema>> {
         assert_eq!(self.only_data_id, None);
         assert_eq!(self.progress_exclusive, *ts);
         self.datas
             .iter()
             .filter(|(_, data_times)| data_times.last_reg().forget_ts.is_none())
-            .map(|(data_id, _)| *data_id)
+            .map(|(data_id, _)| {
+                let (key_schema, val_schema) =
+                    self.data_schemas_at(data_id, ts).expect("registered");
+                DataIdSchema {
+                    data_id: *data_id,
+                    key_schema: Arc::clone(key_schema),
+                    val_schema: Arc::clone(val_schema),
+                }
+            })
             .collect()
     }
 
@@ -364,7 +396,7 @@ where
             // Emitting logical progress at the wrong time is a correctness bug,
             // so be extra defensive about the necessary conditions: the most
             // recent registration is still active, and we're in it.
-            assert!(last_reg.contains(ts));
+            assert!(last_reg.contains(ts).is_some());
             EmitLogicalProgress(self.progress_exclusive.clone())
         } else {
             // The most recent forget is set, which means it's not registered as of
@@ -422,24 +454,34 @@ where
     }
 
     /// Returns the operations needing application as of the current progress.
-    pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied, &T)> {
+    pub(crate) fn unapplied(
+        &self,
+    ) -> impl Iterator<Item = (&DataIdSchema<K::Schema, V::Schema>, Unapplied, &T)> {
         assert_eq!(self.only_data_id, None);
         let registers = self
             .unapplied_registers
             .iter()
-            .map(|(data_id, ts)| (data_id, Unapplied::RegisterForget, ts));
-        let batches = self
-            .unapplied_batches
-            .values()
-            .fold(
-                BTreeMap::new(),
-                |mut accum: BTreeMap<_, Vec<_>>, (data_id, batch, ts)| {
-                    accum.entry((ts, data_id)).or_default().push(batch);
-                    accum
+            .map(|(x, ts)| (x, Unapplied::RegisterForget, ts));
+        let mut batches = BTreeMap::new();
+        for (x, batch, ts) in self.unapplied_batches.values() {
+            if !batches.contains_key(&(ts, x.data_id)) {
+                batches.insert((ts, x.data_id), (x, Vec::new()));
+            }
+            let (
+                DataIdSchema {
+                    key_schema,
+                    val_schema,
+                    ..
                 },
-            )
+                batches,
+            ) = batches.get_mut(&(ts, x.data_id)).expect("inserted above");
+            assert_eq!(*key_schema, x.key_schema);
+            assert_eq!(*val_schema, x.val_schema);
+            batches.push(batch)
+        }
+        let batches = batches
             .into_iter()
-            .map(|((ts, data_id), batches)| (data_id, Unapplied::Batch(batches), ts));
+            .map(|((ts, _), (x, batches))| (x, Unapplied::Batch(batches), ts));
         // This will emit registers and forgets before batches at the same timestamp. Currently,
         // this is fine because for a single data shard you can't combine registers, forgets, and
         // batches at the same timestamp. In the future if we allow combining these operations in
@@ -480,12 +522,23 @@ where
         entries.sort_by(|(a, _, _), (b, _, _)| a.ts::<T>().cmp(&b.ts::<T>()));
         for (e, t, d) in entries {
             match e {
-                TxnsEntry::Register(data_id, ts) => {
+                TxnsEntry::Register {
+                    data_id,
+                    ts,
+                    key_schema,
+                    val_schema,
+                } => {
                     let ts = T::decode(ts);
                     debug_assert!(ts <= t);
-                    self.push_register(data_id, ts, d, t);
+                    // TODO: Once we figure out how to clear out the old format
+                    // records, then we could check that both key_schema and
+                    // val_schema are non-empty and remove the placeholder
+                    // schema nonsense.
+                    let key_schema = <K::Schema>::decode(key_schema);
+                    let val_schema = <V::Schema>::decode(val_schema);
+                    self.push_register(data_id, ts, d, t, key_schema, val_schema);
                 }
-                TxnsEntry::Append(data_id, ts, batch) => {
+                TxnsEntry::Append { data_id, ts, batch } => {
                     let ts = T::decode(ts);
                     debug_assert!(ts <= t);
                     self.push_append(data_id, batch, ts, d)
@@ -496,7 +549,15 @@ where
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
-    fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64, compacted_ts: T) {
+    fn push_register(
+        &mut self,
+        data_id: ShardId,
+        ts: T,
+        diff: i64,
+        compacted_ts: T,
+        key_schema: K::Schema,
+        val_schema: V::Schema,
+    ) {
         self.assert_only_data_id(&data_id);
         // Since we keep the original non-advanced timestamp around, retractions
         // necessarily might be for times in the past, so `|| diff < 0`.
@@ -508,8 +569,16 @@ where
         }
 
         // The shard has not compacted past the register/forget ts, so it may not have been applied.
+        let (key_schema, val_schema) = (Arc::new(key_schema), Arc::new(val_schema));
         if ts == compacted_ts {
-            self.unapplied_registers.push_back((data_id, ts.clone()));
+            self.unapplied_registers.push_back((
+                DataIdSchema {
+                    data_id,
+                    key_schema: Arc::clone(&key_schema),
+                    val_schema: Arc::clone(&val_schema),
+                },
+                ts.clone(),
+            ));
         }
 
         if diff == 1 {
@@ -527,7 +596,8 @@ where
             entry.registered.push_back(DataRegistered {
                 register_ts: ts,
                 forget_ts: None,
-                _phantom: std::marker::PhantomData,
+                key_schema,
+                val_schema,
             });
         } else if diff == -1 {
             debug!(
@@ -569,9 +639,17 @@ where
             self.next_batch_id += 1;
             let prev = self.batch_idx.insert(batch.clone(), idx);
             assert_eq!(prev, None);
+            let (key_schema, val_schema) = self
+                .data_schemas_at(&data_id, &ts)
+                .expect("data shard is registered");
+            let data_id_schema = DataIdSchema {
+                data_id,
+                key_schema: Arc::clone(key_schema),
+                val_schema: Arc::clone(val_schema),
+            };
             let prev = self
                 .unapplied_batches
-                .insert(idx, (data_id, batch, ts.clone()));
+                .insert(idx, (data_id_schema, batch, ts.clone()));
             assert_eq!(prev, None);
             let times = self.datas.get_mut(&data_id).expect("data is initialized");
             // Sanity check that shard is registered.
@@ -592,7 +670,7 @@ where
                 .unapplied_batches
                 .remove(&idx)
                 .expect("invariant violation: batch index should exist");
-            debug_assert_eq!(data_id, prev.0);
+            debug_assert_eq!(data_id, prev.0.data_id);
             debug_assert_eq!(batch, prev.1);
             // Insertion timestamp should be less equal retraction timestamp.
             debug_assert!(prev.2 <= ts);
@@ -770,7 +848,7 @@ where
             if let Some((_, (_, _, unapplied_ts))) = self
                 .unapplied_batches
                 .iter()
-                .find(|(_, (shard_id, _, _))| shard_id == data_id)
+                .find(|(_, (x, _, _))| x.data_id == *data_id)
             {
                 if let Some(write_ts) = data_times.writes.front() {
                     if write_ts > unapplied_ts {
@@ -786,7 +864,7 @@ where
             if let Some((_, unapplied_ts)) = self
                 .unapplied_registers
                 .iter()
-                .find(|(shard_id, _)| shard_id == data_id)
+                .find(|(x, _)| x.data_id == *data_id)
             {
                 let register_ts = &data_times.first_reg().register_ts;
                 if register_ts > unapplied_ts {
@@ -1039,12 +1117,17 @@ pub(crate) struct DataRegistered<KS, VS, T> {
     /// The inclusive time at which the data shard was removed from the txns
     /// set, or None if it hasn't yet been removed.
     pub(crate) forget_ts: Option<T>,
-    _phantom: std::marker::PhantomData<fn() -> (KS, VS)>,
+
+    /// The Schema of this data shard's keys.
+    key_schema: KS,
+    /// The Schema of this data shard's vals.
+    val_schema: VS,
 }
 
 impl<KS, VS, T: Timestamp + TotalOrder> DataRegistered<KS, VS, T> {
-    pub(crate) fn contains(&self, ts: &T) -> bool {
-        &self.register_ts <= ts && self.forget_ts.as_ref().map_or(true, |x| ts <= x)
+    pub(crate) fn contains(&self, ts: &T) -> Option<(&KS, &VS)> {
+        let contains = &self.register_ts <= ts && self.forget_ts.as_ref().map_or(true, |x| ts <= x);
+        contains.then_some((&self.key_schema, &self.val_schema))
     }
 }
 
@@ -1143,6 +1226,7 @@ pub(crate) enum Unapplied<'a> {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
     use mz_persist_types::codec_impls::{ShardIdSchema, StringSchema, UnitSchema};
@@ -1258,7 +1342,7 @@ mod tests {
         testcase(&mut c, 1, d0, ds(None, 1, 2), ReadDataTo(2));
 
         // ts 2 (register)
-        c.push_register(d0, 2, 1, 2);
+        c.push_register(d0, 2, 1, 2, StringSchema, UnitSchema);
         testcase(&mut c, 2, d0, ds(None, 2, 3), ReadDataTo(3));
 
         // ts 3 (registered, not written)
@@ -1295,7 +1379,7 @@ mod tests {
         // Revisit when
         // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
-        c.push_register(d0, 11, -1, 11);
+        c.push_register(d0, 11, -1, 11, StringSchema, UnitSchema);
         testcase(&mut c, 11, d0, ds(None, 11, 12), ReadDataTo(12));
 
         // ts 12 (not registered, not written). This ReadDataTo would block until
@@ -1310,14 +1394,14 @@ mod tests {
         testcase(&mut c, 14, d0, ds(None, 14, 15), ReadDataTo(15));
 
         // ts 15 (registered, previously forgotten)
-        c.push_register(d0, 15, 1, 15);
+        c.push_register(d0, 15, 1, 15, StringSchema, UnitSchema);
         testcase(&mut c, 15, d0, ds(None, 15, 16), ReadDataTo(16));
 
         // ts 16 (forgotten, registered at preceding ts)
         // Revisit when
         // https://github.com/MaterializeInc/materialize/issues/25992 is fixed,
         // it's unclear how to encode the register timestamp in a forget.
-        c.push_register(d0, 16, -1, 16);
+        c.push_register(d0, 16, -1, 16, StringSchema, UnitSchema);
         testcase(&mut c, 16, d0, ds(None, 16, 17), ReadDataTo(17));
 
         // Now that we have more history, some of the old answers change! In
@@ -1414,7 +1498,8 @@ mod tests {
                 dt.registered.push_back(DataRegistered {
                     register_ts: *x,
                     forget_ts: None,
-                    _phantom: std::marker::PhantomData::<fn() -> (StringSchema, UnitSchema)>,
+                    key_schema: StringSchema,
+                    val_schema: UnitSchema,
                 })
             }
             dt.writes = write_ts.into_iter().cloned().collect();
@@ -1497,8 +1582,26 @@ mod tests {
         // With the bug, this panics via an internal sanity assertion.
         cache.push_entries(
             vec![
-                (TxnsEntry::Register(d0, u64::encode(&2)), 2, -1),
-                (TxnsEntry::Register(d0, u64::encode(&1)), 2, 1),
+                (
+                    TxnsEntry::Register {
+                        data_id: d0,
+                        ts: u64::encode(&2),
+                        key_schema: Bytes::new(),
+                        val_schema: Bytes::new(),
+                    },
+                    2,
+                    -1,
+                ),
+                (
+                    TxnsEntry::Register {
+                        data_id: d0,
+                        ts: u64::encode(&1),
+                        key_schema: Bytes::new(),
+                        val_schema: Bytes::new(),
+                    },
+                    2,
+                    1,
+                ),
             ],
             3,
         );

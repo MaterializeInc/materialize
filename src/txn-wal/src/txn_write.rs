@@ -171,7 +171,19 @@ where
 
                 let txn_batches_updates = FuturesUnordered::new();
                 while let Some((data_id, updates)) = self.writes.pop_first() {
-                    let mut data_write = handle.datas.take_write(&data_id).await;
+                    let (key_schema, val_schema) = handle
+                        .txns_cache
+                        .data_schemas_at(&data_id, &commit_ts)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{} should be registered to commit at {:?}",
+                                data_id, commit_ts
+                            )
+                        });
+                    let mut data_write = handle
+                        .datas
+                        .take_write(&data_id, key_schema, val_schema)
+                        .await;
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches = updates
@@ -220,11 +232,11 @@ where
                                     data_id.to_string(),
                                     batch_raw.hashed(),
                                 );
-                                let update = C::encode(TxnsEntry::Append(
+                                let update = C::encode(TxnsEntry::Append {
                                     data_id,
-                                    T::encode(&commit_ts),
-                                    batch_raw,
-                                ));
+                                    ts: T::encode(&commit_ts),
+                                    batch: batch_raw,
+                                });
                                 (batch, update)
                             })
                             .collect::<Vec<_>>();
@@ -248,7 +260,11 @@ where
                     .read_cache()
                     .filter_retractions(&txns_upper, self.tidy.retractions.iter())
                     .map(|(batch_raw, (ts, data_id))| {
-                        C::encode(TxnsEntry::Append(*data_id, *ts, batch_raw.clone()))
+                        C::encode(TxnsEntry::Append {
+                            data_id: *data_id,
+                            ts: *ts,
+                            batch: batch_raw.clone(),
+                        })
                     })
                     .collect::<Vec<_>>();
                 txns_updates.extend(

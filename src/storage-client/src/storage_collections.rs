@@ -405,8 +405,6 @@ where
                 txns_client.clone(),
                 Arc::clone(&txns_metrics),
                 txns_id,
-                Arc::new(RelationDesc::empty()),
-                Arc::new(UnitSchema),
             )
             .await;
 
@@ -425,7 +423,8 @@ where
             .await
             .expect("txns schema shouldn't change");
 
-        let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
+        let txns_read =
+            TxnsRead::start::<SourceData, (), TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
         let finalizable_shards = Arc::new(std::sync::Mutex::new(BTreeSet::default()));

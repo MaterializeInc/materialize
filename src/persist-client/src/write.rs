@@ -198,6 +198,11 @@ where
         self.machine.shard_id()
     }
 
+    /// This handle's schemas.
+    pub fn schemas(&self) -> (&Arc<K::Schema>, &Arc<V::Schema>) {
+        (&self.schemas.key, &self.schemas.val)
+    }
+
     /// A cached version of the shard-global `upper` frontier.
     ///
     /// This is the most recent upper discovered by this handle. It is

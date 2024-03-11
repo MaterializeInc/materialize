@@ -28,6 +28,8 @@ pub struct Metrics {
     pub(crate) compact_to: InfallibleOpMetrics,
 
     pub(crate) batches: BatchMetrics,
+
+    pub(crate) placeholder_schema_apply: IntCounter,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -52,6 +54,10 @@ impl Metrics {
             apply_le: ops.infallible("apply_le"),
             compact_to: ops.infallible("compact_to"),
             batches: BatchMetrics::new(registry),
+            placeholder_schema_apply: registry.register(metric!(
+                name: "mz_txn_placeholder_schema_apply",
+                help: "count of batches applied using a placeholder schema",
+            )),
         }
     }
 }

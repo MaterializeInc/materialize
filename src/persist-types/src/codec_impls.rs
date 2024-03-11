@@ -23,7 +23,7 @@ use arrow::datatypes::{
     Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use mz_ore::assert_none;
 use timely::order::Product;
 
@@ -83,7 +83,16 @@ impl Schema<()> for UnitSchema {
     }
 }
 
-impl TxnsDataSchema for UnitSchema {}
+impl TxnsDataSchema for UnitSchema {
+    fn encode(&self) -> Bytes {
+        Bytes::from("()")
+    }
+
+    fn decode(buf: Bytes) -> Self {
+        assert!(buf.is_empty() || buf == "()");
+        UnitSchema
+    }
+}
 
 impl Codec for () {
     type Storage = ();
@@ -421,7 +430,16 @@ impl Schema2<String> for StringSchema {
     }
 }
 
-impl TxnsDataSchema for StringSchema {}
+impl TxnsDataSchema for StringSchema {
+    fn encode(&self) -> Bytes {
+        Bytes::from("String")
+    }
+
+    fn decode(buf: Bytes) -> Self {
+        assert!(buf.is_empty() || buf == "String");
+        StringSchema
+    }
+}
 
 impl Codec for String {
     type Storage = ();

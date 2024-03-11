@@ -37,7 +37,7 @@ impl StatsCursor {
         // If and only if we are using txn-wal to manage this shard, then
         // this must be Some. This is because the upper might be advanced lazily
         // and we have to go through txn-wal for reads.
-        txns_read: Option<&mut TxnsCache<Timestamp, TxnsCodecRow>>,
+        txns_read: Option<&mut TxnsCache<SourceData, (), Timestamp, TxnsCodecRow>>,
         metrics: &Metrics,
         desc: &RelationDesc,
         as_of: Antichain<Timestamp>,

@@ -126,7 +126,7 @@
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), metrics, txns_id, StringSchema.into(), UnitSchema.into()
+//!     0u64, client.clone(), metrics, txns_id,
 //! ).await;
 //!
 //! // Register data shards to the txn set.
@@ -538,14 +538,18 @@ pub mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
+    use bytes::Bytes;
     use crossbeam_channel::{Receiver, Sender, TryRecvError};
     use differential_dataflow::consolidation::consolidate_updates;
+    use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use mz_persist_types::txn::TxnsDataSchema;
     use prost::Message;
+    use serde::{Deserialize, Serialize};
 
+    use crate::metrics::Metrics;
     use crate::operator::DataSubscribe;
     use crate::txn_cache::TxnsCache;
     use crate::txn_write::{Txn, TxnApply};
@@ -941,5 +945,97 @@ pub mod tests {
         // able to read the previous serialization (ProtoBatch directly) back.
         let roundtrip = ProtoIdBatch::parse(&b0_raw.encode_to_vec());
         assert_eq!(roundtrip, b0_raw);
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    enum TxnsEntryOld {
+        Register {
+            data_id: ShardId,
+            ts: [u8; 8],
+        },
+        Append {
+            data_id: ShardId,
+            ts: [u8; 8],
+            batch: Vec<u8>,
+        },
+    }
+
+    /// The previous version of [TxnsCodecDefault] without schemas.
+    #[derive(Debug)]
+    struct TxnsCodecOld;
+
+    impl TxnsCodec for TxnsCodecOld {
+        type Key = ShardId;
+        type Val = String;
+        fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema) {
+            (ShardIdSchema, StringSchema)
+        }
+        fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
+            let key = e.data_id();
+            let e = match e.clone() {
+                TxnsEntry::Register { data_id, ts, .. } => TxnsEntryOld::Register { data_id, ts },
+                TxnsEntry::Append { data_id, ts, batch } => {
+                    TxnsEntryOld::Append { data_id, ts, batch }
+                }
+            };
+            let val = serde_json::to_string(&e).expect("valid json");
+            (*key, val)
+        }
+        fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry {
+            let ret: TxnsEntryOld = serde_json::from_str(&val).expect("valid TxnsEntry");
+            let ret = match ret {
+                // As declared in TxnsCodec, fill in empty Bytes for schemas
+                // when missing.
+                TxnsEntryOld::Register { data_id, ts } => TxnsEntry::Register {
+                    data_id,
+                    ts,
+                    key_schema: Bytes::new(),
+                    val_schema: Bytes::new(),
+                },
+                TxnsEntryOld::Append { data_id, ts, batch } => {
+                    TxnsEntry::Append { data_id, ts, batch }
+                }
+            };
+            assert_eq!(ret.data_id(), &key);
+            ret
+        }
+        fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+            TxnsCodecDefault::should_fetch_part(data_id, stats)
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn old_txns_codec() {
+        let client = PersistClient::new_for_tests().await;
+        let txns_id = ShardId::new();
+        let d0 = ShardId::new();
+        let log = CommitLog::new(client.clone(), txns_id);
+
+        // Register a data shard with an old version of TxnsCodec without
+        // schemas and append a write, but don't apply it.
+        {
+            let mut txns = TxnsHandle::<String, (), u64, i64, u64, TxnsCodecOld>::open(
+                0,
+                client.clone(),
+                Arc::new(Metrics::new(&MetricsRegistry::new())),
+                txns_id,
+            )
+            .await;
+            let writer = writer(&client, d0).await;
+            txns.register(1, vec![writer]).await.unwrap();
+            let mut txn = txns.begin_test();
+            txn.write(&d0, "old".into(), (), 1).await;
+            let _apply = txn.commit_at(&mut txns, 2).await.unwrap();
+            log.record_txn(2, &txn);
+        }
+
+        // Now open with new codec, commit another txn and apply them both.
+        let mut txns = TxnsHandle::expect_open_id(client.clone(), txns_id).await;
+        let writer = writer(&client, d0).await;
+        txns.register(3, vec![writer]).await.unwrap();
+        txns.expect_commit_at(4, d0, &["new"], &log).await;
+
+        log.assert_snapshot(d0, 4).await;
     }
 }

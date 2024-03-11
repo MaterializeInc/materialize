@@ -11,38 +11,53 @@
 
 use std::fmt::Debug;
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::stats::PartStats;
 use crate::{Codec, Codec64, ShardId};
 
 /// The in-mem representation of an update in the txns shard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TxnsEntry {
     /// A data shard register operation.
-    ///
-    /// The `[u8; 8]` is a Codec64 encoded timestamp.
-    Register(ShardId, [u8; 8]),
+    Register {
+        /// The id of the data shard.
+        data_id: ShardId,
+        /// A Codec64 encoded timestamp.
+        ts: [u8; 8],
+        /// The key schema of the data shard, serialized.
+        #[serde(default)]
+        key_schema: Bytes,
+        /// The val schema of the data shard, serialized.
+        #[serde(default)]
+        val_schema: Bytes,
+    },
     /// A batch written to a data shard in a txn.
-    ///
-    /// The `[u8; 8]` is a Codec64 encoded timestamp.
-    Append(ShardId, [u8; 8], Vec<u8>),
+    Append {
+        /// The id of the data shard.
+        data_id: ShardId,
+        /// A Codec64 encoded timestamp.
+        ts: [u8; 8],
+        /// The transmittable serialization of the batch.
+        batch: Vec<u8>,
+    },
 }
 
 impl TxnsEntry {
     /// Returns the ShardId of the data shard targeted by this entry.
     pub fn data_id(&self) -> &ShardId {
         match self {
-            TxnsEntry::Register(data_id, _) => data_id,
-            TxnsEntry::Append(data_id, _, _) => data_id,
+            TxnsEntry::Register { data_id, .. } => data_id,
+            TxnsEntry::Append { data_id, .. } => data_id,
         }
     }
 
     /// Returns the decoded timestamp of this entry.
     pub fn ts<T: Codec64>(&self) -> T {
         match self {
-            TxnsEntry::Register(_, ts) => T::decode(*ts),
-            TxnsEntry::Append(_, ts, _) => T::decode(*ts),
+            TxnsEntry::Register { ts, .. } => T::decode(*ts),
+            TxnsEntry::Append { ts, .. } => T::decode(*ts),
         }
     }
 }
@@ -64,6 +79,9 @@ pub trait TxnsCodec: Debug {
     /// Decodes a [TxnsEntry] from the format persisted in the txns shard.
     ///
     /// Implementations should panic if the values are invalid.
+    ///
+    /// If the previous format of TxnsEntry encoding is encountered (i.e. the
+    /// one without schemas), this must return empty bytes for the schemas.
     fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry;
 
     /// Returns if a part might include the given data shard based on pushdown
@@ -76,4 +94,21 @@ pub trait TxnsCodec: Debug {
 }
 
 /// [crate::columnar::Schema] of a data shard used with txn-wal.
-pub trait TxnsDataSchema: Debug + PartialEq {}
+pub trait TxnsDataSchema: Debug + PartialEq {
+    /// Encode this schema for permanent storage.
+    ///
+    /// This must perfectly round-trip Self through [TxnsDataSchema::decode]. If
+    /// the encode function for this schema ever changes, decode must be able to
+    /// handle bytes output by all previous versions of encode.
+    fn encode(&self) -> Bytes;
+    /// Decode a schema previous encoded with this schema's
+    /// [TxnsDataSchema::encode].
+    ///
+    /// This must perfectly round-trip Self through [TxnsDataSchema::decode]. If
+    /// the encode function for this schema ever changes, decode must be able to
+    /// handle bytes output by all previous versions of encode.
+    ///
+    /// TODO: While migrating, an empty buf should be decoded to any placeholder
+    /// schema (in practice we use RelationDesc::empty again).
+    fn decode(buf: Bytes) -> Self;
+}

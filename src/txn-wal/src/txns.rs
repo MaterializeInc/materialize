@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
@@ -114,6 +115,11 @@ where
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
     pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
     pub(crate) datas: DataHandles<K, V, T, D>,
+
+    // TODO: Remove these once we've finished migrating all data in txn shards
+    // in prod to the new encoding.
+    placeholder_key_schema: Arc<K::Schema>,
+    placeholder_val_schema: Arc<V::Schema>,
 }
 
 impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
@@ -141,10 +147,6 @@ where
         client: PersistClient,
         metrics: Arc<Metrics>,
         txns_id: ShardId,
-        // TODO(txn): Get rid of these by introducing a SchemalessWriteHandle to
-        // persist.
-        key_schema: Arc<K::Schema>,
-        val_schema: Arc<V::Schema>,
     ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
         let (mut txns_write, txns_read) = client
@@ -182,9 +184,9 @@ where
             datas: DataHandles {
                 client,
                 data_write: BTreeMap::new(),
-                key_schema,
-                val_schema,
             },
+            placeholder_key_schema: Arc::new(K::Schema::decode(Bytes::new())),
+            placeholder_val_schema: Arc::new(V::Schema::decode(Bytes::new())),
         }
     }
 
@@ -211,6 +213,12 @@ where
     /// As a side effect all txns <= register_ts are applied, including the
     /// registration itself.
     ///
+    /// The schema of the WriteHandle must not change while registered. Instead,
+    /// it must be forgotten and re-registered with the new schema.
+    ///
+    /// TODO: Instead of taking a WriteHandle here, take the schemas to make
+    /// the above more obvious.
+    ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
@@ -228,7 +236,13 @@ where
                 .iter()
                 .map(|data_write| {
                     let data_id = data_write.shard_id();
-                    let entry = TxnsEntry::Register(data_id, T::encode(&register_ts));
+                    let (key_schema, val_schema) = data_write.schemas();
+                    let entry = TxnsEntry::Register {
+                        data_id,
+                        ts: T::encode(&register_ts),
+                        key_schema: key_schema.encode(),
+                        val_schema: val_schema.encode(),
+                    };
                     (data_id, C::encode(entry))
                 })
                 .collect::<Vec<_>>();
@@ -354,7 +368,18 @@ where
                     // `[txns_upper, forget_ts]` (due to races) so close off that
                     // interval before returning, just don't write any updates.
                     .filter(|data_id| self.txns_cache.registered_at_progress(data_id, &txns_upper))
-                    .map(|data_id| C::encode(TxnsEntry::Register(*data_id, T::encode(&forget_ts))))
+                    .map(|data_id| {
+                        let (key_schema, val_schema) = self
+                            .txns_cache
+                            .data_schemas_at(data_id, &txns_upper)
+                            .expect("registered");
+                        C::encode(TxnsEntry::Register {
+                            data_id: *data_id,
+                            ts: T::encode(&forget_ts),
+                            key_schema: key_schema.encode(),
+                            val_schema: val_schema.encode(),
+                        })
+                    })
                     .collect::<Vec<_>>();
                 let updates = updates
                     .iter()
@@ -381,7 +406,7 @@ where
                         .unapplied_batches
                         .values()
                         .rev()
-                        .find(|(x, _, _)| data_ids.contains(x));
+                        .find(|(x, _, _)| data_ids.contains(&x.data_id));
                     if let Some((_, _, latest_write)) = data_latest_unapplied {
                         debug!(
                             "txns forget {} applying latest write {:?}",
@@ -447,14 +472,19 @@ where
                 let data_ids_debug = || {
                     registered
                         .iter()
-                        .map(|x| format!("{:.9}", x.to_string()))
+                        .map(|x| format!("{:.9}", x.data_id.to_string()))
                         .collect::<Vec<_>>()
                         .join(" ")
                 };
                 let updates = registered
                     .iter()
-                    .map(|data_id| {
-                        C::encode(crate::TxnsEntry::Register(*data_id, T::encode(&forget_ts)))
+                    .map(|x| {
+                        C::encode(crate::TxnsEntry::Register {
+                            data_id: x.data_id,
+                            ts: T::encode(&forget_ts),
+                            key_schema: x.key_schema.encode(),
+                            val_schema: x.val_schema.encode(),
+                        })
                     })
                     .collect::<Vec<_>>();
                 let updates = updates
@@ -515,11 +545,12 @@ where
                 }
             };
 
-            for data_id in registered.iter() {
-                self.datas.data_write.remove(data_id);
+            for x in registered.iter() {
+                self.datas.data_write.remove(&x.data_id);
             }
             let tidy = self.apply_le(&forget_ts).await;
 
+            let registered = registered.into_iter().map(|x| x.data_id).collect();
             Ok((registered, tidy))
         })
         .await
@@ -545,20 +576,52 @@ where
             let _ = self.txns_cache.update_gt(ts).await;
             self.txns_cache.update_gauges(&self.metrics);
 
-            let mut unapplied_by_data = BTreeMap::<_, Vec<_>>::new();
-            for (data_id, unapplied, unapplied_ts) in self.txns_cache.unapplied() {
+            let mut unapplied_by_data =
+                BTreeMap::<_, (Arc<K::Schema>, Arc<V::Schema>, Vec<_>)>::new();
+            for (x, unapplied, unapplied_ts) in self.txns_cache.unapplied() {
                 if ts < unapplied_ts {
                     break;
                 }
-                unapplied_by_data
-                    .entry(*data_id)
-                    .or_default()
-                    .push((unapplied, unapplied_ts));
+                let (k, v, u) = unapplied_by_data.entry(x.data_id).or_insert_with(|| {
+                    (
+                        Arc::clone(&x.key_schema),
+                        Arc::clone(&x.val_schema),
+                        Vec::new(),
+                    )
+                });
+                // It's possible for a single apply_le to get work for both the
+                // old format (in which case we get a placeholder schema) and
+                // the new format (in which case we get a real schema). Use the
+                // placeholder schema if it's all we have, but if anything for
+                // this data shard has a real schema, use that instead.
+                if *k == self.placeholder_key_schema {
+                    *k = Arc::clone(&x.key_schema);
+                }
+                if *v == self.placeholder_val_schema {
+                    *v = Arc::clone(&x.val_schema);
+                }
+                // TODO: Support schema changes within txn-wal. In the meantime,
+                // assert that we got zero or one real schemas.
+                if x.key_schema != self.placeholder_key_schema {
+                    assert_eq!(*k, x.key_schema);
+                }
+                if x.val_schema != self.placeholder_val_schema {
+                    assert_eq!(*v, x.val_schema);
+                }
+                if x.key_schema == self.placeholder_key_schema
+                    || x.val_schema == self.placeholder_val_schema
+                {
+                    self.metrics.placeholder_schema_apply.inc();
+                }
+                u.push((unapplied, unapplied_ts));
             }
 
             let retractions = FuturesUnordered::new();
-            for (data_id, unapplied) in unapplied_by_data {
-                let mut data_write = self.datas.take_write(&data_id).await;
+            for (data_id, (key_schema, val_schema, unapplied)) in unapplied_by_data {
+                let mut data_write = self
+                    .datas
+                    .take_write(&data_id, &key_schema, &val_schema)
+                    .await;
                 retractions.push(async move {
                     let mut ret = Vec::new();
                     for (unapplied, unapplied_ts) in unapplied {
@@ -702,8 +765,6 @@ where
 {
     pub(crate) client: PersistClient,
     data_write: BTreeMap<ShardId, WriteHandle<K, V, T, D>>,
-    key_schema: Arc<K::Schema>,
-    val_schema: Arc<V::Schema>,
 }
 
 impl<K, V, T, D> DataHandles<K, V, T, D>
@@ -715,23 +776,39 @@ where
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
-    async fn open_data_write(&self, data_id: ShardId) -> WriteHandle<K, V, T, D> {
+    async fn open_data_write(
+        &self,
+        data_id: ShardId,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
+    ) -> WriteHandle<K, V, T, D> {
         self.client
             .open_writer(
                 data_id,
-                Arc::clone(&self.key_schema),
-                Arc::clone(&self.val_schema),
+                key_schema,
+                val_schema,
                 Diagnostics::from_purpose("txn data"),
             )
             .await
             .expect("schema shouldn't change")
     }
 
-    pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> WriteHandle<K, V, T, D> {
+    pub(crate) async fn take_write(
+        &mut self,
+        data_id: &ShardId,
+        key_schema: &Arc<K::Schema>,
+        val_schema: &Arc<V::Schema>,
+    ) -> WriteHandle<K, V, T, D> {
         if let Some(data_write) = self.data_write.remove(data_id) {
-            return data_write;
+            // If the schemas of this handle match, we're done.
+            let (k, v) = data_write.schemas();
+            if **k == **key_schema && **v == **val_schema {
+                return data_write;
+            }
+            // Otherwise fall through to below.
         }
-        self.open_data_write(*data_id).await
+        self.open_data_write(*data_id, Arc::clone(key_schema), Arc::clone(val_schema))
+            .await
     }
 
     pub(crate) fn put_write(&mut self, data_write: WriteHandle<K, V, T, D>) {
@@ -751,7 +828,6 @@ mod tests {
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::RetryParameters;
     use mz_persist_client::PersistLocation;
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use rand::rngs::SmallRng;
     use rand::{RngCore, SeedableRng};
     use timely::progress::Antichain;
@@ -774,8 +850,6 @@ mod tests {
                 client,
                 Arc::new(Metrics::new(&MetricsRegistry::new())),
                 txns_id,
-                Arc::new(StringSchema),
-                Arc::new(UnitSchema),
             )
             .await
         }

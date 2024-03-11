@@ -2326,12 +2326,11 @@ where
             txns_client.clone(),
             Arc::clone(&txns_metrics),
             txns_id,
-            Arc::new(RelationDesc::empty()),
-            Arc::new(UnitSchema),
         )
         .await;
         let persist_table_worker = persist_handles::PersistTableWriteWorker::new_txns(txns);
-        let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
+        let txns_read =
+            TxnsRead::start::<SourceData, (), TxnsCodecRow>(txns_client.clone(), txns_id).await;
         let persist_monotonic_worker = persist_handles::PersistMonotonicWriteWorker::new();
         let collection_manager_write_handle = persist_monotonic_worker.clone();
 

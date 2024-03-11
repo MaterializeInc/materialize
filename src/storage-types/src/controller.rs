@@ -10,6 +10,7 @@
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
 
+use bytes::Bytes;
 use itertools::Itertools;
 use mz_ore::assert_none;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -397,15 +398,24 @@ impl TxnsCodec for TxnsCodecRow {
 
     fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
         let row = match &e {
-            TxnsEntry::Register(data_id, ts) => Row::pack([
+            TxnsEntry::Register {
+                data_id,
+                ts,
+                key_schema,
+                val_schema,
+            } => Row::pack([
                 Datum::from(data_id.to_string().as_str()),
                 Datum::from(u64::from_le_bytes(*ts)),
                 Datum::Null,
+                Datum::from(&**key_schema),
+                Datum::from(&**val_schema),
             ]),
-            TxnsEntry::Append(data_id, ts, batch) => Row::pack([
+            TxnsEntry::Append { data_id, ts, batch } => Row::pack([
                 Datum::from(data_id.to_string().as_str()),
                 Datum::from(u64::from_le_bytes(*ts)),
                 Datum::from(batch.as_slice()),
+                Datum::Null,
+                Datum::Null,
             ]),
         };
         (SourceData(Ok(row)), ())
@@ -418,12 +428,41 @@ impl TxnsCodec for TxnsCodecRow {
         let ts = datums.next().expect("valid entry");
         let ts = u64::to_le_bytes(ts.unwrap_uint64());
         let batch = datums.next().expect("valid entry");
-        assert_none!(datums.next());
-        if batch.is_null() {
-            TxnsEntry::Register(data_id, ts)
+        let ret = if batch.is_null() {
+            // The old format was three Datums (the new format is five). If we
+            // see the old one, TxnsCodec documents that we map the missing
+            // schemas to empty Bytes.
+            let (key_schema, val_schema) = match datums.next() {
+                Some(key_schema) => {
+                    let key_schema = Bytes::copy_from_slice(key_schema.unwrap_bytes());
+                    let val_schema = datums.next().expect("valid entry").unwrap_bytes();
+                    assert_none!(datums.next());
+                    (key_schema, Bytes::copy_from_slice(val_schema))
+                }
+                None => (Bytes::new(), Bytes::new()),
+            };
+            TxnsEntry::Register {
+                data_id,
+                ts,
+                key_schema,
+                val_schema,
+            }
         } else {
-            TxnsEntry::Append(data_id, ts, batch.unwrap_bytes().to_vec())
-        }
+            match datums.next() {
+                Some(x) => {
+                    assert!(x.is_null());
+                    assert!(datums.next().expect("valid entry").is_null());
+                    assert_none!(datums.next());
+                }
+                None => {}
+            }
+            TxnsEntry::Append {
+                data_id,
+                ts,
+                batch: batch.unwrap_bytes().to_vec(),
+            }
+        };
+        ret
     }
 
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
@@ -437,5 +476,97 @@ impl TxnsCodec for TxnsCodecRow {
         let stats = col::<String>(&stats.some, "shard_id")?;
         let data_id_str = data_id.to_string();
         Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn txns_codec_row() {
+        // TxnsEntry::Register roundtrips
+        {
+            let data_id = ShardId::new();
+            let entry = TxnsEntry::Register {
+                data_id,
+                ts: 1u64.to_le_bytes(),
+                key_schema: Bytes::copy_from_slice(&[2]),
+                val_schema: Bytes::copy_from_slice(&[3]),
+            };
+            let (encoded, ()) = TxnsCodecRow::encode(entry.clone());
+            // We'd like to eventually expose this via SQL, so assert the actual
+            // encoded contents, too.
+            let expected = Row::pack_slice(&[
+                Datum::String(data_id.to_string().as_str()),
+                Datum::UInt64(1),
+                Datum::Null,
+                Datum::Bytes(&[2]),
+                Datum::Bytes(&[3]),
+            ]);
+            assert_eq!(encoded, SourceData(Ok(expected)));
+            let decoded = TxnsCodecRow::decode(encoded, ());
+            assert_eq!(entry, decoded);
+        }
+
+        // TxnsEntry::Append roundtrips
+        {
+            let data_id = ShardId::new();
+            let entry = TxnsEntry::Append {
+                data_id,
+                ts: 1u64.to_le_bytes(),
+                batch: vec![2],
+            };
+            let (encoded, ()) = TxnsCodecRow::encode(entry.clone());
+            // We'd like to eventually expose this via SQL, so assert the actual
+            // encoded contents, too.
+            let expected = Row::pack_slice(&[
+                Datum::String(data_id.to_string().as_str()),
+                Datum::UInt64(1),
+                Datum::Bytes(&[2]),
+                Datum::Null,
+                Datum::Null,
+            ]);
+            assert_eq!(encoded, SourceData(Ok(expected)));
+            let decoded = TxnsCodecRow::decode(encoded, ());
+            assert_eq!(entry, decoded);
+        }
+
+        // Old TxnsEntry::Register encoding.
+        {
+            let data_id = ShardId::new();
+            let encoded = Row::pack_slice(&[
+                Datum::String(data_id.to_string().as_str()),
+                Datum::UInt64(1),
+                Datum::Null,
+            ]);
+            let decoded = TxnsCodecRow::decode(SourceData(Ok(encoded)), ());
+            let entry = TxnsEntry::Register {
+                data_id,
+                ts: 1u64.to_le_bytes(),
+                // As mentioned in the TxnsCodecRow::decode doc, the old format
+                // gets empty bytes filled in for the schemas.
+                key_schema: Bytes::new(),
+                val_schema: Bytes::new(),
+            };
+            assert_eq!(entry, decoded);
+        }
+
+        // Old TxnsEntry::Append encoding.
+        {
+            let data_id = ShardId::new();
+            let encoded = Row::pack_slice(&[
+                Datum::String(data_id.to_string().as_str()),
+                Datum::UInt64(1),
+                Datum::Bytes(&[2]),
+            ]);
+            let decoded = TxnsCodecRow::decode(SourceData(Ok(encoded)), ());
+            let entry = TxnsEntry::Append {
+                data_id,
+                ts: 1u64.to_le_bytes(),
+                batch: vec![2],
+            };
+            assert_eq!(entry, decoded);
+        }
     }
 }
