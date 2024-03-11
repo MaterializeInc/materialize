@@ -213,13 +213,13 @@ The level of support for these tools will improve as we extend the coverage of `
 
 ### Data integration
 
-| Service  | Support level                    | Notes                                                                              |             |
-| -------- | -------------------------------- | ---------------------------------------------------------------------------------- | ----------- |
-| Fivetran | {{< supportLevel researching >}} | Not supported yet {{% gh 5188 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
-| Stitch   | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
-| Meltano  | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
-| Airbyte  | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
-| Striim   | {{< supportLevel beta >}}        | See the [Striim integration page](/integrations/striim/) for more details.         |             |
+| Service       | Support level                    | Notes                                                                              |             |
+| ------------- | -------------------------------- | ---------------------------------------------------------------------------------- | ----------- |
+| Fivetran      | {{< supportLevel researching >}} | Not supported yet {{% gh 5188 %}}. Subscribe via "Notify Me" to register interest. | [](#notify) |
+| Stitch        | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
+| Meltano       | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
+| Airbyte       | {{< supportLevel researching >}} | Not supported yet. Subscribe via "Notify Me" to register interest.                 | [](#notify) |
+| Striim Cloud  | {{< supportLevel beta >}}        | See the [Striim Cloud guide](/integrations/striim/) for a step-by-step breakdown of the integration         |             |
 
 ### Business Intelligence (BI)
 
