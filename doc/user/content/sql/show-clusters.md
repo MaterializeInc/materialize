@@ -40,10 +40,10 @@ environment. This cluster has several indexes installed to speed up common
 introspection queries, like `SHOW` commands and queries using the system
 catalog.
 
-To take advantage of these indexes, Materialize will automatically
-re-route your `SHOW` and system catalog queries to the `mz_introspection`
-cluster. You can disable this behavior within your session via the
-`auto_route_introspection_queries`
+To take advantage of these indexes, Materialize will automatically re-route
+`SHOW` commands and queries using system catalog objects to the
+`mz_introspection` system cluster. You can disable this behavior in
+your session via the `auto_route_introspection_queries`
 [session variable](/sql/show/#other-session-variables).
 
 The following characteristics apply to the `mz_introspection` cluster:
