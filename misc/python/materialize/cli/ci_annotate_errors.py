@@ -229,7 +229,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
         formatted_error_message = f"```\n{sanitize_text(truncate_str(error_message.decode('utf-8'), 10_000))}\n```"
 
         for issue in known_issues:
-            match = issue.regex.search(error_message)
+            match = issue.regex.search(for_github_re(error_message))
             if match and issue.info["state"] == "open":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
@@ -245,7 +245,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
                 break
         else:
             for issue in known_issues:
-                match = issue.regex.search(error_message)
+                match = issue.regex.search(for_github_re(error_message))
                 if match and issue.info["state"] == "closed":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
@@ -527,6 +527,24 @@ def get_suite_name() -> str:
         suite_name += f" ({retry_count})"
 
     return suite_name
+
+
+def for_github_re(text: bytes) -> bytes:
+    """
+    Matching newlines in regular expressions is kind of annoying, don't expect
+    ci-regexp to do that correctly, but instead replace all newlines with a
+    space. For examples this makes matching this panic easier:
+
+      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs:1878:5:
+      assertion `left == right` failed
+
+    Previously the regex should have been:
+      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs.*\n.*left == right
+
+    With this function it can be:
+      thread 'test_auth_deduplication' panicked at src/environmentd/tests/auth.rs.*left == right
+    """
+    return text.replace(b"\n", b" ")
 
 
 if __name__ == "__main__":
