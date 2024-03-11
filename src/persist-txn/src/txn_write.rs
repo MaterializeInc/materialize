@@ -29,7 +29,7 @@ use tracing::debug;
 
 use crate::proto::ProtoIdBatch;
 use crate::txns::{Tidy, TxnsHandle};
-use crate::{TxnsCodec, TxnsEntry};
+use crate::{TxnsCodec, TxnsDataSchema, TxnsEntry};
 
 /// An in-progress transaction.
 #[derive(Debug)]
@@ -41,7 +41,9 @@ pub struct Txn<K, V, D> {
 impl<K, V, D> Txn<K, V, D>
 where
     K: Debug + Codec,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec,
+    V::Schema: TxnsDataSchema,
     D: Semigroup + Codec64 + Send + Sync,
 {
     pub(crate) fn new() -> Self {
@@ -288,7 +290,9 @@ impl<T> TxnApply<T> {
     pub async fn apply<K, V, D, O, C>(self, handle: &mut TxnsHandle<K, V, T, D, O, C>) -> Tidy
     where
         K: Debug + Codec,
+        K::Schema: TxnsDataSchema,
         V: Debug + Codec,
+        V::Schema: TxnsDataSchema,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
@@ -303,7 +307,9 @@ impl<T> TxnApply<T> {
     pub async fn apply_eager<K, V, D, O, C>(self, handle: &mut TxnsHandle<K, V, T, D, O, C>) -> Tidy
     where
         K: Debug + Codec,
+        K::Schema: TxnsDataSchema,
         V: Debug + Codec,
+        V::Schema: TxnsDataSchema,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,

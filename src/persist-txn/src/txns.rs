@@ -29,7 +29,7 @@ use tracing::debug;
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
-use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsDataSchema, TxnsEntry};
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -107,7 +107,7 @@ where
     C: TxnsCodec,
 {
     pub(crate) metrics: Arc<Metrics>,
-    pub(crate) txns_cache: TxnsCache<T, C>,
+    pub(crate) txns_cache: TxnsCache<K, V, T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
     pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
     pub(crate) datas: DataHandles<K, V, T, D>,
@@ -116,7 +116,9 @@ where
 impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
 where
     K: Debug + Codec,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
     O: Opaque + Debug + Codec64,
@@ -680,7 +682,7 @@ where
     }
 
     /// Returns the [TxnsCache] used by this handle.
-    pub fn read_cache(&self) -> &TxnsCache<T, C> {
+    pub fn read_cache(&self) -> &TxnsCache<K, V, T, C> {
         &self.txns_cache
     }
 }
@@ -720,7 +722,9 @@ where
 impl<K, V, T, D> DataHandles<K, V, T, D>
 where
     K: Debug + Codec,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {

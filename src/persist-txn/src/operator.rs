@@ -42,7 +42,7 @@ use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
 use crate::txn_read::DataListenNext;
-use crate::{TxnsCodec, TxnsCodecDefault};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsDataSchema};
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///
@@ -99,7 +99,9 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
 ) -> (Stream<G, P>, Vec<PressOnDropButton>)
 where
     K: Debug + Codec,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -173,7 +175,9 @@ fn txns_progress_source<K, V, T, D, P, C, G>(
 ) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
 where
     K: Debug + Codec,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -194,7 +198,7 @@ where
 
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
+        let mut txns_cache = TxnsCache::<K, V, T, C>::open(&client, txns_id, Some(data_id)).await;
 
         txns_cache.update_gt(&as_of).await;
         let snap = txns_cache.data_snapshot(data_id, as_of.clone());
@@ -711,7 +715,7 @@ impl DataSubscribeTask {
 
     fn task(
         client: PersistClient,
-        cache: TxnsCache<u64>,
+        cache: TxnsCache<String, (), u64>,
         data_id: ShardId,
         as_of: u64,
         rx: std::sync::mpsc::Receiver<(
@@ -768,7 +772,9 @@ mod tests {
     impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
     where
         K: Debug + Codec,
+        K::Schema: TxnsDataSchema,
         V: Debug + Codec,
+        V::Schema: TxnsDataSchema,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
