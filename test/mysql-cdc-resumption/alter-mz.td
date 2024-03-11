@@ -7,4 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO #24975 (support ALTER SOURCE)
+# Uncomment all calls to alter-mz.td in test/mysql-cdc-resumption/mzcompose.py
 > ALTER SOURCE mz_source DROP SUBSOURCE t0;

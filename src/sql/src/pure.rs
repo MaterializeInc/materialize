@@ -1322,29 +1322,25 @@ async fn purify_alter_source(
             }
         };
 
-        // If there's no further work to do here, early return.
-        if !matches!(action, AlterSourceAction::AddSubsources { .. }) {
-            return Ok((vec![], Statement::AlterSource(stmt)));
-        }
-
+        // Ensure it's a source that supports ALTER SOURCE...
         match desc.connection {
             GenericSourceConnection::Postgres(pg_connection) => pg_connection,
             _ => sql_bail!(
-                "{} is a {} source, which does not support ALTER SOURCE...ADD SUBSOURCES",
+                "{} is a {} source, which does not support ALTER SOURCE.",
                 scx.catalog.minimal_qualification(item.name()),
                 desc.connection.name()
             ),
         }
     };
 
-    // If there's no further work to do here, early return.
+    // If we don't need to handle added subsources, early return.
     let (targeted_subsources, details, options) = match action {
         AlterSourceAction::AddSubsources {
             subsources,
             details,
             options,
         } => (subsources, details, options),
-        _ => unreachable!(),
+        _ => return Ok((vec![], Statement::AlterSource(stmt))),
     };
 
     assert!(

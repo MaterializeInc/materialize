@@ -8,4 +8,6 @@
 # by the Apache License, Version 2.0.
 
 # Tests expect healthy sources at end of test.
-> ALTER SOURCE mz_source DROP SUBSOURCE alter_fail_drop_constraint, alter_fail_drop_col;
+# TODO: Once we support ALTER SOURCE .. DROP SUBSOURCE for mysql, just
+# drop the unhealthy subsource rather than the whole source.
+> DROP SOURCE mz_source;
