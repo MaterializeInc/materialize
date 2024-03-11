@@ -246,8 +246,7 @@ To troubleshoot and fix memory and CPU usage, follow the steps in the
 
 For guidance on how to reduce memory and CPU usage for this or another query,
 take a look at the [indexing and query optimization](#indexing-and-query-optimization)
-and [computation-intensive queries](#computation-intensive-queries) sections
-above.
+and [result filtering](#result-filtering) sections above.
 
 If your query was the root cause, you'll need to kill it for the cluster's
 memory or CPU to go down. If your query was causing an OOM, the cluster will
