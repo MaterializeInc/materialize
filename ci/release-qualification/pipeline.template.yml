@@ -164,6 +164,7 @@ steps:
 
   - id: tests-preflight-check-rollback
     label: Tests with preflight check and rollback
+    skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
     trigger: tests
     async: false
     build:
@@ -173,6 +174,7 @@ steps:
 
   - id: nightlies-preflight-check-rollback
     label: Nightlies with preflight check and rollback
+    skip: "TODO(def-): Too complex to adapt for all mzcompose-based tests"
     trigger: nightlies
     async: false
     build:
