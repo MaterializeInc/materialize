@@ -74,3 +74,6 @@ pub trait TxnsCodec: Debug {
     /// treated the same as `Some(true)`.
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool>;
 }
+
+/// [crate::columnar::Schema] of a data shard used with txn-wal.
+pub trait TxnsDataSchema: Debug + PartialEq {}

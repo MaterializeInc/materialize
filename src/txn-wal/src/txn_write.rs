@@ -22,7 +22,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_persist_client::batch::Batch;
 use mz_persist_client::ShardId;
-use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
+use mz_persist_types::txn::{TxnsCodec, TxnsDataSchema, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
@@ -78,7 +78,9 @@ where
 impl<K, V, T, D> Txn<K, V, T, D>
 where
     K: Debug + Codec,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
@@ -355,7 +357,9 @@ impl<T> TxnApply<T> {
     pub async fn apply<K, V, D, O, C>(self, handle: &mut TxnsHandle<K, V, T, D, O, C>) -> Tidy
     where
         K: Debug + Codec,
+        K::Schema: TxnsDataSchema,
         V: Debug + Codec,
+        V::Schema: TxnsDataSchema,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,

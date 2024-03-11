@@ -27,8 +27,8 @@ use mz_persist_client::metrics::encode_ts_metric;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
-use mz_persist_types::{Codec64, StepForward};
+use mz_persist_types::txn::{TxnsCodec, TxnsDataSchema, TxnsEntry};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
@@ -77,7 +77,7 @@ use crate::TxnsCodecDefault;
 /// unchanged and simply manipulating capabilities in response to data and txns
 /// shard progress. See [crate::operator::txns_progress].
 #[derive(Debug)]
-pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
+pub struct TxnsCacheState<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64> {
     txns_id: ShardId,
     /// The since of the txn_shard when this cache was initialized.
     /// Some writes with a timestamp < than this may have been applied and
@@ -102,7 +102,7 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     ///
     /// Invariant: Contains all unapplied writes and registers.
     /// Invariant: Contains the latest write and registertaion >= init_ts for all shards.
-    pub(crate) datas: BTreeMap<ShardId, DataTimes<T>>,
+    pub(crate) datas: BTreeMap<ShardId, DataTimes<Arc<K::Schema>, Arc<V::Schema>, T>>,
     /// The registers and forgets needing application as of the current progress.
     ///
     /// Invariant: Values are sorted by timestamp.
@@ -115,19 +115,33 @@ pub struct TxnsCacheState<T: Timestamp + Lattice + Codec64> {
     /// TODO: It'd be nice to make this a compile time thing. I have some ideas,
     /// but they're decently invasive, so leave it for a followup.
     only_data_id: Option<ShardId>,
+
+    _phantom: std::marker::PhantomData<fn() -> (K, V)>,
 }
 
 /// A self-updating [TxnsCacheState].
 #[derive(Debug)]
-pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+pub struct TxnsCache<
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64,
+    C: TxnsCodec = TxnsCodecDefault,
+> {
     /// A subscribe over the txn shard.
     pub(crate) txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
     /// Pending updates for timestamps that haven't closed.
     pub(crate) buf: Vec<(TxnsEntry, T, i64)>,
-    state: TxnsCacheState<T>,
+    state: TxnsCacheState<K, V, T>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState<T> {
+impl<K, V, T> TxnsCacheState<K, V, T>
+where
+    K: Codec,
+    K::Schema: TxnsDataSchema,
+    V: Codec,
+    V::Schema: TxnsDataSchema,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+{
     /// Creates a new empty [`TxnsCacheState`].
     ///
     /// `init_ts` must be == the critical handle's since of the txn shard.
@@ -142,6 +156,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             datas: BTreeMap::new(),
             unapplied_registers: VecDeque::new(),
             only_data_id,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -163,7 +178,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         let mut buf = Vec::new();
         // The cache must be updated to `since_ts` to maintain the invariant
         // that `state.since_ts <= state.progress_exclusive`.
-        TxnsCache::<T, C>::update(
+        TxnsCache::<K, V, T, C>::update(
             &mut state,
             &mut txns_subscribe,
             &mut buf,
@@ -512,6 +527,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             entry.registered.push_back(DataRegistered {
                 register_ts: ts,
                 forget_ts: None,
+                _phantom: std::marker::PhantomData,
             });
         } else if diff == -1 {
             debug!(
@@ -786,7 +802,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
+impl<K, V, T, C> TxnsCache<K, V, T, C>
+where
+    K: Codec,
+    K::Schema: TxnsDataSchema,
+    V: Codec,
+    V::Schema: TxnsDataSchema,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    C: TxnsCodec,
+{
     /// Initialize the txn shard at `init_ts` and returns a [TxnsCache] reading
     /// from that shard.
     pub(crate) async fn init(
@@ -881,7 +905,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
     /// Listen to the txns shard for events until `done` returns true.
     async fn update<F: Fn(&T) -> bool>(
-        state: &mut TxnsCacheState<T>,
+        state: &mut TxnsCacheState<K, V, T>,
         txns_subscribe: &mut Subscribe<C::Key, C::Val, T, i64>,
         buf: &mut Vec<(TxnsEntry, T, i64)>,
         only_data_id: Option<ShardId>,
@@ -964,21 +988,25 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> Deref for TxnsCache<T, C> {
-    type Target = TxnsCacheState<T>;
+impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, C: TxnsCodec> Deref
+    for TxnsCache<K, V, T, C>
+{
+    type Target = TxnsCacheState<K, V, T>;
     fn deref(&self) -> &Self::Target {
         &self.state
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64, C: TxnsCodec> DerefMut for TxnsCache<T, C> {
+impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, C: TxnsCodec> DerefMut
+    for TxnsCache<K, V, T, C>
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct DataTimes<T> {
+pub(crate) struct DataTimes<KS, VS, T> {
     /// The times at which the data shard was in the txns set.
     ///
     /// Invariants:
@@ -987,12 +1015,12 @@ pub(crate) struct DataTimes<T> {
     /// - These are in increasing order.
     /// - These are non-overlapping intervals.
     /// - Everything in writes is in one of these intervals.
-    pub(crate) registered: VecDeque<DataRegistered<T>>,
+    pub(crate) registered: VecDeque<DataRegistered<KS, VS, T>>,
     /// Invariant: These are in increasing order.
     pub(crate) writes: VecDeque<T>,
 }
 
-impl<T> Default for DataTimes<T> {
+impl<KS, VS, T> Default for DataTimes<KS, VS, T> {
     fn default() -> Self {
         Self {
             registered: Default::default(),
@@ -1002,7 +1030,7 @@ impl<T> Default for DataTimes<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct DataRegistered<T> {
+pub(crate) struct DataRegistered<KS, VS, T> {
     /// The inclusive time at which the data shard was added to the txns set.
     ///
     /// If this time has been advanced by compaction, writes might be at times
@@ -1011,20 +1039,21 @@ pub(crate) struct DataRegistered<T> {
     /// The inclusive time at which the data shard was removed from the txns
     /// set, or None if it hasn't yet been removed.
     pub(crate) forget_ts: Option<T>,
+    _phantom: std::marker::PhantomData<fn() -> (KS, VS)>,
 }
 
-impl<T: Timestamp + TotalOrder> DataRegistered<T> {
+impl<KS, VS, T: Timestamp + TotalOrder> DataRegistered<KS, VS, T> {
     pub(crate) fn contains(&self, ts: &T) -> bool {
         &self.register_ts <= ts && self.forget_ts.as_ref().map_or(true, |x| ts <= x)
     }
 }
 
-impl<T: Timestamp + TotalOrder> DataTimes<T> {
-    pub(crate) fn last_reg(&self) -> &DataRegistered<T> {
+impl<KS: Debug, VS: Debug, T: Timestamp + TotalOrder> DataTimes<KS, VS, T> {
+    pub(crate) fn last_reg(&self) -> &DataRegistered<KS, VS, T> {
         self.registered.back().expect("at least one registration")
     }
 
-    fn first_reg(&self) -> &DataRegistered<T> {
+    fn first_reg(&self) -> &DataRegistered<KS, VS, T> {
         self.registered.front().expect("at least one registration")
     }
 
@@ -1116,7 +1145,7 @@ pub(crate) enum Unapplied<'a> {
 mod tests {
     use mz_ore::assert_err;
     use mz_persist_client::PersistClient;
-    use mz_persist_types::codec_impls::{ShardIdSchema, VecU8Schema};
+    use mz_persist_types::codec_impls::{ShardIdSchema, StringSchema, UnitSchema, VecU8Schema};
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
@@ -1125,7 +1154,7 @@ mod tests {
 
     use super::*;
 
-    impl TxnsCache<u64, TxnsCodecDefault> {
+    impl TxnsCache<String, (), u64, TxnsCodecDefault> {
         pub(crate) async fn expect_open(
             init_ts: u64,
             txns: &TxnsHandle<String, (), u64, i64>,
@@ -1189,7 +1218,7 @@ mod tests {
         };
         #[track_caller]
         fn testcase(
-            cache: &mut TxnsCacheState<u64>,
+            cache: &mut TxnsCacheState<String, (), u64>,
             ts: u64,
             data_id: ShardId,
             snap_expected: DataSnapshot<u64>,
@@ -1385,6 +1414,7 @@ mod tests {
                 dt.registered.push_back(DataRegistered {
                     register_ts: *x,
                     forget_ts: None,
+                    _phantom: std::marker::PhantomData::<fn() -> (StringSchema, UnitSchema)>,
                 })
             }
             dt.writes = write_ts.into_iter().cloned().collect();
@@ -1445,7 +1475,8 @@ mod tests {
             .await
             .expect("txns schema shouldn't change");
         txns_read.downgrade_since(&Antichain::from_elem(10)).await;
-        let mut cache = TxnsCache::<_, TxnsCodecDefault>::from_read(txns_read, None).await;
+        let mut cache =
+            TxnsCache::<String, (), _, TxnsCodecDefault>::from_read(txns_read, None).await;
         let _ = cache.update_gt(&15).await;
         let snap = cache.data_snapshot(d0, 12);
         assert_eq!(snap.latest_write, Some(5));
@@ -1479,7 +1510,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn data_compacted() {
         let d0 = ShardId::new();
-        let mut c = TxnsCacheState::new(ShardId::new(), 10, None);
+        let mut c = TxnsCacheState::<String, (), _>::new(ShardId::new(), 10, None);
         c.progress_exclusive = 20;
 
         assert_err!(mz_ore::panic::catch_unwind(|| c.data_listen_next(&d0, &0)));

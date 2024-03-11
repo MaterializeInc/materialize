@@ -552,6 +552,7 @@ pub mod tests {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use mz_persist_types::txn::TxnsDataSchema;
     use prost::Message;
 
     use crate::operator::DataSubscribe;
@@ -564,7 +565,9 @@ pub mod tests {
     impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
     where
         K: Debug + Codec + Clone,
+        K::Schema: TxnsDataSchema,
         V: Debug + Codec + Clone,
+        V::Schema: TxnsDataSchema,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
         O: Opaque + Debug + Codec64,
@@ -591,7 +594,9 @@ pub mod tests {
     impl<K, V, T, D> TestTxn<K, V, T, D>
     where
         K: Debug + Codec + Clone,
+        K::Schema: TxnsDataSchema,
         V: Debug + Codec + Clone,
+        V::Schema: TxnsDataSchema,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
     {
@@ -733,7 +738,7 @@ pub mod tests {
         #[allow(ungated_async_fn_track_caller)]
         #[track_caller]
         pub async fn assert_snapshot(&self, data_id: ShardId, as_of: u64) {
-            let mut cache: TxnsCache<u64, TxnsCodecDefault> =
+            let mut cache: TxnsCache<String, (), u64, TxnsCodecDefault> =
                 TxnsCache::open(&self.client, self.txns_id, Some(data_id)).await;
             let _ = cache.update_gt(&as_of).await;
             let snapshot = cache.data_snapshot(data_id, as_of);

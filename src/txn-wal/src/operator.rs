@@ -28,7 +28,7 @@ use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_client::project::ProjectionPushdown;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
-use mz_persist_types::txn::TxnsCodec;
+use mz_persist_types::txn::{TxnsCodec, TxnsDataSchema};
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
     AsyncInputHandle, Event as AsyncEvent, InputConnection,
@@ -106,7 +106,9 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
 ) -> (Stream<G, P>, Vec<PressOnDropButton>)
 where
     K: Debug + Codec + Send + Sync,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec + Send + Sync,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -170,7 +172,9 @@ fn txns_progress_source_local<K, V, T, D, P, C, G>(
 ) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
 where
     K: Debug + Codec + Send + Sync,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec + Send + Sync,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -191,7 +195,7 @@ where
 
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
+        let mut txns_cache = TxnsCache::<K, V, T, C>::open(&client, txns_id, Some(data_id)).await;
 
         let _ = txns_cache.update_gt(&as_of).await;
         let mut subscribe = txns_cache.data_subscribe(data_id, as_of.clone());
@@ -286,7 +290,9 @@ fn txns_progress_source_global<K, V, T, D, P, C, G>(
 ) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
 where
     K: Debug + Codec + Send + Sync,
+    K::Schema: TxnsDataSchema,
     V: Debug + Codec + Send + Sync,
+    V::Schema: TxnsDataSchema,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
@@ -307,7 +313,7 @@ where
 
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let txns_read = ctx.get_or_init::<T, C>(&client, txns_id).await;
+        let txns_read = ctx.get_or_init::<K, V, T, C>(&client, txns_id).await;
 
         let _ = txns_read.update_gt(as_of.clone()).await;
         let data_write = client
@@ -534,8 +540,12 @@ pub struct TxnsContext {
 }
 
 impl TxnsContext {
-    async fn get_or_init<T, C>(&self, client: &PersistClient, txns_id: ShardId) -> TxnsRead<T>
+    async fn get_or_init<K, V, T, C>(&self, client: &PersistClient, txns_id: ShardId) -> TxnsRead<T>
     where
+        K: Codec,
+        K::Schema: TxnsDataSchema,
+        V: Codec,
+        V::Schema: TxnsDataSchema,
         T: Timestamp + Lattice + Codec64 + TotalOrder + StepForward,
         C: TxnsCodec + 'static,
     {
@@ -545,7 +555,7 @@ impl TxnsContext {
                 let client = client.clone();
                 async move {
                     let read: Box<dyn Any + Send + Sync> =
-                        Box::new(TxnsRead::<T>::start::<C>(client, txns_id).await);
+                        Box::new(TxnsRead::<T>::start::<K, V, C>(client, txns_id).await);
                     read
                 }
             })
@@ -827,7 +837,7 @@ impl DataSubscribeTask {
 
     fn task(
         client: PersistClient,
-        cache: TxnsCache<u64>,
+        cache: TxnsCache<String, (), u64>,
         data_id: ShardId,
         as_of: u64,
         rx: std::sync::mpsc::Receiver<(
@@ -886,7 +896,9 @@ mod tests {
     impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
     where
         K: Debug + Codec,
+        K::Schema: TxnsDataSchema,
         V: Debug + Codec,
+        V::Schema: TxnsDataSchema,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,

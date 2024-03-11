@@ -37,10 +37,11 @@ use crate::dyn_struct::{
     ColumnsMut, ColumnsRef, DynStruct, DynStructCfg, DynStructCol, DynStructMut, DynStructRef,
 };
 use crate::stats::{BytesStats, NoneStats, OptionStats, PrimitiveStats, StatsFn, StructStats};
+use crate::txn::TxnsDataSchema;
 use crate::{Codec, Codec64, Opaque, ShardId};
 
 /// An implementation of [Schema] for [()].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct UnitSchema;
 
 /// [`PartEncoder`] for [`UnitSchema`].
@@ -81,6 +82,8 @@ impl Schema<()> for UnitSchema {
         Ok(UnitSchemaEncoder { len })
     }
 }
+
+impl TxnsDataSchema for UnitSchema {}
 
 impl Codec for () {
     type Storage = ();
@@ -381,7 +384,7 @@ impl<X, T: Data> SimpleSchema<X, T> {
 }
 
 /// An implementation of [Schema] for [String].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StringSchema;
 
 impl Schema<String> for StringSchema {
@@ -418,6 +421,8 @@ impl Schema2<String> for StringSchema {
     }
 }
 
+impl TxnsDataSchema for StringSchema {}
+
 impl Codec for String {
     type Storage = ();
     type Schema = StringSchema;
@@ -439,7 +444,7 @@ impl Codec for String {
 }
 
 /// An implementation of [Schema] for [`Vec<u8>`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct VecU8Schema;
 
 impl Schema<Vec<u8>> for VecU8Schema {
