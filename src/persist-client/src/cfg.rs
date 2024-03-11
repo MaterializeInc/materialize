@@ -35,6 +35,7 @@ use crate::operators::{
     STORAGE_SOURCE_DECODE_FUEL,
 };
 use crate::read::READER_LEASE_DURATION;
+use crate::rpc::PUBSUB_CLIENT_ENABLED;
 
 /// The tunable knobs for persist.
 ///
@@ -231,6 +232,11 @@ impl PersistConfig {
     /// operator before yielding.
     pub fn storage_source_decode_fuel(&self) -> usize {
         STORAGE_SOURCE_DECODE_FUEL.get(self)
+    }
+
+    /// Overrides the value for "persist_pubsub_client_enabled".
+    pub fn set_pubsub_client_enabled(&self, val: bool) {
+        self.set_config(&PUBSUB_CLIENT_ENABLED, val);
     }
 
     /// Overrides the value for "persist_reader_lease_duration".
