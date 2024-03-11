@@ -183,6 +183,13 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 # Postgres returns a double for nullif(int, double), which does not seem better
                 return YesIgnore("not considered worse")
 
+        if db_function.function_name_in_lower_case == "decode" and expression.args[
+            0
+        ].has_any_characteristic(
+            {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
+        ):
+            return YesIgnore("#25937 (base64 decode with new line and tab)")
+
         return NoIgnore()
 
     def _matches_problematic_operation_invocation(
