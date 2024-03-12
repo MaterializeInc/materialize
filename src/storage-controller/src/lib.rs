@@ -745,6 +745,7 @@ where
                     new_source_statistic_entries.insert(id);
                 }
             }
+
             self.persist_read_handles.register(id, since_handle);
 
             // If this collection has a dependency, install a read hold on it.
@@ -1169,8 +1170,8 @@ where
 
         for (id, description) in exports {
             let from_id = description.sink.from;
-
-            let dependency_since = self.determine_collection_since_joins(&[from_id])?;
+            let dep_collection = self.collection(from_id)?;
+            let dependency_since = dep_collection.implied_capability.clone();
             self.install_read_capability(id, from_id, dependency_since.clone())?;
 
             info!(
@@ -2719,26 +2720,6 @@ where
             .collect_vec();
 
         res
-    }
-
-    /// Return the since frontier at which we can read from all the given
-    /// collections.
-    ///
-    /// The outer error is a potentially recoverable internal error, while the
-    /// inner error is appropriate to return to the adapter.
-    fn determine_collection_since_joins(
-        &self,
-        collections: &[GlobalId],
-    ) -> Result<Antichain<T>, StorageError<T>> {
-        let mut joined_since = Antichain::from_elem(T::minimum());
-        for id in collections {
-            let collection = self.collection(*id)?;
-
-            let since = collection.implied_capability.clone();
-            joined_since.join_assign(&since);
-        }
-
-        Ok(joined_since)
     }
 
     /// Install read capabilities on the given `storage_dependency`.

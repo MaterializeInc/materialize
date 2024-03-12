@@ -46,7 +46,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource, QualifiedReplica,
-    TransactionIsolationLevel, TransactionMode, Value, WithOptionValue,
+    TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -1270,6 +1270,12 @@ pub struct Source {
 pub enum DataSourceDesc {
     /// Receives data from an external system.
     Ingestion(Ingestion),
+    /// This source receives its data from the identified ingestion,
+    /// specifically the output identified by `external_reference`.
+    IngestionExport {
+        ingestion_id: GlobalId,
+        external_reference: UnresolvedItemName,
+    },
     /// Receives data from some other source.
     Source,
     /// Receives data from the source's reclocking/remapping operations.

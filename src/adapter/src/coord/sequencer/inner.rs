@@ -296,6 +296,17 @@ impl Coordinator {
                                 set_read_policies,
                             )
                         }
+                        DataSourceDesc::IngestionExport {
+                            ingestion_id,
+                            external_reference,
+                        } => (
+                            DataSource::IngestionExport {
+                                ingestion_id,
+                                external_reference,
+                            },
+                            source_status_collection_id,
+                            vec![],
+                        ),
                         DataSourceDesc::Source => {
                             unreachable!("cannot render legacy-style sources")
                         }
