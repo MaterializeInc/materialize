@@ -28,15 +28,17 @@ class TestApplyGrantsAndPrivileges:
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
         project.run_sql("DROP ROLE my_role")
-        project.run_sql("DROP SCHEMA IF EXISTS blue CASCADE")
-        project.run_sql("DROP SCHEMA IF EXISTS green CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS blue_schema CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS green_schema CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS blue_cluster  CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS green_cluster CASCADE")
 
     def apply_schema_default_privileges(self, project):
         project.run_sql("CREATE ROLE my_role")
-        project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA green")
+        project.run_sql("CREATE SCHEMA blue_schema")
+        project.run_sql("CREATE SCHEMA green_schema")
         project.run_sql(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA blue GRANT SELECT ON TABLES TO my_role"
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA blue_schema GRANT SELECT ON TABLES TO my_role"
         )
 
         run_dbt(
@@ -44,7 +46,7 @@ class TestApplyGrantsAndPrivileges:
                 "run-operation",
                 "internal_copy_schema_grants",
                 "--args",
-                "{from: blue, to: green}",
+                "{from: blue_schema, to: green_schema}",
             ]
         )
 
@@ -52,7 +54,7 @@ class TestApplyGrantsAndPrivileges:
             """SELECT count(*) = 1
              FROM mz_internal.mz_show_default_privileges
              WHERE database = current_database()
-                AND schema = 'green'
+                AND schema = 'green_schema'
                 AND grantee = 'my_role'
                 AND object_type = 'table'
                 AND privilege_type = 'SELECT'""",
@@ -63,17 +65,17 @@ class TestApplyGrantsAndPrivileges:
 
     def apply_schema_grants(self, project):
         project.run_sql("CREATE ROLE my_role")
-        project.run_sql("CREATE SCHEMA blue")
-        project.run_sql("CREATE SCHEMA green")
+        project.run_sql("CREATE SCHEMA blue_schema")
+        project.run_sql("CREATE SCHEMA green_schema")
 
-        project.run_sql("GRANT CREATE ON SCHEMA green TO my_role")
-        project.run_sql("GRANT USAGE ON SCHEMA blue TO my_role")
+        project.run_sql("GRANT CREATE ON SCHEMA green_schema TO my_role")
+        project.run_sql("GRANT USAGE ON SCHEMA blue_schema TO my_role")
         run_dbt(
             [
                 "run-operation",
                 "internal_copy_schema_grants",
                 "--args",
-                "{from: blue, to: green}",
+                "{from: blue_schema, to: green_schema}",
             ]
         )
 
@@ -82,7 +84,7 @@ class TestApplyGrantsAndPrivileges:
             SELECT count(*) = 0
             FROM mz_internal.mz_show_schema_privileges
             WHERE grantee = 'my_role'
-                AND name = 'green'
+                AND name = 'green_schema'
                 AND privilege_type = 'CREATE'""",
             fetch="one",
         )
@@ -94,7 +96,7 @@ class TestApplyGrantsAndPrivileges:
             SELECT count(*) = 1
             FROM mz_internal.mz_show_schema_privileges
             WHERE grantee = 'my_role'
-                AND name = 'green'
+                AND name = 'green_schema'
                 AND privilege_type = 'USAGE'""",
             fetch="one",
         )
@@ -103,17 +105,17 @@ class TestApplyGrantsAndPrivileges:
 
     def apply_cluster_grants(self, project):
         project.run_sql("CREATE ROLE my_role")
-        project.run_sql("CREATE CLUSTER blue SIZE = '1'")
-        project.run_sql("CREATE CLUSTER green SIZE = '1'")
+        project.run_sql("CREATE CLUSTER blue_cluster SIZE = '1'")
+        project.run_sql("CREATE CLUSTER green_cluster SIZE = '1'")
 
-        project.run_sql("GRANT CREATE ON CLUSTER green TO my_role")
-        project.run_sql("GRANT USAGE ON CLUSTER blue TO my_role")
+        project.run_sql("GRANT CREATE ON CLUSTER green_cluster TO my_role")
+        project.run_sql("GRANT USAGE ON CLUSTER blue_cluster TO my_role")
         run_dbt(
             [
                 "run-operation",
-                "internal_copy_schema_grants",
+                "internal_copy_cluster_grants",
                 "--args",
-                "{from: blue, to: green}",
+                "{from: blue_cluster, to: green_cluster}",
             ]
         )
 
@@ -122,7 +124,7 @@ class TestApplyGrantsAndPrivileges:
             SELECT count(*) = 0
             FROM mz_internal.mz_show_cluster_privileges
             WHERE grantee = 'my_role'
-                AND name = 'green'
+                AND name = 'green_cluster'
                 AND privilege_type = 'CREATE'""",
             fetch="one",
         )
@@ -134,7 +136,7 @@ class TestApplyGrantsAndPrivileges:
             SELECT count(*) = 1
             FROM mz_internal.mz_show_cluster_privileges
             WHERE grantee = 'my_role'
-                AND name = 'green'
+                AND name = 'green_cluster'
                 AND privilege_type = 'USAGE'""",
             fetch="one",
         )

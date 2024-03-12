@@ -219,7 +219,7 @@ WHERE database = current_database() AND schema = {{ dbt.string_literal(from) }}
 
 {% macro internal_copy_schema_grants(from, to) %}
 {% set find_revokes %}
-WITH schema_privledge AS (
+WITH schema_privilege AS (
     SELECT mz_internal.mz_aclexplode(s.privileges).*
     FROM mz_schemas s
     JOIN mz_databases d ON s.database_id = d.id
@@ -230,7 +230,7 @@ WITH schema_privledge AS (
 SELECT 'REVOKE '    || s.privilege_type || ' ' ||
        'ON SCHEMA ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
        'FROM '      || quote_ident(grantee.name)
-FROM schema_privledge AS s
+FROM schema_privilege AS s
 JOIN mz_roles AS grantee ON s.grantee = grantee.id
 WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
 {% endset %}
@@ -243,7 +243,7 @@ WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
 {% endif %}
 
 {% set find_grants %}
-WITH schema_privledge AS (
+WITH schema_privilege AS (
     SELECT mz_internal.mz_aclexplode(s.privileges).*
     FROM mz_schemas s
     JOIN mz_databases d ON s.database_id = d.id
@@ -254,7 +254,7 @@ WITH schema_privledge AS (
 SELECT 'GRANT '     || s.privilege_type || ' ' ||
        'ON SCHEMA ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
        'TO '        || quote_ident(grantee.name)
-FROM schema_privledge AS s
+FROM schema_privilege AS s
 JOIN mz_roles AS grantee ON s.grantee = grantee.id
 WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
 {% endset %}
@@ -270,19 +270,17 @@ WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
 
 {% macro internal_copy_cluster_grants(from, to) %}
 {% set find_revokes %}
-WITH schema_privledge AS (
-    SELECT mz_internal.mz_aclexplode(s.privileges).*
-    FROM mz_schemas s
-    JOIN mz_databases d ON s.database_id = d.id
-    WHERE d.name = current_database()
-        AND s.name = {{ dbt.string_literal(to) }}
+WITH cluster_privilege AS (
+    SELECT mz_internal.mz_aclexplode(privileges).*
+    FROM mz_clusters
+    WHERE name = {{ dbt.string_literal(from) }}
 )
 
-SELECT 'REVOKE '     || s.privilege_type || ' ' ||
+SELECT 'REVOKE '     || c.privilege_type || ' ' ||
        'ON CLUSTER ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
        'FROM '       || quote_ident(grantee.name)
-FROM schema_privledge AS s
-JOIN mz_roles AS grantee ON s.grantee = grantee.id
+FROM cluster_privilege AS c
+JOIN mz_roles AS grantee ON c.grantee = grantee.id
 WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
     AND grantee.name <> current_role
 {% endset %}
@@ -295,7 +293,7 @@ WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
 {% endif %}
 
 {% set find_grants %}
-WITH cluster_privledge AS (
+WITH cluster_privilege AS (
     SELECT mz_internal.mz_aclexplode(privileges).*
     FROM mz_clusters
     WHERE name = {{ dbt.string_literal(from) }}
@@ -304,7 +302,7 @@ WITH cluster_privledge AS (
 SELECT 'GRANT '      || c.privilege_type || ' ' ||
        'ON CLUSTER ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
        'TO '         || quote_ident(grantee.name)
-FROM cluster_privledge AS c
+FROM cluster_privilege AS c
 JOIN mz_roles AS grantee ON c.grantee = grantee.id
 WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
 {% endset %}

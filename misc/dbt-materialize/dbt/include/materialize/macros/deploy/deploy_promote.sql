@@ -94,13 +94,13 @@ BEGIN;
 {% for schema in schemas %}
     {% set deploy_schema = schema ~ "_dbt_deploy" %}
     {{ log("Swapping schemas " ~ schema ~ " and " ~ deploy_schema, info=True) }}
-    ALTER SCHEMA "{{ schema }}" SWAP WITH "{{ deploy_schema }}";
+    ALTER SCHEMA {{ adapter.quote(schema) }} SWAP WITH {{ adapter.quote(deploy_schema) }};
 {% endfor %}
 
 {% for cluster in clusters %}
     {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
     {{ log("Swapping clusters " ~ cluster ~ " and " ~ deploy_cluster, info=True) }}
-    ALTER CLUSTER "{{ cluster }}" SWAP WITH "{{ deploy_cluster }}";
+    ALTER CLUSTER {{ adapter.quote(cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
 {% endfor %}
 
 COMMIT;

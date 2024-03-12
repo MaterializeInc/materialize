@@ -16,7 +16,7 @@
 {% macro set_cluster_ci_tag(cluster, ci_tag=env_var('CI_TAG', '')) %}
     {% if ci_tag != '' %}
         {% set ci_comment %}
-            COMMENT ON CLUSTER "{{ cluster }}" IS {{ dbt.string_literal(ci_tag) }};
+            COMMENT ON CLUSTER {{ adapter.quote(cluster) }} IS {{ dbt.string_literal(ci_tag) }};
         {% endset %}
         {{ run_query(ci_comment) }}
     {% endif %}
@@ -25,7 +25,7 @@
 {% macro set_schema_ci_tag(schema, ci_tag=env_var('CI_TAG', '')) %}
     {% if ci_tag != '' %}
         {% set ci_comment %}
-            COMMENT ON SCHEMA "{{ schema }}" IS {{ dbt.string_literal(ci_tag) }};
+            COMMENT ON SCHEMA {{ adapter.quote(schema) }} IS {{ dbt.string_literal(ci_tag) }};
         {% endset %}
         {{ run_query(ci_comment) }}
     {% endif %}
