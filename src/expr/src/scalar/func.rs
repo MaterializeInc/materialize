@@ -4602,7 +4602,7 @@ derive_unary!(
     CastBytesToString,
     CastStringToJsonb,
     CastJsonbToString,
-    CastJsonbOrNullToJsonb,
+    CastJsonbableToJsonb,
     CastJsonbToInt16,
     CastJsonbToInt32,
     CastJsonbToInt64,
@@ -4986,7 +4986,7 @@ impl Arbitrary for UnaryFunc {
             CastBytesToString::arbitrary().prop_map_into().boxed(),
             CastStringToJsonb::arbitrary().prop_map_into().boxed(),
             CastJsonbToString::arbitrary().prop_map_into().boxed(),
-            CastJsonbOrNullToJsonb::arbitrary().prop_map_into().boxed(),
+            CastJsonbableToJsonb::arbitrary().prop_map_into().boxed(),
             CastJsonbToInt16::arbitrary().prop_map_into().boxed(),
             CastJsonbToInt32::arbitrary().prop_map_into().boxed(),
             CastJsonbToInt64::arbitrary().prop_map_into().boxed(),
@@ -5374,7 +5374,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::CastBytesToString(_) => CastBytesToString(()),
             UnaryFunc::CastStringToJsonb(_) => CastStringToJsonb(()),
             UnaryFunc::CastJsonbToString(_) => CastJsonbToString(()),
-            UnaryFunc::CastJsonbOrNullToJsonb(_) => CastJsonbOrNullToJsonb(()),
+            UnaryFunc::CastJsonbableToJsonb(_) => CastJsonbableToJsonb(()),
             UnaryFunc::CastJsonbToInt16(_) => CastJsonbToInt16(()),
             UnaryFunc::CastJsonbToInt32(_) => CastJsonbToInt32(()),
             UnaryFunc::CastJsonbToInt64(_) => CastJsonbToInt64(()),
@@ -5799,7 +5799,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 CastBytesToString(()) => Ok(impls::CastBytesToString.into()),
                 CastStringToJsonb(()) => Ok(impls::CastStringToJsonb.into()),
                 CastJsonbToString(()) => Ok(impls::CastJsonbToString.into()),
-                CastJsonbOrNullToJsonb(()) => Ok(impls::CastJsonbOrNullToJsonb.into()),
+                CastJsonbableToJsonb(()) => Ok(impls::CastJsonbableToJsonb.into()),
                 CastJsonbToInt16(()) => Ok(impls::CastJsonbToInt16.into()),
                 CastJsonbToInt32(()) => Ok(impls::CastJsonbToInt32.into()),
                 CastJsonbToInt64(()) => Ok(impls::CastJsonbToInt64.into()),
@@ -6437,26 +6437,38 @@ fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> 
 }
 
 fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    if datums.iter().any(|datum| datum.is_null()) {
-        // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
-        Datum::Null
-    } else {
-        temp_storage.make_datum(|packer| packer.push_list(datums))
-    }
+    temp_storage.make_datum(|packer| {
+        packer.push_list(datums.into_iter().map(|d| match d {
+            Datum::Null => Datum::JsonNull,
+            d => *d,
+        }))
+    })
 }
 
-fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    if datums.iter().any(|datum| datum.is_null()) {
-        // the inputs should all be valid jsonb types, but a casting error might produce a Datum::Null that needs to be propagated
-        Datum::Null
-    } else {
-        let mut kvs = datums.chunks(2).collect::<Vec<_>>();
-        kvs.sort_by(|kv1, kv2| kv1[0].cmp(&kv2[0]));
-        kvs.dedup_by(|kv1, kv2| kv1[0] == kv2[0]);
-        temp_storage.make_datum(|packer| {
-            packer.push_dict(kvs.into_iter().map(|kv| (kv[0].unwrap_str(), kv[1])))
+fn jsonb_build_object<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut kvs = datums.chunks(2).collect::<Vec<_>>();
+    kvs.sort_by(|kv1, kv2| kv1[0].cmp(&kv2[0]));
+    kvs.dedup_by(|kv1, kv2| kv1[0] == kv2[0]);
+    temp_storage.try_make_datum(|packer| {
+        packer.push_dict_with(|packer| {
+            for kv in kvs {
+                let k = kv[0];
+                if k.is_null() {
+                    return Err(EvalError::KeyCannotBeNull);
+                };
+                let v = match kv[1] {
+                    Datum::Null => Datum::JsonNull,
+                    d => d,
+                };
+                packer.push(k);
+                packer.push(v);
+            }
+            Ok(())
         })
-    }
+    })
 }
 
 fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -7559,7 +7571,7 @@ impl VariadicFunc {
             VariadicFunc::Replace => Ok(replace(&ds, temp_storage)),
             VariadicFunc::Translate => Ok(translate(&ds, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildObject => Ok(jsonb_build_object(&ds, temp_storage)),
+            VariadicFunc::JsonbBuildObject => jsonb_build_object(&ds, temp_storage),
             VariadicFunc::MapBuild { .. } => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate {
                 elem_type: ScalarType::Array(_),

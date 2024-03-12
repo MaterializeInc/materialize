@@ -171,7 +171,10 @@ impl LazyUnaryFunc for CastArrayToJsonb {
                 [dim] => {
                     for _ in 0..dim.length {
                         let elem = elems.next().unwrap();
-                        let elem = cast_element.eval(&[elem], temp_storage)?;
+                        let elem = match cast_element.eval(&[elem], temp_storage)? {
+                            Datum::Null => Datum::JsonNull,
+                            d => d,
+                        };
                         packer.push(elem);
                     }
                     Ok(())

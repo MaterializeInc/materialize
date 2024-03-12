@@ -159,11 +159,10 @@ sqlfunc!(
 );
 
 sqlfunc!(
-    #[sqlname = "jsonb_or_null_to_jsonb"]
-    fn cast_jsonb_or_null_to_jsonb<'a>(a: Option<JsonbRef<'a>>) -> JsonbRef<'a> {
-        match a.map(|v| v.into_datum()) {
-            None => JsonbRef::from_datum(Datum::JsonNull),
-            Some(Datum::Numeric(n)) => {
+    #[sqlname = "jsonbable_to_jsonb"]
+    fn cast_jsonbable_to_jsonb<'a>(a: JsonbRef<'a>) -> JsonbRef<'a> {
+        match a.into_datum() {
+            Datum::Numeric(n) => {
                 let n = n.into_inner();
                 let datum = if n.is_finite() {
                     Datum::from(n)
@@ -176,7 +175,7 @@ sqlfunc!(
                 };
                 JsonbRef::from_datum(datum)
             }
-            Some(datum) => JsonbRef::from_datum(datum),
+            datum => JsonbRef::from_datum(datum),
         }
     }
 );
