@@ -108,14 +108,16 @@ impl Coordinator {
     }
 
     /// Same as [`Self::catalog_transact_inner`] but awaits the table updates.
-    #[instrument(name = "coord::catalog_transact_inner")]
+    #[instrument(name = "coord::catalog_transact_conn")]
     pub(crate) async fn catalog_transact_conn(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
         let table_updates = self.catalog_transact_inner(conn_id, ops).await?;
-        table_updates.await;
+        table_updates
+            .instrument(info_span!("coord::catalog_transact_conn::table_updates"))
+            .await;
         Ok(())
     }
 
