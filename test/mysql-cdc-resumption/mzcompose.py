@@ -9,6 +9,8 @@
 
 import time
 
+import pymysql
+
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
@@ -90,15 +92,16 @@ def workflow_backup_restore(c: Composition) -> None:
         # No end confirmation here, since we expect the source to be in a bad state
 
 
-def workflow_reset_gtid(c: Composition) -> None:
+def workflow_bin_log_manipulations(c: Composition) -> None:
     with c.override(
         Materialized(sanity_restart=False),
     ):
-        scenario = reset_master_gtid
-        print(f"--- Running scenario {scenario.__name__}")
-        initialize(c)
-        scenario(c)
-        # No end confirmation here, since we expect the source to be in a bad state
+        scenarios = [reset_master_gtid, corrupt_bin_log]
+        for scenario in scenarios:
+            print(f"--- Running scenario {scenario.__name__}")
+            initialize(c)
+            scenario(c)
+            # No end confirmation here, since we expect the source to be in a bad state
 
 
 def workflow_master_changes(c: Composition) -> None:
@@ -477,6 +480,40 @@ def reset_master_gtid(c: Composition) -> None:
     run_testdrive_files(
         c,
         "delete-rows-t1.td",
+        "verify-source-stalled.td",
+    )
+
+
+def corrupt_bin_log(c: Composition) -> None:
+    """
+    Switch off mz, modify data in mysql, and purge the bin-log so that mz hasn't seen all entries in the replication
+    stream.
+    """
+
+    c.kill("materialized")
+
+    mysql_conn = pymysql.connect(
+        host="localhost",
+        user="root",
+        password=MySql.DEFAULT_ROOT_PASSWORD,
+        database="mysql",
+        port=c.default_port("mysql"),
+    )
+
+    mysql_conn.autocommit(True)
+    with mysql_conn.cursor() as cur:
+        cur.execute("INSERT INTO public.t1 VALUES (1, 'text')")
+
+        cur.execute("FLUSH BINARY LOGS")
+        time.sleep(2)
+        cur.execute("PURGE BINARY LOGS BEFORE now()")
+
+        cur.execute("INSERT INTO public.t1 VALUES (2, 'text')")
+
+    c.up("materialized")
+
+    run_testdrive_files(
+        c,
         "verify-source-stalled.td",
     )
 
