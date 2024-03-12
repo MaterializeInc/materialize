@@ -163,6 +163,17 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
     }
+
+    fn output_idx_for_name(&self, name: &mz_sql_parser::ast::UnresolvedItemName) -> Option<usize> {
+        self.details
+            .tables
+            .iter()
+            .position(|t| {
+                let inner = &name.0;
+                t.schema_name == inner[0].as_str() && t.name == inner[1].as_str()
+            })
+            .map(|idx| idx + 1)
+    }
 }
 
 // TODO(roshan): implement alter comaptibility logic

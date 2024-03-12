@@ -45,8 +45,8 @@ mz-repr = { path = "../repr" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
-mz-ssh-util = { path = "../ssh-util" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-ssh-util = { path = "../ssh-util" }
 mz-stash-types = { path = "../stash-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-tls-util = { path = "../tls-util" }

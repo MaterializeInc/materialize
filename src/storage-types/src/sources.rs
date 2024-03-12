@@ -30,6 +30,7 @@ use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, ProtoRow, RelationDesc, Row,
     RowDecoder, RowEncoder,
 };
+use mz_sql_parser::ast::UnresolvedItemName;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use prost::Message;
@@ -592,6 +593,9 @@ pub trait SourceConnection: Debug + Clone + PartialEq + crate::AlterCompatible {
     /// Returns metadata columns that this connection *instance* will produce once rendered. The
     /// columns are returned in the order specified by the user.
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)>;
+
+    /// Returns the output position for `name`if this source contains it.
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize>;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -881,6 +885,15 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::Postgres(conn) => conn.metadata_columns(),
             Self::MySql(conn) => conn.metadata_columns(),
             Self::LoadGenerator(conn) => conn.metadata_columns(),
+        }
+    }
+
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        match self {
+            Self::Kafka(conn) => conn.output_idx_for_name(name),
+            Self::Postgres(conn) => conn.output_idx_for_name(name),
+            Self::MySql(conn) => conn.output_idx_for_name(name),
+            Self::LoadGenerator(conn) => conn.output_idx_for_name(name),
         }
     }
 }
