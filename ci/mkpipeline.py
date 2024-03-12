@@ -51,7 +51,7 @@ from .deploy.deploy_util import rust_version
 # err on the side of including too much rather than too little. (For example,
 # bin/resync-submodules is not presently used by CI, but it's just not worth
 # trying to capture that.)
-CI_GLUE_GLOBS = ["bin", "ci", "misc/python"]
+CI_GLUE_GLOBS = ["bin", "ci"]
 
 
 def steps(pipeline: Any) -> Iterator[dict[str, Any]]:
@@ -59,6 +59,10 @@ def steps(pipeline: Any) -> Iterator[dict[str, Any]]:
         yield step
         if "group" in step:
             yield from step.get("steps", [])
+
+
+def get_imported_files(composition: str) -> list[str]:
+    return spawn.capture(["bin/ci-python-imports", composition]).splitlines()
 
 
 def main() -> int:
@@ -353,6 +357,9 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool) -> None:
                         for dep in composition.dependencies:
                             step.image_dependencies.add(dep)
                         step.extra_inputs.add(str(repo.compositions[name]))
+                        # All (transitively) imported python modules are also implicitly dependencies
+                        for file in get_imported_files(str(repo.compositions[name])):
+                            step.extra_inputs.add(file)
                     elif plugin_name == "./ci/plugins/cloudtest":
                         step.image_dependencies.add(deps["environmentd"])
                         step.image_dependencies.add(deps["clusterd"])
