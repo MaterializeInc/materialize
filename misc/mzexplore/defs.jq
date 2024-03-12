@@ -45,7 +45,7 @@ def isproject(expr):
 ;
 
 def parts(expr):
-    .CallUnary?.expr[]?, .CallBinary?.expr1[]?, .CallBinary?.expr2[]?, .CallVariadic?.exprs[]? 
+    .CallUnary?.expr[]?, .CallBinary?.expr1[]?, .CallBinary?.expr2[]?, .CallVariadic?.exprs[]?
 ;
 
 def subexprs(expr):
