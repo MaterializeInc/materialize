@@ -1501,12 +1501,12 @@ generate_extracted_config!(
 
 pub fn plan_create_subsource(
     scx: &StatementContext,
-    stmt: CreateSubsourceStatement<Aug>,
+    mut stmt: CreateSubsourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let CreateSubsourceStatement {
         name,
         columns,
-        of_source: _,
+        of_source,
         constraints,
         if_not_exists,
         with_options,
@@ -1515,6 +1515,8 @@ pub fn plan_create_subsource(
     let CreateSubsourceOptionExtracted {
         progress,
         references,
+        external_reference,
+        init_output_index,
         ..
     } = with_options.clone().try_into()?;
 
@@ -1523,7 +1525,7 @@ pub fn plan_create_subsource(
     // statements, so this would fire in integration testing if we failed to
     // uphold it.
     assert!(
-        progress ^ references,
+        (progress ^ references) ^ (external_reference.is_some() && of_source.is_some()),
         "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
     );
 
@@ -1625,8 +1627,51 @@ pub fn plan_create_subsource(
         }
     }
 
+    let data_source = if let Some(source_reference) = of_source {
+        let ingestion_id = *source_reference.item_id();
+        let external_reference = external_reference.unwrap();
+
+        let output_index = match init_output_index {
+            // We provide the output index as an option when adding new subsources
+            // (the table might not yet exist in the connection's details we've
+            // persisted in the catalog).
+            Some(output_index) => usize::cast_from(output_index),
+            // We do not need to provide the output index when the details are
+            // stable (i.e. on reboot).
+            None => {
+                let desc = scx
+                    .catalog
+                    .get_item(&ingestion_id)
+                    .source_desc()
+                    .expect("source reference must be a source")
+                    .expect("source reference must be an ingestion");
+
+                desc.connection
+                    .output_idx_for_name(&external_reference)
+                    .expect("reference to upstream object must be valid")
+            }
+        };
+
+        DataSourceDesc::SourceExport {
+            output_index,
+            ingestion_id,
+        }
+    } else if progress {
+        DataSourceDesc::Progress
+    } else if references {
+        DataSourceDesc::Source
+    } else {
+        panic!("must have specified one")
+    };
+
     let if_not_exists = *if_not_exists;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+
+    // Remove the output index option, which we only use during purification,
+    // i.e. the persisted `create_sql` should not specify it.
+    stmt.with_options
+        .retain(|option| option.name != CreateSubsourceOptionName::InitOutputIndex);
+
     let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -1634,13 +1679,7 @@ pub fn plan_create_subsource(
 
     let source = Source {
         create_sql,
-        data_source: if progress {
-            DataSourceDesc::Progress
-        } else if references {
-            DataSourceDesc::Source
-        } else {
-            unreachable!("state prohibited above")
-        },
+        data_source,
         desc,
         compaction_window: None,
     };
