@@ -289,16 +289,11 @@ pub(crate) async fn upgrade(
             46 => {
                 run_versioned_upgrade(unopened_catalog_state, mode, version, v46_to_v47::upgrade)
                     .await
-                }
-                47 => {
-                    run_versioned_upgrade(
-                        unopened_catalog_state,
-                        mode,
-                        version,
-                        v47_to_v48::upgrade,
-                    )
+            }
+            47 => {
+                run_versioned_upgrade(unopened_catalog_state, mode, version, v47_to_v48::upgrade)
                     .await
-                }
+            }
 
             // Up-to-date, no migration needed!
             CATALOG_VERSION => Ok(CATALOG_VERSION),
