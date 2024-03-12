@@ -295,6 +295,11 @@ impl Coordinator {
                                 set_read_policies,
                             )
                         }
+                        DataSourceDesc::SourceExport { id, output_index } => (
+                            DataSource::SourceExport { id, output_index },
+                            source_status_collection_id,
+                            vec![],
+                        ),
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (
                             DataSource::Other(DataSourceOther::Source),

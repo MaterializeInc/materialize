@@ -1927,16 +1927,20 @@ impl Coordinator {
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
 
         let source_desc = |source: &Source| {
-            let (data_source, status_collection_id) = match &source.data_source {
+            let (data_source, status_collection_id) = match source.data_source.clone() {
                 // Re-announce the source description.
                 DataSourceDesc::Ingestion(ingestion) => {
-                    let ingestion = ingestion.clone().into_inline_connection(catalog.state());
+                    let ingestion = ingestion.into_inline_connection(catalog.state());
 
                     (
                         DataSource::Ingestion(ingestion.clone()),
                         Some(source_status_collection_id),
                     )
                 }
+                DataSourceDesc::SourceExport { id, output_index } => (
+                    DataSource::SourceExport { id, output_index },
+                    Some(source_status_collection_id),
+                ),
                 // Subsources use source statuses.
                 DataSourceDesc::Source => (
                     DataSource::Other(DataSourceOther::Source),
@@ -1947,7 +1951,7 @@ impl Coordinator {
                 }
                 DataSourceDesc::Progress => (DataSource::Progress, None),
                 DataSourceDesc::Introspection(introspection) => {
-                    (DataSource::Introspection(*introspection), None)
+                    (DataSource::Introspection(introspection), None)
                 }
             };
             CollectionDescription {

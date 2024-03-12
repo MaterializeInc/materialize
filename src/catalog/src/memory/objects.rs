@@ -388,6 +388,8 @@ pub enum DataSourceDesc {
     Ingestion(IngestionDescription<(), ReferencedConnection>),
     /// Receives data from some other source
     Source,
+    /// Receives data from some other source
+    SourceExport { id: GlobalId, output_index: usize },
     /// Receives introspection data from an internal system
     Introspection(IntrospectionType),
     /// Receives data from the source's reclocking/remapping operations.
@@ -485,6 +487,19 @@ impl Source {
                     );
                     DataSourceDesc::Progress
                 }
+                mz_sql::plan::DataSourceDesc::SourceExport {
+                    ingestion_id,
+                    output_index,
+                } => {
+                    assert!(
+                        plan.in_cluster.is_none(),
+                        "subsources must not have a host config or cluster_id defined"
+                    );
+                    DataSourceDesc::SourceExport {
+                        id: ingestion_id,
+                        output_index,
+                    }
+                }
                 mz_sql::plan::DataSourceDesc::Source => {
                     assert!(
                         plan.in_cluster.is_none(),
@@ -516,21 +531,12 @@ impl Source {
         }
     }
 
-    /// Returns whether this source ingests data from an external source.
-    pub fn is_external(&self) -> bool {
-        match self.data_source {
-            DataSourceDesc::Ingestion(_) | DataSourceDesc::Webhook { .. } => true,
-            DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Source => false,
-        }
-    }
-
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.name(),
             DataSourceDesc::Progress => "progress",
+            DataSourceDesc::SourceExport { .. } => "subsourcev2",
             DataSourceDesc::Source => "subsource",
             DataSourceDesc::Introspection(_) => "source",
             DataSourceDesc::Webhook { .. } => "webhook",
@@ -547,6 +553,9 @@ impl Source {
                 },
                 None => (None, None),
             },
+            // This isn't quite right because these values are encoded--just
+            // that they're encoded by the source.
+            DataSourceDesc::SourceExport { .. } => (None, None),
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
@@ -582,6 +591,9 @@ impl Source {
                     Some("materialize")
                 }
             },
+            // This isn't quite right because these sources have an envelope
+            // applied--just by their source.
+            DataSourceDesc::SourceExport { .. } => None,
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
@@ -593,7 +605,8 @@ impl Source {
     pub fn connection_id(&self) -> Option<GlobalId> {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => ingestion.desc.connection.connection_id(),
-            DataSourceDesc::Introspection(_)
+            DataSourceDesc::SourceExport { .. }
+            | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
             | DataSourceDesc::Source => None,
@@ -616,6 +629,10 @@ impl Source {
                 // persist shard).
                 std::cmp::max(1, i64::try_from(ingestion.source_exports.len().saturating_sub(1)).expect("fewer than i64::MAX persist shards"))
             }
+            //  DataSourceDesc::Source represents subsources, which are
+            //  accounted for in their primary source's ingestion. However,
+            //  maybe we can fix this.
+            DataSourceDesc::SourceExport { .. } => 0,
             DataSourceDesc::Webhook { .. } => 1,
             //  DataSourceDesc::Source represents subsources, which are accounted for in their
             //  primary source's ingestion.
@@ -818,7 +835,8 @@ impl CatalogItem {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
-                DataSourceDesc::Introspection(_)
+                DataSourceDesc::SourceExport { .. }
+                | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => Ok(None),
@@ -1180,6 +1198,10 @@ impl CatalogItem {
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.instance_id),
+                // This is somewhat of a lie because the export runs on the same
+                // cluster as its ingestion but we don't yet have a way of
+                // cross-referencing the items
+                DataSourceDesc::SourceExport { .. } => None,
                 DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
@@ -1463,7 +1485,8 @@ impl CatalogEntry {
                     .copied()
                     .chain(std::iter::once(ingestion.remap_collection_id))
                     .collect(),
-                DataSourceDesc::Introspection(_)
+                DataSourceDesc::SourceExport { .. }
+                | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Source => BTreeSet::new(),
@@ -1486,7 +1509,8 @@ impl CatalogEntry {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
-                DataSourceDesc::Introspection(_)
+                DataSourceDesc::SourceExport { .. }
+                | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Source => None,

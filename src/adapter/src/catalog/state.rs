@@ -908,6 +908,13 @@ impl CatalogState {
                             },
                         )
                     }
+                    mz_sql::plan::DataSourceDesc::SourceExport {
+                        ingestion_id,
+                        output_index,
+                    } => DataSourceDesc::SourceExport {
+                        id: ingestion_id,
+                        output_index,
+                    },
                     mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                     mz_sql::plan::DataSourceDesc::Webhook {

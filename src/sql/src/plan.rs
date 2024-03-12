@@ -1254,6 +1254,10 @@ pub struct Source {
 pub enum DataSourceDesc {
     /// Receives data from an external system.
     Ingestion(Ingestion),
+    SourceExport {
+        ingestion_id: GlobalId,
+        output_index: usize,
+    },
     /// Receives data from some other source.
     Source,
     /// Receives data from the source's reclocking/remapping operations.
