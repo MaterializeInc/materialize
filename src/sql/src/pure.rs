@@ -1305,7 +1305,7 @@ async fn purify_alter_source(
     } = &mut stmt;
 
     // Get connection
-    let (source_name, pg_source_connection) = {
+    let (source_name, mut pg_source_connection, subsource_native_idxs) = {
         // Get name.
         let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
             Ok(item) => item,
@@ -1332,8 +1332,21 @@ async fn purify_alter_source(
             print_id: true,
         };
 
+        // Get all of the output indexes being used.
+        let subsource_native_idxs: BTreeSet<_> = item
+            .used_by()
+            .iter()
+            .filter_map(|id| {
+                scx.get_item(id)
+                    .subsource_details()
+                    .map(|(_id, output_idx)| output_idx - 1)
+            })
+            .collect();
+
         match desc.connection {
-            GenericSourceConnection::Postgres(pg_connection) => (source_name, pg_connection),
+            GenericSourceConnection::Postgres(pg_connection) => {
+                (source_name, pg_connection, subsource_native_idxs)
+            }
             _ => sql_bail!(
                 "{} is a {} source, which does not support ALTER SOURCE.",
                 scx.catalog.minimal_qualification(item.name()),
@@ -1392,18 +1405,64 @@ async fn purify_alter_source(
         Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
     }
 
-    let mut publication_tables = mz_postgres_util::publication_info(
+    let new_publication_tables = mz_postgres_util::publication_info(
         &storage_configuration.connection_context.ssh_tunnel_manager,
         &config,
         &pg_source_connection.publication,
     )
     .await?;
 
-    if publication_tables.is_empty() {
+    if new_publication_tables.is_empty() {
         Err(PgSourcePurificationError::EmptyPublication(
             pg_source_connection.publication.to_string(),
         ))?;
     }
+
+    let mut current_publication_details_name_by_idx = BTreeMap::new();
+    for (native_idx, table_desc) in pg_source_connection
+        .publication_details
+        .tables
+        .iter()
+        .enumerate()
+    {
+        current_publication_details_name_by_idx.insert(
+            UnresolvedItemName(vec![
+                Ident::new(pg_connection.database.clone())?,
+                Ident::new(table_desc.namespace.clone())?,
+                Ident::new(table_desc.name.clone())?,
+            ]),
+            native_idx,
+        );
+    }
+
+    // Fixup the publication info
+    for table in new_publication_tables.into_iter() {
+        let name = UnresolvedItemName(vec![
+            Ident::new(pg_connection.database.clone())?,
+            Ident::new(table.namespace.clone())?,
+            Ident::new(table.name.clone())?,
+        ]);
+
+        // Update the existing publication tables to contain updated or new
+        // tables. We need to do this in a way that maintains the current output
+        // indices because it is easier to do this than update all of the
+        // existing output indexes transactionally.
+        match current_publication_details_name_by_idx.get(&name) {
+            // Do not change the definition of existing subsources.
+            Some(idx) if subsource_native_idxs.contains(idx) => {}
+            // All unused subsources, update their definition.
+            Some(idx) => {
+                pg_source_connection.publication_details.tables[*idx] = table.clone();
+            }
+            // If this table did not yet exist, move it into the publication.
+            None => pg_source_connection
+                .publication_details
+                .tables
+                .push(table.clone()),
+        }
+    }
+
+    let publication_tables = pg_source_connection.publication_details.tables;
 
     let publication_catalog = postgres::derive_catalog_from_publication_tables(
         &pg_connection.database,
@@ -1418,30 +1477,13 @@ async fn purify_alter_source(
         &unresolved_source_name,
     )?;
 
-    // Determine duplicate references to tables by cross-referencing the table
-    // positions in the current publication info to thei
-    let mut current_subsources = BTreeMap::new();
-    for idx in pg_source_connection.table_casts.keys() {
-        // Table casts all have their values increased by to accommodate for the
-        // primary source--this means that to look them up in the publication
-        // tables you must subtract one.
-        let native_idx = *idx - 1;
-        let table_desc = &pg_source_connection.publication_details.tables[native_idx];
-        current_subsources.insert(
-            UnresolvedItemName(vec![
-                Ident::new(pg_connection.database.clone())?,
-                Ident::new(table_desc.namespace.clone())?,
-                Ident::new(table_desc.name.clone())?,
-            ]),
-            native_idx,
-        );
-    }
-
     for RequestedSubsource { upstream_name, .. } in validated_requested_subsources.iter() {
-        if current_subsources.contains_key(upstream_name) {
-            Err(PlanError::SubsourceAlreadyReferredTo {
-                name: upstream_name.clone(),
-            })?;
+        if let Some(native_idx) = current_publication_details_name_by_idx.get(upstream_name) {
+            if subsource_native_idxs.contains(native_idx) {
+                Err(PlanError::SubsourceAlreadyReferredTo {
+                    name: upstream_name.clone(),
+                })?;
+            }
         }
     }
 
@@ -1481,7 +1523,7 @@ async fn purify_alter_source(
         text_cols_option.value = Some(WithOptionValue::Sequence(seq));
     }
 
-    let (named_subsources, new_subsources) = postgres::generate_targeted_subsources(
+    let (_named_subsources, new_subsources) = postgres::generate_targeted_subsources(
         &scx,
         Some(source_name),
         validated_requested_subsources,
@@ -1489,40 +1531,6 @@ async fn purify_alter_source(
         get_transient_subsource_id,
         &publication_tables,
     )?;
-
-    *targeted_subsources = named_subsources;
-
-    // An index from table name -> output index.
-    let mut new_name_to_output_map = BTreeMap::new();
-    for (i, table) in publication_tables.iter().enumerate() {
-        new_name_to_output_map.insert(
-            UnresolvedItemName(vec![
-                Ident::new(pg_connection.database.clone())?,
-                Ident::new(table.namespace.clone())?,
-                Ident::new(table.name.clone())?,
-            ]),
-            i,
-        );
-    }
-
-    // Fixup the publication info
-    for (name, idx) in current_subsources {
-        let table = pg_source_connection.publication_details.tables[idx].clone();
-
-        // Determine if this current subsource is in the new publication tables.
-        match new_name_to_output_map.get(&name) {
-            // These are tables that were previously defined; we want to
-            // duplicate their definition to the new `publication_tables`
-            // because this command is meant only to add new tables, not update
-            // the schema of existing tables.
-            Some(cur_idx) => publication_tables[*cur_idx] = table,
-            // These are tables that no longer exist in the publication but the
-            // user has kept around. When the ingestion restarts after adding
-            // the new table, they will error out, but that is not the problem
-            // or scope of this function.
-            None => publication_tables.push(table),
-        }
-    }
 
     let timeline_id = match pg_source_connection.publication_details.timeline_id {
         None => {
