@@ -420,6 +420,8 @@ impl DataSourceDesc {
         ingestion: PlanIngestion,
         instance_id: ClusterId,
     ) -> DataSourceDesc {
+        // TODO(#26769): planning should no longer generate source exports once
+        // we fix subsource dependency inversion.
         let source_exports = ingestion
             .subsource_exports
             .iter()

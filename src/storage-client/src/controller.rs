@@ -31,6 +31,7 @@ use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::{Codec64, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
@@ -87,6 +88,18 @@ pub enum IntrospectionType {
 pub enum DataSource {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
+    /// This source receives its data from the identified ingestion,
+    /// specifically the output identified by `external_reference`.
+    ///
+    /// The referenced ingestion must be created before all of its exports.
+    IngestionExport {
+        ingestion_id: GlobalId,
+        // This is an `UnresolvedItemName` because the structure works for PG,
+        // MySQL, and load generator sources. However, in the future, it should
+        // be sufficiently genericized to support all multi-output sources we
+        // support.
+        external_reference: UnresolvedItemName,
+    },
     /// Data comes from introspection sources, which the controller itself is
     /// responsible for generating.
     Introspection(IntrospectionType),
@@ -96,7 +109,6 @@ pub enum DataSource {
     Webhook,
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
-    // TODO? Add a means to track some data sources' GlobalIds.
     Other(DataSourceOther),
 }
 
@@ -109,6 +121,7 @@ pub enum DataSourceOther {
     /// Compute maintains, i.e. it is a `MATERIALIZED VIEW`.
     Compute,
     /// Some other sources writes this data, i.e. a subsource.
+    // TODO: remove this after the subsource dependency inversion migration.
     Source,
 }
 
@@ -136,6 +149,10 @@ impl<T> CollectionDescription<T> {
         match &self.data_source {
             DataSource::Ingestion(ingestion) => {
                 result.push(ingestion.remap_collection_id);
+            }
+            DataSource::IngestionExport { ingestion_id, .. } => {
+                // TODO: this should be the ingestion's remap collection.
+                result.push(*ingestion_id);
             }
             DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
                 // Introspection, Progress, and Webhook sources have no dependencies, for now.

@@ -27,10 +27,11 @@ mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = [

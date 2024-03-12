@@ -6284,6 +6284,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
+ "mz-sql-parser",
  "mz-storage-types",
  "mz-timely-util",
  "once_cell",
