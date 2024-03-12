@@ -39,6 +39,7 @@ def search_build(
     build_number = build["number"]
     build_pipeline = build["pipeline"]["slug"]
     build_state = build["state"]
+    branch = build["branch"]
     web_url = build["web_url"]
 
     is_completed_build_state = build_state in BUILDKITE_COMPLETED_BUILD_STATES
@@ -53,6 +54,7 @@ def search_build(
     matches_in_build = search_annotations(
         build_number,
         build_pipeline,
+        branch,
         web_url,
         annotations,
         search_value=search_value,
@@ -65,6 +67,7 @@ def search_build(
 def search_annotations(
     build_number: str,
     build_pipeline: str,
+    branch: str,
     web_url: str,
     annotations: list[Any],
     search_value: str,
@@ -81,6 +84,7 @@ def search_annotations(
             print_match(
                 build_number,
                 build_pipeline,
+                branch,
                 web_url,
                 annotation_text,
                 search_value=search_value,
