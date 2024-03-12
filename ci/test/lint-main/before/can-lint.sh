@@ -24,7 +24,7 @@ if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
         echo -e "hint: you can disable shellcheck locally by setting \$MZDEV_NO_SHELLCHECK=1" >&2
         exit 1
     fi
-    version=$(shellcheck --version | grep version: | grep -oE "[0-9]\.[0-9]\.[0-9]" || echo "0.0.0+unknown")
+    version=$(shellcheck --version | grep version: | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" || echo "0.0.0+unknown")
     if ! version_compat "0.7.0" "$version"; then
         echo -e "lint: $(red fatal:) shellcheck v0.7.0+ is required" >&2
         echo -e "hint: detected version \"$version\"" >&2
