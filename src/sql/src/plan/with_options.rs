@@ -96,8 +96,12 @@ impl ImpliedValue for Object {
 impl TryFromValue<WithOptionValue<Aug>> for Ident {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         Ok(match v {
-            WithOptionValue::Ident(name) => name,
-            _ => sql_bail!("must provide an identifier"),
+            WithOptionValue::UnresolvedItemName(UnresolvedItemName(mut inner))
+                if inner.len() == 1 =>
+            {
+                inner.remove(0)
+            }
+            _ => sql_bail!("must provide an unqalified identifier"),
         })
     }
     fn name() -> String {
@@ -457,7 +461,11 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
     fn try_from_value(v: WithOptionValue<T>) -> Result<Self, PlanError> {
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
-            WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.into_string())),
+            WithOptionValue::UnresolvedItemName(UnresolvedItemName(mut inner))
+                if inner.len() == 1 =>
+            {
+                V::try_from_value(Value::String(inner.remove(0).into_string()))
+            }
             WithOptionValue::RetainHistoryFor(v) => V::try_from_value(v),
             WithOptionValue::Sequence(_)
             | WithOptionValue::Item(_)
@@ -472,7 +480,6 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                 match v {
                     // The first few are unreachable because they are handled at the top of the outer match.
                     WithOptionValue::Value(_) => unreachable!(),
-                    WithOptionValue::Ident(_) => unreachable!(),
                     WithOptionValue::RetainHistoryFor(_) => unreachable!(),
                     WithOptionValue::Sequence(_) => "sequences",
                     WithOptionValue::Item(_) => "object references",

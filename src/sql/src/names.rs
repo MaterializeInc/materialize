@@ -1759,7 +1759,6 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     .collect(),
             ),
             Value(v) => Value(self.fold_value(v)),
-            Ident(i) => Ident(self.fold_ident(i)),
             DataType(dt) => DataType(self.fold_data_type(dt)),
             Secret(secret) => {
                 let item_name = self.fold_item_name(secret);
