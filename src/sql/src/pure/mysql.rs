@@ -164,6 +164,7 @@ where
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
+            of_source: None,
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {
