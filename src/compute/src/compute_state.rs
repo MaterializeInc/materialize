@@ -29,7 +29,7 @@ use mz_compute_client::protocol::response::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::flat_plan::FlatPlan;
-use mz_compute_types::plan::NodeId;
+use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
@@ -1346,7 +1346,7 @@ pub struct HydrationEvent {
     /// The ID of the export this dataflow maintains.
     pub export_id: GlobalId,
     /// The ID of the LIR node.
-    pub lir_id: NodeId,
+    pub lir_id: LirId,
     /// Whether the node is hydrated.
     pub hydrated: bool,
 }
