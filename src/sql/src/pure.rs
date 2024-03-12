@@ -16,6 +16,7 @@ use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::ast::AlterSourceAddSubsourceOption;
 use anyhow::anyhow;
 use itertools::Itertools;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
@@ -259,7 +260,7 @@ pub async fn purify_statement(
     now: u64,
     stmt: Statement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
+) -> Result<Vec<Statement<Aug>>, PlanError> {
     match stmt {
         Statement::CreateSource(stmt) => {
             purify_create_source(catalog, now, stmt, storage_configuration).await
@@ -267,10 +268,9 @@ pub async fn purify_statement(
         Statement::AlterSource(stmt) => {
             purify_alter_source(catalog, stmt, storage_configuration).await
         }
-        Statement::CreateSink(stmt) => {
-            let r = purify_create_sink(catalog, stmt, storage_configuration).await?;
-            Ok((vec![], r))
-        }
+        Statement::CreateSink(stmt) => purify_create_sink(catalog, stmt, storage_configuration)
+            .await
+            .map(|s| vec![s]),
         o => unreachable!("{:?} does not need to be purified", o),
     }
 }
@@ -502,7 +502,7 @@ async fn purify_create_source(
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
+) -> Result<Vec<Statement<Aug>>, PlanError> {
     let CreateSourceStatement {
         name: source_name,
         connection,
@@ -1259,7 +1259,7 @@ async fn purify_create_source(
     let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
 
     // Create the subsource statement
-    let subsource = CreateSubsourceStatement {
+    let progress_subsources = CreateSubsourceStatement {
         name,
         columns,
         of_source: None,
@@ -1270,7 +1270,6 @@ async fn purify_create_source(
             value: Some(WithOptionValue::Value(Value::Boolean(true))),
         }],
     };
-    subsources.push(subsource);
 
     purify_source_format(
         &catalog,
@@ -1281,7 +1280,14 @@ async fn purify_create_source(
     )
     .await?;
 
-    Ok((subsources, Statement::CreateSource(stmt)))
+    let mut stmts = vec![
+        Statement::CreateSubsource(progress_subsources),
+        Statement::CreateSource(stmt),
+    ];
+
+    stmts.extend(subsources.into_iter().map(Statement::CreateSubsource));
+
+    Ok(stmts)
 }
 
 /// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
@@ -1292,23 +1298,27 @@ async fn purify_create_source(
 /// we are permitted to use async code.
 async fn purify_alter_source(
     catalog: impl SessionCatalog,
-    mut stmt: AlterSourceStatement<Aug>,
+    stmt: AlterSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
+) -> Result<Vec<Statement<Aug>>, PlanError> {
     let scx = StatementContext::new(None, &catalog);
     let AlterSourceStatement {
-        source_name,
+        source_name: outer_source_name,
         action,
         if_exists,
-    } = &mut stmt;
+    } = stmt;
 
     // Get connection
     let (source_name, mut pg_source_connection, subsource_native_idxs) = {
         // Get name.
-        let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
+        let item = match scx.resolve_item(RawItemName::Name(outer_source_name.clone())) {
             Ok(item) => item,
-            Err(_) if *if_exists => {
-                return Ok((vec![], Statement::AlterSource(stmt)));
+            Err(_) if if_exists => {
+                return Ok(vec![Statement::AlterSource(AlterSourceStatement {
+                    source_name: outer_source_name,
+                    action,
+                    if_exists,
+                })]);
             }
             Err(e) => return Err(e),
         };
@@ -1354,24 +1364,26 @@ async fn purify_alter_source(
     };
 
     // If we don't need to handle added subsources, early return.
-    let (targeted_subsources, details, options) = match action {
+    let (mut targeted_subsources, mut options) = match action {
         AlterSourceAction::AddSubsources {
             subsources,
-            details,
             options,
-        } => (subsources, details, options),
-        _ => return Ok((vec![], Statement::AlterSource(stmt))),
+        } => (subsources, options.to_vec()),
+        action => {
+            return Ok(vec![Statement::AlterSource(AlterSourceStatement {
+                source_name: outer_source_name,
+                action,
+                if_exists,
+            })])
+        }
     };
-
-    assert!(
-        details.is_none(),
-        "details cannot be set before purification"
-    );
 
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
         mut text_columns,
+        details,
         ..
     } = options.clone().try_into()?;
+    assert!(details.is_none(), "details cannot be explicitly set");
 
     for CreateSourceSubsource {
         subsource,
@@ -1470,7 +1482,7 @@ async fn purify_alter_source(
     let unresolved_source_name = UnresolvedItemName::from(source_name.full_item_name().clone());
 
     let validated_requested_subsources = subsource_gen(
-        targeted_subsources,
+        &mut targeted_subsources,
         &publication_catalog,
         &unresolved_source_name,
     )?;
@@ -1500,25 +1512,9 @@ async fn purify_alter_source(
         &AlterSourceAddSubsourceOptionName::TextColumns.to_ast_string(),
     )?;
 
-    // Normalize options to contain full qualified values.
-    if let Some(text_cols_option) = options
-        .iter_mut()
-        .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns)
-    {
-        let mut seq: Vec<_> = text_columns
-            .into_iter()
-            .map(WithOptionValue::UnresolvedItemName)
-            .collect();
-
-        seq.sort();
-        seq.dedup();
-
-        text_cols_option.value = Some(WithOptionValue::Sequence(seq));
-    }
-
     let mut new_subsources = postgres::generate_targeted_subsources(
         &scx,
-        Some(source_name),
+        Some(source_name.clone()),
         validated_requested_subsources,
         text_cols_dict,
         &publication_tables,
@@ -1546,11 +1542,40 @@ async fn purify_alter_source(
         new_details.output_idx_for_name(name)
     });
 
-    *details = Some(WithOptionValue::Value(Value::String(hex::encode(
-        new_details.into_proto().encode_to_vec(),
-    ))));
+    options.push(AlterSourceAddSubsourceOption {
+        name: mz_sql_parser::ast::AlterSourceAddSubsourceOptionName::Details,
+        value: Some(WithOptionValue::Value(Value::String(hex::encode(
+            new_details.into_proto().encode_to_vec(),
+        )))),
+    });
 
-    Ok((new_subsources, Statement::AlterSource(stmt)))
+    // Normalize options to contain full qualified values.
+    if let Some(text_cols_option) = options
+        .iter_mut()
+        .find(|option| option.name == AlterSourceAddSubsourceOptionName::TextColumns)
+    {
+        let mut seq: Vec<_> = text_columns
+            .into_iter()
+            .map(WithOptionValue::UnresolvedItemName)
+            .collect();
+
+        seq.sort();
+        seq.dedup();
+
+        text_cols_option.value = Some(WithOptionValue::Sequence(seq));
+    }
+
+    let source_name = normalize::unresolve(source_name.full_item_name().clone());
+
+    let mut stmts = vec![Statement::AlterSource(AlterSourceStatement {
+        source_name,
+        if_exists,
+        action: AlterSourceAction::SetAddSubsourceOptions(options),
+    })];
+
+    stmts.extend(new_subsources.into_iter().map(Statement::CreateSubsource));
+
+    Ok(stmts)
 }
 
 async fn purify_source_format(

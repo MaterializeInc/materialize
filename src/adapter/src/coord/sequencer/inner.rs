@@ -50,9 +50,9 @@ use mz_catalog::memory::objects::{
 };
 use mz_ore::instrument;
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee,
-    ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
-    QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, CreateSourcePlans, ExplainSinkSchemaPlan,
+    Explainee, ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption,
+    PlannedRoleVariable, QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
@@ -254,6 +254,210 @@ impl Coordinator {
             sources,
             if_not_exists_ids,
         })
+    }
+
+    /// Subsources are planned differently from other statements because they
+    /// are typically synthesized from other statements, e.g. `CREATE SOURCE`.
+    /// Because of this, we have usually "missed" the opportunity to plan them
+    /// through the normal statement execution life cycle.
+    pub(crate) async fn plan_subsource(
+        &mut self,
+        session: &Session,
+        params: &mz_sql::plan::Params,
+        subsource_stmt: mz_sql::ast::CreateSubsourceStatement<mz_sql::names::Aug>,
+    ) -> Result<CreateSourcePlans, AdapterError> {
+        let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
+        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let plan = self.plan_statement(
+            session,
+            Statement::CreateSubsource(subsource_stmt),
+            params,
+            &resolved_ids,
+        )?;
+        let plan = match plan {
+            Plan::CreateSource(plan) => plan,
+            _ => unreachable!(),
+        };
+        Ok(CreateSourcePlans {
+            source_id,
+            plan,
+            resolved_ids,
+        })
+    }
+
+    /// Prepares an `ALTER SOURCE...ADD SUBSOURCE`.
+    ///
+    /// # Panics
+    /// This function expects `stmts` to have the following structure:
+    /// - The first statement must be an `ALTER SOURCE` whose action is
+    ///   [`mz_sql::ast::AlterSourceAction::SetAddSubsourceOptions`].
+    /// - The remaining statements must be [`Statement::CreateSubsource`].
+    ///
+    /// Any other order of statements are intended to panic.
+    pub(crate) async fn prepare_alter_source_add_subsource(
+        &mut self,
+        session: &Session,
+        params: Params,
+        mut stmts: Vec<Statement<mz_sql::names::Aug>>,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        let catalog = self.catalog.for_session(session);
+        let stmt = stmts.remove(0);
+        // Determine all dependencies, not just those in the statement
+        // itself.
+        let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+        let (id, options) = match stmt {
+            Statement::AlterSource(stmt) => {
+                let name = mz_sql::normalize::unresolved_item_name(stmt.source_name)?;
+                let item = catalog.resolve_item(&name)?;
+                match stmt.action {
+                    mz_sql::ast::AlterSourceAction::SetAddSubsourceOptions(options) => {
+                        (item.id(), options)
+                    }
+                    action => unreachable!(
+                        "ALTER SOURCE action must be SetAddSubsourceOptions, but got {}",
+                        action.to_ast_string_redacted()
+                    ),
+                }
+            }
+            s => unreachable!(
+                "statement must be Statement::AlterSource, but got {:?}",
+                mz_sql_parser::ast::StatementKind::from(s)
+            ),
+        };
+
+        let mut subsources = Vec::with_capacity(stmts.len());
+
+        for stmt in stmts {
+            let subsource_stmt = match stmt {
+                Statement::CreateSubsource(stmt) => stmt,
+                s => unreachable!(
+                    "statement must be Statement::CreateSubsource but got {:?}",
+                    mz_sql_parser::ast::StatementKind::from(s)
+                ),
+            };
+
+            let s = self
+                .plan_subsource(session, &params, subsource_stmt)
+                .await?;
+            subsources.push(s);
+        }
+
+        let action = mz_sql::plan::AlterSourceAction::AddSubsourceExports {
+            subsources,
+            options,
+        };
+
+        Ok((
+            Plan::AlterSource(mz_sql::plan::AlterSourcePlan { id, action }),
+            resolved_ids,
+        ))
+    }
+
+    /// Prepares a `CREATE SOURCE` statement to create its progress subsource,
+    /// the primary source, and any data-bearing subsources.'
+    ///
+    /// # Panics
+    /// This function expects `stmts` to have the following structure:
+    /// - The first statement must be a `Statement::CreateSubsource` that
+    ///   generates a progress subsource.
+    /// - The second statement must be a `Statement::CreateSource` that creates
+    ///   the primary source.
+    /// - All following statements must be `Statement::CreateSubsource` that
+    ///   generate data-bearing subsources, which will be subsources "of" the
+    ///   primary source created in a prior step.
+    ///
+    /// Any other order of statements are intended to panic.
+    pub(crate) async fn prepare_create_sources(
+        &mut self,
+        ctx: &ExecuteContext,
+        params: Params,
+        stmts: Vec<Statement<mz_sql::names::Aug>>,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        assert!(
+            stmts.len() > 1,
+            "must create progress subsource and primary source"
+        );
+
+        let mut create_source_plans = Vec::with_capacity(stmts.len());
+        let mut of_source = None;
+
+        for stmt in stmts {
+            match stmt {
+                Statement::CreateSubsource(mut stmt) => {
+                    assert!(match of_source {
+                        // Progress subsource must be first and does not have
+                        // dependency on source.
+                        None => create_source_plans.is_empty(),
+                        // All following subsources must be created after the
+                        // primary source and must have a dependency on it.
+                        Some(_) => create_source_plans.len() > 1,
+                    });
+
+                    stmt.of_source = of_source.clone();
+                    let plan = self.plan_subsource(ctx.session(), &params, stmt).await?;
+                    create_source_plans.push(plan);
+                }
+                Statement::CreateSource(mut stmt) => {
+                    assert!(of_source.is_none(), "each call to prepare_create_sources must have exactly one Statement::CreateSource");
+                    assert_eq!(
+                        create_source_plans.len(),
+                        1,
+                        "must create progress subsource before primary source"
+                    );
+
+                    let progress = &create_source_plans[0];
+                    let full_name = self.catalog().resolve_full_name(&progress.plan.name, None);
+
+                    let progress_subsource = ResolvedItemName::Item {
+                        id: progress.source_id,
+                        qualifiers: progress.plan.name.qualifiers.clone(),
+                        full_name,
+                        print_id: true,
+                    };
+
+                    stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
+
+                    let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+
+                    // Plan primary source.
+                    let plan = match self.plan_statement(
+                        ctx.session(),
+                        Statement::CreateSource(stmt),
+                        &params,
+                        &resolved_ids,
+                    )? {
+                        Plan::CreateSource(plan) => plan,
+                        p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
+                    };
+
+                    let source_id = self.catalog_mut().allocate_user_id().await?;
+                    let full_name = self.catalog().resolve_full_name(&plan.name, None);
+                    of_source = Some(ResolvedItemName::Item {
+                        id: source_id,
+                        qualifiers: plan.name.qualifiers.clone(),
+                        full_name,
+                        print_id: true,
+                    });
+
+                    create_source_plans.push(CreateSourcePlans {
+                        source_id,
+                        plan,
+                        resolved_ids: resolved_ids.clone(),
+                    });
+                }
+                s => unreachable!("prepare_create_sources cannot prepare {:?}", s),
+            }
+        }
+
+        assert!(
+            of_source.is_some(),
+            "must have exactly one Statement::CreateSource"
+        );
+
+        Ok((
+            Plan::CreateSources(create_source_plans),
+            ResolvedIds(BTreeSet::new()),
+        ))
     }
 
     #[instrument]
@@ -3154,15 +3358,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         plan::AlterSourcePlan { id, action }: plan::AlterSourcePlan,
-        to_create_subsources: Vec<plan::CreateSourcePlans>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        assert!(
-            to_create_subsources.is_empty()
-                || matches!(action, plan::AlterSourceAction::AddSubsourceExports { .. }),
-            "cannot include subsources with {:?}",
-            action
-        );
-
         let cur_entry = self.catalog().get_entry(&id);
         let cur_source = cur_entry.source().expect("known to be source");
 
@@ -3406,10 +3602,12 @@ impl Coordinator {
                     .expect("altering collection after txn must succeed");
             }
             plan::AlterSourceAction::AddSubsourceExports {
-                subsources,
-                details,
+                subsources: _,
                 options,
             } => {
+                // TODO: change subsource handling.
+                let subsources = vec![];
+
                 const ALTER_SOURCE: &str = "ALTER SOURCE...ADD SUBSOURCES";
 
                 // Resolve items in statement
@@ -3461,10 +3659,10 @@ impl Coordinator {
                 curr_options
                     .retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
 
-                curr_options.push(PgConfigOption {
-                    name: PgConfigOptionName::Details,
-                    value: details,
-                });
+                // curr_options.push(PgConfigOption {
+                //     name: PgConfigOptionName::Details,
+                //     value: details,
+                // });
 
                 // Merge text columns
                 let curr_text_columns = curr_options
@@ -3546,13 +3744,7 @@ impl Coordinator {
                 let source = Source::new(
                     id,
                     plan,
-                    ResolvedIds(
-                        resolved_ids
-                            .0
-                            .into_iter()
-                            .chain(to_create_subsources.iter().map(|csp| csp.source_id))
-                            .collect(),
-                    ),
+                    resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
                 );
@@ -3578,9 +3770,7 @@ impl Coordinator {
                     mut ops,
                     sources,
                     if_not_exists_ids,
-                } = self
-                    .create_source_inner(session, to_create_subsources)
-                    .await?;
+                } = self.create_source_inner(session, vec![]).await?;
 
                 assert!(
                     if_not_exists_ids.is_empty(),

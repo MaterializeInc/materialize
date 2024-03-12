@@ -5687,7 +5687,8 @@ pub fn describe_alter_source(
 
 generate_extracted_config!(
     AlterSourceAddSubsourceOption,
-    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
+    (Details, String)
 );
 
 pub fn plan_alter_source(
@@ -5713,6 +5714,9 @@ pub fn plan_alter_source(
     };
 
     let action = match action {
+        AlterSourceAction::SetAddSubsourceOptions(_) => {
+            unreachable!("only meant to be used in purification")
+        }
         AlterSourceAction::SetOptions(options) => {
             let mut options = options.into_iter();
             let option = options.next().unwrap();
@@ -5728,6 +5732,8 @@ pub fn plan_alter_source(
                     option.value,
                 );
             }
+            // n.b we use this statement in purification in a way that cannot be
+            // planned directly.
             sql_bail!(
                 "Cannot modify the {} of a SOURCE.",
                 option.name.to_ast_string()
@@ -5797,15 +5803,9 @@ pub fn plan_alter_source(
                 crate::plan::AlterSourceAction::DropSubsourceExports { to_drop }
             }
         }
-        AlterSourceAction::AddSubsources {
-            subsources,
-            details,
-            options,
-        } => crate::plan::AlterSourceAction::AddSubsourceExports {
-            subsources,
-            details,
-            options,
-        },
+        AlterSourceAction::AddSubsources { .. } => {
+            unreachable!("ALTER SOURCE...ADD SUBSOURCE must be purified")
+        }
     };
 
     Ok(Plan::AlterSource(AlterSourcePlan {

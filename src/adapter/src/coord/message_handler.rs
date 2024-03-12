@@ -23,6 +23,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::usage::ShardsUsageReferenced;
+use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
@@ -436,7 +437,7 @@ impl Coordinator {
         &mut self,
         PurifiedStatementReady {
             ctx,
-            result: _,
+            result,
             params,
             resolved_ids,
             original_stmt,
@@ -464,7 +465,49 @@ impl Coordinator {
             return;
         }
 
-        todo!("bankruptcy declared on sequencing purified statements")
+        let mut stmts = match result {
+            Ok(ok) => ok,
+            Err(e) => return ctx.retire(Err(e)),
+        };
+
+        // Look at the first statement which will determine how to execute the
+        // set of statements.
+        let (plan, resolved_ids) = match &stmts[0] {
+            // This is a `CREATE SOURCE`
+            Statement::CreateSubsource(_) => {
+                match self.prepare_create_sources(&ctx, params, stmts).await {
+                    Ok(p) => p,
+                    Err(e) => return ctx.retire(Err(e)),
+                }
+            }
+            // This is an `ALTER SOURCE...ADD SUBSOURCE`
+            Statement::AlterSource(_) if stmts.len() > 1 => {
+                match self
+                    .prepare_alter_source_add_subsource(ctx.session(), params, stmts)
+                    .await
+                {
+                    Ok(p) => p,
+                    Err(e) => return ctx.retire(Err(e)),
+                }
+            }
+            Statement::AlterSource(_) | Statement::CreateSink(_) => {
+                // These must have only only a single statement.
+                let stmt = stmts.remove(0);
+                assert!(stmts.is_empty());
+
+                // Determine all dependencies, not just those in the statement
+                // itself.
+                let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+
+                match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+                    Ok(plan) => (plan, resolved_ids),
+                    Err(e) => return ctx.retire(Err(e)),
+                }
+            }
+            s => unreachable!("{:?} is not purified", s),
+        };
+
+        self.sequence_plan(ctx, plan, resolved_ids).await;
     }
 
     #[mz_ore::instrument(level = "debug")]

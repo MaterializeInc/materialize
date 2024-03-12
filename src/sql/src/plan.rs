@@ -46,7 +46,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterScheduleOptionValue, ConnectionOptionName,
-    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode, Value,
+    CreateSubsourceStatement, QualifiedReplica, TransactionIsolationLevel, TransactionMode, Value,
     WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
@@ -154,12 +154,6 @@ pub enum Plan {
     AlterSetCluster(AlterSetClusterPlan),
     AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
-    PurifiedAlterSource {
-        // The `ALTER SOURCE` plan
-        alter_source: AlterSourcePlan,
-        // The plan to create any subsources added in the `ALTER SOURCE` statement.
-        subsources: Vec<CreateSourcePlans>,
-    },
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
@@ -378,7 +372,7 @@ impl Plan {
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterConnection(_) => "alter connection",
-            Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
+            Plan::AlterSource(_) => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSchemaRename(_) => "alter rename schema",
@@ -998,13 +992,18 @@ pub struct AlterConnectionPlan {
 }
 
 #[derive(Debug)]
+pub enum AddSubsourceExportsState {
+    Purified(Vec<CreateSubsourceStatement<Aug>>),
+    Planned(),
+}
+
+#[derive(Debug)]
 pub enum AlterSourceAction {
     DropSubsourceExports {
         to_drop: BTreeSet<GlobalId>,
     },
     AddSubsourceExports {
-        subsources: Vec<CreateSourceSubsource<Aug>>,
-        details: Option<WithOptionValue<Aug>>,
+        subsources: Vec<CreateSourcePlans>,
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
     },
 }
