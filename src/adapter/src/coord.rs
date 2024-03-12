@@ -2543,8 +2543,9 @@ impl Coordinator {
                 // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
                 let span = span!(
-                    Level::DEBUG,
-                    "coordinator processing (handle_message)",
+                    target: "mz_adapter::coord::handle_message_loop",
+                    Level::INFO,
+                    "coord::handle_message",
                     kind = msg_kind
                 );
                 let otel_context = span.context().span().span_context().clone();
