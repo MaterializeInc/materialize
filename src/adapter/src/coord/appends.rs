@@ -18,6 +18,7 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
@@ -25,7 +26,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_timestamp_oracle::WriteTimestamp;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
-use tracing::{warn, Instrument, Span};
+use tracing::{debug_span, warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
@@ -211,7 +212,7 @@ impl Coordinator {
     /// All applicable pending writes will be combined into a single Append command and sent to
     /// STORAGE as a single batch. All applicable writes will happen at the same timestamp and all
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
-    #[instrument(name = "coord::group_commit_initiate")]
+    #[instrument(name = "coord::group_commit_initiate", fields(has_write_lock=write_lock_guard.is_some()))]
     pub(crate) async fn group_commit_initiate(
         &mut self,
         write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
@@ -369,11 +370,16 @@ impl Coordinator {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let apply_write_fut = self.apply_local_write(timestamp);
 
+        let mut span = debug_span!(parent: None, "group_commit_apply");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
         task::spawn(
             || "group_commit_apply",
             async move {
                 // Wait for the writes to complete.
-                match append_fut.await {
+                match append_fut
+                    .instrument(debug_span!("group_commit_apply::append_fut"))
+                    .await
+                {
                     Ok(append_result) => {
                         append_result.unwrap_or_terminate("cannot fail to apply appends")
                     }
@@ -381,7 +387,9 @@ impl Coordinator {
                 };
 
                 // Apply the write by marking the timestamp as complete on the timeline.
-                apply_write_fut.await;
+                apply_write_fut
+                    .instrument(debug_span!("group_commit_apply::append_write_fut"))
+                    .await;
 
                 // Notify the external clients of the result.
                 for response in responses {
@@ -406,7 +414,7 @@ impl Coordinator {
                     let _ = notify.send(());
                 }
             }
-            .instrument(Span::current()),
+            .instrument(span),
         );
     }
 
