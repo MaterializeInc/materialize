@@ -15,6 +15,7 @@ use mz_ore::now::NowFn;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
+use mz_sql_parser::ast::UnresolvedItemName;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,14 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
+    }
+
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        self.load_generator
+            .views()
+            .iter()
+            .position(|(view_name, _)| view_name == &name.0[2].as_str())
+            .map(|idx| idx + 1)
     }
 }
 
