@@ -131,17 +131,13 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
 
 /// Checks that the in-memory catalog matches what we have persisted on disk.
 async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
-    let maybe_disk_catalog = state
-        .with_catalog_copy(|catalog| catalog.state().clone())
-        .await
-        .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
-        .map(|catalog| catalog.dump().expect("state must be dumpable"));
-    let Some(disk_catalog) = maybe_disk_catalog else {
-        // TODO(parkmycar): Ideally this could be an error, but a lot of test suites fail.
-        tracing::warn!("No Catalog state on disk, skipping consistency check");
-        return Ok(());
-    };
+    #[derive(Debug, Deserialize)]
+    struct CatalogDump {
+        system_parameter_defaults: BTreeMap<String, String>,
+    }
 
+    // Dump the in-memory catalog state of the Materialize environment that we're
+    // connected to.
     let memory_catalog = reqwest::get(&format!(
         "http://{}/api/catalog/dump",
         state.materialize_internal_http_addr,
@@ -151,6 +147,24 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     .text()
     .await
     .context("deserialize catalog")?;
+
+    // Pull out the system parameter defaults from the in-memory catalog, as we
+    // need to load the disk catalog with the same defaults.
+    let dump: CatalogDump = serde_json::from_str(&memory_catalog).context("decoding catalog")?;
+
+    // Load the on-disk catalog and dump its state.
+    let maybe_disk_catalog = state
+        .with_catalog_copy(dump.system_parameter_defaults, |catalog| {
+            catalog.state().clone()
+        })
+        .await
+        .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
+        .map(|catalog| catalog.dump().expect("state must be dumpable"));
+    let Some(disk_catalog) = maybe_disk_catalog else {
+        // TODO(parkmycar): Ideally this could be an error, but a lot of test suites fail.
+        tracing::warn!("No Catalog state on disk, skipping consistency check");
+        return Ok(());
+    };
 
     if disk_catalog != memory_catalog {
         // The state objects here are around 100k lines pretty printed, so find the

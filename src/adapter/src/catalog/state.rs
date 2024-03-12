@@ -1996,14 +1996,24 @@ impl CatalogState {
     /// that the serialized state for two identical catalogs will compare
     /// identically.
     pub fn dump(&self) -> Result<String, Error> {
-        serde_json::to_string_pretty(&self).map_err(|e| {
+        // Dump the base catalog.
+        let mut dump = serde_json::to_value(&self).map_err(|e| {
             Error::new(ErrorKind::Unstructured(format!(
                 // Don't panic here because we don't have compile-time failures for maps with
                 // non-string keys.
                 "internal error: could not dump catalog: {}",
                 e
             )))
-        })
+        })?;
+
+        // Stitch in system parameter defaults.
+        dump.as_object_mut().unwrap().insert(
+            "system_parameter_defaults".into(),
+            serde_json::json!(self.system_config().defaults()),
+        );
+
+        // Emit as pretty-printed JSON.
+        Ok(serde_json::to_string_pretty(&dump).expect("cannot fail on serde_json::Value"))
     }
 
     pub fn availability_zones(&self) -> &[String] {

@@ -304,7 +304,11 @@ impl State {
     }
     /// Makes of copy of the durable catalog and runs a function on its
     /// state. Returns `None` if there's no catalog information in the State.
-    pub async fn with_catalog_copy<F, T>(&self, f: F) -> Result<Option<T>, anyhow::Error>
+    pub async fn with_catalog_copy<F, T>(
+        &self,
+        system_parameter_defaults: BTreeMap<String, String>,
+        f: F,
+    ) -> Result<Option<T>, anyhow::Error>
     where
         F: FnOnce(ConnCatalog) -> T,
     {
@@ -335,6 +339,7 @@ impl State {
                 persist_client,
                 SYSTEM_TIME.clone(),
                 self.environment_id.clone(),
+                system_parameter_defaults,
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));

@@ -1464,6 +1464,20 @@ impl SystemVars {
         Ok(result)
     }
 
+    /// Returns a map from each system parameter's name to its default value.
+    pub fn defaults(&self) -> BTreeMap<String, String> {
+        self.vars
+            .iter()
+            .map(|(name, var)| {
+                let default = var
+                    .dynamic_default
+                    .as_deref()
+                    .unwrap_or(var.definition.default_value());
+                (name.as_str().to_owned(), default.format())
+            })
+            .collect()
+    }
+
     /// Propagate a change to the parameter named `name` to our state.
     fn propagate_var_change(&mut self, name: &str) {
         if name == MAX_CONNECTIONS.name || name == SUPERUSER_RESERVED_CONNECTIONS.name {
