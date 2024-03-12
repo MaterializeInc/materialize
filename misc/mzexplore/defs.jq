@@ -48,5 +48,5 @@ def subexprs(expr):
 ;
 
 def summarize(expr):
-    [ expr | group_by(.)[] | { "predicate": .[0], "occurrences": length } ] | sort_by(.occurrences) | reverse
+    [ expr | group_by(.)[] | { "term": .[0], "occurrences": length } ] | sort_by(.occurrences) | reverse
 ;
