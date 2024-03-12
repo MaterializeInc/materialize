@@ -162,6 +162,11 @@ class PostExecutionInconsistencyIgnoreFilterBase:
                 error, query_template, contains_aggregation
             )
 
+        if error.error_type == ValidationErrorType.CONTENT_TYPE_MISMATCH:
+            return self._shall_ignore_content_type_mismatch(
+                error, query_template, contains_aggregation
+            )
+
         if error.error_type == ValidationErrorType.CONTENT_MISMATCH:
             return self._shall_ignore_content_mismatch(
                 error, query_template, contains_aggregation
@@ -189,6 +194,16 @@ class PostExecutionInconsistencyIgnoreFilterBase:
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
         return NoIgnore()
+
+    def _shall_ignore_content_type_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        return self._shall_ignore_content_mismatch(
+            error, query_template, contains_aggregation
+        )
 
     def _shall_ignore_content_mismatch(
         self,

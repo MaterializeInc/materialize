@@ -18,8 +18,9 @@ from materialize.output_consistency.query.query_result import QueryExecution
 class ValidationErrorType(Enum):
     SUCCESS_MISMATCH = 1
     ROW_COUNT_MISMATCH = 2
-    CONTENT_MISMATCH = 3
-    ERROR_MISMATCH = 4
+    CONTENT_TYPE_MISMATCH = 3
+    CONTENT_MISMATCH = 4
+    ERROR_MISMATCH = 5
 
 
 class ValidationMessage:
