@@ -89,6 +89,7 @@ def print_before_search_results() -> None:
 def print_match(
     build_number: str,
     build_pipeline: str,
+    branch: str,
     web_url: str,
     annotation_text: str,
     search_value: str,
@@ -105,7 +106,8 @@ def print_match(
 
     print(
         with_formatting(
-            f"Match in build #{build_number} (pipeline={build_pipeline}):", STYLE_BOLD
+            f"Match in build #{build_number} (pipeline {build_pipeline} on {branch}):",
+            STYLE_BOLD,
         )
     )
     print(f"URL: {with_formatting(web_url, COLOR_CYAN)}")
