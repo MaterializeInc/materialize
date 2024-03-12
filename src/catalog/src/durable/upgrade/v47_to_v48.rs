@@ -11,7 +11,7 @@ use mz_stash::upgrade::WireCompatible;
 use mz_stash::wire_compatible;
 use std::collections::BTreeMap;
 
-use crate::durable::upgrade::persist::MigrationAction;
+use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v47 as v47, objects_v48 as v48};
 
 wire_compatible!(v47::DatabaseKey with v48::DatabaseKey);
