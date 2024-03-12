@@ -165,6 +165,23 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
     fn metadata_columns(&self) -> Vec<(&str, ColumnType)> {
         vec![]
     }
+
+    fn output_idx_for_name(&self, name: &UnresolvedItemName) -> Option<usize> {
+        let (schema_name, name) = match &name.0[..] {
+            // TODO: remove this inserted database name that doesn't refer to
+            // anything meaningful.
+            [database, schema_name, name] if database.as_str() == "mysql" => {
+                (schema_name.as_str(), name.as_str())
+            }
+            _ => return None,
+        };
+
+        self.details
+            .tables
+            .iter()
+            .position(|t| t.schema_name == schema_name && t.name == name)
+            .map(|idx| idx + 1)
+    }
 }
 
 impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
