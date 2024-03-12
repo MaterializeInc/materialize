@@ -998,8 +998,10 @@ where
         for (id, description) in exports {
             let from_id = description.sink.from;
 
-            let dependency_since = self.determine_collection_since_joins(&[from_id])?;
-            self.install_read_capabilities(id, &[from_id], dependency_since.clone())?;
+            let collection = self.collection(from_id)?;
+            let dependency_since = collection.implied_capability.clone();
+
+            self.install_read_capability(id, from_id, dependency_since.clone())?;
 
             info!(
                 sink_id = id.to_string(),
@@ -2488,32 +2490,12 @@ where
             .map(|(id, e)| (*id, e))
     }
 
-    /// Return the since frontier at which we can read from all the given
-    /// collections.
-    ///
-    /// The outer error is a potentially recoverable internal error, while the
-    /// inner error is appropriate to return to the adapter.
-    fn determine_collection_since_joins(
-        &self,
-        collections: &[GlobalId],
-    ) -> Result<Antichain<T>, StorageError> {
-        let mut joined_since = Antichain::from_elem(T::minimum());
-        for id in collections {
-            let collection = self.collection(*id)?;
-
-            let since = collection.implied_capability.clone();
-            joined_since.join_assign(&since);
-        }
-
-        Ok(joined_since)
-    }
-
     /// Install read capabilities on the given `storage_dependencies`.
     #[instrument(level = "info", fields(from_id, storage_dependencies, read_capability))]
-    fn install_read_capabilities(
+    fn install_read_capability(
         &mut self,
         _from_id: GlobalId,
-        storage_dependencies: &[GlobalId],
+        storage_dependency: GlobalId,
         read_capability: Antichain<T>,
     ) -> Result<(), StorageError> {
         let mut changes = ChangeBatch::new();
@@ -2521,10 +2503,8 @@ where
             changes.update(time.clone(), 1);
         }
 
-        let mut storage_read_updates = storage_dependencies
-            .iter()
-            .map(|id| (*id, changes.clone()))
-            .collect();
+        let mut storage_read_updates =
+            BTreeMap::from_iter(std::iter::once((storage_dependency, changes)));
 
         self.update_read_capabilities(&mut storage_read_updates);
 
@@ -3197,7 +3177,7 @@ where
         );
 
         let read_hold = collection.implied_capability.clone();
-        self.install_read_capabilities(id, &[storage_dependency], read_hold)?;
+        self.install_read_capability(id, storage_dependency, read_hold)?;
         Ok(())
     }
 
