@@ -1860,6 +1860,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "domain"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e853e3f6d4c6e52a4d73a94c1810c66ad71958fbe24934a7119b447f425aed76"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "libc",
+ "octseq",
+ "rand",
+ "smallvec",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2241,9 +2257,9 @@ checksum = "ee1b05cbd864bcaecbd3455d6d967862d446e4ebfc3c2e5e5b9841e53cba6673"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.1.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9c384f161156f5260c24a097c56119f9be8c798586aecc13afbcbe7b7e26bf8"
+checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
 ]
@@ -2750,9 +2766,9 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "idna"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e14ddfc70884202db2244c223200c204c2bda1bc6e0998d11b5e024d657209e6"
+checksum = "634d9b1461af396cad843f47fdba5597a4f9e6ddd4bfb6ff5d85028c25cb12f6"
 dependencies = [
  "unicode-bidi",
  "unicode-normalization",
@@ -3328,12 +3344,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "matches"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3e378b66a060d48947b590737b30a1be76706c8dd7b8ba0f2fe3989c68a853f"
-
-[[package]]
 name = "matchit"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3779,11 +3789,11 @@ dependencies = [
  "bytes",
  "bytesize",
  "clap",
+ "domain",
  "futures",
  "hyper",
  "hyper-openssl",
  "jsonwebtoken",
- "mz-adapter-types",
  "mz-build-info",
  "mz-environmentd",
  "mz-frontegg-auth",
@@ -6552,6 +6562,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "octseq"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d92b38a4aabbacf619b8083841713216e7668178422decfe06bbc70643024c5d"
+dependencies = [
+ "bytes",
+ "smallvec",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6902,9 +6922,9 @@ dependencies = [
 
 [[package]]
 name = "percent-encoding"
-version = "2.2.0"
+version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "478c572c3d73181ff3c2539045f6eb99e5491218eae919370993b890cdbdd98e"
+checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
 name = "persistcli"
@@ -9615,12 +9635,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-bidi"
-version = "0.3.4"
+version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49f2bd0c6468a8230e1db229cff8029217cf623c767ea5d60bfbd42729ea54d5"
-dependencies = [
- "matches",
-]
+checksum = "08f95100a766bf4f8f28f90d77e0a5461bbdb219042e7679bebe79004fed8d75"
 
 [[package]]
 name = "unicode-ident"
@@ -9630,9 +9647,9 @@ checksum = "d22af068fba1eb5edcb4aea19d382b2a3deb4c8f9d475c589b6ada9e0fd493ee"
 
 [[package]]
 name = "unicode-normalization"
-version = "0.1.21"
+version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "854cbdc4f7bc6ae19c820d44abdc3277ac3e1b2b93db20a636825d9322fb60e6"
+checksum = "a56d1686db2308d901306f92a263857ef59ea39678a5458e7cb17f01415101f5"
 dependencies = [
  "tinyvec",
 ]
@@ -9683,9 +9700,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.3.1"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d68c799ae75762b8c3fe375feb6600ef5602c883c5d21eb51c09f22b83c4643"
+checksum = "31e6302e3bb753d46e83516cae55ae196fc0c309407cf11ab35cc51a4c2a4633"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -10204,6 +10221,8 @@ dependencies = [
  "tracing-subscriber",
  "tungstenite",
  "uncased",
+ "unicode-bidi",
+ "unicode-normalization",
  "url",
  "uuid",
  "zeroize",

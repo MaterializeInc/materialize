@@ -22,19 +22,22 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
 use axum::{routing, Router};
 use bytes::BytesMut;
+use domain::base::{Dname, Rtype};
+use domain::rdata::AllRecordData;
+use domain::resolv::StubResolver;
 use futures::stream::BoxStream;
-use mz_ore::cast::CastFrom;
-
 use futures::TryFutureExt;
 use hyper::StatusCode;
 use mz_build_info::{build_info, BuildInfo};
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
@@ -58,6 +61,7 @@ use tokio::task::JoinSet;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 use tracing::{debug, error, warn};
+use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 
@@ -205,10 +209,17 @@ impl BalancerService {
             });
         }
         {
+            let Some((addr, port)) = self.cfg.https_addr_template.split_once(':') else {
+                panic!("expected port in https_addr_template");
+            };
+            let port: u16 = port.parse().expect("unexpected port");
+            let resolver = StubResolver::new();
             let https = HttpsBalancer {
+                resolver: Arc::from(resolver),
                 tls: https_tls,
-                resolve_template: Arc::from(self.cfg.https_addr_template),
-                metrics: ServerMetrics::new(metrics, "https"),
+                resolve_template: Arc::from(addr),
+                port,
+                metrics: Arc::from(ServerMetrics::new(metrics, "https")),
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
@@ -774,9 +785,101 @@ async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &P
 }
 
 struct HttpsBalancer {
+    resolver: Arc<StubResolver>,
     tls: Option<ReloadingSslContext>,
     resolve_template: Arc<str>,
-    metrics: ServerMetrics,
+    port: u16,
+    metrics: Arc<ServerMetrics>,
+}
+
+impl HttpsBalancer {
+    async fn resolve(
+        resolver: &StubResolver,
+        resolve_template: &str,
+        port: u16,
+        servername: Option<&str>,
+    ) -> Result<ResolvedAddr, anyhow::Error> {
+        let addr = match &servername {
+            Some(servername) => resolve_template.replace("{}", servername),
+            None => resolve_template.to_string(),
+        };
+        debug!("https address: {addr}");
+
+        // When we lookup the address using SNI, we get a hostname (`3dl07g8zmj91pntk4eo9cfvwe` for
+        // example), which you convert into a different form for looking up the environment address
+        // `blncr-3dl07g8zmj91pntk4eo9cfvwe`. When you do a DNS lookup in kubernetes for
+        // `blncr-3dl07g8zmj91pntk4eo9cfvwe`, you get a CNAME response pointing at environmentd
+        // `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`. This
+        // is of the form `<service>.<namespace>.svc.cluster.local`. That `<namespace>` is the same
+        // as the environment name, and is based on the tenant ID. `environment-<tenant_id>-<index>`
+        // We currently only support a single environment per tenant in a region, so `<index>` is
+        // always 0. Do not rely on this ending in `-0` so in the future multiple envds are
+        // supported.
+
+        // Attempt to get a tenant.
+        let tenant = Self::tenant(resolver, &addr).await;
+
+        // Now do the regular ip lookup, regardless of if there was a CNAME.
+        let envd_addr = lookup(&format!("{addr}:{port}")).await?;
+
+        Ok(ResolvedAddr {
+            addr: envd_addr,
+            password: None,
+            tenant,
+        })
+    }
+
+    /// Finds the tenant of a DNS address. Errors or lack of cname resolution here are ok, because
+    /// this is only used for metrics.
+    async fn tenant(resolver: &StubResolver, addr: &str) -> Option<String> {
+        let Ok(dname) = Dname::<Vec<_>>::from_str(addr) else {
+            return None;
+        };
+        // Lookup the CNAME. If there's a CNAME, find the tenant.
+        let lookup = resolver.query((dname, Rtype::Cname)).await;
+        if let Ok(lookup) = lookup {
+            if let Ok(answer) = lookup.answer() {
+                let res = answer.limit_to::<AllRecordData<_, _>>();
+                for record in res {
+                    let Ok(record) = record else {
+                        continue;
+                    };
+                    if record.rtype() != Rtype::Cname {
+                        continue;
+                    }
+                    let cname = record.data();
+                    let cname = cname.to_string();
+                    debug!("cname: {cname}");
+                    return Self::extract_tenant_from_cname(&cname);
+                }
+            }
+        }
+        None
+    }
+
+    /// Extracts the tenant from a CNAME.
+    fn extract_tenant_from_cname(cname: &str) -> Option<String> {
+        let mut parts = cname.split('.');
+        let _service = parts.next();
+        let Some(namespace) = parts.next() else {
+            return None;
+        };
+        // Trim off the starting `environmentd-`.
+        let Some((_, namespace)) = namespace.split_once('-') else {
+            return None;
+        };
+        // Trim off the ending `-0` (or some other number).
+        let Some((tenant, _)) = namespace.rsplit_once('-') else {
+            return None;
+        };
+        // Convert to a Uuid so that this tenant matches the frontegg resolver exactly, because it
+        // also uses Uuid::to_string.
+        let Ok(tenant) = Uuid::parse_str(tenant) else {
+            error!("cname tenant not a uuid: {tenant}");
+            return None;
+        };
+        Some(tenant.to_string())
+    }
 }
 
 impl mz_server_core::Server for HttpsBalancer {
@@ -784,12 +887,15 @@ impl mz_server_core::Server for HttpsBalancer {
 
     fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
         let tls_context = self.tls.clone();
+        let resolver = Arc::clone(&self.resolver);
         let resolve_template = Arc::clone(&self.resolve_template);
-        let metrics = self.metrics.clone();
+        let port = self.port;
+        let inner_metrics = Arc::clone(&self.metrics);
+        let outer_metrics = Arc::clone(&self.metrics);
         Box::pin(async move {
-            let active_guard = metrics.active_connections();
-            let result = Box::pin(async move {
-                let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
+            let active_guard = inner_metrics.active_connections();
+            let result: Result<_, anyhow::Error> = Box::pin(async move {
+                let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
                     match tls_context {
                         Some(tls_context) => {
                             let mut ssl_stream =
@@ -812,29 +918,35 @@ impl mz_server_core::Server for HttpsBalancer {
                         _ => (Box::new(conn), None),
                     };
 
-                let addr: String = match servername {
-                    Some(servername) => resolve_template.replace("{}", &servername),
-                    None => resolve_template.to_string(),
-                };
-                debug!("https address: {addr}");
+                let resolved =
+                    Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
+                        .await?;
+                let inner_active_guard = resolved
+                    .tenant
+                    .as_ref()
+                    .map(|tenant| inner_metrics.tenant_connections(tenant));
 
-                let mut addrs = tokio::net::lookup_host(&*addr).await?;
-                let Some(envd_addr) = addrs.next() else {
-                    error!("{addr} did not resolve to any addresses");
-                    anyhow::bail!("internal error");
-                };
-
-                let mut mz_stream = TcpStream::connect(envd_addr).await?;
+                let mut mz_stream = TcpStream::connect(resolved.addr).await?;
+                let mut client_counter = CountingConn::new(client_stream);
 
                 // Now blindly shuffle bytes back and forth until closed.
                 // TODO: Limit total memory use.
-                tokio::io::copy_bidirectional(&mut client_stream, &mut mz_stream).await?;
-
+                // See corresponding comment in pgwire implementation about ignoring the error.
+                let _ = tokio::io::copy_bidirectional(&mut client_counter, &mut mz_stream).await;
+                if let Some(tenant) = &resolved.tenant {
+                    inner_metrics
+                        .tenant_connections_tx(tenant)
+                        .inc_by(u64::cast_from(client_counter.written));
+                    inner_metrics
+                        .tenant_connections_rx(tenant)
+                        .inc_by(u64::cast_from(client_counter.read));
+                }
+                drop(inner_active_guard);
                 Ok(())
             })
             .await;
             drop(active_guard);
-            metrics.connection_status(result.is_ok()).inc();
+            outer_metrics.connection_status(result.is_ok()).inc();
             if let Err(e) = result {
                 debug!("connection error: {e}");
             }
@@ -904,12 +1016,13 @@ impl Resolver {
     }
 }
 
-async fn lookup(addr: &str) -> Result<SocketAddr, anyhow::Error> {
-    let mut addrs = tokio::net::lookup_host(&addr).await?;
+/// Returns the first IP address resolved from the provided hostname.
+async fn lookup(name: &str) -> Result<SocketAddr, anyhow::Error> {
+    let mut addrs = tokio::net::lookup_host(name).await?;
     match addrs.next() {
         Some(addr) => Ok(addr),
         None => {
-            error!("{addr} did not resolve to any addresses");
+            error!("{name} did not resolve to any addresses");
             anyhow::bail!("internal error")
         }
     }
@@ -926,4 +1039,63 @@ struct ResolvedAddr {
     addr: SocketAddr,
     password: Option<String>,
     tenant: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_tenant() {
+        let tests = vec![
+            ("", None),
+            (
+                "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+                Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
+            ),
+            (
+                // Variously named parts.
+                "service.something-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.ssvvcc.cloister.faraway",
+                Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
+            ),
+            (
+                // No dashes in uuid.
+                "environmentd.environment-58cd23ffa4d74bd0ad85a6ff29cc86c3-0.svc.cluster.local",
+                Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
+            ),
+            (
+                // -1234 suffix.
+                "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-1234.svc.cluster.local",
+                Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
+            ),
+            (
+                // Uppercase.
+                "environmentd.environment-58CD23FF-A4D7-4BD0-AD85-A6FF29CC86C3-0.svc.cluster.local",
+                Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
+            ),
+            (
+                // No -number suffix.
+                "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3.svc.cluster.local",
+               None,
+            ),
+            (
+                // No service name.
+                "environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+                None,
+            ),
+            (
+                // Invalid UUID.
+                "environmentd.environment-8cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+               None,
+            ),
+        ];
+        for (name, expect) in tests {
+            let cname = HttpsBalancer::extract_tenant_from_cname(name);
+            assert_eq!(
+                cname.as_deref(),
+                expect,
+                "{name} got {cname:?} expected {expect:?}"
+            );
+        }
+    }
 }
