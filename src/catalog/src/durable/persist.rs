@@ -273,23 +273,46 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         &mut self,
         updates: Vec<(S, Diff)>,
     ) -> Result<(), CatalogError> {
-        let updates = updates
-            .into_iter()
-            .map(|(kind, diff)| StateUpdate {
-                kind,
-                ts: self.upper,
-                diff,
-            })
-            .collect();
+        let updates = updates.into_iter().map(|(kind, diff)| {
+            let kind: StateUpdateKindRaw = kind.into();
+            ((Into::<SourceData>::into(kind), ()), self.upper, diff)
+        });
         let next_upper = self.upper.step_forward();
-        compare_and_append(
-            &mut self.since_handle,
-            &mut self.write_handle,
-            updates,
-            self.upper,
-            next_upper,
-        )
-        .await?;
+        self.write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(self.upper),
+                Antichain::from_elem(next_upper),
+            )
+            .await
+            .expect("invalid usage")
+            .map_err(|upper_mismatch| {
+                DurableCatalogError::Fence(format!(
+                    "current catalog upper {:?} fenced by new catalog upper {:?}",
+                    upper_mismatch.expected, upper_mismatch.current
+                ))
+            })?;
+
+        // Lag the shard's upper by 1 to keep it readable.
+        let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
+
+        // The since handle gives us the ability to fence out other writes using an opaque token.
+        // (See the method documentation for details.)
+        // That's not needed here, so we use a constant opaque token to avoid any comparison failures.
+        let opaque = i64::initial();
+        let downgrade = self
+            .since_handle
+            .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
+            .await;
+
+        match downgrade {
+            None => {}
+            Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
+            Some(Ok(updated)) => soft_assert_or_log!(
+                updated == downgrade_to,
+                "updated bound should match expected"
+            ),
+        }
         self.sync(next_upper).await?;
         Ok(())
     }
@@ -349,7 +372,36 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     #[mz_ore::instrument(level = "debug")]
     async fn sync_inner(&mut self, target_upper: Timestamp) -> Result<(), DurableCatalogError> {
         self.epoch.validate()?;
-        let updates = sync(&mut self.listen, &mut self.upper, target_upper).await;
+        let mut updates = Vec::new();
+
+        while self.upper < target_upper {
+            let listen_events = self.listen.fetch_next().await;
+            for listen_event in listen_events {
+                match listen_event {
+                    ListenEvent::Progress(upper) => {
+                        debug!("synced up to {upper:?}");
+                        self.upper = upper
+                            .as_option()
+                            .cloned()
+                            .expect("we use a totally ordered time and never finalize the shard");
+                    }
+                    ListenEvent::Updates(batch_updates) => {
+                        debug!("syncing updates {batch_updates:?}");
+                        let batch_updates = batch_updates
+                            .into_iter()
+                            .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
+                            .map(|update| {
+                                let kind = T::try_from(update.kind).expect("kind decoding error");
+                                (kind, update.ts, update.diff)
+                            });
+                        updates.extend(batch_updates);
+                    }
+                }
+            }
+        }
+        let updates = updates
+            .into_iter()
+            .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
         self.apply_updates(updates)?;
         Ok(())
     }
@@ -561,7 +613,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
         let mut read_handle = self.read_handle().await;
         let as_of = as_of(&read_handle, self.upper);
-        let snapshot = snapshot(&mut read_handle, as_of, &self.metrics).await;
+        let snapshot = snapshot_binary(&mut read_handle, as_of, &self.metrics)
+            .await
+            .map(|update| update.try_into().expect("kind decoding error"));
         read_handle.expire().await;
         snapshot
     }
@@ -1392,57 +1446,6 @@ fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Times
     as_of
 }
 
-/// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
-/// iff the current global upper of the catalog is `current_upper`.
-async fn compare_and_append<T: IntoStateUpdateKindRaw>(
-    since_handle: &mut SinceHandle<SourceData, (), Timestamp, Diff, i64>,
-    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
-    updates: Vec<StateUpdate<T>>,
-    current_upper: Timestamp,
-    next_upper: Timestamp,
-) -> Result<(), CatalogError> {
-    let updates = updates.into_iter().map(|update| {
-        let kind: StateUpdateKindRaw = update.kind.into();
-        ((Into::<SourceData>::into(kind), ()), update.ts, update.diff)
-    });
-    write_handle
-        .compare_and_append(
-            updates,
-            Antichain::from_elem(current_upper),
-            Antichain::from_elem(next_upper),
-        )
-        .await
-        .expect("invalid usage")
-        .map_err(|upper_mismatch| {
-            DurableCatalogError::Fence(format!(
-                "current catalog upper {:?} fenced by new catalog upper {:?}",
-                upper_mismatch.expected, upper_mismatch.current
-            ))
-        })?;
-
-    // Lag the shard's upper by 1 to keep it readable.
-    let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
-
-    // The since handle gives us the ability to fence out other writes using an opaque token.
-    // (See the method documentation for details.)
-    // That's not needed here, so we use a constant opaque token to avoid any comparison failures.
-    let opaque = i64::initial();
-    let downgrade = since_handle
-        .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
-        .await;
-
-    match downgrade {
-        None => {}
-        Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
-        Some(Ok(updated)) => soft_assert_or_log!(
-            updated == downgrade_to,
-            "updated bound should match expected"
-        ),
-    }
-
-    Ok(())
-}
-
 /// Fetch the persist version of the catalog upgrade shard, if one exists. A version will not
 /// exist if the catalog upgrade shard itself doesn't exist which could happen in the following
 /// scenarios:
@@ -1466,17 +1469,6 @@ async fn fetch_catalog_upgrade_shard_version(
     let upgrade_version =
         serde_json::from_value(upgrade_version).expect("version deserialization error");
     Some(upgrade_version)
-}
-
-#[mz_ore::instrument(level = "debug")]
-async fn snapshot(
-    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
-    as_of: Timestamp,
-    metrics: &Arc<Metrics>,
-) -> impl Iterator<Item = StateUpdate<StateUpdateKind>> + DoubleEndedIterator {
-    snapshot_binary(read_handle, as_of, metrics)
-        .await
-        .map(|update| update.try_into().expect("kind decoding error"))
 }
 
 /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -1518,48 +1510,6 @@ async fn snapshot_binary_inner(
         .into_iter()
         .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
-}
-
-/// Listen for all updates up to `target_upper`.
-///
-/// Results are guaranteed to be consolidated and sorted by timestamp then diff.
-#[mz_ore::instrument(level = "debug")]
-async fn sync<T: IntoStateUpdateKindRaw>(
-    listen: &mut Listen<SourceData, (), Timestamp, Diff>,
-    current_upper: &mut Timestamp,
-    target_upper: Timestamp,
-) -> Vec<StateUpdate<T>> {
-    let mut updates = Vec::new();
-
-    while *current_upper < target_upper {
-        let listen_events = listen.fetch_next().await;
-        for listen_event in listen_events {
-            match listen_event {
-                ListenEvent::Progress(upper) => {
-                    debug!("synced up to {upper:?}");
-                    *current_upper = upper
-                        .as_option()
-                        .cloned()
-                        .expect("we use a totally ordered time and never finalize the shard");
-                }
-                ListenEvent::Updates(batch_updates) => {
-                    debug!("syncing updates {batch_updates:?}");
-                    let batch_updates = batch_updates
-                        .into_iter()
-                        .map(Into::<StateUpdate<StateUpdateKindRaw>>::into)
-                        .map(|update| {
-                            let kind = T::try_from(update.kind).expect("kind decoding error");
-                            (kind, update.ts, update.diff)
-                        });
-                    updates.extend(batch_updates);
-                }
-            }
-        }
-    }
-    updates
-        .into_iter()
-        .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff })
-        .collect()
 }
 
 // Debug methods.
