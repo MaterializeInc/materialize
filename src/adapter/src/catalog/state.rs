@@ -51,7 +51,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
-use mz_pgrepr::oid;
+use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
@@ -90,7 +90,7 @@ use crate::catalog::{BuiltinTableUpdate, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::util::{index_sql, ResultExt};
+use crate::util::index_sql;
 use crate::AdapterError;
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
@@ -119,8 +119,6 @@ pub struct CatalogState {
     pub(super) roles_by_id: BTreeMap<RoleId, Role>,
     #[serde(skip)]
     pub(super) config: mz_sql::catalog::CatalogConfig,
-    #[serde(skip)]
-    pub(super) oid_counter: u32,
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
     #[serde(skip)]
     pub(crate) availability_zones: Vec<String>,
@@ -174,7 +172,6 @@ impl CatalogState {
                     InMemorySecretsController::new(),
                 )),
             },
-            oid_counter: Default::default(),
             cluster_replica_sizes: Default::default(),
             availability_zones: Default::default(),
             system_configuration: Default::default(),
@@ -235,15 +232,6 @@ impl CatalogState {
 
     pub fn for_system_session(&self) -> ConnCatalog {
         self.for_sessionless_user(MZ_SYSTEM_ROLE_ID)
-    }
-
-    pub fn allocate_oid(&mut self) -> Result<u32, Error> {
-        let oid = self.oid_counter;
-        if oid == u32::MAX {
-            return Err(Error::new(ErrorKind::OidExhaustion));
-        }
-        self.oid_counter += 1;
-        Ok(oid)
     }
 
     /// Computes the IDs of any indexes that transitively depend on this catalog
@@ -1256,13 +1244,13 @@ impl CatalogState {
         &mut self,
         id: ClusterId,
         name: String,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId, u32)>,
         owner_id: RoleId,
         privileges: PrivilegeMap,
         config: ClusterConfig,
     ) {
         let mut log_indexes = BTreeMap::new();
-        for (log, index_id) in introspection_source_indexes {
+        for (log, index_id, oid) in introspection_source_indexes {
             let source_name = FullItemName {
                 database: RawDatabaseSpecifier::Ambient,
                 schema: log.schema.into(),
@@ -1278,15 +1266,6 @@ impl CatalogState {
             };
             index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
             let index_item_name = index_name.item.clone();
-            // TODO(clusters): Avoid panicking here on ID exhaustion
-            // before stabilization.
-            //
-            // The OID counter is an i32, and could plausibly be exhausted.
-            // Preallocating OIDs for each logging index is eminently
-            // doable, but annoying enough that we don't bother now.
-            let oid = self
-                .allocate_oid()
-                .unwrap_or_terminate("cannot return error here");
             let log_id = self.resolve_builtin_log(log);
             self.insert_item(
                 index_id,
@@ -1614,18 +1593,6 @@ impl CatalogState {
         &self.ambient_schemas_by_name[MZ_UNSAFE_SCHEMA]
     }
 
-    // TODO(jkosh44) This can be removed once OIDs are persisted
-    pub fn get_system_schema_oid(name: &str) -> Option<u32> {
-        match name {
-            MZ_CATALOG_SCHEMA => Some(oid::SCHEMA_MZ_CATALOG_OID),
-            PG_CATALOG_SCHEMA => Some(oid::SCHEMA_PG_CATALOG_OID),
-            INFORMATION_SCHEMA => Some(oid::SCHEMA_INFORMATION_SCHEMA_OID),
-            MZ_INTERNAL_SCHEMA => Some(oid::SCHEMA_MZ_INTERNAL_OID),
-            MZ_UNSAFE_SCHEMA => Some(oid::SCHEMA_MZ_UNSAFE_OID),
-            _ => None,
-        }
-    }
-
     pub fn is_system_schema(&self, schema: &str) -> bool {
         schema == MZ_CATALOG_SCHEMA
             || schema == PG_CATALOG_SCHEMA
@@ -1656,7 +1623,11 @@ impl CatalogState {
         conn_id: &ConnectionId,
         owner_id: RoleId,
     ) -> Result<(), Error> {
-        let oid = self.allocate_oid()?;
+        // Temporary schema OIDs are never used, and it's therefore wasteful to go to the durable
+        // catalog to allocate a new OID for every temporary schema. Instead, we give them all the
+        // same invalid OID. This matches the semantics of temporary schema `GlobalId`s which are
+        // all -1.
+        let oid = INVALID_OID;
         self.temporary_schemas.insert(
             conn_id.clone(),
             Schema {

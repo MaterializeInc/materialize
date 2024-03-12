@@ -135,12 +135,12 @@ contains:SOURCE "mz_source_progress" is a progress collection and cannot be drop
 contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source;
-contains:SOURCE "mz_source" is a not a subsource of "mz_source"
+contains:SOURCE "mz_source" is not a subsource of "mz_source"
 
 > CREATE TABLE mz_table (a int);
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE mz_table;
-contains:"materialize.public.mz_table" is a table not a source
+contains:mz_table is a table not a source
 
 > DROP TABLE mz_table;
 
@@ -149,10 +149,10 @@ contains:"materialize.public.mz_table" is a table not a source
   FOR TABLES (public.table_a AS t_a);
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE t_a;
-contains:SOURCE "t_a" is a not a subsource of "mz_source"
+contains:SOURCE "t_a" is not a subsource of "mz_source"
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_too;
-contains:SOURCE "mz_source_too" is a not a subsource of "mz_source"
+contains:SOURCE "mz_source_too" is not a subsource of "mz_source"
 
 > DROP SOURCE mz_source_too;
 

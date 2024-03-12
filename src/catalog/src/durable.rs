@@ -60,6 +60,7 @@ pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
+pub const OID_ALLOC_KEY: &str = "oid";
 pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
 
 #[derive(Clone, Debug)]

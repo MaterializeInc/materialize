@@ -14,6 +14,10 @@ use mz_audit_log::{EventV1, VersionedEvent};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
+use mz_pgrepr::oid::{
+    FIRST_USER_OID, ROLE_PUBLIC_OID, SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID,
+    SCHEMA_MZ_INTERNAL_OID, SCHEMA_MZ_UNSAFE_OID, SCHEMA_PG_CATALOG_OID,
+};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{
@@ -32,9 +36,9 @@ use crate::durable::upgrade::CATALOG_VERSION;
 use crate::durable::{
     BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
     DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
-    AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
-    SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
-    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
+    USER_CLUSTER_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key used within the "config" collection stores the deploy generation.
@@ -125,25 +129,28 @@ pub async fn initialize(
         ),
         (AUDIT_LOG_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (STORAGE_USAGE_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
+        (OID_ALLOC_KEY.to_string(), FIRST_USER_OID.into()),
     ] {
         tx.insert_id_allocator(name, next_id)?;
     }
 
     for role in BUILTIN_ROLES {
-        tx.insert_role(
+        tx.insert_system_role(
             role.id,
             role.name.to_string(),
             role.attributes.clone(),
             RoleMembership::new(),
             RoleVars::default(),
+            role.oid,
         )?;
     }
-    tx.insert_role(
+    tx.insert_system_role(
         RoleId::Public,
         PUBLIC_ROLE_NAME.as_str().to_lowercase(),
         RoleAttributes::new(),
         RoleMembership::new(),
         RoleVars::default(),
+        ROLE_PUBLIC_OID,
     )?;
 
     // If provided, generate a new Id for the bootstrap role.
@@ -152,7 +159,7 @@ pub async fn initialize(
         let membership = RoleMembership::new();
         let vars = RoleVars::default();
 
-        let id = tx.insert_user_role(
+        let (id, oid) = tx.insert_user_role(
             role.to_string(),
             attributes.clone(),
             membership.clone(),
@@ -174,6 +181,7 @@ pub async fn initialize(
             attributes,
             membership,
             vars,
+            oid,
         })
     } else {
         None
@@ -289,11 +297,13 @@ pub async fn initialize(
         })
     };
 
+    let materialize_db_oid = tx.allocate_oid()?;
     tx.insert_database(
         MATERIALIZE_DATABASE_ID,
         "materialize",
         MZ_SYSTEM_ROLE_ID,
         db_privileges,
+        materialize_db_oid,
     )?;
     audit_events.extend([
         (
@@ -345,6 +355,7 @@ pub async fn initialize(
 
     let mz_catalog_schema = Schema {
         id: SchemaId::System(MZ_CATALOG_SCHEMA_ID),
+        oid: SCHEMA_MZ_CATALOG_OID,
         database_id: None,
         name: "mz_catalog".to_string(),
         owner_id: MZ_SYSTEM_ROLE_ID,
@@ -352,6 +363,7 @@ pub async fn initialize(
     };
     let pg_catalog_schema = Schema {
         id: SchemaId::System(PG_CATALOG_SCHEMA_ID),
+        oid: SCHEMA_PG_CATALOG_OID,
         database_id: None,
         name: "pg_catalog".to_string(),
         owner_id: MZ_SYSTEM_ROLE_ID,
@@ -359,6 +371,7 @@ pub async fn initialize(
     };
     let mz_internal_schema = Schema {
         id: SchemaId::System(MZ_INTERNAL_SCHEMA_ID),
+        oid: SCHEMA_MZ_INTERNAL_OID,
         database_id: None,
         name: "mz_internal".to_string(),
         owner_id: MZ_SYSTEM_ROLE_ID,
@@ -366,6 +379,7 @@ pub async fn initialize(
     };
     let information_schema = Schema {
         id: SchemaId::System(INFORMATION_SCHEMA_ID),
+        oid: SCHEMA_INFORMATION_SCHEMA_OID,
         database_id: None,
         name: "information_schema".to_string(),
         owner_id: MZ_SYSTEM_ROLE_ID,
@@ -373,13 +387,16 @@ pub async fn initialize(
     };
     let mz_unsafe_schema = Schema {
         id: SchemaId::System(MZ_UNSAFE_SCHEMA_ID),
+        oid: SCHEMA_MZ_UNSAFE_OID,
         database_id: None,
         name: "mz_unsafe".to_string(),
         owner_id: MZ_SYSTEM_ROLE_ID,
         privileges: schema_privileges.clone(),
     };
+    let public_schema_oid = tx.allocate_oid()?;
     let public_schema = Schema {
         id: SchemaId::User(PUBLIC_SCHEMA_ID),
+        oid: public_schema_oid,
         database_id: Some(MATERIALIZE_DATABASE_ID),
         name: "public".to_string(),
         owner_id: MZ_SYSTEM_ROLE_ID,
@@ -422,6 +439,7 @@ pub async fn initialize(
             schema.name,
             schema.owner_id,
             schema.privileges,
+            schema.oid,
         )?;
     }
     audit_events.push((

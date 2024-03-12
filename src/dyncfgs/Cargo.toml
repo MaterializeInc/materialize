@@ -11,10 +11,11 @@ publish = false
 workspace = true
 
 [dependencies]
-mz-compute-types = { path = "../compute-types"}
-mz-dyncfg = { path = "../dyncfg"}
-mz-persist-client = { path = "../persist-client"}
-mz-persist-txn = { path = "../persist-txn"}
+mz-adapter-types = { path = "../adapter-types" }
+mz-compute-types = { path = "../compute-types" }
+mz-dyncfg = { path = "../dyncfg" }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-txn = { path = "../persist-txn" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]

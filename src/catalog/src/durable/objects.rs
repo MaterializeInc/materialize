@@ -54,6 +54,7 @@ pub trait DurableType<K, V>: Sized {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Database {
     pub id: DatabaseId,
+    pub oid: u32,
     pub name: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
@@ -64,6 +65,7 @@ impl DurableType<DatabaseKey, DatabaseValue> for Database {
         (
             DatabaseKey { id: self.id },
             DatabaseValue {
+                oid: self.oid,
                 name: self.name,
                 owner_id: self.owner_id,
                 privileges: self.privileges,
@@ -74,6 +76,7 @@ impl DurableType<DatabaseKey, DatabaseValue> for Database {
     fn from_key_value(key: DatabaseKey, value: DatabaseValue) -> Self {
         Self {
             id: key.id,
+            oid: value.oid,
             name: value.name,
             owner_id: value.owner_id,
             privileges: value.privileges,
@@ -84,6 +87,7 @@ impl DurableType<DatabaseKey, DatabaseValue> for Database {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub id: SchemaId,
+    pub oid: u32,
     pub name: String,
     pub database_id: Option<DatabaseId>,
     pub owner_id: RoleId,
@@ -95,6 +99,7 @@ impl DurableType<SchemaKey, SchemaValue> for Schema {
         (
             SchemaKey { id: self.id },
             SchemaValue {
+                oid: self.oid,
                 database_id: self.database_id,
                 name: self.name,
                 owner_id: self.owner_id,
@@ -106,6 +111,7 @@ impl DurableType<SchemaKey, SchemaValue> for Schema {
     fn from_key_value(key: SchemaKey, value: SchemaValue) -> Self {
         Self {
             id: key.id,
+            oid: value.oid,
             name: value.name,
             database_id: value.database_id,
             owner_id: value.owner_id,
@@ -117,6 +123,7 @@ impl DurableType<SchemaKey, SchemaValue> for Schema {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Role {
     pub id: RoleId,
+    pub oid: u32,
     pub name: String,
     pub attributes: RoleAttributes,
     pub membership: RoleMembership,
@@ -128,6 +135,7 @@ impl DurableType<RoleKey, RoleValue> for Role {
         (
             RoleKey { id: self.id },
             RoleValue {
+                oid: self.oid,
                 name: self.name,
                 attributes: self.attributes,
                 membership: self.membership,
@@ -139,6 +147,7 @@ impl DurableType<RoleKey, RoleValue> for Role {
     fn from_key_value(key: RoleKey, value: RoleValue) -> Self {
         Self {
             id: key.id,
+            oid: value.oid,
             name: value.name,
             attributes: value.attributes,
             membership: value.membership,
@@ -207,6 +216,7 @@ pub struct IntrospectionSourceIndex {
     pub cluster_id: ClusterId,
     pub name: String,
     pub index_id: GlobalId,
+    pub oid: u32,
 }
 
 impl DurableType<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>
@@ -235,7 +245,10 @@ impl DurableType<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceI
                 cluster_id: self.cluster_id,
                 name: self.name,
             },
-            ClusterIntrospectionSourceIndexValue { index_id },
+            ClusterIntrospectionSourceIndexValue {
+                index_id,
+                oid: self.oid,
+            },
         )
     }
 
@@ -247,6 +260,7 @@ impl DurableType<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceI
             cluster_id: key.cluster_id,
             name: key.name,
             index_id: GlobalId::System(value.index_id),
+            oid: value.oid,
         }
     }
 }
@@ -374,6 +388,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
     pub id: GlobalId,
+    pub oid: u32,
     pub schema_id: SchemaId,
     pub name: String,
     pub create_sql: String,
@@ -386,6 +401,7 @@ impl DurableType<ItemKey, ItemValue> for Item {
         (
             ItemKey { gid: self.id },
             ItemValue {
+                oid: self.oid,
                 schema_id: self.schema_id,
                 name: self.name,
                 create_sql: self.create_sql,
@@ -398,6 +414,7 @@ impl DurableType<ItemKey, ItemValue> for Item {
     fn from_key_value(key: ItemKey, value: ItemValue) -> Self {
         Self {
             id: key.gid,
+            oid: value.oid,
             schema_id: value.schema_id,
             name: value.name,
             create_sql: value.create_sql,
@@ -813,6 +830,7 @@ pub struct ClusterIntrospectionSourceIndexKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
     pub(crate) index_id: u64,
+    pub(crate) oid: u32,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
@@ -838,6 +856,7 @@ pub struct DatabaseValue {
     pub(crate) name: String,
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
+    pub(crate) oid: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -851,6 +870,7 @@ pub struct SchemaValue {
     pub(crate) name: String,
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
+    pub(crate) oid: u32,
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
@@ -865,6 +885,7 @@ pub struct ItemValue {
     pub(crate) create_sql: String,
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
+    pub(crate) oid: u32,
 }
 
 impl ItemValue {
@@ -915,6 +936,7 @@ pub struct RoleValue {
     pub(crate) attributes: RoleAttributes,
     pub(crate) membership: RoleMembership,
     pub(crate) vars: RoleVars,
+    pub(crate) oid: u32,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]

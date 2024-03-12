@@ -739,10 +739,8 @@ impl Coordinator {
         event: &StatementLifecycleEvent,
         when: EpochMillis,
     ) {
-        if self
-            .catalog()
-            .system_config()
-            .enable_statement_lifecycle_logging()
+        if mz_adapter_types::dyncfgs::ENABLE_STATEMENT_LIFECYCLE_LOGGING
+            .get(self.catalog().system_config().dyncfgs())
         {
             let row = Self::pack_statement_lifecycle_event(id, event, when);
             self.statement_logging

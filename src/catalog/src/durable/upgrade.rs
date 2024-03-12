@@ -35,7 +35,7 @@
 //!    change could then impact a previous migration. You need to write separate upgrade functions
 //!    for the stash catalog and the persist catalog.
 //! 9. Call your upgrade function in [`stash::upgrade()`] and [`persist::upgrade()`].
-//! 10. To generate a test file for the new version:
+//! 10. Generate a test file for the new version:
 //!     ```ignore
 //!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
 //!     ```
@@ -170,14 +170,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v42, v43, v44, v45, v46, v47);
+objects!(v42, v43, v44, v45, v46, v47, v48);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 47;
+pub const CATALOG_VERSION: u64 = 48;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -194,6 +194,7 @@ mod v43_to_v44;
 mod v44_to_v45;
 mod v45_to_v46;
 mod v46_to_v47;
+mod v47_to_v48;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -288,7 +289,16 @@ pub(crate) async fn upgrade(
             46 => {
                 run_versioned_upgrade(unopened_catalog_state, mode, version, v46_to_v47::upgrade)
                     .await
-            }
+                }
+                47 => {
+                    run_versioned_upgrade(
+                        unopened_catalog_state,
+                        mode,
+                        version,
+                        v47_to_v48::upgrade,
+                    )
+                    .await
+                }
 
             // Up-to-date, no migration needed!
             CATALOG_VERSION => Ok(CATALOG_VERSION),

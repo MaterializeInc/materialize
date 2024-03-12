@@ -13,6 +13,7 @@ from typing import Any
 
 from materialize.buildkite_insights.buildkite_api import builds_api
 from materialize.buildkite_insights.cache import generic_cache
+from materialize.buildkite_insights.cache.cache_constants import FetchMode
 from materialize.buildkite_insights.util.data_io import (
     get_file_path,
 )
@@ -20,7 +21,7 @@ from materialize.buildkite_insights.util.data_io import (
 
 def get_or_query_builds(
     pipeline_slug: str,
-    fetch_mode: str,
+    fetch_mode: FetchMode,
     max_fetches: int,
     branch: str | None,
     build_states: list[str] | None,
@@ -46,7 +47,7 @@ def get_or_query_builds(
 
 
 def get_or_query_builds_for_all_pipelines(
-    fetch_mode: str,
+    fetch_mode: FetchMode,
     max_fetches: int,
     build_states: list[str] | None,
     items_per_page: int = 50,

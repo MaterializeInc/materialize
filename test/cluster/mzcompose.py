@@ -3227,11 +3227,11 @@ def workflow_cluster_drop_concurrent(
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"
 
 
-def workflow_test_refresh_mv_restart(
+def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Test REFRESH materialized views with restarts:
+    Test REFRESH materialized view warmup behavior after envd restarts:
     1. Regression test for https://github.com/MaterializeInc/materialize/issues/25380
        If an MV is past its last refresh, it shouldn't get rehydrated after a restart.
     2. Regression test for https://github.com/MaterializeInc/materialize/issues/25279
@@ -3248,21 +3248,14 @@ def workflow_test_refresh_mv_restart(
         Testdrive(no_reset=True),
     ):
         c.down(destroy_volumes=True)
-
         c.up("materialized")
         c.up("testdrive", persistent=True)
-
-        # Create a new cluster
-        c.sql(
-            """
-            CREATE CLUSTER cluster1 SIZE '1'
-            """
-        )
 
         c.testdrive(
             input=dedent(
                 """
-                > SET cluster = cluster1;
+                > CREATE CLUSTER cluster12 SIZE '1';
+                > SET cluster = cluster12;
 
                 ## 1. Create a materialized view that has only one refresh, and takes at least a few seconds to hydrate.
                 ##    (Currently, it's ~2 seconds on a release build.)
@@ -3336,3 +3329,205 @@ def workflow_test_refresh_mv_restart(
                 """
             )
         )
+
+
+def workflow_test_refresh_mv_restart(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test REFRESH materialized views with envd restarts:
+
+    1a. Restart just after a refresh, and then check after the next refresh that things still work.
+    1b. Same as above, but turn off the replica before the restart, and then turn it back on after the restart.
+    1c. Same as 1a, but with the MV reading from an index.
+
+    2a. Kill envd, sleep through a refresh time, then bring up envd and check that we recover.
+    2b. Same as 2a, but manipulate replicas as in 1b.
+    2c. Same as 2a but with the MV reading from an index.
+
+    3d. No replica while creating the MV, restart envd, and then create a replica
+    3e. Same as 3d but with the MV reading from an index.
+    3f. Same as 3d, but with an MV that has a last refresh.
+    3g. Same as 3e, but with an MV that has a last refresh.
+    3h. Same as 3d, but with an MV that has a short refresh interval, so we miss several refreshes by the time we get a
+        replica.
+
+    After each of 1., 2., and 3., check that the input table's read frontier keeps advancing.
+    """
+
+    def check_frontier_is_not_stuck():
+        query_t1_frontier = dedent(
+            """
+            SELECT read_frontier
+            FROM mz_internal.mz_frontiers ft JOIN mz_tables t ON (t.id = ft.object_id)
+            WHERE t.name = 't';
+            """
+        )
+        table_frontier1 = c.sql_query(query_t1_frontier)[0][0]
+        time.sleep(2)
+        table_frontier2 = c.sql_query(query_t1_frontier)[0][0]
+        assert table_frontier1 < table_frontier2
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_refresh_every_mvs": "true",
+            },
+        ),
+        Testdrive(no_reset=True),
+    ):
+        # We'll issue the same SQL commands in 1. and 2. (the only difference is we make the restart slow with a sleep),
+        # so save the SQL commands in `before_restart` and `after_restart`.
+        before_restart = dedent(
+            """
+            > CREATE TABLE t (x int);
+            > INSERT INTO t VALUES (100);
+
+            > CREATE CLUSTER cluster_ac SIZE '1';
+            > CREATE CLUSTER cluster_b SIZE '1';
+
+            > CREATE MATERIALIZED VIEW mv_a
+              IN CLUSTER cluster_ac
+              WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
+              SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+            > CREATE MATERIALIZED VIEW mv_b
+              IN CLUSTER cluster_b
+              WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
+              SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+            > CREATE DEFAULT INDEX
+              IN CLUSTER cluster_ac
+              ON t;
+            > CREATE MATERIALIZED VIEW mv_c
+              IN CLUSTER cluster_ac
+              WITH (REFRESH EVERY '20 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
+              SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+            # Let's wait for the MVs' initial refresh to complete.
+            > SELECT * FROM mv_a;
+            100
+            > SELECT * FROM mv_b;
+            100
+            > SELECT * FROM mv_c;
+            100
+
+            > INSERT INTO t VALUES (1000);
+
+            > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 0);
+            """
+        )
+
+        after_restart = dedent(
+            """
+            > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 1);
+
+            > SELECT * FROM mv_a;
+            1100
+            > SELECT * FROM mv_b;
+            1100
+            > SELECT * FROM mv_c;
+            1100
+            """
+        )
+
+        c.down(destroy_volumes=True)
+        c.up("materialized")
+        c.up("testdrive", persistent=True)
+
+        # 1. (quick restart)
+        c.testdrive(input=before_restart)
+        c.kill("materialized")
+        c.up("materialized")
+        c.testdrive(input=after_restart)
+        check_frontier_is_not_stuck()
+
+        # Reset the testing context.
+        c.down(destroy_volumes=True)
+        c.up("materialized")
+        c.up("testdrive", persistent=True)
+
+        # 2. (slow restart)
+        c.testdrive(input=before_restart)
+        c.kill("materialized")
+        time.sleep(20)  # Sleep through the refresh interval of the above MVs
+        c.up("materialized")
+        c.testdrive(input=after_restart)
+        check_frontier_is_not_stuck()
+
+        # Reset the testing context.
+        c.down(destroy_volumes=True)
+        c.up("materialized")
+        c.up("testdrive", persistent=True)
+
+        # 3.
+        c.testdrive(
+            input=dedent(
+                """
+                > CREATE TABLE t (x int);
+                > INSERT INTO t VALUES (100);
+
+                > CREATE CLUSTER cluster_defg (SIZE '1', REPLICATION FACTOR 0);
+
+                > CREATE MATERIALIZED VIEW mv_3h
+                  IN CLUSTER cluster_defg
+                  WITH (REFRESH EVERY '1600 ms') AS
+                  SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+                > CREATE MATERIALIZED VIEW mv_3d
+                  IN CLUSTER cluster_defg
+                  WITH (REFRESH EVERY '100000 sec') AS
+                  SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+                > CREATE MATERIALIZED VIEW mv_3f
+                  IN CLUSTER cluster_defg
+                  WITH (REFRESH AT CREATION) AS
+                  SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+                > CREATE DEFAULT INDEX
+                  IN CLUSTER cluster_defg
+                  ON t;
+
+                > CREATE MATERIALIZED VIEW mv_3e
+                  IN CLUSTER cluster_defg
+                  WITH (REFRESH EVERY '100000 sec') AS
+                  SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+                > CREATE MATERIALIZED VIEW mv_3g
+                  IN CLUSTER cluster_defg
+                  WITH (REFRESH AT CREATION) AS
+                  SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
+
+                # This won't be visible, because the refresh interval is very long.
+                > INSERT INTO t VALUES (1000);
+                """
+            )
+        )
+
+        c.kill("materialized")
+        c.up("materialized")
+        c.testdrive(
+            input=dedent(
+                """
+                > ALTER CLUSTER cluster_defg SET (REPLICATION FACTOR 1);
+
+                > SELECT * FROM mv_3d
+                100
+                > SELECT * FROM mv_3e
+                100
+                > SELECT * FROM mv_3f
+                100
+                > SELECT * FROM mv_3g
+                100
+
+                > SELECT * FROM mv_3h;
+                1100
+
+                > INSERT INTO t VALUES (10000);
+
+                > SELECT * FROM mv_3h;
+                11100
+                """
+            )
+        )
+        check_frontier_is_not_stuck()

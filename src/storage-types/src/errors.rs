@@ -542,6 +542,7 @@ mod columnation {
                         | e @ EvalError::NegSqrt
                         | e @ EvalError::NegLimit
                         | e @ EvalError::NullCharacterNotPermitted
+                        | e @ EvalError::KeyCannotBeNull
                         | e @ EvalError::UnterminatedLikeEscapeSequence
                         | e @ EvalError::MultipleRowsFromSubquery
                         | e @ EvalError::LikePatternTooLong

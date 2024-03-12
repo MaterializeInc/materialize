@@ -307,7 +307,7 @@ A dataflow operator is hydrated on a given replica when it has fully processed t
 | Field                   | Type        | Meaning  |
 | ----------------------- | ----------- | -------- |
 | `object_id`             | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes) or [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views). |
-| `physical_plan_node_id` | [`uint8`]   | The ID of a node in the physical plan of the compute object. Corresponds to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node_ids)`. |
+| `physical_plan_node_id` | [`uint8`]   | The ID of a node in the physical plan of the compute object. Corresponds to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`. |
 | `replica_id`            | [`text`]    | The ID of a cluster replica. |
 | `hydrated`              | [`boolean`] | Whether the node is hydrated on the replica. |
 

@@ -233,22 +233,24 @@ async fn test_open_savepoint(
         let mut ids = Vec::new();
         let mut db_schemas = Vec::new();
         for i in 0..10 {
-            let db_id = txn
+            let (db_id, db_oid) = txn
                 .insert_user_database(&format!("db{i}"), RoleId::User(i), Vec::new())
                 .unwrap();
-            let schema_id = txn
+            let (schema_id, schema_oid) = txn
                 .insert_user_schema(db_id, &format!("sc{i}"), RoleId::User(i), Vec::new())
                 .unwrap();
             ids.push((db_id.clone(), schema_id.clone()));
             db_schemas.push((
                 Database {
                     id: db_id.clone(),
+                    oid: db_oid,
                     name: format!("db{i}"),
                     owner_id: RoleId::User(i),
                     privileges: Vec::new(),
                 },
                 Schema {
                     id: schema_id,
+                    oid: schema_oid,
                     name: format!("sc{i}"),
                     database_id: Some(db_id),
                     owner_id: RoleId::User(i),
@@ -374,7 +376,7 @@ async fn test_open_read_only(
 
     // Read-only catalog should survive writes from a write-able catalog.
     let mut txn = state.transaction().await.unwrap();
-    let role_id = txn
+    let (role_id, _) = txn
         .insert_user_role(
             "joe".to_string(),
             RoleAttributes::new(),

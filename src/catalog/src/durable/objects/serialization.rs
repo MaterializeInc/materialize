@@ -362,6 +362,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
     fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexValue {
         proto::ClusterIntrospectionSourceIndexValue {
             index_id: self.index_id,
+            oid: self.oid,
         }
     }
 
@@ -370,6 +371,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
     ) -> Result<Self, TryFromProtoError> {
         Ok(ClusterIntrospectionSourceIndexValue {
             index_id: proto.index_id,
+            oid: proto.oid,
         })
     }
 }
@@ -434,6 +436,7 @@ impl RustType<proto::DatabaseValue> for DatabaseValue {
             name: self.name.clone(),
             owner_id: Some(self.owner_id.into_proto()),
             privileges: self.privileges.into_proto(),
+            oid: self.oid,
         }
     }
 
@@ -444,6 +447,7 @@ impl RustType<proto::DatabaseValue> for DatabaseValue {
                 .owner_id
                 .into_rust_if_some("DatabaseValue::owner_id")?),
             privileges: proto.privileges.into_rust()?,
+            oid: proto.oid,
         })
     }
 }
@@ -469,6 +473,7 @@ impl RustType<proto::SchemaValue> for SchemaValue {
             database_id: self.database_id.map(|id| id.into_proto()),
             owner_id: Some(self.owner_id.into_proto()),
             privileges: self.privileges.into_proto(),
+            oid: self.oid,
         }
     }
 
@@ -476,10 +481,9 @@ impl RustType<proto::SchemaValue> for SchemaValue {
         Ok(SchemaValue {
             name: proto.name,
             database_id: proto.database_id.into_rust()?,
-            owner_id: (proto
-                .owner_id
-                .into_rust_if_some("DatabaseValue::owner_id")?),
+            owner_id: (proto.owner_id.into_rust_if_some("SchemaValue::owner_id")?),
             privileges: proto.privileges.into_rust()?,
+            oid: proto.oid,
         })
     }
 }
@@ -511,6 +515,7 @@ impl RustType<proto::ItemValue> for ItemValue {
             definition: Some(definition),
             owner_id: Some(self.owner_id.into_proto()),
             privileges: self.privileges.into_proto(),
+            oid: self.oid,
         }
     }
 
@@ -529,6 +534,7 @@ impl RustType<proto::ItemValue> for ItemValue {
             create_sql,
             owner_id: proto.owner_id.into_rust_if_some("ItemValue::owner_id")?,
             privileges: proto.privileges.into_rust()?,
+            oid: proto.oid,
         })
     }
 }
@@ -596,6 +602,7 @@ impl RustType<proto::RoleValue> for RoleValue {
             attributes: Some(self.attributes.into_proto()),
             membership: Some(self.membership.into_proto()),
             vars: Some(self.vars.into_proto()),
+            oid: self.oid,
         }
     }
 
@@ -609,6 +616,7 @@ impl RustType<proto::RoleValue> for RoleValue {
                 .membership
                 .into_rust_if_some("RoleValue::membership")?,
             vars: proto.vars.into_rust_if_some("RoleValue::vars")?,
+            oid: proto.oid,
         })
     }
 }
@@ -1003,7 +1011,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             proto::CatalogItemType::Secret => CatalogItemType::Secret,
             proto::CatalogItemType::Connection => CatalogItemType::Connection,
             proto::CatalogItemType::Unknown => {
-                return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"))
+                return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"));
             }
         };
         Ok(item_type)

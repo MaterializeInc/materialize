@@ -986,8 +986,8 @@ async fn purify_create_source(
             let tables = mz_mysql_util::schema_info(
                 &mut *conn,
                 &table_schema_request,
-                Some(&text_cols_map),
-                Some(&ignore_cols_map),
+                &text_cols_map,
+                &ignore_cols_map,
             )
             .await
             .map_err(|err| match err {
@@ -1021,7 +1021,7 @@ async fn purify_create_source(
                 .find(|option| option.name == MySqlConfigOptionName::TextColumns)
             {
                 text_cols_option.value = Some(WithOptionValue::Sequence(
-                    mysql::normalize_column_refs(text_columns, &mysql_catalog),
+                    mysql::normalize_column_refs(text_columns, &mysql_catalog)?,
                 ));
             }
             if let Some(ignore_cols_option) = options
@@ -1029,7 +1029,7 @@ async fn purify_create_source(
                 .find(|option| option.name == MySqlConfigOptionName::IgnoreColumns)
             {
                 ignore_cols_option.value = Some(WithOptionValue::Sequence(
-                    mysql::normalize_column_refs(ignore_columns, &mysql_catalog),
+                    mysql::normalize_column_refs(ignore_columns, &mysql_catalog)?,
                 ));
             }
 

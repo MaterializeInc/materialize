@@ -11,7 +11,7 @@
 
 use std::num::NonZeroUsize;
 
-use mz_compute_types::plan::NodeId;
+use mz_compute_types::plan::LirId;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
@@ -587,7 +587,7 @@ pub struct OperatorHydrationStatus {
     /// The ID of the compute collection exported by the dataflow.
     pub collection_id: GlobalId,
     /// The ID of the LIR node for which the hydration status changed.
-    pub lir_id: NodeId,
+    pub lir_id: LirId,
     /// The ID of the worker for which the hydration status changed.
     pub worker_id: usize,
     /// Whether the node is hydrated on the worker.

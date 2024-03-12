@@ -1189,6 +1189,8 @@ pub enum CatalogError {
     },
     /// Ran out of unique IDs.
     IdExhaustion,
+    /// Ran out of unique OIDs.
+    OidExhaustion,
     /// Timeline already exists.
     TimelineAlreadyExists(String),
     /// Id Allocator already exists.
@@ -1238,6 +1240,7 @@ impl fmt::Display for CatalogError {
                 typ,
             ),
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
+            Self::OidExhaustion => write!(f, "oid counter overflows u32"),
             Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),
             Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
             Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),

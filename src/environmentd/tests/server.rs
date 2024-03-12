@@ -4114,3 +4114,47 @@ async fn test_startup_cluster_notice() {
     ]
     "###);
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_durable_oids() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+
+    let table_oid: u32 = {
+        let server = harness.clone().start().await;
+        let client = server.connect().await.unwrap();
+        client
+            .execute("CREATE TABLE t (a INT);", &[])
+            .await
+            .expect("failed to create table");
+        client
+            .query_one("SELECT oid FROM mz_tables WHERE name = 't'", &[])
+            .await
+            .expect("failed to select")
+            .get(0)
+    };
+
+    {
+        let server = harness.clone().start().await;
+        let client = server.connect().await.unwrap();
+
+        let restarted_table_oid: u32 = client
+            .query_one("SELECT oid FROM mz_tables WHERE name = 't'", &[])
+            .await
+            .expect("failed to select")
+            .get(0);
+        assert_eq!(table_oid, restarted_table_oid);
+
+        client
+            .execute("CREATE VIEW v AS SELECT 1;", &[])
+            .await
+            .expect("failed to create table");
+        let view_oid: u32 = client
+            .query_one("SELECT oid FROM mz_views WHERE name = 'v'", &[])
+            .await
+            .expect("failed to select")
+            .get(0);
+        assert_ne!(table_oid, view_oid);
+    }
+}

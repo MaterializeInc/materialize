@@ -12,8 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from materialize.buildkite_insights.cache.cache_constants import (
-    FETCH_MODE_AUTO,
-    FETCH_MODE_NO,
+    FetchMode,
 )
 from materialize.buildkite_insights.util.data_io import (
     ensure_temp_dir_exists,
@@ -26,16 +25,16 @@ from materialize.buildkite_insights.util.data_io import (
 def get_or_query_data(
     cache_file_path: str,
     fetch_action: Callable[[], list[Any]],
-    fetch_mode: str,
+    fetch_mode: FetchMode,
     max_allowed_cache_age_in_hours: int | None = 10,
     add_to_cache_if_not_present: bool = True,
     quiet_mode: bool = False,
 ) -> list[Any]:
     ensure_temp_dir_exists()
 
-    no_fetch = fetch_mode == FETCH_MODE_NO
+    no_fetch = fetch_mode == FetchMode.NEVER
 
-    if fetch_mode == FETCH_MODE_AUTO and exists_file_with_recent_data(
+    if fetch_mode == FetchMode.AUTO and exists_file_with_recent_data(
         cache_file_path, max_allowed_cache_age_in_hours
     ):
         no_fetch = True

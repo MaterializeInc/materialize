@@ -29,5 +29,6 @@ pub fn all_dyncfgs() -> ConfigSet {
     configs = mz_persist_client::cfg::all_dyncfgs(configs);
     configs = mz_persist_txn::all_dyncfgs(configs);
     configs = mz_compute_types::dyncfgs::all_dyncfgs(configs);
+    configs = mz_adapter_types::dyncfgs::all_dyncfgs(configs);
     configs
 }

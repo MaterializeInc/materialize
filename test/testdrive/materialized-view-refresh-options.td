@@ -91,7 +91,11 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 > SELECT * FROM mv4;
 10000
 
-## Check turning the replica off and on
+## Test turning replicas off and on, part 1:
+## First, we check the following two things:
+## - 1a. Turn the replica off just after a refresh, and then turn the replica back on immediately.
+## - 1b. Turn the replica off just after a refresh, and then turn the replica back on only after the next refresh time
+##   has passed.
 
 > CREATE CLUSTER refresh_cluster SIZE = '1', REPLICATION FACTOR = 1;
 > SET cluster = refresh_cluster;
@@ -114,6 +118,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
 
+# We should be able to query the MV even if there is no replica.
 > SELECT * FROM mv5;
 300
 306
@@ -132,7 +137,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 306
 330
 
-# Turn off the cluster, and insert something, and then sleep through a scheduled refresh.
+# Turn off the cluster, and insert something, and then sleep through a scheduled refresh. (1b.)
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
 
 > INSERT INTO t2 VALUES (120);
@@ -150,7 +155,80 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 330
 360
 
-# REFRESH AT + REFRESH EVERY
+## Test turning replicas off and on, part 2:
+## No replica during MV creation.
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
+> CREATE MATERIALIZED VIEW mv_no_rep
+  IN CLUSTER refresh_cluster
+  WITH (REFRESH EVERY '8 sec')
+  AS SELECT 10*y as y2 FROM t2;
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 1);
+> SELECT * FROM mv_no_rep;
+1000
+1020
+1100
+1200
+
+## Test turning replicas off and on, part 3:
+## Turn the replica off _during_ the first refresh, and then turn the replica back on immediately.
+
+> CREATE TABLE tg (a int);
+> INSERT INTO tg VALUES (10000000);
+
+# Refreshing this will take a non-trivial amount of time.
+> CREATE MATERIALIZED VIEW mv_gs
+  IN CLUSTER refresh_cluster
+  WITH (REFRESH AT CREATION) AS
+  SELECT count(*) FROM (SELECT generate_series(1,a) FROM tg);
+
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 1);
+
+> SELECT * FROM mv_gs;
+10000000
+
+## Test turning replicas off and on, part 4:
+## - Turn the replica off while it's in a non-caught-up state after an input change.
+## - Turn the replica off while it's still rehydrating after turning a replica on.
+## - More than 1 replicas.
+## - MV that reads from an index.
+> CREATE MATERIALIZED VIEW mv_gs2
+  IN CLUSTER refresh_cluster
+  WITH (REFRESH EVERY '4 sec') AS
+  SELECT count(*) FROM (SELECT generate_series(1,a) FROM tg);
+
+> CREATE DEFAULT INDEX
+  IN CLUSTER refresh_cluster
+  ON tg;
+> CREATE MATERIALIZED VIEW mv_gs2_index
+  IN CLUSTER refresh_cluster
+  WITH (REFRESH EVERY '4 sec') AS
+  SELECT count(*) FROM (SELECT generate_series(1,a) FROM tg);
+
+# Wait for the first refresh.
+> SELECT * FROM mv_gs2;
+10000000
+> SELECT * FROM mv_gs2_index;
+10000000
+
+> INSERT INTO tg VALUES (10000000);
+
+# Mess with the replicas before the MV could catch up with the above insert.
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 2);
+> SELECT mz_unsafe.mz_sleep(0.5);
+<null>
+
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 3);
+
+# Check that we recover.
+> SELECT * FROM mv_gs2;
+20000000
+> SELECT * FROM mv_gs2_index;
+20000000
+
+## REFRESH AT + REFRESH EVERY
 
 > CREATE TABLE t3(x int);
 > INSERT INTO t3 VALUES (1);

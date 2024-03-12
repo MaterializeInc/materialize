@@ -123,7 +123,7 @@ query T colnames
 SELECT to_jsonb(strcol) as strcol FROM substrtest
 ----
 strcol
-null
+NULL
 "               "
 "24.31          "
 "Mg             "

@@ -1450,13 +1450,6 @@ pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarD
     true,
 );
 
-pub static ENABLE_STATEMENT_LIFECYCLE_LOGGING: VarDefinition = VarDefinition::new(
-    "enable_statement_lifecycle_logging",
-    value!(bool; false),
-    "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history",
-    true,
-);
-
 pub static ENABLE_DEPENDENCY_READ_HOLD_ASSERTS: VarDefinition = VarDefinition::new(
     "enable_dependency_read_hold_asserts",
     value!(bool; true),

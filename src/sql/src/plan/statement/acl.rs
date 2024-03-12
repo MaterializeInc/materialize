@@ -19,8 +19,8 @@ use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::ast::{Ident, UnresolvedDatabaseName};
 use crate::catalog::{
-    CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-    ErrorMessageObjectDescription, ObjectType, SystemObjectType,
+    DefaultPrivilegeAclItem, DefaultPrivilegeObject, ErrorMessageObjectDescription, ObjectType,
+    SystemObjectType,
 };
 use crate::names::{
     Aug, ObjectId, ResolvedDatabaseSpecifier, ResolvedRoleName, SchemaSpecifier, SystemObjectId,
@@ -192,29 +192,25 @@ fn plan_alter_item_owner(
     name: UnresolvedItemName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
-    match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
+    let resolved = match resolve_item_or_type(scx, object_type, name.clone(), if_exists) {
+        Ok(r) => r,
+        // Return a more helpful error on `DROP VIEW <materialized-view>`.
+        Err(PlanError::MismatchedObjectType {
+            name,
+            is_type: ObjectType::MaterializedView,
+            expected_type: ObjectType::View,
+        }) => {
+            return Err(PlanError::AlterViewOnMaterializedView(name.to_string()));
+        }
+        e => e?,
+    };
+
+    match resolved {
         Some(item) => {
             if item.id().is_system() {
                 sql_bail!(
                     "cannot alter item {} because it is required by the database system",
                     scx.catalog.resolve_full_name(item.name()),
-                );
-            }
-            let item_type = item.item_type();
-
-            // Return a more helpful error on `ALTER VIEW <materialized-view>`.
-            if object_type == ObjectType::View && item_type == CatalogItemType::MaterializedView {
-                let name = scx.catalog.resolve_full_name(item.name()).to_string();
-                return Err(PlanError::AlterViewOnMaterializedView(name));
-            } else if object_type != item_type {
-                sql_bail!(
-                    "{} is a {} not a {}",
-                    scx.catalog
-                        .resolve_full_name(item.name())
-                        .to_string()
-                        .quoted(),
-                    item.item_type(),
-                    format!("{object_type}").to_lowercase(),
                 );
             }
 

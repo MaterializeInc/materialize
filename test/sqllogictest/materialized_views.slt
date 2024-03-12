@@ -474,13 +474,13 @@ CREATE OR REPLACE MATERIALIZED VIEW mv AS SELECT id, name FROM mz_internal.mz_da
 
 # Test: Attempting to use view commands on materialized views gives helpful errors.
 
-statement error materialize\.public\.mv is not a view\nHINT: Use DROP MATERIALIZED VIEW to remove a materialized view\.
+statement error mv is not a view\nHINT: Use DROP MATERIALIZED VIEW to remove a materialized view\.
 DROP VIEW mv
 
-statement error materialize\.public\.mv is not a view\nHINT: Use SHOW CREATE MATERIALIZED VIEW to show a materialized view\.
+statement error mv is not a view\nHINT: Use SHOW CREATE MATERIALIZED VIEW to show a materialized view\.
 SHOW CREATE VIEW mv
 
-statement error materialize\.public\.mv is not a view\nHINT: Use ALTER MATERIALIZED VIEW to rename a materialized view\.
+statement error mv is not a view\nHINT: Use ALTER MATERIALIZED VIEW to rename a materialized view\.
 ALTER VIEW mv RENAME TO mv2
 
 # We should not be able to create materialized views on top of 'SHOW' commands.

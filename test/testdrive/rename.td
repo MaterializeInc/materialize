@@ -86,10 +86,10 @@ a  b
 1  dog
 
 ! ALTER VIEW mz_data RENAME TO renamed_mz_data;
-exact:"materialize.public.mz_data" is a source not a view
+exact:mz_data is a source not a view
 
 ! ALTER INDEX mz_data RENAME TO renamed_mz_data;
-exact:"materialize.public.mz_data" is a source not a index
+exact:mz_data is a source not an index
 
 > ALTER SOURCE mz_data RENAME TO renamed_mz_data;
 
@@ -128,10 +128,10 @@ mz_view
 mz_view_primary_idx
 
 ! ALTER SOURCE mz_view RENAME TO renamed_mz_view;
-exact:"materialize.public.mz_view" is a view not a source
+exact:mz_view is a view not a source
 
 ! ALTER INDEX mz_view RENAME TO renamed_mz_view;
-exact:"materialize.public.mz_view" is a view not a index
+exact:mz_view is a view not an index
 
 > ALTER VIEW mz_view RENAME TO renamed_mz_view;
 
@@ -151,10 +151,10 @@ name
 mz_view_primary_idx
 
 ! ALTER VIEW mz_view_primary_idx RENAME TO renamed_index;
-exact:"materialize.public.mz_view_primary_idx" is a index not a view
+exact:mz_view_primary_idx is an index not a view
 
 ! ALTER SOURCE mz_view_primary_idx RENAME TO renamed_index;
-exact:"materialize.public.mz_view_primary_idx" is a index not a source
+exact:mz_view_primary_idx is an index not a source
 
 > ALTER INDEX mz_view_primary_idx RENAME TO renamed_index;
 
@@ -173,7 +173,7 @@ name
 sink1
 
 ! ALTER VIEW sink1 RENAME TO renamed_sink;
-exact:"materialize.public.sink1" is a sink not a view
+exact:sink1 is a sink not a view
 
 > ALTER SINK sink1 RENAME TO renamed_sink
 

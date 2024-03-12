@@ -113,7 +113,7 @@ use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashab
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING;
 use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
-use mz_compute_types::plan::NodeId;
+use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
@@ -743,7 +743,7 @@ where
     pub fn render_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
         let (mut nodes, root_id, topological_order) = plan.destruct();
 
-        // Rendered collections by their `NodeId`.
+        // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
 
         for id in topological_order {
@@ -771,7 +771,7 @@ where
     fn render_plan_node(
         &mut self,
         node: FlatPlanNode,
-        collections: &BTreeMap<NodeId, CollectionBundle<G>>,
+        collections: &BTreeMap<LirId, CollectionBundle<G>>,
     ) -> CollectionBundle<G> {
         use FlatPlanNode::*;
 

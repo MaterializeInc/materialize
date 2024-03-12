@@ -20,17 +20,46 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
 )
 from materialize.buildkite_insights.cache import annotations_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
-    FETCH_MODE_AUTO,
-    FETCH_MODE_NO,
-    FETCH_MODE_YES,
+    FETCH_MODE_CHOICES,
+    FetchMode,
 )
-from materialize.terminal import (
-    COLOR_CYAN,
-    COLOR_GREEN,
-    STYLE_BOLD,
-    with_formatting,
-    with_formattings,
+from materialize.buildkite_insights.failure_search.search_result_presentation import (
+    print_before_search_results,
+    print_match,
+    print_summary,
 )
+from materialize.buildkite_insights.failure_search.search_utility import (
+    _search_value_to_pattern,
+)
+
+
+def search_build(
+    build: Any, search_value: str, use_regex: bool, fetch_mode: FetchMode
+) -> int:
+    build_number = build["number"]
+    build_pipeline = build["pipeline"]["slug"]
+    build_state = build["state"]
+    web_url = build["web_url"]
+
+    is_completed_build_state = build_state in BUILDKITE_COMPLETED_BUILD_STATES
+
+    annotations = annotations_cache.get_or_query_annotations(
+        fetch_mode=fetch_mode,
+        pipeline_slug=build_pipeline,
+        build_number=build_number,
+        add_to_cache_if_not_present=is_completed_build_state,
+    )
+
+    matches_in_build = search_annotations(
+        build_number,
+        build_pipeline,
+        web_url,
+        annotations,
+        search_value=search_value,
+        use_regex=use_regex,
+    )
+
+    return matches_in_build
 
 
 def search_annotations(
@@ -39,16 +68,23 @@ def search_annotations(
     web_url: str,
     annotations: list[Any],
     search_value: str,
+    use_regex: bool,
 ) -> int:
     count_matches = 0
 
+    search_pattern = _search_value_to_pattern(search_value, use_regex)
     for annotation in annotations:
         annotation_html = annotation["body_html"]
         annotation_text = clean_annotation_text(annotation_html)
 
-        if matches(annotation_text=annotation_text, search_value=search_value):
+        if search_pattern.search(annotation_text) is not None:
             print_match(
-                build_number, build_pipeline, web_url, annotation_text, search_value
+                build_number,
+                build_pipeline,
+                web_url,
+                annotation_text,
+                search_value=search_value,
+                use_regex=use_regex,
             )
             count_matches = count_matches + 1
 
@@ -59,99 +95,14 @@ def clean_annotation_text(annotation_html: str) -> str:
     return re.sub(r"<[^>]+>", "", annotation_html)
 
 
-def matches(annotation_text: str, search_value: str) -> bool:
-    return search_value.lower() in annotation_text.lower()
-
-
-def highlight_match(annotation_text: str, search_value: str) -> str:
-    case_insensitive_pattern = re.compile(re.escape(search_value), re.IGNORECASE)
-    highlighted_match = with_formattings(search_value, [COLOR_GREEN, STYLE_BOLD])
-    return case_insensitive_pattern.sub(highlighted_match, annotation_text)
-
-
-def trim_match(annotation_text: str, search_value: str) -> str:
-    # We do not care about multiple occurrences within an annotation and focus on the first one.
-
-    original_annotation_text = annotation_text.strip()
-    annotation_text = original_annotation_text.lower()
-    search_value = search_value.lower()
-
-    max_chars_before_match = 300
-    max_chars_after_match = 300
-
-    match_begin_index = annotation_text.index(search_value)
-    match_end_index = match_begin_index + len(search_value)
-
-    # identify cut-off point before first match
-    if match_begin_index > max_chars_before_match:
-        cut_off_index_begin = annotation_text.find(
-            " ", match_begin_index - max_chars_before_match
-        )
-
-        if cut_off_index_begin == -1:
-            cut_off_index_begin = match_begin_index - max_chars_before_match
-    else:
-        cut_off_index_begin = 0
-
-    # identify cut-off point after first match
-    if len(annotation_text) - match_end_index > 300:
-        cut_off_index_end = annotation_text.rfind(
-            " ", match_end_index, match_end_index + max_chars_after_match
-        )
-
-        if cut_off_index_end == -1:
-            cut_off_index_end = match_end_index + max_chars_after_match
-    else:
-        cut_off_index_end = len(annotation_text)
-
-    cut_annotation_text = original_annotation_text[
-        cut_off_index_begin:cut_off_index_end
-    ]
-    cut_annotation_text = cut_annotation_text.strip()
-
-    if cut_off_index_begin > 0:
-        cut_annotation_text = f"[...] {cut_annotation_text}"
-
-    if cut_off_index_end != len(original_annotation_text):
-        cut_annotation_text = f"{cut_annotation_text} [...]"
-
-    return cut_annotation_text
-
-
-def print_match(
-    build_number: str,
-    build_pipeline: str,
-    web_url: str,
-    annotation_text: str,
-    search_value: str,
-) -> None:
-    match_snippet = trim_match(
-        annotation_text=annotation_text, search_value=search_value
-    )
-    match_snippet = highlight_match(
-        annotation_text=match_snippet,
-        search_value=search_value,
-    )
-
-    print(
-        with_formatting(
-            f"Match in build #{build_number} (pipeline={build_pipeline}):", STYLE_BOLD
-        )
-    )
-    print(f"URL: {with_formatting(web_url, COLOR_CYAN)}")
-    print("----------")
-    print(match_snippet)
-    print(
-        "-------------------------------------------------------------------------------------"
-    )
-
-
 def main(
     pipeline_slug: str,
-    fetch_mode: str,
+    fetch_builds_mode: FetchMode,
+    fetch_annotations_mode: FetchMode,
     max_build_fetches: int,
     only_failed_builds: bool,
     search_value: str,
+    use_regex: bool,
 ) -> None:
     assert len(search_value) > 0
 
@@ -162,54 +113,30 @@ def main(
 
     if pipeline_slug == "*":
         builds_data = builds_cache.get_or_query_builds_for_all_pipelines(
-            fetch_mode,
+            fetch_builds_mode,
             max_build_fetches,
             build_states=build_states,
         )
     else:
         builds_data = builds_cache.get_or_query_builds(
             pipeline_slug,
-            fetch_mode,
+            fetch_builds_mode,
             max_build_fetches,
             branch=None,
             build_states=build_states,
         )
 
-    print()
-    print(
-        "-------------------------------------------------------------------------------------"
-    )
+    print_before_search_results()
 
     count_matches = 0
 
     for build in builds_data:
-        build_number = build["number"]
-        build_pipeline = build["pipeline"]["slug"]
-        build_state = build["state"]
-        web_url = build["web_url"]
-
-        is_completed_build_state = build_state in BUILDKITE_COMPLETED_BUILD_STATES
-
-        annotations = annotations_cache.get_or_query_annotations(
-            fetch_mode=fetch_mode,
-            pipeline_slug=build_pipeline,
-            build_number=build_number,
-            add_to_cache_if_not_present=is_completed_build_state,
-        )
-
-        matches_in_build = search_annotations(
-            build_number, build_pipeline, web_url, annotations, search_value
+        matches_in_build = search_build(
+            build, search_value, use_regex=use_regex, fetch_mode=fetch_annotations_mode
         )
         count_matches = count_matches + matches_in_build
 
-    if len(builds_data) == 0:
-        print("Found no builds!")
-    else:
-        most_recent_build_number = builds_data[0]["number"]
-        print(
-            f"{count_matches} match(es) in {len(builds_data)} searched builds of pipeline '{pipeline_slug}'. "
-            f"The most recent considered build was #{most_recent_build_number}."
-        )
+    print_summary(pipeline_slug, builds_data, count_matches)
 
 
 if __name__ == "__main__":
@@ -226,11 +153,18 @@ if __name__ == "__main__":
         help="Use * for all pipelines",
     )
     parser.add_argument(
-        "--fetch",
-        choices=[FETCH_MODE_AUTO, FETCH_MODE_NO, FETCH_MODE_YES],
-        default=FETCH_MODE_AUTO,
-        type=str,
-        help="Whether to fetch new data from Buildkite or reuse previously fetched, matching data.",
+        "--fetch-builds",
+        type=lambda mode: FetchMode[mode],
+        choices=FETCH_MODE_CHOICES,
+        default=FetchMode.AUTO,
+        help="Whether to fetch fresh builds from Buildkite.",
+    )
+    parser.add_argument(
+        "--fetch-annotations",
+        type=lambda mode: FetchMode[mode.upper()],
+        choices=FETCH_MODE_CHOICES,
+        default=FetchMode.AUTO,
+        help="Whether to fetch fresh annotations from Buildkite.",
     )
     parser.add_argument("--max-build-fetches", default=2, type=int)
     parser.add_argument(
@@ -239,12 +173,18 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument("--value", required=True, type=str)
+    parser.add_argument(
+        "--use-regex",
+        action="store_true",
+    )
     args = parser.parse_args()
 
     main(
         args.pipeline,
-        args.fetch,
+        args.fetch_builds,
+        args.fetch_annotations,
         args.max_build_fetches,
         args.only_failed_builds,
         args.value,
+        args.use_regex,
     )
