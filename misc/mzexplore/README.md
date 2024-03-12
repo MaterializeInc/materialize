@@ -43,6 +43,6 @@ If you have multiple JSON files you'd like to analyze together, you
 can run:
 
 ```sh
-find ~/mz-support/tmpfs/ -name \*.json | 
+find ~/mz-support/tmpfs/ -name \*.json |
   xargs jq --slurp --depth 0 -f filters.jq
 ```
