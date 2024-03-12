@@ -3071,6 +3071,12 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
 
                 let json_null = HirScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
                 let key = typeconv::to_string(ecx, key);
+                // `AggregateFunc::JsonbObjectAgg` uses the same underlying
+                // implementation as `AggregateFunc::MapAgg`, so it's our
+                // responsibility to apply the JSON-specific behavior of casting
+                // SQL nulls to JSON nulls; otherwise the produced `Datum::Map`
+                // can contain `Datum::Null` values that are not valid for the
+                // `ScalarType::Jsonb` type.
                 let val = HirScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![typeconv::to_jsonb(ecx, val), json_null],
