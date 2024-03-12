@@ -140,7 +140,9 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
             ),
             (publication == &other.publication, "publication"),
             (
-                publication_details == &other.publication_details,
+                publication_details
+                    .alter_compatible(id, &other.publication_details)
+                    .is_ok(),
                 "publication_details",
             ),
         ];
@@ -252,6 +254,40 @@ impl PostgresSourcePublicationDetails {
                 t.namespace == inner[1].as_str() && t.name == inner[2].as_str()
             })
             .map(|idx| idx + 1)
+    }
+}
+
+impl crate::AlterCompatible for PostgresSourcePublicationDetails {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let PostgresSourcePublicationDetails {
+            // Tables can change as they're added and dropped
+            tables: _,
+            slot,
+            timeline_id,
+        } = self;
+
+        let compatibility_checks = [
+            (slot == &other.slot, "slot"),
+            (timeline_id == &other.timeline_id, "timeline_id"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "PostgresSourcePublicationDetails incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlter { id });
+            }
+        }
+
+        Ok(())
     }
 }
 
