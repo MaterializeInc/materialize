@@ -11,13 +11,14 @@ from typing import Any
 
 from materialize.buildkite_insights.buildkite_api import annotations_api
 from materialize.buildkite_insights.cache import generic_cache
+from materialize.buildkite_insights.cache.cache_constants import FetchMode
 from materialize.buildkite_insights.util.data_io import (
     get_file_path,
 )
 
 
 def get_or_query_annotations(
-    fetch_mode: str,
+    fetch_mode: FetchMode,
     pipeline_slug: str,
     build_number: str,
     add_to_cache_if_not_present: bool,

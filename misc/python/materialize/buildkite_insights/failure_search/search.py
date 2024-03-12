@@ -20,9 +20,8 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
 )
 from materialize.buildkite_insights.cache import annotations_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
-    FETCH_MODE_AUTO,
-    FETCH_MODE_NO,
-    FETCH_MODE_YES,
+    FETCH_MODE_CHOICES,
+    FetchMode,
 )
 from materialize.buildkite_insights.failure_search.search_result_presentation import (
     print_before_search_results,
@@ -31,7 +30,7 @@ from materialize.buildkite_insights.failure_search.search_result_presentation im
 )
 
 
-def search_build(build: Any, search_value: str, fetch_mode: str) -> int:
+def search_build(build: Any, search_value: str, fetch_mode: FetchMode) -> int:
     build_number = build["number"]
     build_pipeline = build["pipeline"]["slug"]
     build_state = build["state"]
@@ -85,7 +84,8 @@ def matches(annotation_text: str, search_value: str) -> bool:
 
 def main(
     pipeline_slug: str,
-    fetch_mode: str,
+    fetch_builds_mode: FetchMode,
+    fetch_annotations_mode: FetchMode,
     max_build_fetches: int,
     only_failed_builds: bool,
     search_value: str,
@@ -99,14 +99,14 @@ def main(
 
     if pipeline_slug == "*":
         builds_data = builds_cache.get_or_query_builds_for_all_pipelines(
-            fetch_mode,
+            fetch_builds_mode,
             max_build_fetches,
             build_states=build_states,
         )
     else:
         builds_data = builds_cache.get_or_query_builds(
             pipeline_slug,
-            fetch_mode,
+            fetch_builds_mode,
             max_build_fetches,
             branch=None,
             build_states=build_states,
@@ -117,7 +117,9 @@ def main(
     count_matches = 0
 
     for build in builds_data:
-        matches_in_build = search_build(build, search_value, fetch_mode=fetch_mode)
+        matches_in_build = search_build(
+            build, search_value, fetch_mode=fetch_annotations_mode
+        )
         count_matches = count_matches + matches_in_build
 
     print_summary(pipeline_slug, builds_data, count_matches)
@@ -137,11 +139,18 @@ if __name__ == "__main__":
         help="Use * for all pipelines",
     )
     parser.add_argument(
-        "--fetch",
-        choices=[FETCH_MODE_AUTO, FETCH_MODE_NO, FETCH_MODE_YES],
-        default=FETCH_MODE_AUTO,
-        type=str,
-        help="Whether to fetch new data from Buildkite or reuse previously fetched, matching data.",
+        "--fetch-builds",
+        type=lambda mode: FetchMode[mode],
+        choices=FETCH_MODE_CHOICES,
+        default=FetchMode.AUTO,
+        help="Whether to fetch fresh builds from Buildkite.",
+    )
+    parser.add_argument(
+        "--fetch-annotations",
+        type=lambda mode: FetchMode[mode.upper()],
+        choices=FETCH_MODE_CHOICES,
+        default=FetchMode.AUTO,
+        help="Whether to fetch fresh annotations from Buildkite.",
     )
     parser.add_argument("--max-build-fetches", default=2, type=int)
     parser.add_argument(
@@ -154,7 +163,8 @@ if __name__ == "__main__":
 
     main(
         args.pipeline,
-        args.fetch,
+        args.fetch_builds,
+        args.fetch_annotations,
         args.max_build_fetches,
         args.only_failed_builds,
         args.value,

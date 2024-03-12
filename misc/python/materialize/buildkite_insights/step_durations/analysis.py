@@ -19,9 +19,8 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
 )
 from materialize.buildkite_insights.cache import builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
-    FETCH_MODE_AUTO,
-    FETCH_MODE_NO,
-    FETCH_MODE_YES,
+    FETCH_MODE_CHOICES,
+    FetchMode,
 )
 from materialize.buildkite_insights.step_durations.build_step import (
     BuildJobOutcome,
@@ -106,7 +105,7 @@ def print_stats(
 def main(
     pipeline_slug: str,
     build_steps: list[BuildStepMatcher],
-    fetch_mode: str,
+    fetch_mode: FetchMode,
     max_fetches: int,
     branch: str | None,
     build_state: str | None,
@@ -134,10 +133,10 @@ if __name__ == "__main__":
     parser.add_argument("--build-step-key", action="append", default=[], type=str)
     parser.add_argument(
         "--fetch",
-        choices=[FETCH_MODE_AUTO, FETCH_MODE_NO, FETCH_MODE_YES],
-        default=FETCH_MODE_AUTO,
-        type=str,
-        help="Whether to fetch new data from Buildkite or reuse previously fetched, matching data.",
+        type=lambda mode: FetchMode[mode],
+        choices=FETCH_MODE_CHOICES,
+        default=FetchMode.AUTO,
+        help="Whether to fetch fresh builds from Buildkite.",
     )
     parser.add_argument("--max-fetches", default=3, type=int)
     parser.add_argument(
