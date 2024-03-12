@@ -79,7 +79,7 @@ ALTER MATERIALIZED VIEW mv SET CLUSTER other_cluster
 query error db error: ERROR: ALTER VIEW SET CLUSTER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/alter\-set\-cluster/
 ALTER VIEW mv SET CLUSTER quickstart
 
-query error db error: ERROR: Cannot modify view as MATERIALIZED VIEW
+query error db error: ERROR: v is a view not a materialized view
 ALTER MATERIALIZED VIEW v SET CLUSTER quickstart
 
 query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/issues/20841 for more details

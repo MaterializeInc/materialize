@@ -103,40 +103,40 @@ contains:source "materialize.public.s" already exists
 
 # Test that objects do not get dropped if the drop command does not specify the correct type
 ! DROP SOURCE v
-exact:"materialize.public.v" is a materialized view not a source
+exact:v is a materialized view not a source
 
 ! DROP SOURCE IF EXISTS v
-exact:"materialize.public.v" is a materialized view not a source
+exact:v is a materialized view not a source
 
 ! DROP INDEX v
-exact:"materialize.public.v" is a materialized view not a index
+exact:v is a materialized view not an index
 
 ! DROP INDEX IF EXISTS v
-exact:"materialize.public.v" is a materialized view not a index
+exact:v is a materialized view not an index
 
 ! DROP SOURCE i
-exact:"materialize.public.i" is a index not a source
+exact:i is an index not a source
 
 ! DROP SOURCE IF EXISTS i
-exact:"materialize.public.i" is a index not a source
+exact:i is an index not a source
 
 ! DROP VIEW i
-exact:"materialize.public.i" is a index not a view
+exact:i is an index not a view
 
 ! DROP VIEW IF EXISTS i
-exact:"materialize.public.i" is a index not a view
+exact:i is an index not a view
 
 ! DROP INDEX s
-exact:"materialize.public.s" is a source not a index
+exact:s is a source not an index
 
 ! DROP INDEX IF EXISTS s
-exact:"materialize.public.s" is a source not a index
+exact:s is a source not an index
 
 ! DROP VIEW s
-exact:"materialize.public.s" is a source not a view
+exact:s is a source not a view
 
 ! DROP VIEW IF EXISTS s
-exact:"materialize.public.s" is a source not a view
+exact:s is a source not a view
 
 # Delete objects
 
