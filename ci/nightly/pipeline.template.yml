@@ -1075,7 +1075,6 @@ steps:
     steps:
       - id: rqg-simple-aggregates
         label: "RQG simple-aggregates workload"
-        skip: "#25926"
         timeout_in_minutes: 45
         agents:
           queue: linux-aarch64-small
