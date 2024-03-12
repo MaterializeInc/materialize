@@ -160,9 +160,16 @@ impl FenceableEpoch {
     }
 }
 
+trait ApplyUpdate<T> {
+    /// Process and apply `update`.
+    ///
+    /// Returns `Some` if `update` should be cached in memory and `None` otherwise.
+    fn apply_update(&mut self, update: T, metrics: &Arc<Metrics>) -> Option<T>;
+}
+
 /// TODO(jkosh44)
 #[derive(Debug)]
-pub struct PersistHandle<T: TryIntoStateUpdateKind> {
+pub struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T>>> {
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
@@ -177,6 +184,8 @@ pub struct PersistHandle<T: TryIntoStateUpdateKind> {
     ///
     /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
     pub(crate) snapshot: Vec<(T, Timestamp, Diff)>,
+    /// TODO(jkosh44)
+    update_applier: U,
     /// The current upper of the persist shard.
     pub(crate) upper: Timestamp,
     /// The epoch of the catalog, if one exists. This information is also included in `snapshot`,
@@ -186,7 +195,7 @@ pub struct PersistHandle<T: TryIntoStateUpdateKind> {
     metrics: Arc<Metrics>,
 }
 
-impl<T: TryIntoStateUpdateKind> PersistHandle<T> {
+impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T>>> PersistHandle<T, U> {
     /// Returns the schema of the `Row`s/`SourceData`s stored in the persist
     /// shard backing the catalog.
     pub fn desc() -> RelationDesc {
@@ -348,39 +357,40 @@ impl<T: TryIntoStateUpdateKind> PersistHandle<T> {
         &mut self,
         updates: Vec<StateUpdate<T>>,
     ) -> Result<(), DurableCatalogError> {
-        for StateUpdate { kind, ts, diff } in updates {
-            if diff != 1 && diff != -1 {
+        for update in updates {
+            let StateUpdate { kind, ts, diff } = &update;
+            if *diff != 1 && *diff != -1 {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
             }
 
-            if let Ok(kind) = kind.clone().try_into() {
-                match (kind, diff) {
-                    (StateUpdateKind::Epoch(epoch), 1) => match self.epoch {
-                        FenceableEpoch::Unfenced(Some(current_epoch)) => {
-                            if epoch > current_epoch {
-                                self.epoch = FenceableEpoch::Fenced {
-                                    current_epoch,
-                                    fence_epoch: epoch,
-                                };
-                                self.epoch.validate()?;
-                            } else if epoch < current_epoch {
-                                panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
-                            }
+            if let Ok(StateUpdateKind::Epoch(epoch)) = kind.clone().try_into() {
+                match self.epoch {
+                    FenceableEpoch::Unfenced(Some(current_epoch)) => {
+                        if epoch > current_epoch {
+                            soft_assert_eq_or_log!(*diff, 1);
+                            self.epoch = FenceableEpoch::Fenced {
+                                current_epoch,
+                                fence_epoch: epoch,
+                            };
+                            self.epoch.validate()?;
+                        } else if epoch < current_epoch {
+                            panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
                         }
-                        FenceableEpoch::Unfenced(None) => {
-                            self.epoch = FenceableEpoch::Unfenced(Some(epoch));
-                        }
-                        FenceableEpoch::Fenced { .. } => {}
-                    },
-                    (StateUpdateKind::Epoch(_), -1) => {
-                        // Nothing to do, we're about to get fenced.
                     }
-                    _ => {}
+                    FenceableEpoch::Unfenced(None) => {
+                        self.epoch = FenceableEpoch::Unfenced(Some(epoch));
+                    }
+                    FenceableEpoch::Fenced { .. } => {}
                 }
             }
 
-            self.snapshot.push((kind, ts, diff));
+            if let Some(StateUpdate { kind, ts, diff }) =
+                self.update_applier.apply_update(update, &self.metrics)
+            {
+                self.snapshot.push((kind, ts, diff));
+            }
         }
+
         self.consolidate();
         Ok(())
     }
@@ -415,7 +425,7 @@ impl<T: TryIntoStateUpdateKind> PersistHandle<T> {
     }
 }
 
-impl PersistHandle<StateUpdateKindRaw> {
+impl<U: ApplyUpdate<StateUpdate<StateUpdateKindRaw>>> PersistHandle<StateUpdateKindRaw, U> {
     /// Create a new [`PersistHandle`] to the catalog state associated with
     /// `organization_id`.
     ///
@@ -426,8 +436,9 @@ impl PersistHandle<StateUpdateKindRaw> {
         persist_client: PersistClient,
         organization_id: Uuid,
         version: semver::Version,
+        update_applier: U,
         metrics: Arc<Metrics>,
-    ) -> Result<PersistHandle<StateUpdateKindRaw>, DurableCatalogError> {
+    ) -> Result<PersistHandle<StateUpdateKindRaw, U>, DurableCatalogError> {
         let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
         debug!(
@@ -521,6 +532,7 @@ impl PersistHandle<StateUpdateKindRaw> {
             persist_client,
             shard_id: catalog_shard_id,
             snapshot,
+            update_applier,
             upper,
             epoch,
             metrics,
@@ -528,7 +540,7 @@ impl PersistHandle<StateUpdateKindRaw> {
     }
 }
 
-impl PersistHandle<StateUpdateKind> {
+impl<U: ApplyUpdate<StateUpdate<StateUpdateKind>>> PersistHandle<StateUpdateKind, U> {
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
     /// state.
     ///
