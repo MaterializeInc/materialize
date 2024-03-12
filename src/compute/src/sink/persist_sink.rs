@@ -14,9 +14,10 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use itertools::Itertools;
 use mz_compute_types::dyncfgs::ENABLE_PERSIST_SINK_STASH;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
@@ -566,6 +567,115 @@ impl<T, R> CorrectionBuffer<T, R> {
     }
 }
 
+/// A stash for storing future updates by time.
+#[derive(Default)]
+struct UpdateStash<D>(BTreeMap<Timestamp, ConsolidatingVec<D>>);
+
+impl<D: Ord> UpdateStash<D> {
+    fn new() -> Self {
+        Self(Default::default())
+    }
+
+    /// Insert a batch of updates into the stash.
+    fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+        consolidate_updates(&mut updates);
+        updates.sort_unstable_by_key(|(_, time, _)| *time);
+
+        let mut updates = updates.into_iter().peekable();
+        while let Some(&(_, time, _)) = updates.peek() {
+            let data = updates
+                .peeking_take_while(|(_, t, _)| *t == time)
+                .map(|(d, _, r)| (d, r));
+
+            use std::collections::btree_map::Entry;
+            match self.0.entry(time) {
+                Entry::Vacant(entry) => {
+                    entry.insert(data.collect());
+                }
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().extend(data);
+                }
+            }
+        }
+    }
+
+    /// Remove all updates before the given frontier and return an iterator over them.
+    fn seal(
+        &mut self,
+        frontier: &Antichain<Timestamp>,
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> {
+        let retain = match frontier.as_option() {
+            Some(time) => self.0.split_off(time),
+            None => BTreeMap::new(),
+        };
+        let drain = std::mem::replace(&mut self.0, retain);
+        drain
+            .into_iter()
+            .flat_map(|(t, data)| data.into_iter().map(move |(d, r)| (d, t, r)))
+    }
+}
+
+/// A vector that consolidates its contents.
+///
+/// The vector is filled with updates until it reaches capacity. At this point, the updates are
+/// consolidated to free up space. This process repeats until the consolidation recovered less than
+/// half of the vector's capacity, at which point the capacity is doubled.
+struct ConsolidatingVec<D>(Vec<(D, Diff)>);
+
+impl<D: Ord> ConsolidatingVec<D> {
+    // Pushes `item` into the vector.
+    //
+    // If the vector does not have sufficient capacity, we try to consolidate and/or double its
+    // capacity.
+    //
+    // The worst-case cost of this function is O(n log n) in the number of items the vector stores,
+    // but amortizes to O(1).
+    fn push(&mut self, item: (D, Diff)) {
+        let capacity = self.0.capacity();
+        if self.0.len() == capacity {
+            // The vector is full. First, consolidate to try to recover some space.
+            consolidate(&mut self.0);
+
+            // If consolidation didn't free at least half the available capacity, double the
+            // capacity. This ensures we won't consolidate over and over again with small gains.
+            if self.0.len() > capacity / 2 {
+                self.0.reserve(capacity);
+            }
+        }
+
+        self.0.push(item);
+    }
+}
+
+impl<D> IntoIterator for ConsolidatingVec<D> {
+    type Item = (D, Diff);
+    type IntoIter = std::vec::IntoIter<(D, Diff)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = (D, Diff)>,
+    {
+        Self(Vec::from_iter(iter))
+    }
+}
+
+impl<D: Ord> Extend<(D, Diff)> for ConsolidatingVec<D> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = (D, Diff)>,
+    {
+        for item in iter {
+            self.push(item);
+        }
+    }
+}
+
 /// Writes `desired_stream - persist_stream` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` for any batch of updates that was written.
@@ -629,7 +739,7 @@ where
         // Contains updates from `desired` at times beyond `desired`'s frontier, by time. The idea
         // is to only move updates into `correction` that have a chance of being emitted shortly,
         // to keep the amount of updates we need to consolidate small.
-        let mut desired_stash = enable_stash.then(BTreeMap::new);
+        let mut desired_stash = enable_stash.then(UpdateStash::new);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -733,9 +843,7 @@ where
                             }
 
                             if let Some(stash) = &mut desired_stash {
-                                for (d, t, r) in data {
-                                    stash.entry(t).or_insert_with(Vec::new).push((d, r));
-                                }
+                                stash.insert(data);
                             } else {
                                 correction.with_correction_buffer(
                                     sink_metrics,
@@ -749,18 +857,11 @@ where
                         Event::Progress(frontier) => {
                             // Extract desired rows as positive contributions to `correction`.
                             if let Some(stash) = &mut desired_stash {
-                                stash.retain(|time, data| {
-                                    if !frontier.less_equal(time) {
-                                        correction.with_correction_buffer(
-                                            sink_metrics,
-                                            sink_worker_metrics,
-                                            |buffer| buffer.extend(data.drain(..).map(|(d, r)| (d, *time, r))),
-                                        );
-                                        false
-                                    } else {
-                                        true
-                                    }
-                                });
+                                correction.with_correction_buffer(
+                                    sink_metrics,
+                                    sink_worker_metrics,
+                                    |buffer| buffer.extend(stash.seal(&frontier)),
+                                );
                             }
 
                             desired_frontier = frontier;
