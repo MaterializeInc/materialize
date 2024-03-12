@@ -28,9 +28,14 @@ from materialize.buildkite_insights.failure_search.search_result_presentation im
     print_match,
     print_summary,
 )
+from materialize.buildkite_insights.failure_search.search_utility import (
+    _search_value_to_pattern,
+)
 
 
-def search_build(build: Any, search_value: str, fetch_mode: FetchMode) -> int:
+def search_build(
+    build: Any, search_value: str, use_regex: bool, fetch_mode: FetchMode
+) -> int:
     build_number = build["number"]
     build_pipeline = build["pipeline"]["slug"]
     build_state = build["state"]
@@ -46,7 +51,12 @@ def search_build(build: Any, search_value: str, fetch_mode: FetchMode) -> int:
     )
 
     matches_in_build = search_annotations(
-        build_number, build_pipeline, web_url, annotations, search_value
+        build_number,
+        build_pipeline,
+        web_url,
+        annotations,
+        search_value=search_value,
+        use_regex=use_regex,
     )
 
     return matches_in_build
@@ -58,16 +68,23 @@ def search_annotations(
     web_url: str,
     annotations: list[Any],
     search_value: str,
+    use_regex: bool,
 ) -> int:
     count_matches = 0
 
+    search_pattern = _search_value_to_pattern(search_value, use_regex)
     for annotation in annotations:
         annotation_html = annotation["body_html"]
         annotation_text = clean_annotation_text(annotation_html)
 
-        if matches(annotation_text=annotation_text, search_value=search_value):
+        if search_pattern.search(annotation_text) is not None:
             print_match(
-                build_number, build_pipeline, web_url, annotation_text, search_value
+                build_number,
+                build_pipeline,
+                web_url,
+                annotation_text,
+                search_value=search_value,
+                use_regex=use_regex,
             )
             count_matches = count_matches + 1
 
@@ -78,10 +95,6 @@ def clean_annotation_text(annotation_html: str) -> str:
     return re.sub(r"<[^>]+>", "", annotation_html)
 
 
-def matches(annotation_text: str, search_value: str) -> bool:
-    return search_value.lower() in annotation_text.lower()
-
-
 def main(
     pipeline_slug: str,
     fetch_builds_mode: FetchMode,
@@ -89,6 +102,7 @@ def main(
     max_build_fetches: int,
     only_failed_builds: bool,
     search_value: str,
+    use_regex: bool,
 ) -> None:
     assert len(search_value) > 0
 
@@ -118,7 +132,7 @@ def main(
 
     for build in builds_data:
         matches_in_build = search_build(
-            build, search_value, fetch_mode=fetch_annotations_mode
+            build, search_value, use_regex=use_regex, fetch_mode=fetch_annotations_mode
         )
         count_matches = count_matches + matches_in_build
 
@@ -159,6 +173,10 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument("--value", required=True, type=str)
+    parser.add_argument(
+        "--use-regex",
+        action="store_true",
+    )
     args = parser.parse_args()
 
     main(
@@ -168,4 +186,5 @@ if __name__ == "__main__":
         args.max_build_fetches,
         args.only_failed_builds,
         args.value,
+        args.use_regex,
     )

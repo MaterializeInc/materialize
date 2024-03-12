@@ -9,9 +9,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import re
 from typing import Any
 
+from materialize.buildkite_insights.failure_search.search_utility import (
+    _search_value_to_pattern,
+)
 from materialize.terminal import (
     COLOR_CYAN,
     COLOR_GREEN,
@@ -24,29 +26,31 @@ SHORT_SEPARATOR = "----------"
 LONG_SEPARATOR = "-------------------------------------------------------------------------------------"
 
 
-def highlight_match(annotation_text: str, search_value: str) -> str:
-    case_insensitive_pattern = re.compile(re.escape(search_value), re.IGNORECASE)
-    highlighted_match = with_formattings(search_value, [COLOR_GREEN, STYLE_BOLD])
-    return case_insensitive_pattern.sub(highlighted_match, annotation_text)
+def highlight_match(input: str, search_value: str, use_regex: bool) -> str:
+    case_insensitive_pattern = _search_value_to_pattern(search_value, use_regex)
+    match_replacement = with_formattings(r"\1", [COLOR_GREEN, STYLE_BOLD])
+    return case_insensitive_pattern.sub(match_replacement, input)
 
 
-def trim_match(annotation_text: str, search_value: str) -> str:
+def trim_match(input: str, search_value: str, use_regex: bool) -> str:
     # We do not care about multiple occurrences within an annotation and focus on the first one.
 
-    original_annotation_text = annotation_text.strip()
-    annotation_text = original_annotation_text.lower()
-    search_value = search_value.lower()
+    input = input.strip()
+    case_insensitive_pattern = _search_value_to_pattern(search_value, use_regex)
 
     max_chars_before_match = 300
     max_chars_after_match = 300
 
-    match_begin_index = annotation_text.index(search_value)
-    match_end_index = match_begin_index + len(search_value)
+    match = case_insensitive_pattern.search(input)
+    assert match is not None
+
+    match_begin_index = match.start()
+    match_end_index = match.end()
 
     # identify cut-off point before first match
     if match_begin_index > max_chars_before_match:
-        cut_off_index_begin = annotation_text.find(
-            " ", match_begin_index - max_chars_before_match
+        cut_off_index_begin = input.find(
+            " ", match_begin_index - max_chars_before_match, match_begin_index
         )
 
         if cut_off_index_begin == -1:
@@ -55,28 +59,26 @@ def trim_match(annotation_text: str, search_value: str) -> str:
         cut_off_index_begin = 0
 
     # identify cut-off point after first match
-    if len(annotation_text) - match_end_index > 300:
-        cut_off_index_end = annotation_text.rfind(
+    if len(input) > match_end_index + 300:
+        cut_off_index_end = input.rfind(
             " ", match_end_index, match_end_index + max_chars_after_match
         )
 
         if cut_off_index_end == -1:
             cut_off_index_end = match_end_index + max_chars_after_match
     else:
-        cut_off_index_end = len(annotation_text)
+        cut_off_index_end = len(input)
 
-    cut_annotation_text = original_annotation_text[
-        cut_off_index_begin:cut_off_index_end
-    ]
-    cut_annotation_text = cut_annotation_text.strip()
+    result = input[cut_off_index_begin:cut_off_index_end]
+    result = result.strip()
 
     if cut_off_index_begin > 0:
-        cut_annotation_text = f"[...] {cut_annotation_text}"
+        result = f"[...] {result}"
 
-    if cut_off_index_end != len(original_annotation_text):
-        cut_annotation_text = f"{cut_annotation_text} [...]"
+    if cut_off_index_end != len(input):
+        result = f"{result} [...]"
 
-    return cut_annotation_text
+    return result
 
 
 def print_before_search_results() -> None:
@@ -90,13 +92,15 @@ def print_match(
     web_url: str,
     annotation_text: str,
     search_value: str,
+    use_regex: bool,
 ) -> None:
-    match_snippet = trim_match(
-        annotation_text=annotation_text, search_value=search_value
+    matched_snippet = trim_match(
+        input=annotation_text, search_value=search_value, use_regex=use_regex
     )
-    match_snippet = highlight_match(
-        annotation_text=match_snippet,
+    matched_snippet = highlight_match(
+        input=matched_snippet,
         search_value=search_value,
+        use_regex=use_regex,
     )
 
     print(
@@ -106,7 +110,7 @@ def print_match(
     )
     print(f"URL: {with_formatting(web_url, COLOR_CYAN)}")
     print(SHORT_SEPARATOR)
-    print(match_snippet)
+    print(matched_snippet)
     print(LONG_SEPARATOR)
 
 
