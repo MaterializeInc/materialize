@@ -304,6 +304,9 @@ class ResultComparator:
             ].to_sql(SqlDialectAdjuster(), True)
 
             if not self.is_value_equal(result_value1, result_value2):
+                error_type = ValidationErrorType.CONTENT_TYPE_MISMATCH
+                error_message = "Value type differs"
+            elif not self.is_value_equal(result_value1, result_value2):
                 error_type = ValidationErrorType.CONTENT_MISMATCH
                 error_message = "Value differs"
             else:
@@ -326,6 +329,13 @@ class ResultComparator:
                     location=f"row index {row_index}, column index {col_index} ('{expression}')",
                 ),
             )
+
+    def is_type_equal(self, value1: Any, value2: Any) -> bool:
+        if value1 is None or value2 is None:
+            # ignore None values
+            return True
+
+        return type(value1) == type(value2)
 
     def is_value_equal(self, value1: Any, value2: Any) -> bool:
         if value1 == value2:
