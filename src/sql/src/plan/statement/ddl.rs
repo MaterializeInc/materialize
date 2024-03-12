@@ -5430,15 +5430,18 @@ pub fn plan_alter_source(
                 crate::plan::AlterSourceAction::DropSubsourceExports { to_drop }
             }
         }
-        AlterSourceAction::AddSubsources {
+        AlterSourceAction::AddSubsourcesPurified {
             subsources,
             details,
             options,
         } => crate::plan::AlterSourceAction::AddSubsourceExports {
-            subsources,
+            subsources: crate::plan::AddSubsourceExportsState::Purified(subsources),
             details,
             options,
         },
+        AlterSourceAction::AddSubsources { .. } => {
+            unreachable!("ALTER SOURCE...ADD SUBSOURCE must be purified")
+        }
     };
 
     Ok(Plan::AlterSource(AlterSourcePlan {

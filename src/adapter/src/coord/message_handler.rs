@@ -24,7 +24,7 @@ use mz_ore::task;
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
-use mz_sql::plan::{CreateSourcePlans, Plan};
+use mz_sql::plan::{AlterSourceAction, Plan};
 use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
@@ -447,7 +447,72 @@ impl Coordinator {
             return;
         }
 
-        todo!("bankruptcy declared on sequencing purified statements")
+        let mut stmts = match result {
+            Ok(ok) => ok,
+            Err(e) => return ctx.retire(Err(e)),
+        };
+
+        // Look at the first statement which will determine how to execute the
+        // set of statements.
+        let (plan, resolved_ids) = match &stmts[0] {
+            Statement::AlterSource(_) | Statement::CreateSink(_) => {
+                // These must have only only a single statement.
+                let stmt = stmts.remove(0);
+                assert!(stmts.is_empty());
+
+                match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+                    Ok(plan @ (Plan::AlterNoop(..) | Plan::CreateSink(_))) => (plan, resolved_ids),
+                    Ok(Plan::AlterSource(mut plan)) => {
+                        // When adding subsource exports, we need to plan them.
+                        if let AlterSourceAction::AddSubsourceExports { subsources, .. } =
+                            &mut plan.action
+                        {
+                            let planned = match subsources {
+                                mz_sql::plan::AddSubsourceExportsState::Purified(inner) => {
+                                    let mut plans = Vec::with_capacity(inner.len());
+                                    for subsource_stmt in inner.clone() {
+                                        match self
+                                            .plan_subsource(ctx.session(), &params, subsource_stmt)
+                                            .await
+                                        {
+                                            Ok(s) => plans.push(s),
+                                            Err(e) => return ctx.retire(Err(e)),
+                                        }
+                                    }
+                                    mz_sql::plan::AddSubsourceExportsState::Planned(plans)
+                                }
+                                mz_sql::plan::AddSubsourceExportsState::Planned(_) => {
+                                    unreachable!("planning does not return planned subsources");
+                                }
+                            };
+                            *subsources = planned;
+                        }
+
+                        (Plan::AlterSource(plan), resolved_ids)
+                    }
+                    Ok(p) => {
+                        unreachable!("{:?} is not purified", p)
+                    }
+                    Err(e) => return ctx.retire(Err(e)),
+                }
+            }
+            // If we start with a `CreateSubsource`, we know that this is an
+            // operation that creates sources and their subsources.
+            Statement::CreateSubsource(_) => {
+                let sources = match self
+                    .prepare_create_sources(&ctx, params, stmts, resolved_ids)
+                    .await
+                {
+                    Ok(s) => s,
+                    Err(e) => return ctx.retire(Err(e)),
+                };
+
+                (Plan::CreateSources(sources), ResolvedIds(BTreeSet::new()))
+            }
+            s => unreachable!("{:?} is not purified", s),
+        };
+
+        self.sequence_plan(ctx, plan, resolved_ids).await;
     }
 
     #[mz_ore::instrument(level = "debug")]

@@ -258,18 +258,17 @@ pub async fn purify_statement(
     now: u64,
     stmt: Statement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
+) -> Result<Vec<Statement<Aug>>, PlanError> {
     match stmt {
         Statement::CreateSource(stmt) => {
             purify_create_source(catalog, now, stmt, storage_configuration).await
         }
-        Statement::AlterSource(stmt) => {
-            purify_alter_source(catalog, stmt, storage_configuration).await
-        }
-        Statement::CreateSink(stmt) => {
-            let r = purify_create_sink(catalog, stmt, storage_configuration).await?;
-            Ok((vec![], r))
-        }
+        Statement::AlterSource(stmt) => purify_alter_source(catalog, stmt, storage_configuration)
+            .await
+            .map(|s| vec![s]),
+        Statement::CreateSink(stmt) => purify_create_sink(catalog, stmt, storage_configuration)
+            .await
+            .map(|s| vec![s]),
         o => unreachable!("{:?} does not need to be purified", o),
     }
 }
@@ -500,7 +499,7 @@ async fn purify_create_source(
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
+) -> Result<Vec<Statement<Aug>>, PlanError> {
     let CreateSourceStatement {
         name: source_name,
         connection,
@@ -1248,7 +1247,7 @@ async fn purify_create_source(
     let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
 
     // Create the subsource statement
-    let subsource = CreateSubsourceStatement {
+    let progress_subsources = CreateSubsourceStatement {
         name,
         columns,
         of_source: None,
@@ -1259,7 +1258,6 @@ async fn purify_create_source(
             value: Some(WithOptionValue::Value(Value::Boolean(true))),
         }],
     };
-    subsources.push(subsource);
 
     purify_source_format(
         &catalog,
@@ -1270,7 +1268,14 @@ async fn purify_create_source(
     )
     .await?;
 
-    Ok((subsources, Statement::CreateSource(stmt)))
+    let mut stmts = vec![
+        Statement::CreateSubsource(progress_subsources),
+        Statement::CreateSource(stmt),
+    ];
+
+    stmts.extend(subsources.into_iter().map(Statement::CreateSubsource));
+
+    Ok(stmts)
 }
 
 /// Equivalent to `purify_create_source` but for `AlterSourceStatement`.
@@ -1283,7 +1288,7 @@ async fn purify_alter_source(
     catalog: impl SessionCatalog,
     mut stmt: AlterSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
-) -> Result<(Vec<CreateSubsourceStatement<Aug>>, Statement<Aug>), PlanError> {
+) -> Result<Statement<Aug>, PlanError> {
     let scx = StatementContext::new(None, &catalog);
     let AlterSourceStatement {
         source_name,
@@ -1297,7 +1302,7 @@ async fn purify_alter_source(
         let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
             Ok(item) => item,
             Err(_) if *if_exists => {
-                return Ok((vec![], Statement::AlterSource(stmt)));
+                return Ok(Statement::AlterSource(stmt));
             }
             Err(e) => return Err(e),
         };
@@ -1343,19 +1348,16 @@ async fn purify_alter_source(
     };
 
     // If we don't need to handle added subsources, early return.
-    let (targeted_subsources, details, options) = match action {
+    let (targeted_subsources, mut options) = match action {
         AlterSourceAction::AddSubsources {
             subsources,
-            details,
             options,
-        } => (subsources, details, options),
-        _ => return Ok((vec![], Statement::AlterSource(stmt))),
+        } => (subsources, options.to_vec()),
+        AlterSourceAction::AddSubsourcesPurified { .. } => {
+            unreachable!("cannot generate this action outside of purification");
+        }
+        _ => return Ok(Statement::AlterSource(stmt)),
     };
-
-    assert!(
-        details.is_none(),
-        "details cannot be set before purification"
-    );
 
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
         mut text_columns,
@@ -1535,11 +1537,15 @@ async fn purify_alter_source(
         new_details.output_idx_for_name(name)
     });
 
-    *details = Some(WithOptionValue::Value(Value::String(hex::encode(
-        new_details.into_proto().encode_to_vec(),
-    ))));
+    stmt.action = AlterSourceAction::AddSubsourcesPurified {
+        subsources: new_subsources,
+        details: Some(WithOptionValue::Value(Value::String(hex::encode(
+            new_details.into_proto().encode_to_vec(),
+        )))),
+        options,
+    };
 
-    Ok((new_subsources, Statement::AlterSource(stmt)))
+    Ok(Statement::AlterSource(stmt))
 }
 
 async fn purify_source_format(
