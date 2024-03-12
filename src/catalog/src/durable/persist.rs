@@ -194,31 +194,6 @@ pub struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T
 }
 
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<StateUpdate<T>>> PersistHandle<T, U> {
-    /// Fetch the persist version of the catalog upgrade shard, if one exists. A version will not
-    /// exist if the catalog upgrade shard itself doesn't exist which could happen in the following
-    /// scenarios:
-    ///
-    ///   - We are creating a brand new environment.
-    ///   - We are upgrading from a version of the code where the catalog upgrade shard didn't
-    ///   exist.
-    async fn fetch_catalog_upgrade_shard_version(
-        persist_client: &PersistClient,
-        upgrade_shard_id: ShardId,
-    ) -> Option<semver::Version> {
-        let shard_state = persist_client
-            .inspect_shard::<Timestamp>(&upgrade_shard_id)
-            .await
-            .ok()?;
-        let json_state = serde_json::to_value(shard_state).expect("state serialization error");
-        let upgrade_version = json_state
-            .get("applier_version")
-            .cloned()
-            .expect("missing applier_version");
-        let upgrade_version =
-            serde_json::from_value(upgrade_version).expect("version deserialization error");
-        Some(upgrade_version)
-    }
-
     /// Increment the version in the catalog upgrade shard to the code's current version.
     async fn increment_catalog_upgrade_shard_version(&mut self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
@@ -513,7 +488,7 @@ impl<U: ApplyUpdate<StateUpdate<StateUpdateKindRaw>>> PersistHandle<StateUpdateK
 
         // Check the catalog upgrade shard to see ensure that we don't fence anyone out of persist.
         let upgrade_version =
-            Self::fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await;
+            fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await;
         // If this is `None`, no version was found in the upgrade shard. Either this is a brand new
         // environment and we don't need to worry about fencing existing users or we're upgrading
         // from a version that doesn't contain the catalog upgrade shard and we need to proceed
@@ -1272,9 +1247,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
-        self.persist_handle
-            .with_snapshot(|snapshot| Ok(snapshot))
-            .await
+        self.persist_handle.with_snapshot(Ok).await
     }
 }
 
@@ -1469,6 +1442,31 @@ fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Times
     let mut as_of = upper.saturating_sub(1);
     as_of.advance_by(since.borrow());
     as_of
+}
+
+/// Fetch the persist version of the catalog upgrade shard, if one exists. A version will not
+/// exist if the catalog upgrade shard itself doesn't exist which could happen in the following
+/// scenarios:
+///
+///   - We are creating a brand new environment.
+///   - We are upgrading from a version of the code where the catalog upgrade shard didn't
+///   exist.
+async fn fetch_catalog_upgrade_shard_version(
+    persist_client: &PersistClient,
+    upgrade_shard_id: ShardId,
+) -> Option<semver::Version> {
+    let shard_state = persist_client
+        .inspect_shard::<Timestamp>(&upgrade_shard_id)
+        .await
+        .ok()?;
+    let json_state = serde_json::to_value(shard_state).expect("state serialization error");
+    let upgrade_version = json_state
+        .get("applier_version")
+        .cloned()
+        .expect("missing applier_version");
+    let upgrade_version =
+        serde_json::from_value(upgrade_version).expect("version deserialization error");
+    Some(upgrade_version)
 }
 
 /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog

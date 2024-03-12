@@ -341,17 +341,18 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
 
     // 4. Apply migration to catalog.
     if matches!(mode, Mode::Writable) {
-        unopened_catalog_state.persist_handle.compare_and_append(updates).await?;
+        unopened_catalog_state
+            .persist_handle
+            .compare_and_append(updates)
+            .await?;
     } else {
+        let ts = unopened_catalog_state.persist_handle.upper;
         let updates = updates
             .into_iter()
-            .map(|(kind, diff)| StateUpdate {
-                kind,
-                ts: unopened_catalog_state.persist_handle.upper,
-                diff,
-            })
-            .collect();
-        unopened_catalog_state.persist_handle.apply_updates(updates)?;
+            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
+        unopened_catalog_state
+            .persist_handle
+            .apply_updates(updates)?;
     }
 
     // 5. Consolidate snapshot to remove old versions.
