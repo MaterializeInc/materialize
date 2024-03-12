@@ -8,7 +8,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from enum import Enum
 
-FETCH_MODE_NO = "no"
-FETCH_MODE_YES = "yes"
-FETCH_MODE_AUTO = "auto"
+
+class FetchMode(Enum):
+    AUTO = 1
+    """Fetch fresh data if existing data does not exist or is outdated"""
+    ALWAYS = 2
+    """Always fetch fresh data"""
+    NEVER = 3
+    """Never fetch fresh data"""
+
+
+FETCH_MODE_CHOICES = [entry.name.lower() for entry in list(FetchMode)]

@@ -20,9 +20,8 @@ from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
 )
 from materialize.buildkite_insights.cache import annotations_cache, builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
-    FETCH_MODE_AUTO,
-    FETCH_MODE_NO,
-    FETCH_MODE_YES,
+    FETCH_MODE_CHOICES,
+    FetchMode,
 )
 from materialize.buildkite_insights.failure_search.search_result_presentation import (
     print_before_search_results,
@@ -31,7 +30,7 @@ from materialize.buildkite_insights.failure_search.search_result_presentation im
 )
 
 
-def search_build(build: Any, search_value: str, fetch_mode: str) -> int:
+def search_build(build: Any, search_value: str, fetch_mode: FetchMode) -> int:
     build_number = build["number"]
     build_pipeline = build["pipeline"]["slug"]
     build_state = build["state"]
@@ -85,8 +84,8 @@ def matches(annotation_text: str, search_value: str) -> bool:
 
 def main(
     pipeline_slug: str,
-    fetch_builds_mode: str,
-    fetch_annotations_mode: str,
+    fetch_builds_mode: FetchMode,
+    fetch_annotations_mode: FetchMode,
     max_build_fetches: int,
     only_failed_builds: bool,
     search_value: str,
@@ -141,16 +140,16 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--fetch-builds",
-        choices=[FETCH_MODE_AUTO, FETCH_MODE_NO, FETCH_MODE_YES],
-        default=FETCH_MODE_AUTO,
-        type=str,
+        type=lambda mode: FetchMode[mode],
+        choices=FETCH_MODE_CHOICES,
+        default=FetchMode.AUTO,
         help="Whether to fetch fresh builds from Buildkite.",
     )
     parser.add_argument(
         "--fetch-annotations",
-        choices=[FETCH_MODE_AUTO, FETCH_MODE_NO, FETCH_MODE_YES],
-        default=FETCH_MODE_AUTO,
-        type=str,
+        type=lambda mode: FetchMode[mode.upper()],
+        choices=FETCH_MODE_CHOICES,
+        default=FetchMode.AUTO,
         help="Whether to fetch fresh annotations from Buildkite.",
     )
     parser.add_argument("--max-build-fetches", default=2, type=int)
