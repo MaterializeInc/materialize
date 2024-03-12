@@ -28,7 +28,7 @@ def app() -> None:
 
 
 class Arg:
-    repository = dict(
+    repository: dict[str, Any] = dict(
         type=click.Path(
             exists=False,
             file_okay=False,
@@ -64,42 +64,42 @@ class Arg:
 
 
 class Opt:
-    db_port = dict(
+    db_port: dict[str, Any] = dict(
         default=6877,
         help="DB connection port.",
         envvar="PGPORT",
     )
 
-    db_host = dict(
+    db_host: dict[str, Any] = dict(
         default="localhost",
         help="DB connection host.",
         envvar="PGHOST",
     )
 
-    db_user = dict(
+    db_user: dict[str, Any] = dict(
         default="mz_support",
         help="DB connection user.",
         envvar="PGUSER",
     )
 
-    db_pass = dict(
+    db_pass: dict[str, Any] = dict(
         default=None,
         help="DB connection password.",
         envvar="PGPASSWORD",
     )
 
-    db_require_ssl = dict(
+    db_require_ssl: dict[str, Any] = dict(
         is_flag=True,
         help="DB connection requires SSL.",
         envvar="PGREQUIRESSL",
     )
 
-    mzfmt = dict(
+    mzfmt: dict[str, Any] = dict(
         default=True,
         help="Format SQL statements with `mzfmt` if present.",
     )
 
-    explainee_type = dict(
+    explainee_type: dict[str, Any] = dict(
         type=click.Choice([v.name.lower() for v in list(api.ExplaineeType)]),
         default="all",  # We should have at least arity for good measure.
         callback=lambda ctx, param, v: api.ExplaineeType[v.upper()],  # type: ignore
@@ -107,7 +107,7 @@ class Opt:
         metavar="MODE",
     )
 
-    explain_flags = dict(
+    explain_flags: dict[str, Any] = dict(
         type=click.Choice([v.name.lower() for v in list(api.ExplainFlag)]),
         multiple=True,
         default=["arity"],  # We should have at least arity for good measure.
@@ -116,7 +116,7 @@ class Opt:
         metavar="FLAG",
     )
 
-    explain_stage = dict(
+    explain_stage: dict[str, Any] = dict(
         type=click.Choice([str(v.name.lower()) for v in list(api.ExplainStage)]),
         multiple=True,
         default=["optimized_plan"],  # Most often we'll only the optimized plan.
@@ -125,14 +125,14 @@ class Opt:
         metavar="STAGE",
     )
 
-    explain_suffix = dict(
+    explain_suffix: dict[str, Any] = dict(
         type=str,
         default="",
         help="A suffix to append to the EXPLAIN output files.",
         metavar="SUFFIX",
     )
 
-    explain_format = dict(
+    explain_format: dict[str, Any] = dict(
         type=click.Choice([str(v.name.lower()) for v in list(api.ExplainFormat)]),
         default="text",
         callback=lambda ctx, param, v: api.ExplainFormat[v.upper()],  # type: ignore
