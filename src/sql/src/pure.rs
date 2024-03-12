@@ -217,6 +217,34 @@ fn validate_subsource_names<T>(
     Ok(())
 }
 
+pub fn add_output_index_to_subsources<F>(
+    subsources: &mut Vec<CreateSubsourceStatement<Aug>>,
+    output_idx_for_name: F,
+) where
+    F: Fn(&UnresolvedItemName) -> Option<usize>,
+{
+    for subsource in subsources {
+        let option = subsource
+            .with_options
+            .iter()
+            .find(|o| o.name == CreateSubsourceOptionName::ExternalReference)
+            .expect("all can only add external reference subsoutrces");
+        let name = match &option.value {
+            Some(WithOptionValue::UnresolvedItemName(name)) => name,
+            _ => unreachable!(),
+        };
+
+        let output_idx = output_idx_for_name(name)
+            .expect("only determine output index for tables you've validated exist");
+        subsource.with_options.push(CreateSubsourceOption {
+            name: CreateSubsourceOptionName::InitOutputIndex,
+            value: Some(WithOptionValue::Value(Value::Number(
+                output_idx.to_string(),
+            ))),
+        })
+    }
+}
+
 /// Purifies a statement, removing any dependencies on external state.
 ///
 /// See the section on [purification](crate#purification) in the crate
@@ -827,7 +855,7 @@ async fn purify_create_source(
                 text_cols_option.value = Some(WithOptionValue::Sequence(seq));
             }
 
-            let new_subsources = postgres::generate_targeted_subsources(
+            let mut new_subsources = postgres::generate_targeted_subsources(
                 &scx,
                 None,
                 validated_requested_subsources,
@@ -839,7 +867,6 @@ async fn purify_create_source(
             // statement, remove the references so it is not canonicalized as
             // part of the `CREATE SOURCE` statement in the catalog.
             *referenced_subsources = None;
-            subsources.extend(new_subsources);
 
             // Record the active replication timeline_id to allow detection of a future upstream
             // point-in-time-recovery that will put the source into an error state.
@@ -858,6 +885,13 @@ async fn purify_create_source(
                 ),
                 timeline_id: Some(timeline_id),
             };
+
+            add_output_index_to_subsources(&mut new_subsources, |name| {
+                details.output_idx_for_name(name)
+            });
+
+            subsources.extend(new_subsources);
+
             options.push(PgConfigOption {
                 name: PgConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(
@@ -1482,7 +1516,7 @@ async fn purify_alter_source(
         text_cols_option.value = Some(WithOptionValue::Sequence(seq));
     }
 
-    let new_subsources = postgres::generate_targeted_subsources(
+    let mut new_subsources = postgres::generate_targeted_subsources(
         &scx,
         Some(source_name),
         validated_requested_subsources,
@@ -1507,6 +1541,10 @@ async fn purify_alter_source(
         slot: pg_source_connection.publication_details.slot.clone(),
         timeline_id,
     };
+
+    add_output_index_to_subsources(&mut new_subsources, |name| {
+        new_details.output_idx_for_name(name)
+    });
 
     *details = Some(WithOptionValue::Value(Value::String(hex::encode(
         new_details.into_proto().encode_to_vec(),
