@@ -208,6 +208,11 @@ class Composition:
                         raise ValueError(f"Unknown platform {config['platform']}")
                 images.append(image)
 
+                if image.rd.arch == Arch.X86_64:
+                    config["platform"] = "linux/amd64"
+                elif image.rd.arch == Arch.AARCH64:
+                    config["platform"] = "linux/arm64/v8"
+
             if "propagate_uid_gid" in config:
                 if config["propagate_uid_gid"]:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
