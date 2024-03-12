@@ -709,26 +709,9 @@ where
         // could create the subsource collections only as part of creating the
         // main source/ingestion.
         for id in to_execute.iter() {
-            let description = self.collection(*id).unwrap().description.clone();
-            match &description.data_source {
-                DataSource::Ingestion(ingestion) => {
-                    let storage_dependencies = description.get_storage_dependencies();
-
-                    self.install_dependency_read_holds(
-                        // N.B. The "main" collection of the source is included in
-                        // `source_exports`.
-                        ingestion.source_exports.keys().cloned(),
-                        &storage_dependencies,
-                    )?;
-                }
-                DataSource::SourceExport { .. } => todo!(),
-                DataSource::Webhook
-                | DataSource::Introspection(_)
-                | DataSource::Progress
-                | DataSource::Other(_) => {
-                    // No since to patch up and no read holds to install on
-                    // dependencies!
-                }
+            let description = &self.collection(*id).unwrap().description;
+            if let Some(dependency) = description.get_storage_dependency() {
+                self.install_dependency_read_holds(*id, dependency)?;
             }
         }
 
@@ -957,16 +940,12 @@ where
                 _ => unreachable!("verified collection refers to ingestion"),
             };
 
-            // Assess dependency since, which we have to fast-forward this
-            // collection's since to.
-            let storage_dependencies = collection.description.get_storage_dependencies();
-
             // Ensure this new collection's since is aligned with the dependencies.
             // This will likely place its since beyond its upper which is OK because
             // its snapshot will catch it up with the rest of the source, i.e. we
             // will never see its upper at a state beyond 0 and less than its since.
-            for id in new_source_exports {
-                self.install_dependency_read_holds([id].into_iter(), &storage_dependencies)?;
+            for _id in new_source_exports {
+                todo!("this should be removed");
             }
 
             // Fetch the client for this ingestion's instance.
@@ -3087,7 +3066,7 @@ where
 
         // Get the previous storage dependencies; we need these to understand if something has
         // changed in what we depend upon.
-        let prev_storage_dependencies = collection_description.get_storage_dependencies();
+        let prev_storage_dependencies = collection_description.get_storage_dependency();
 
         // We cannot know the metadata of exports yet to be created, so we have
         // to remove them. However, we know that adding source exports is
@@ -3117,7 +3096,7 @@ where
             }
         };
 
-        let new_storage_dependencies = collection_description.get_storage_dependencies();
+        let new_storage_dependencies = collection_description.get_storage_dependency();
 
         if prev_storage_dependencies != new_storage_dependencies {
             tracing::info!(
@@ -3132,7 +3111,7 @@ where
     }
 
     /// For each element of `collections`, install a read hold on all of the
-    /// `storage_dependencies`.
+    /// `storage_dependency`.
     ///
     /// Note that this adjustment is only guaranteed to be reflected in memory;
     /// downgrades to persist shards are not guaranteed to occur unless they
@@ -3140,112 +3119,85 @@ where
     ///
     /// # Panics
     ///
-    /// - If any identified collection's since is less than the dependency since
-    ///   and:
-    ///     - Its read policy is not `ReadPolicy::NoPolicy`
-    ///     - Its read policy is `ReadPolicy::NoPolicy(f)` and the dependency
-    ///       since is <= `f`.
-    ///
-    ///     - Its write frontier is neither `T::minimum` nor beyond the
-    ///       dependency since.
-    /// - If any identified collection's data source is not
-    ///   [`DataSource::Ingestion] (primary source) or [`DataSource::Other`]
-    ///   (subsources).
-    fn install_dependency_read_holds<I: Iterator<Item = GlobalId>>(
+    /// This function retains a complex set of invariants. Consult its
+    /// implementation to determine the cases in which it panics.
+    fn install_dependency_read_holds(
         &mut self,
-        collections: I,
-        storage_dependencies: &[GlobalId],
+        id: GlobalId,
+        storage_dependency: GlobalId,
     ) -> Result<(), StorageError> {
-        let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
+        let collection = self.collection(storage_dependency)?;
+        let dependency_since = collection.implied_capability.clone();
+
         let enable_asserts = self.config().parameters.enable_dependency_read_hold_asserts;
 
-        for id in collections {
+        let collection = self.collection(id).expect("known to exist");
+        assert!(
+            matches!(collection.description.data_source, DataSource::SourceExport {..} | DataSource::Ingestion(_)),
+            "only primary sources w/ subsources and subsources can have dependency read holds installed"
+        );
+
+        // Because of the "backward" dependency structure (primary sources
+        // depend on subsources, rather than the other way around, which one
+        // might expect), we do not know what the initial since of the
+        // collection should be. We only find out that information once its
+        // primary sources comes along and correlates the subsource to its
+        // dependency sinces (e.g. remap shards).
+        //
+        // Once we find that out, we need ensure that the controller's
+        // version of the since is sufficiently advanced so that we may
+        // install the read hold.
+        if PartialOrder::less_than(&collection.implied_capability, &dependency_since) {
+            // Patch up the implied capability + maybe the persist shard's
+            // since.
+            self.set_read_policy(vec![(
+                id,
+                ReadPolicy::NoPolicy {
+                    initial_since: dependency_since.clone(),
+                },
+            )]);
+
+            // We have to re-borrow.
             let collection = self.collection(id).expect("known to exist");
             assert!(
-                matches!(collection.description.data_source, DataSource::Other(_) | DataSource::Ingestion(_)),
-                "only primary sources w/ subsources and subsources can have dependency read holds installed"
-            );
-
-            // Because of the "backward" dependency structure (primary sources
-            // depend on subsources, rather than the other way around, which one
-            // might expect), we do not know what the initial since of the
-            // collection should be. We only find out that information once its
-            // primary sources comes along and correlates the subsource to its
-            // dependency sinces (e.g. remap shards).
-            //
-            // Once we find that out, we need ensure that the controller's
-            // version of the since is sufficiently advanced so that we may
-            // install the read hold.
-            //
-            // TODO: remove this if statement once we fix the inverse dependency
-            // of subsources
-            if PartialOrder::less_than(&collection.implied_capability, &dependency_since) {
-                assert!(
-                    match &collection.read_policy {
-                        ReadPolicy::NoPolicy { initial_since } =>
-                            PartialOrder::less_than(initial_since, &dependency_since),
-                        _ => false,
-                    } || !enable_asserts,
-                    "subsources should not have external read holds installed until \
-                                    their ingestion is created, but {:?} has read policy {:?}",
-                    id,
-                    collection.read_policy
-                );
-
-                // Patch up the implied capability + maybe the persist shard's
-                // since.
-                self.set_read_policy(vec![(
-                    id,
-                    ReadPolicy::NoPolicy {
-                        initial_since: dependency_since.clone(),
-                    },
-                )]);
-
-                // We have to re-borrow.
-                let collection = self.collection(id).expect("known to exist");
-                assert!(
-                    collection.implied_capability == dependency_since || !enable_asserts,
-                    "monkey patching the implied_capability to {:?} did not work, is still {:?}",
-                    dependency_since,
-                    collection.implied_capability,
-                );
-            }
-
-            // Fill in the storage dependencies.
-            let collection = self.collection_mut(id).expect("known to exist");
-
-            assert!(
-                PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
-                    // Whenever a collection is being initialized, this state is
-                    // acceptable.
-                    || *collection.write_frontier == [T::minimum()]
-                    || !enable_asserts,
-                "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
+                collection.implied_capability == dependency_since || !enable_asserts,
+                "monkey patching the implied_capability to {:?} did not work, is still {:?}",
+                dependency_since,
                 collection.implied_capability,
-                collection.write_frontier,
-                collection
             );
-
-            collection
-                .storage_dependencies
-                .extend(storage_dependencies.iter().cloned());
-
-            assert!(
-                !PartialOrder::less_than(
-                    &collection.read_capabilities.frontier(),
-                    &collection.implied_capability.borrow()
-                ) || !enable_asserts,
-                "{id}: at this point, there can be no read holds for any time that is not \
-                    beyond the implied capability  but we have implied_capability {:?}, \
-                    read_capabilities {:?}",
-                collection.implied_capability,
-                collection.read_capabilities,
-            );
-
-            let read_hold = collection.implied_capability.clone();
-            self.install_read_capabilities(id, storage_dependencies, read_hold)?;
         }
 
+        // Fill in the storage dependencies.
+        let collection = self.collection_mut(id).expect("known to exist");
+
+        assert!(
+            PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
+                // Whenever a collection is being initialized, this state is
+                // acceptable.
+                || *collection.write_frontier == [T::minimum()]
+                || !enable_asserts,
+            "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
+            collection.implied_capability,
+            collection.write_frontier,
+            collection
+        );
+
+        collection.storage_dependencies.push(storage_dependency);
+
+        assert!(
+            !PartialOrder::less_than(
+                &collection.read_capabilities.frontier(),
+                &collection.implied_capability.borrow()
+            ) || !enable_asserts,
+            "{id}: at this point, there can be no read holds for any time that is not \
+                beyond the implied capability  but we have implied_capability {:?}, \
+                read_capabilities {:?}",
+            collection.implied_capability,
+            collection.read_capabilities,
+        );
+
+        let read_hold = collection.implied_capability.clone();
+        self.install_read_capabilities(id, &[storage_dependency], read_hold)?;
         Ok(())
     }
 

@@ -130,31 +130,19 @@ pub struct CollectionDescription<T> {
 impl<T> CollectionDescription<T> {
     /// Returns IDs for all storage objects that this `CollectionDescription`
     /// depends on.
-    pub fn get_storage_dependencies(&self) -> Vec<GlobalId> {
-        let mut result = Vec::new();
-
+    ///
+    /// There are currently either 0 or 1 dependencies per collection, so use an
+    /// `Option`; this can easily be changed to a `Vec` in the future.
+    pub fn get_storage_dependency(&self) -> Option<GlobalId> {
         // NOTE: Exhaustive match for future proofing.
         match &self.data_source {
-            DataSource::Ingestion(ingestion) => {
-                result.push(ingestion.remap_collection_id);
-            }
-            DataSource::SourceExport { id, .. } => {
-                result.push(*id);
-            }
-            DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
-                // Introspection, Progress, and Webhook sources have no dependencies, for now.
-                //
-                // TODO(parkmycar): Once webhook sources support validation, then they will have
-                // dependencies.
-                //
-                // See <https://github.com/MaterializeInc/materialize/issues/20211>.
-            }
-            DataSource::Other(_) => {
-                // We don't know anything about it's dependencies.
-            }
+            DataSource::Ingestion(ingestion) => Some(ingestion.remap_collection_id),
+            DataSource::SourceExport { id, .. } => Some(*id),
+            DataSource::Webhook
+            | DataSource::Introspection(_)
+            | DataSource::Progress
+            | DataSource::Other(_) => None,
         }
-
-        result
     }
 
     pub fn from_desc(desc: RelationDesc, source: DataSourceOther) -> Self {
