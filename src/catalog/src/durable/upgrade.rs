@@ -351,14 +351,10 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
     if matches!(mode, Mode::Writable) {
         unopened_catalog_state.compare_and_append(updates).await?;
     } else {
+        let ts = unopened_catalog_state.upper;
         let updates = updates
             .into_iter()
-            .map(|(kind, diff)| StateUpdate {
-                kind,
-                ts: unopened_catalog_state.upper,
-                diff,
-            })
-            .collect();
+            .map(|(kind, diff)| StateUpdate { kind, ts, diff });
         unopened_catalog_state.apply_updates(updates)?;
     }
 

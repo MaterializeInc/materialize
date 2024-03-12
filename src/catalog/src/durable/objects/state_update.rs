@@ -22,7 +22,7 @@ use crate::durable::transaction::TransactionBatch;
 use crate::durable::Epoch;
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKindRaw`].
-pub(crate) trait IntoStateUpdateKindRaw:
+pub trait IntoStateUpdateKindRaw:
     Into<StateUpdateKindRaw> + PartialEq + Eq + PartialOrd + Ord + Debug + Clone
 {
     type Error: Debug;
@@ -50,7 +50,7 @@ where
 }
 
 /// Trait for objects that can be converted to/from a [`StateUpdateKind`].
-pub(crate) trait TryIntoStateUpdateKind: IntoStateUpdateKindRaw {
+pub trait TryIntoStateUpdateKind: IntoStateUpdateKindRaw {
     type Error: Debug;
 
     fn try_into(self) -> Result<StateUpdateKind, <Self as TryIntoStateUpdateKind>::Error>;
@@ -595,7 +595,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct StateUpdateKindRaw(Jsonb);
+pub struct StateUpdateKindRaw(Jsonb);
 
 impl From<StateUpdateKind> for StateUpdateKindRaw {
     fn from(value: StateUpdateKind) -> Self {
