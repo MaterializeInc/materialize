@@ -19,7 +19,7 @@ class Toxiproxy(Service):
     def __init__(
         self,
         name: str = "toxiproxy",
-        image: str = "shopify/toxiproxy:2.1.4",
+        image: str = "jauderho/toxiproxy:v2.8.0",
         port: int = 8474,
         seed: int = random.randrange(2**63),
     ) -> None:
