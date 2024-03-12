@@ -847,6 +847,7 @@ async fn purify_create_source(
 
             let (targeted_subsources, new_subsources) = postgres::generate_targeted_subsources(
                 &scx,
+                None,
                 validated_requested_subsources,
                 text_cols_dict,
                 get_transient_subsource_id,
@@ -1186,11 +1187,11 @@ async fn purify_create_source(
                     scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
 
                 targeted_subsources.push(CreateSourceSubsource {
-                    reference: upstream_name,
+                    reference: upstream_name.clone(),
                     subsource: Some(DeferredItemName::Named(subsource)),
                 });
 
-                // Create the subsource statement
+                // Create the subsourcev2 statement
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,
                     columns,
@@ -1202,8 +1203,8 @@ async fn purify_create_source(
                     constraints: table_constraints,
                     if_not_exists: false,
                     with_options: vec![CreateSubsourceOption {
-                        name: CreateSubsourceOptionName::References,
-                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                        name: CreateSubsourceOptionName::ExternalReference,
+                        value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
                     }],
                 };
                 subsources.push((transient_id, subsource));
@@ -1223,12 +1224,9 @@ async fn purify_create_source(
     let scx = StatementContext::new(None, &catalog);
 
     // Take name from input or generate name
-    let (name, subsource) = match progress_subsource {
+    let name = match progress_subsource {
         Some(name) => match name {
-            DeferredItemName::Deferred(name) => (
-                name.clone(),
-                scx.allocate_resolved_item_name(transient_id, name.clone())?,
-            ),
+            DeferredItemName::Deferred(name) => name.clone(),
             DeferredItemName::Named(_) => unreachable!("already checked for this value"),
         },
         None => {
@@ -1250,21 +1248,11 @@ async fn purify_create_source(
             let qualified_name = scx.allocate_qualified_name(full_name)?;
             let full_name = scx.catalog.resolve_full_name(&qualified_name);
 
-            (
-                UnresolvedItemName::from(full_name.clone()),
-                crate::names::ResolvedItemName::Item {
-                    id: transient_id,
-                    qualifiers: qualified_name.qualifiers,
-                    full_name,
-                    print_id: true,
-                },
-            )
+            UnresolvedItemName::from(full_name.clone())
         }
     };
 
     let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
-
-    *progress_subsource = Some(DeferredItemName::Named(subsource));
 
     // Create the subsource statement
     let subsource = CreateSubsourceStatement {
@@ -1317,7 +1305,7 @@ async fn purify_alter_source(
     } = &mut stmt;
 
     // Get connection
-    let pg_source_connection = {
+    let (source_name, pg_source_connection) = {
         // Get name.
         let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
             Ok(item) => item,
@@ -1335,9 +1323,17 @@ async fn purify_alter_source(
             }
         };
 
-        // Ensure it's a source that supports ALTER SOURCE...
+        let name = item.name();
+        let full_name = scx.catalog.resolve_full_name(name);
+        let source_name = ResolvedItemName::Item {
+            id: item.id(),
+            qualifiers: item.name().qualifiers.clone(),
+            full_name,
+            print_id: true,
+        };
+
         match desc.connection {
-            GenericSourceConnection::Postgres(pg_connection) => pg_connection,
+            GenericSourceConnection::Postgres(pg_connection) => (source_name, pg_connection),
             _ => sql_bail!(
                 "{} is a {} source, which does not support ALTER SOURCE.",
                 scx.catalog.minimal_qualification(item.name()),
@@ -1414,8 +1410,13 @@ async fn purify_alter_source(
         &publication_tables,
     )?;
 
-    let validated_requested_subsources =
-        subsource_gen(targeted_subsources, &publication_catalog, source_name)?;
+    let unresolved_source_name = UnresolvedItemName::from(source_name.full_item_name().clone());
+
+    let validated_requested_subsources = subsource_gen(
+        targeted_subsources,
+        &publication_catalog,
+        &unresolved_source_name,
+    )?;
 
     // Determine duplicate references to tables by cross-referencing the table
     // positions in the current publication info to thei
@@ -1482,6 +1483,7 @@ async fn purify_alter_source(
 
     let (named_subsources, new_subsources) = postgres::generate_targeted_subsources(
         &scx,
+        Some(source_name),
         validated_requested_subsources,
         text_cols_dict,
         get_transient_subsource_id,

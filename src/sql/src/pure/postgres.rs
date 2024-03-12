@@ -18,13 +18,13 @@ use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    DeferredItemName, Ident, Value, WithOptionValue,
+    DeferredItemName, Ident, WithOptionValue,
 };
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
 use crate::catalog::SubsourceCatalog;
-use crate::names::{Aug, PartialItemName};
+use crate::names::{Aug, PartialItemName, ResolvedItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
@@ -157,6 +157,7 @@ pub(super) fn generate_text_columns(
 
 pub(crate) fn generate_targeted_subsources<F>(
     scx: &StatementContext,
+    source_name: Option<ResolvedItemName>,
     validated_requested_subsources: Vec<RequestedSubsource<'_, PostgresTableDesc>>,
     mut text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
     mut get_transient_subsource_id: F,
@@ -261,7 +262,7 @@ where
         let subsource = scx.allocate_resolved_item_name(transient_id, subsource_name.clone())?;
 
         targeted_subsources.push(CreateSourceSubsource {
-            reference: upstream_name,
+            reference: upstream_name.clone(),
             subsource: Some(DeferredItemName::Named(subsource)),
         });
 
@@ -269,7 +270,7 @@ where
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
-            of_source: None,
+            of_source: source_name.clone(),
             // TODO(petrosagg): nothing stops us from getting the constraints of the
             // upstream tables and mirroring them here which will lead to more optimization
             // opportunities if for example there is a primary key or an index.
@@ -281,8 +282,8 @@ where
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {
-                name: CreateSubsourceOptionName::References,
-                value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                name: CreateSubsourceOptionName::ExternalReference,
+                value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
             }],
         };
         subsources.push((transient_id, subsource));
