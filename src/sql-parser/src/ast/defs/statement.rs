@@ -1087,6 +1087,9 @@ pub enum CreateSubsourceOptionName {
     Progress,
     References,
     ExternalReference,
+    /// This option is meant only to be used to specify the output index before
+    /// the primary source has any changes to it durably recorded.
+    InitOutputIndex,
 }
 
 impl AstDisplay for CreateSubsourceOptionName {
@@ -1100,6 +1103,9 @@ impl AstDisplay for CreateSubsourceOptionName {
             }
             CreateSubsourceOptionName::ExternalReference => {
                 f.write_str("EXTERNAL REFERENCE");
+            }
+            CreateSubsourceOptionName::InitOutputIndex => {
+                f.write_str("INIT OUTPUT INDEX");
             }
         }
     }
@@ -1115,7 +1121,8 @@ impl WithOptionName for CreateSubsourceOptionName {
         match self {
             CreateSubsourceOptionName::Progress
             | CreateSubsourceOptionName::References
-            | CreateSubsourceOptionName::ExternalReference => false,
+            | CreateSubsourceOptionName::ExternalReference
+            | CreateSubsourceOptionName::InitOutputIndex => false,
         }
     }
 }

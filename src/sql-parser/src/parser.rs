@@ -2626,10 +2626,14 @@ impl<'a> Parser<'a> {
     fn parse_create_subsource_option_name(
         &mut self,
     ) -> Result<CreateSubsourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS, REFERENCES])? {
+        let name = match self.expect_one_of_keywords(&[EXTERNAL, OUTPUT, PROGRESS, REFERENCES])? {
             EXTERNAL => {
                 self.expect_keyword(REFERENCE)?;
                 CreateSubsourceOptionName::ExternalReference
+            }
+            INIT => {
+                self.expect_keywords(&[OUTPUT, INDEX])?;
+                CreateSubsourceOptionName::InitOutputIndex
             }
             PROGRESS => CreateSubsourceOptionName::Progress,
             REFERENCES => CreateSubsourceOptionName::References,

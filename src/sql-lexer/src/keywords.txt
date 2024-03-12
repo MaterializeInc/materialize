@@ -198,6 +198,7 @@ Index
 Indexes
 Info
 Inherit
+Init
 Inline
 Inner
 Input
@@ -291,6 +292,7 @@ Or
 Order
 Ordinality
 Outer
+Output
 Over
 Owned
 Owner
