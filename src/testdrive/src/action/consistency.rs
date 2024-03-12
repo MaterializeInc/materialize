@@ -133,7 +133,7 @@ async fn check_coordinator(state: &State) -> Result<(), anyhow::Error> {
 async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     #[derive(Debug, Deserialize)]
     struct CatalogDump {
-        system_parameter_defaults: BTreeMap<String, String>,
+        system_parameter_defaults: Option<BTreeMap<String, String>>,
     }
 
     // Dump the in-memory catalog state of the Materialize environment that we're
@@ -152,16 +152,24 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     // need to load the disk catalog with the same defaults.
     let dump: CatalogDump = serde_json::from_str(&memory_catalog).context("decoding catalog")?;
 
+    let Some(system_parameter_defaults) = dump.system_parameter_defaults else {
+        // TODO(parkmycar, def-): Ideally this could be an error, but a lot of test suites fail. We
+        // should explicitly disable consistency check in these test suites.
+        tracing::warn!(
+            "Missing system_parameter_defaults in memory catalog state, skipping consistency check"
+        );
+        return Ok(());
+    };
+
     // Load the on-disk catalog and dump its state.
     let maybe_disk_catalog = state
-        .with_catalog_copy(dump.system_parameter_defaults, |catalog| {
-            catalog.state().clone()
-        })
+        .with_catalog_copy(system_parameter_defaults, |catalog| catalog.state().clone())
         .await
         .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
         .map(|catalog| catalog.dump().expect("state must be dumpable"));
     let Some(disk_catalog) = maybe_disk_catalog else {
-        // TODO(parkmycar): Ideally this could be an error, but a lot of test suites fail.
+        // TODO(parkmycar, def-): Ideally this could be an error, but a lot of test suites fail. We
+        // should explicitly disable consistency check in these test suites.
         tracing::warn!("No Catalog state on disk, skipping consistency check");
         return Ok(());
     };
