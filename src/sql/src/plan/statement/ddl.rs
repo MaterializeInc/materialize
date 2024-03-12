@@ -1495,7 +1495,8 @@ pub fn plan_create_source(
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
-    (References, bool, Default(false))
+    (References, bool, Default(false)),
+    (ExternalReference, UnresolvedItemName)
 );
 
 pub fn plan_create_subsource(
@@ -1505,6 +1506,7 @@ pub fn plan_create_subsource(
     let CreateSubsourceStatement {
         name,
         columns,
+        of_source: _,
         constraints,
         if_not_exists,
         with_options,

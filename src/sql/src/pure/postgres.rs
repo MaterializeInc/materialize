@@ -269,6 +269,9 @@ where
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
+            // We don't know the primary source's `GlobalId` yet; fill it in
+            // once we generate it.
+            of_source: None,
             // TODO(petrosagg): nothing stops us from getting the constraints of the
             // upstream tables and mirroring them here which will lead to more optimization
             // opportunities if for example there is a primary key or an index.

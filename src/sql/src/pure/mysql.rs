@@ -164,6 +164,9 @@ where
         let subsource = CreateSubsourceStatement {
             name: subsource_name,
             columns,
+            // We don't know the primary source's `GlobalId` yet; fill it in
+            // once we generate it.
+            of_source: None,
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {

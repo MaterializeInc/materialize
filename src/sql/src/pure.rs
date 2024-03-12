@@ -1201,6 +1201,9 @@ async fn purify_create_source(
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,
                     columns,
+                    // We don't know the primary source's `GlobalId` yet; fill
+                    // it in once we generate it.
+                    of_source: None,
                     // unlike sources that come from an external upstream, we
                     // have more leniency to introduce different constraints
                     // every time the load generator is run; i.e. we are not as
@@ -1276,6 +1279,10 @@ async fn purify_create_source(
     let subsource = CreateSubsourceStatement {
         name,
         columns,
+        // Progress subsources do not refer to the source to which they belong.
+        // Instead the primary source depends on it (the opposite is true of
+        // ingestion exports, which depend on the primary source).
+        of_source: None,
         constraints,
         if_not_exists: false,
         with_options: vec![CreateSubsourceOption {
