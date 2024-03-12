@@ -247,7 +247,7 @@ impl EquivalenceClasses {
         // TODO: remove these measures once we are more confident about idempotence.
         let prev = self.clone();
         self.minimize_once(columns);
-        assert_eq!(self, &prev);
+        mz_ore::soft_assert_eq_or_log!(self, &prev, "Equivalences::minimize() not idempotent");
     }
 
     /// A single iteration of minimization, which we expect to repeat but benefit from factoring out.
