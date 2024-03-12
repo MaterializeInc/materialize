@@ -22,7 +22,6 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
-
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::spawn;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -34,13 +33,14 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_sql::ast::CreateSubsourceStatement;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
     ErrorMessageObjectDescription, ObjectType, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
-    ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
+    Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -50,10 +50,11 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
 use mz_ore::instrument;
+use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee,
-    ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
-    QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, CreateSourcePlans, ExplainSinkSchemaPlan,
+    Explainee, ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption,
+    PlannedRoleVariable, QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
@@ -255,6 +256,146 @@ impl Coordinator {
             sources,
             if_not_exists_ids,
         })
+    }
+
+    /// Subsources are planned differently from other statements because they
+    /// are typically synthesized from other statements, e.g. `CREATE SOURCE`.
+    /// Because of this, we have usually "missed" the opportunity to plan them
+    /// through the normal statement execution life cycle (the exception being
+    /// during bootstrapping).
+    pub(crate) async fn plan_subsource(
+        &mut self,
+        session: &Session,
+        params: &mz_sql::plan::Params,
+        subsource_stmt: mz_sql::ast::CreateSubsourceStatement<mz_sql::names::Aug>,
+    ) -> Result<CreateSourcePlans, AdapterError> {
+        let resolved_ids = mz_sql::names::visit_dependencies(&subsource_stmt);
+        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let plan = self.plan_statement(
+            session,
+            Statement::CreateSubsource(subsource_stmt),
+            params,
+            &resolved_ids,
+        )?;
+        let plan = match plan {
+            Plan::CreateSource(plan) => plan,
+            _ => unreachable!(),
+        };
+        Ok(CreateSourcePlans {
+            source_id,
+            plan,
+            resolved_ids,
+        })
+    }
+
+    /// Prepares an `ALTER SOURCE...ADD SUBSOURCE`.
+    pub(crate) async fn plan_purified_alter_source_add_subsource(
+        &mut self,
+        session: &Session,
+        params: Params,
+        id: GlobalId,
+        options: Vec<AlterSourceAddSubsourceOption<Aug>>,
+        create_subsource_stmts: Vec<CreateSubsourceStatement<Aug>>,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        let mut subsources = Vec::with_capacity(create_subsource_stmts.len());
+        for subsource_stmt in create_subsource_stmts {
+            let s = self
+                .plan_subsource(session, &params, subsource_stmt)
+                .await?;
+            subsources.push(s);
+        }
+
+        let action = mz_sql::plan::AlterSourceAction::AddSubsourceExports {
+            subsources,
+            options,
+        };
+
+        Ok((
+            Plan::AlterSource(mz_sql::plan::AlterSourcePlan { id, action }),
+            ResolvedIds(BTreeSet::new()),
+        ))
+    }
+
+    /// Prepares a `CREATE SOURCE` statement to create its progress subsource,
+    /// the primary source, and any ingestion export subsources (e.g. PG
+    /// tables).
+    pub(crate) async fn plan_purified_create_source(
+        &mut self,
+        ctx: &ExecuteContext,
+        params: Params,
+        progress_stmt: CreateSubsourceStatement<Aug>,
+        mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
+        subsource_stmts: Vec<CreateSubsourceStatement<Aug>>,
+    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+        let mut create_source_plans = Vec::with_capacity(subsource_stmts.len() + 2);
+
+        // 1. First plan the progress subsource.
+        //
+        // The primary source depends on this subsource because the primary
+        // source needs to know its shard ID, and the easiest way of
+        // guaranteeing that the shard ID is discoverable is to create this
+        // collection first.
+        assert!(progress_stmt.of_source.is_none());
+        let progress_plan = self
+            .plan_subsource(ctx.session(), &params, progress_stmt)
+            .await?;
+        let progress_full_name = self
+            .catalog()
+            .resolve_full_name(&progress_plan.plan.name, None);
+        let progress_subsource = ResolvedItemName::Item {
+            id: progress_plan.source_id,
+            qualifiers: progress_plan.plan.name.qualifiers.clone(),
+            full_name: progress_full_name,
+            print_id: true,
+        };
+
+        create_source_plans.push(progress_plan);
+
+        // 2. Then plan the main source.
+        //
+        // The subsources need this to exist in order to set their `OF SOURCE`
+        // correctly.
+        source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
+
+        let resolved_ids = mz_sql::names::visit_dependencies(&source_stmt);
+
+        // Plan primary source.
+        let source_plan = match self.plan_statement(
+            ctx.session(),
+            Statement::CreateSource(source_stmt),
+            &params,
+            &resolved_ids,
+        )? {
+            Plan::CreateSource(plan) => plan,
+            p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
+        };
+
+        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
+        let of_source = ResolvedItemName::Item {
+            id: source_id,
+            qualifiers: source_plan.name.qualifiers.clone(),
+            full_name: source_full_name,
+            print_id: true,
+        };
+
+        create_source_plans.push(CreateSourcePlans {
+            source_id,
+            plan: source_plan,
+            resolved_ids: resolved_ids.clone(),
+        });
+
+        // 3. Finally, plan all the subsources
+        for mut stmt in subsource_stmts {
+            stmt.of_source = Some(of_source.clone());
+            let plan = self.plan_subsource(ctx.session(), &params, stmt).await?;
+            create_source_plans.push(plan);
+        }
+
+        Ok((
+            Plan::CreateSources(create_source_plans),
+            ResolvedIds(BTreeSet::new()),
+        ))
     }
 
     #[instrument]
@@ -3164,15 +3305,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         plan::AlterSourcePlan { id, action }: plan::AlterSourcePlan,
-        to_create_subsources: Vec<plan::CreateSourcePlans>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        assert!(
-            to_create_subsources.is_empty()
-                || matches!(action, plan::AlterSourceAction::AddSubsourceExports { .. }),
-            "cannot include subsources with {:?}",
-            action
-        );
-
         let cur_entry = self.catalog().get_entry(&id);
         let cur_source = cur_entry.source().expect("known to be source");
 
@@ -3418,10 +3551,11 @@ impl Coordinator {
                     .expect("altering collection after txn must succeed");
             }
             plan::AlterSourceAction::AddSubsourceExports {
-                subsources,
-                details,
+                subsources: _,
                 options,
             } => {
+                let subsources = vec![];
+
                 const ALTER_SOURCE: &str = "ALTER SOURCE...ADD SUBSOURCES";
 
                 let id = cur_entry.id();
@@ -3435,6 +3569,7 @@ impl Coordinator {
                 let purification_err =
                     || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
 
+                // TODO: refactor how you add subsources
                 match create_source_stmt
                     .referenced_subsources
                     .as_mut()
@@ -3474,10 +3609,10 @@ impl Coordinator {
                 curr_options
                     .retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
 
-                curr_options.push(PgConfigOption {
-                    name: PgConfigOptionName::Details,
-                    value: details,
-                });
+                // curr_options.push(PgConfigOption {
+                //     name: PgConfigOptionName::Details,
+                //     value: details,
+                // });
 
                 // Merge text columns
                 let curr_text_columns = curr_options
@@ -3559,13 +3694,7 @@ impl Coordinator {
                 let source = Source::new(
                     id,
                     plan,
-                    ResolvedIds(
-                        resolved_ids
-                            .0
-                            .into_iter()
-                            .chain(to_create_subsources.iter().map(|csp| csp.source_id))
-                            .collect(),
-                    ),
+                    resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
                 );
@@ -3602,9 +3731,7 @@ impl Coordinator {
                     ops: new_ops,
                     sources,
                     if_not_exists_ids,
-                } = self
-                    .create_source_inner(session, to_create_subsources)
-                    .await?;
+                } = self.create_source_inner(session, vec![]).await?;
 
                 ops.extend(new_ops.into_iter());
 

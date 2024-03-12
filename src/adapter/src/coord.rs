@@ -112,9 +112,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
-use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
+use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::names::{Aug, ResolvedIds};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
@@ -347,10 +347,7 @@ pub struct BackgroundWorkResult<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
-pub type PurifiedStatementReady = BackgroundWorkResult<(
-    Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
-    Statement<Aug>,
-)>;
+pub type PurifiedStatementReady = BackgroundWorkResult<mz_sql::pure::PurifiedStatement>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
