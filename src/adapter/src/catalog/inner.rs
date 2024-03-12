@@ -120,7 +120,8 @@ impl Catalog {
                         }),
                         ..old_source
                     }),
-                    DataSourceDesc::Source
+                    DataSourceDesc::SourceExport { .. }
+                    | DataSourceDesc::Source
                     | DataSourceDesc::Introspection(_)
                     | DataSourceDesc::Progress
                     | DataSourceDesc::Webhook { .. } => {
