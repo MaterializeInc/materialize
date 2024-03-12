@@ -22,22 +22,6 @@ include "defs";
 #            Get l8 // { arity: 11 }
 #        Get l9 // { arity: 13 }
 
-def isunion(expr):
-  expr | type == "object" and has("Union")
-;
-
-def ismap(expr):
-  expr | type == "object" and has("Map")
-;
-
-def isnegate(expr):
-  expr | type == "object" and has("Negate")
-;
-
-def isproject(expr):
-  expr | type == "object" and has("Project")
-;
-
 def isleftjoin(expr):
       isunion(expr)
       # check antijoin
@@ -46,7 +30,7 @@ def isleftjoin(expr):
   and (expr.Union.base.Map.input.Union.inputs | length == 1)
   and isnegate(expr.Union.base.Map.input.Union.base)
   and isproject(expr.Union.base.Map.input.Union.base.Negate.input)
-       # check outer term
+      # check outer term
   and (expr.Union.inputs | length == 1)
       # check moral identity of negated inner term and outer term
 ;

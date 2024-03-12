@@ -28,6 +28,22 @@ def isliteral(expr):
     expr | type == "object" and has("Literal")
 ;
 
+def isunion(expr):
+  expr | type == "object" and has("Union")
+;
+
+def ismap(expr):
+  expr | type == "object" and has("Map")
+;
+
+def isnegate(expr):
+  expr | type == "object" and has("Negate")
+;
+
+def isproject(expr):
+  expr | type == "object" and has("Project")
+;
+
 def parts(expr):
     .CallUnary?.expr[]?, .CallBinary?.expr1[]?, .CallBinary?.expr2[]?, .CallVariadic?.exprs[]? 
 ;

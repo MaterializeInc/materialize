@@ -28,7 +28,10 @@ these JSON outputs.
 
 - `filters.jq`: finds all predicates used in filters and returns a
   list, sorted by number of occurrences descending
-  
+
+- `leftjoins.jq`: finds unreduced left joins (particularly shaped
+  unions of antijoins and an inner join)
+
 - `defs.jq`: utility functions
 
 Note that the ASTs we produce in JSON are quite deeply nested, so you
