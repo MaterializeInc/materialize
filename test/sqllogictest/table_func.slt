@@ -777,7 +777,7 @@ SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb
 {"a":1,"c":3} {"a":1,"c":3}
 {"b":1,"c":3} {"b":1,"c":3}
 
-query error db error: ERROR: key cannot be null
+query error key cannot be null
 SELECT jsonb_build_object(jsonb_object_keys('{"a":2, "b":3}'), 1, 'c', 3), jsonb_build_object(jsonb_object_keys('{"a":2}'), 1, 'c', 3)
 
 query TT
