@@ -576,11 +576,12 @@ explain with(arity, join implementations)
 select a, b, min(2), max(3) from t where b = 1 group by a, b;
 ----
 Explained Query:
-  Map (1, 2, 3) // { arity: 4 }
-    Distinct project=[#0] // { arity: 1 }
-      Project (#0) // { arity: 1 }
-        Filter (#1 = 1) // { arity: 2 }
-          ReadStorage materialize.public.t // { arity: 2 }
+  Project (#0, #1, #3, #2) // { arity: 4 }
+    Map (1, 3, 2) // { arity: 4 }
+      Distinct project=[#0] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Filter (#1 = 1) // { arity: 2 }
+            ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
   filter=((#1 = 1))

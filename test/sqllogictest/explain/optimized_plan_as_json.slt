@@ -1015,14 +1015,14 @@ SELECT abs(min(a) - max(a)) FROM t
               "group_key": [],
               "aggregates": [
                 {
-                  "func": "MinInt32",
+                  "func": "MaxInt32",
                   "expr": {
                     "Column": 0
                   },
                   "distinct": false
                 },
                 {
-                  "func": "MaxInt32",
+                  "func": "MinInt32",
                   "expr": {
                     "Column": 0
                   },
@@ -1040,26 +1040,34 @@ SELECT abs(min(a) - max(a)) FROM t
                   "input": {
                     "Union": {
                       "base": {
-                        "Get": {
-                          "id": {
-                            "Local": 0
-                          },
-                          "typ": {
-                            "column_types": [
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
+                        "Project": {
+                          "input": {
+                            "Get": {
+                              "id": {
+                                "Local": 0
                               },
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
-                              }
-                            ],
-                            "keys": [
-                              []
-                            ]
+                              "typ": {
+                                "column_types": [
+                                  {
+                                    "scalar_type": "Int32",
+                                    "nullable": true
+                                  },
+                                  {
+                                    "scalar_type": "Int32",
+                                    "nullable": true
+                                  }
+                                ],
+                                "keys": [
+                                  []
+                                ]
+                              },
+                              "access_strategy": "UnknownOrLocal"
+                            }
                           },
-                          "access_strategy": "UnknownOrLocal"
+                          "outputs": [
+                            1,
+                            0
+                          ]
                         }
                       },
                       "inputs": [
@@ -1247,14 +1255,14 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                   ],
                   "aggregates": [
                     {
-                      "func": "MinInt32",
+                      "func": "MaxInt32",
                       "expr": {
                         "Column": 0
                       },
                       "distinct": false
                     },
                     {
-                      "func": "MaxInt32",
+                      "func": "MinInt32",
                       "expr": {
                         "Column": 0
                       },
@@ -1275,10 +1283,10 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                       "CallBinary": {
                         "func": "SubInt32",
                         "expr1": {
-                          "Column": 1
+                          "Column": 2
                         },
                         "expr2": {
-                          "Column": 2
+                          "Column": 1
                         }
                       }
                     }

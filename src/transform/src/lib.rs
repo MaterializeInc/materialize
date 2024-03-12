@@ -373,6 +373,7 @@ impl Default for FuseAndCollapse {
                 Box::new(crate::movement::ProjectionLifting::default()),
                 Box::new(crate::fusion::Fusion),
                 Box::new(crate::canonicalization::FlatMapToMap),
+                Box::new(crate::canonicalization::ReduceOrdering),
                 Box::new(crate::fusion::join::Join),
                 Box::new(crate::normalize_lets::NormalizeLets::new(false)),
                 Box::new(crate::fusion::reduce::Reduce),

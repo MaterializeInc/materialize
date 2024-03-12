@@ -21,3 +21,71 @@ mod topk_elision;
 pub use flatmap_to_map::FlatMapToMap;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
+
+use crate::TransformCtx;
+use crate::TransformError;
+use mz_expr::MirRelationExpr;
+
+/// Orders the keys in a `Reduce`.
+///
+/// This ordering is best thought of as a "logical" transformation, in that
+/// it aims to canonicalize the representation without (yet) worrying about
+/// physical properties like the order of arrangement keys (which can help
+/// to avoid re-arranging data).
+#[derive(Debug)]
+pub struct ReduceOrdering;
+
+impl crate::Transform for ReduceOrdering {
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "debug",
+        skip_all,
+        fields(path.segment = "reduce_ordering")
+    )]
+    fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        _: &mut TransformCtx,
+    ) -> Result<(), TransformError> {
+        // Visit looking for `Reduce` expressions with keys or aggregates not in canonical order.
+        relation.visit_pre_mut(|expr| {
+            if let MirRelationExpr::Reduce {
+                group_key: keys,
+                aggregates: aggs,
+                ..
+            } = expr
+            {
+                let old_keys = keys.clone();
+                let old_aggs = aggs.clone();
+                keys.sort();
+                keys.dedup();
+                aggs.sort();
+                aggs.dedup();
+
+                let mut projection = Vec::with_capacity(old_keys.len() + old_aggs.len());
+                // Need to find each of `old_keys` in `keys`, and install a projection.
+                projection.extend(
+                    old_keys
+                        .iter()
+                        .map(|ok| keys.iter().position(|k| ok == k).unwrap()),
+                );
+                // Need to find each of `old_aggs` in `aggs`, and install a projection.
+                projection.extend(
+                    old_aggs
+                        .iter()
+                        .map(|oa| keys.len() + aggs.iter().position(|a| oa == a).unwrap()),
+                );
+
+                if !projection
+                    .iter()
+                    .cloned()
+                    .eq(0..(old_keys.len() + old_aggs.len()))
+                {
+                    *expr = expr.take_dangerous().project(projection);
+                }
+            }
+        });
+        mz_repr::explain::trace_plan(&*relation);
+        Ok(())
+    }
+}

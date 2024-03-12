@@ -474,7 +474,8 @@ EXPLAIN WITH(arity, join implementations) SELECT MIN((SELECT f1 FROM t1 WHERE f1
 Explained Query:
   Return // { arity: 2 }
     Union // { arity: 2 }
-      Get l3 // { arity: 2 }
+      Project (#1, #0) // { arity: 2 }
+        Get l3 // { arity: 2 }
       Map (null, null) // { arity: 2 }
         Union // { arity: 0 }
           Negate // { arity: 0 }
@@ -484,7 +485,7 @@ Explained Query:
             - ()
   With
     cte l3 =
-      Reduce aggregates=[min(#0), max(#1)] // { arity: 2 }
+      Reduce aggregates=[max(#1), min(#0)] // { arity: 2 }
         CrossJoin type=delta // { arity: 2 }
           implementation
             %0:t1 » %1:l2[×] » %2:l2[×]

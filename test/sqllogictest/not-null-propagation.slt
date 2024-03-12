@@ -257,17 +257,18 @@ Explained Query:
     Project (#0, #1, #8, #9, #7) // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
       Map ((bigint_to_numeric(#2) / bigint_to_numeric(case when (#3 = 0) then null else #3 end)), sqrtnumeric(case when ((#4) IS NULL OR (#5) IS NULL OR (case when (#6 = 0) then null else #6 end) IS NULL OR (case when (0 = (#6 - 1)) then null else (#6 - 1) end) IS NULL) then null else greatest(((#4 - ((#5 * #5) / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) / bigint_to_numeric(case when (0 = (#6 - 1)) then null else (#6 - 1) end)), 0) end)) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, numeric?, numeric?)" }
         Union // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
-          Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+          Project (#1, #0, #2, #5, #4, #3, #6, #7) // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+            Get l0 // { types: "(integer, integer, bigint, numeric, numeric, bigint, bigint, integer list)" }
           Map (null, null, null, 0, null, null, 0, null) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
             Union // { types: "()" }
               Negate // { types: "()" }
                 Project () // { types: "()" }
-                  Get l0 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+                  Get l0 // { types: "(integer, integer, bigint, numeric, numeric, bigint, bigint, integer list)" }
               Constant // { types: "()" }
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[min(#0), max(#0), sum(#0), count(*), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), sum(integer_to_numeric(#0)), count(integer_to_numeric(#0)), list_agg[order_by=[]](row(list[#0]))] // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
+      Reduce aggregates=[max(#0), min(#0), sum(#0), sum(integer_to_numeric(#0)), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), count(*), count(integer_to_numeric(#0)), list_agg[order_by=[]](row(list[#0]))] // { types: "(integer, integer, bigint, numeric, numeric, bigint, bigint, integer list)" }
         Project (#1) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
@@ -283,7 +284,8 @@ EXPLAIN WITH(types, no fast path) SELECT COUNT(col_not_null), COUNT(DISTINCT col
 Explained Query:
   Return // { types: "(bigint, bigint)" }
     Union // { types: "(bigint, bigint)" }
-      Get l0 // { types: "(bigint, bigint)" }
+      Project (#1, #0) // { types: "(bigint, bigint)" }
+        Get l0 // { types: "(bigint, bigint)" }
       Map (0, 0) // { types: "(bigint, bigint)" }
         Union // { types: "()" }
           Negate // { types: "()" }
@@ -293,7 +295,7 @@ Explained Query:
             - ()
   With
     cte l0 =
-      Reduce aggregates=[count(*), count(distinct #0)] // { types: "(bigint, bigint)" }
+      Reduce aggregates=[count(distinct #0), count(*)] // { types: "(bigint, bigint)" }
         Project (#1) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
