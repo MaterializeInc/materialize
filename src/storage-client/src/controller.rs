@@ -94,6 +94,8 @@ pub enum DataSource {
     Progress,
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
+    /// This source receives its data from another source's export.
+    SourceExport { id: GlobalId, output_index: usize },
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view, table, or subsource.
     // TODO? Add a means to track some data sources' GlobalIds.
@@ -136,6 +138,9 @@ impl<T> CollectionDescription<T> {
         match &self.data_source {
             DataSource::Ingestion(ingestion) => {
                 result.push(ingestion.remap_collection_id);
+            }
+            DataSource::SourceExport { id, .. } => {
+                result.push(*id);
             }
             DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
                 // Introspection, Progress, and Webhook sources have no dependencies, for now.
@@ -716,6 +721,10 @@ impl<T: Timestamp> CollectionState<T> {
             DataSource::Webhook
             | DataSource::Introspection(_)
             | DataSource::Other(_)
+            // This isn't quite right because a source export runs on the
+            // ingestion's cluster, but we don't have the ability to perform
+            // cross-referenced lookups here (at least not yet).
+            | DataSource::SourceExport { .. }
             | DataSource::Progress => None,
         }
     }

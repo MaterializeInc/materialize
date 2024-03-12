@@ -427,6 +427,7 @@ where
                         PersistTxns::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
                     },
                     DataSource::Ingestion(_)
+                    | DataSource::SourceExport { .. }
                     | DataSource::Introspection(_)
                     | DataSource::Progress
                     | DataSource::Webhook
@@ -457,7 +458,7 @@ where
         // Reborrow the `&mut self` as immutable, as all the concurrent work to be processed in
         // this stream cannot all have exclusive access.
         let this = &*self;
-        let to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
+        let mut to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
             .map(|data: Result<_, StorageError<Self::Timestamp>>| {
                 let register_ts = register_ts.clone();
                 async move {
@@ -489,6 +490,7 @@ where
                 // storage's internal sources and perhaps others, but leave them for now.
                 match description.data_source {
                     DataSource::Introspection(_)
+                    | DataSource::SourceExport { .. }
                     | DataSource::Webhook
                     | DataSource::Ingestion(_)
                     | DataSource::Progress
@@ -523,61 +525,107 @@ where
             .try_collect()
             .await?;
 
-        let mut to_create = Vec::with_capacity(to_register.len());
+        // Reorder in dependency order.
+        to_register.sort_by_key(|(id, ..)| *id);
+
+        let mut to_execute = BTreeSet::new();
+        let mut new_collections = BTreeSet::new();
         let mut table_registers = Vec::with_capacity(to_register.len());
-        // This work mutates the controller state, so must be done serially. Because there
-        // is no io-bound work, its very fast.
-        {
-            // We hold this lock for a very short amount of time, just doing some hashmap inserts
-            // and unbounded channel sends.
-            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-            for (id, description, write, since_handle, metadata) in to_register {
-                let data_shard_since = since_handle.since().clone();
 
-                let collection_state = CollectionState::new(
-                    description.clone(),
-                    data_shard_since,
-                    write.upper().clone(),
-                    vec![],
-                    metadata.clone(),
-                );
+        // Statistics need a level of indirection so we can mutably borrow
+        // `self` when registering collections and when we are inserting
+        // statistics.
+        let mut new_source_statistic_entries = BTreeSet::new();
+        let mut new_webhook_statistic_entries = BTreeSet::new();
 
-                match description.data_source {
-                    DataSource::Introspection(_) => {
-                        debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                        self.persist_monotonic_worker.register(id, write);
-                        self.collections.insert(id, collection_state);
-                    }
-                    DataSource::Webhook => {
-                        debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                        self.persist_monotonic_worker.register(id, write);
-                        self.collections.insert(id, collection_state);
+        for (id, description, write, since_handle, metadata) in to_register {
+            to_execute.insert(id);
+            new_collections.insert(id);
 
-                        source_statistics.source_statistics.insert(id, None);
-                        // This collection of statistics is periodically aggregated into
-                        // `source_statistics`.
-                        source_statistics
-                            .webhook_statistics
-                            .insert(id, Default::default());
-                    }
-                    DataSource::Other(DataSourceOther::TableWrites) => {
-                        debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
-                        table_registers.push((id, write, collection_state));
-                    }
-                    DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
-                        debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
-                        self.collections.insert(id, collection_state);
-                    }
-                    DataSource::Ingestion(_) | DataSource::Other(DataSourceOther::Source) => {
-                        debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
-                        self.collections.insert(id, collection_state);
-                        source_statistics.source_statistics.insert(id, None);
-                    }
+            let data_shard_since = since_handle.since().clone();
+            let collection_state = CollectionState::new(
+                description.clone(),
+                data_shard_since,
+                write.upper().clone(),
+                vec![],
+                metadata.clone(),
+            );
+
+            match description.data_source {
+                DataSource::Introspection(_) => {
+                    debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
+                    self.persist_monotonic_worker.register(id, write);
+                    self.collections.insert(id, collection_state);
                 }
-                self.persist_read_handles.register(id, since_handle);
+                DataSource::Webhook => {
+                    debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
+                    self.persist_monotonic_worker.register(id, write);
+                    self.collections.insert(id, collection_state);
+                    new_source_statistic_entries.insert(id);
+                    // This collection of statistics is periodically aggregated into
+                    // `source_statistics`.
+                    new_webhook_statistic_entries.insert(id);
+                }
+                DataSource::SourceExport {
+                    id: source_id,
+                    output_index,
+                } => {
+                    self.collections.insert(id, collection_state);
 
-                to_create.push((id, description));
+                    // Adjust the source to contain this export.
+                    let source_collection = self.collection_mut(source_id).expect("known to exist");
+                    match &mut source_collection.description {
+                        CollectionDescription {
+                            data_source: DataSource::Ingestion(ingestion_desc),
+                            ..
+                        } => ingestion_desc.source_exports.insert(
+                            id,
+                            SourceExport {
+                                output_index,
+                                storage_metadata: (),
+                            },
+                        ),
+                        _ => unreachable!(
+                            "SourceExport must only refer to primary sources that already exist"
+                        ),
+                    };
+
+                    // Executing the source export doesn't do anything, ensure we execute the source instead.
+                    to_execute.remove(&id);
+                    to_execute.insert(source_id);
+
+                    new_source_statistic_entries.insert(id);
+                }
+                DataSource::Other(DataSourceOther::TableWrites) => {
+                    debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
+                    table_registers.push((id, write, collection_state));
+                }
+                DataSource::Progress | DataSource::Other(DataSourceOther::Compute) => {
+                    debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                    self.collections.insert(id, collection_state);
+                }
+                DataSource::Ingestion(_) | DataSource::Other(DataSourceOther::Source) => {
+                    debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                    self.collections.insert(id, collection_state);
+                    new_source_statistic_entries.insert(id);
+                }
             }
+            self.persist_read_handles.register(id, since_handle);
+        }
+
+        {
+            // Enusre all sources are associated with the statistics.
+            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
+            source_statistics.source_statistics.extend(
+                new_source_statistic_entries
+                    .into_iter()
+                    .map(|id| (id, None)),
+            );
+            source_statistics.webhook_statistics.extend(
+                new_webhook_statistic_entries
+                    .into_iter()
+                    .map(|id| (id, Default::default())),
+            );
         }
 
         // Register the tables all in one batch.
@@ -630,7 +678,8 @@ where
         // read holds in place when we create the subsource collections. OR, we
         // could create the subsource collections only as part of creating the
         // main source/ingestion.
-        for (_id, description) in to_create.iter() {
+        for id in to_execute.iter() {
+            let description = self.collection(*id).unwrap().description.clone();
             match &description.data_source {
                 DataSource::Ingestion(ingestion) => {
                     let storage_dependencies = description.get_storage_dependencies();
@@ -642,6 +691,7 @@ where
                         &storage_dependencies,
                     )?;
                 }
+                DataSource::SourceExport { .. } => todo!(),
                 DataSource::Webhook
                 | DataSource::Introspection(_)
                 | DataSource::Progress
@@ -652,15 +702,13 @@ where
             }
         }
 
-        // Reborrow `&mut self` immutably, same reasoning as above.
-        let this = &*self;
-
-        this.append_shard_mappings(to_create.iter().map(|(id, _)| *id), 1)
+        self.append_shard_mappings(new_collections.into_iter(), 1)
             .await;
 
         // TODO(guswynn): perform the io in this final section concurrently.
-        for (id, description) in to_create {
-            match description.data_source {
+        for id in to_execute {
+            let description = &self.collection(id).unwrap().description;
+            match description.data_source.clone() {
                 DataSource::Ingestion(ingestion) => {
                     let description = self.enrich_ingestion(id, ingestion)?;
 
@@ -676,6 +724,9 @@ where
 
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
+                DataSource::SourceExport { .. } => unreachable!(
+                    "source exports do not execute directly, but instead schedule their source to be re-executed"
+                ),
                 DataSource::Introspection(i) => {
                     let prev = self
                         .introspection_ids
@@ -885,10 +936,9 @@ where
             // This will likely place its since beyond its upper which is OK because
             // its snapshot will catch it up with the rest of the source, i.e. we
             // will never see its upper at a state beyond 0 and less than its since.
-            self.install_dependency_read_holds(
-                new_source_exports.into_iter(),
-                &storage_dependencies,
-            )?;
+            for id in new_source_exports {
+                self.install_dependency_read_holds([id].into_iter(), &storage_dependencies)?;
+            }
 
             // Fetch the client for this ingestion's instance.
             let client = self
@@ -1768,7 +1818,8 @@ where
                     | DataSource::Introspection(_)
                     | DataSource::Other(_)
                     | DataSource::Progress
-                    | DataSource::Ingestion(_) => None,
+                    | DataSource::Ingestion(_)
+                    | DataSource::SourceExport { .. } => None,
                 };
 
                 // Wait for all of the resources to get cleaned up, but emitting our event.
