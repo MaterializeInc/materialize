@@ -235,13 +235,13 @@ pub(crate) async fn upgrade(
     mode: Mode,
 ) -> Result<(), CatalogError> {
     soft_assert_ne_or_log!(
-        persist_handle.upper,
+        persist_handle.persist_handle.upper,
         Timestamp::minimum(),
         "cannot upgrade uninitialized catalog"
     );
 
     // Consolidate to avoid migrating old state.
-    persist_handle.consolidate();
+    persist_handle.persist_handle.consolidate();
     let mut version = persist_handle
         .get_user_version()
         .await?
@@ -316,6 +316,7 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
 ) -> Result<u64, CatalogError> {
     // 1. Use the V1 to deserialize the contents of the current snapshot.
     let snapshot: Vec<_> = unopened_catalog_state
+        .persist_handle
         .trace
         .iter()
         .map(|update| {
@@ -340,21 +341,21 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKi
 
     // 4. Apply migration to catalog.
     if matches!(mode, Mode::Writable) {
-        unopened_catalog_state.compare_and_append(updates).await?;
+        unopened_catalog_state.persist_handle.compare_and_append(updates).await?;
     } else {
         let updates = updates
             .into_iter()
             .map(|(kind, diff)| StateUpdate {
                 kind,
-                ts: unopened_catalog_state.upper,
+                ts: unopened_catalog_state.persist_handle.upper,
                 diff,
             })
             .collect();
-        unopened_catalog_state.apply_updates(updates)?;
+        unopened_catalog_state.persist_handle.apply_updates(updates)?;
     }
 
     // 5. Consolidate snapshot to remove old versions.
-    unopened_catalog_state.consolidate();
+    unopened_catalog_state.persist_handle.consolidate();
 
     Ok(next_version)
 }

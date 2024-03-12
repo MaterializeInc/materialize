@@ -12,7 +12,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use uuid::Uuid;
 
-use crate::durable::persist::{shard_id, UnopenedPersistCatalogState, UPGRADE_SEED};
+use crate::durable::persist::{shard_id, PersistHandle, UnopenedPersistCatalogState, UPGRADE_SEED};
 use crate::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state_with_version,
     OpenableDurableCatalogState,
@@ -35,11 +35,7 @@ async fn test_upgrade_shard() {
 
     assert_eq!(
         None,
-        UnopenedPersistCatalogState::fetch_catalog_upgrade_shard_version(
-            &persist_client,
-            upgrade_shard_id
-        )
-        .await
+        PersistHandle::fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await
     );
 
     let persist_openable_state = test_persist_backed_catalog_state_with_version(
@@ -56,11 +52,7 @@ async fn test_upgrade_shard() {
 
     assert_eq!(
         Some(first_version.clone()),
-        UnopenedPersistCatalogState::fetch_catalog_upgrade_shard_version(
-            &persist_client,
-            upgrade_shard_id
-        )
-        .await,
+        PersistHandle::fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await,
         "opening the catalog should increment the upgrade version"
     );
 
@@ -83,11 +75,7 @@ async fn test_upgrade_shard() {
 
     assert_eq!(
         Some(first_version.clone()),
-        UnopenedPersistCatalogState::fetch_catalog_upgrade_shard_version(
-            &persist_client,
-            upgrade_shard_id
-        )
-        .await,
+        PersistHandle::fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await,
         "opening a savepoint catalog should not increment the upgrade version"
     );
 
@@ -105,11 +93,7 @@ async fn test_upgrade_shard() {
 
     assert_eq!(
         Some(first_version),
-        UnopenedPersistCatalogState::fetch_catalog_upgrade_shard_version(
-            &persist_client,
-            upgrade_shard_id
-        )
-        .await,
+        PersistHandle::fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await,
         "opening a readonly catalog should not increment the upgrade version"
     );
 }
