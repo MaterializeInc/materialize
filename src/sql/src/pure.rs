@@ -1183,6 +1183,7 @@ async fn purify_create_source(
                 let subsource = CreateSubsourceStatement {
                     name: subsource_name,
                     columns,
+                    of_source: None,
                     // unlike sources that come from an external upstream, we
                     // have more leniency to introduce different constraints
                     // every time the load generator is run; i.e. we are not as
@@ -1258,6 +1259,7 @@ async fn purify_create_source(
     let subsource = CreateSubsourceStatement {
         name,
         columns,
+        of_source: None,
         constraints,
         if_not_exists: false,
         with_options: vec![CreateSubsourceOption {

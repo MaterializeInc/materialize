@@ -1068,6 +1068,7 @@ impl_display_t!(ReferencedSubsources);
 pub enum CreateSubsourceOptionName {
     Progress,
     References,
+    ExternalReference,
 }
 
 impl AstDisplay for CreateSubsourceOptionName {
@@ -1078,6 +1079,9 @@ impl AstDisplay for CreateSubsourceOptionName {
             }
             CreateSubsourceOptionName::References => {
                 f.write_str("REFERENCES");
+            }
+            CreateSubsourceOptionName::ExternalReference => {
+                f.write_str("EXTERNAL REFERENCE");
             }
         }
     }
@@ -1104,6 +1108,7 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceOption<T> {
 pub struct CreateSubsourceStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
     pub columns: Vec<ColumnDef<T>>,
+    pub of_source: Option<T::ItemName>,
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
     pub with_options: Vec<CreateSubsourceOption<T>>,
@@ -1115,6 +1120,7 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
+
         f.write_node(&self.name);
         f.write_str(" (");
         f.write_node(&display::comma_separated(&self.columns));
@@ -1123,6 +1129,11 @@ impl<T: AstInfo> AstDisplay for CreateSubsourceStatement<T> {
             f.write_node(&display::comma_separated(&self.constraints));
         }
         f.write_str(")");
+
+        if let Some(of_source) = &self.of_source {
+            f.write_str(" OF SOURCE ");
+            f.write_node(of_source);
+        }
 
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");

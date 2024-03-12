@@ -2582,6 +2582,14 @@ impl<'a> Parser<'a> {
 
         let (columns, constraints) = self.parse_columns(Mandatory)?;
 
+        // TODO: after migration, this will always be expected.
+        let of_source = if self.parse_keyword(OF) {
+            self.expect_keyword(SOURCE)?;
+            Some(self.parse_raw_name()?)
+        } else {
+            None
+        };
+
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
             let options = self.parse_comma_separated(Parser::parse_create_subsource_option)?;
@@ -2595,6 +2603,7 @@ impl<'a> Parser<'a> {
             name,
             if_not_exists,
             columns,
+            of_source,
             constraints,
             with_options,
         }))
@@ -2604,7 +2613,11 @@ impl<'a> Parser<'a> {
     fn parse_create_subsource_option_name(
         &mut self,
     ) -> Result<CreateSubsourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[PROGRESS, REFERENCES])? {
+        let name = match self.expect_one_of_keywords(&[EXTERNAL, PROGRESS, REFERENCES])? {
+            EXTERNAL => {
+                self.expect_keyword(REFERENCE)?;
+                CreateSubsourceOptionName::ExternalReference
+            }
             PROGRESS => CreateSubsourceOptionName::Progress,
             REFERENCES => CreateSubsourceOptionName::References,
             _ => unreachable!(),

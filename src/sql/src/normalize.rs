@@ -280,6 +280,7 @@ pub fn create_statement(
         Statement::CreateSubsource(CreateSubsourceStatement {
             name,
             columns,
+            of_source: _,
             constraints: _,
             if_not_exists,
             with_options: _,
