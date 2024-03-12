@@ -563,6 +563,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(&postgres.publication_details.slot),
+                Datum::from(postgres.publication_details.timeline_id),
             ]),
             diff,
         }]

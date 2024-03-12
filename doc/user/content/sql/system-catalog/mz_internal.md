@@ -477,6 +477,7 @@ system.
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                   |
 | `replication_slot`  | [`text`]         | The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from. |
+| `timeline_id`       | [`uint8`]        | The PostgreSQL timeline ID determined when creating the source.                                                |
 
 <!--
 ### `mz_prepared_statement_history`

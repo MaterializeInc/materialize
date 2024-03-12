@@ -338,9 +338,9 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
 > SELECT * FROM mz_internal.mz_postgres_sources
-id             replication_slot
----------------------------------------
-u<SUPPRESSED>  materialize<SUPPRESSED>
+id             replication_slot         timeline_id
+---------------------------------------------------
+u<SUPPRESSED>  materialize<SUPPRESSED>  <SUPPRESSED>
 
 $ unset-regex
 

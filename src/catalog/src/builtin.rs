@@ -1954,7 +1954,8 @@ pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_POSTGRES_SOURCES_OID,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("replication_slot", ScalarType::String.nullable(false)),
+        .with_column("replication_slot", ScalarType::String.nullable(false))
+        .with_column("timeline_id", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });

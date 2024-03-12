@@ -93,7 +93,7 @@ When you define a source, Materialize will automatically:
     `mz_internal.mz_postgres_sources`.
 
     ```sql
-    SELECT * FROM mz_internal.mz_postgres_sources;
+    SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
     ```
 
     ```
