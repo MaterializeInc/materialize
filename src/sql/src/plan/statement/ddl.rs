@@ -1431,7 +1431,8 @@ generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
     (References, bool, Default(false)),
-    (ExternalReference, UnresolvedItemName)
+    (ExternalReference, UnresolvedItemName),
+    (OutputIndex, u64)
 );
 
 pub fn plan_create_subsource(

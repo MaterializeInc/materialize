@@ -1069,6 +1069,7 @@ pub enum CreateSubsourceOptionName {
     Progress,
     References,
     ExternalReference,
+    OutputIndex,
 }
 
 impl AstDisplay for CreateSubsourceOptionName {
@@ -1082,6 +1083,9 @@ impl AstDisplay for CreateSubsourceOptionName {
             }
             CreateSubsourceOptionName::ExternalReference => {
                 f.write_str("EXTERNAL REFERENCE");
+            }
+            CreateSubsourceOptionName::OutputIndex => {
+                f.write_str("OUTPUT INDEX");
             }
         }
     }
