@@ -252,7 +252,12 @@ impl std::fmt::Debug for TracingGuard {
 /// Note: folks should feel free to add more crates here if we find more
 /// with long lived Spans.
 pub static LOGGING_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
-    vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
+    vec![
+        Directive::from_str("kube_client::client::builder=off").expect("valid directive"),
+        Directive::from_str("mz_storage_controller=debug").expect("valid directive"),
+        Directive::from_str("mz_persist_txn=debug").expect("valid directive"),
+        Directive::from_str("mz_timestamp_oracle=debug").expect("valid directive"),
+    ]
 });
 /// By default we turn off tracing from the following crates, because they
 /// have long-lived Spans, which OpenTelemetry does not handle well.
