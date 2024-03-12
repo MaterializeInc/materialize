@@ -3336,7 +3336,6 @@ impl_display_t!(ShowStatementFilter);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
-    Ident(Ident),
     DataType(T::DataType),
     Secret(T::ItemName),
     Item(T::ItemName),
@@ -3362,19 +3361,16 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::Refresh(_) => {
                     // These are redact-aware.
                 }
+                WithOptionValue::Secret(_) | WithOptionValue::ConnectionKafkaBroker(_) => {
+                    f.write_str("'<REDACTED>'");
+                    return;
+                }
                 WithOptionValue::DataType(_)
                 | WithOptionValue::Item(_)
                 | WithOptionValue::UnresolvedItemName(_)
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
                 | WithOptionValue::ClusterReplicas(_) => {
-
                     // These do not need redaction.
-                }
-                WithOptionValue::Secret(_)
-                | WithOptionValue::ConnectionKafkaBroker(_)
-                | WithOptionValue::Ident(_) => {
-                    f.write_str("'<REDACTED>'");
-                    return;
                 }
             }
         }
@@ -3385,9 +3381,6 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str(")");
             }
             WithOptionValue::Value(value) => f.write_node(value),
-            WithOptionValue::Ident(id) => {
-                f.write_node(id);
-            }
             WithOptionValue::DataType(typ) => f.write_node(typ),
             WithOptionValue::Secret(name) => {
                 f.write_str("SECRET ");

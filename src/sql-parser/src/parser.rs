@@ -4311,12 +4311,14 @@ impl<'a> Parser<'a> {
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))
             } else {
-                Ok(WithOptionValue::Ident(ident!("secret")))
+                Ok(WithOptionValue::UnresolvedItemName(UnresolvedItemName(
+                    vec![ident!("secret")],
+                )))
             }
         } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
-        } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
-            Ok(WithOptionValue::Ident(ident))
+        } else if let Some(item_name) = self.maybe_parse(Parser::parse_item_name) {
+            Ok(WithOptionValue::UnresolvedItemName(item_name))
         } else {
             self.expected(self.peek_pos(), "option value", self.peek_token())
         }
