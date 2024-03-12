@@ -30,7 +30,6 @@ USE public;
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (1, 'one');
 INSERT INTO table_a VALUES (2, 'two');
-
 # Check empty publication on ALTER
 
 > CREATE SOURCE mz_source
@@ -45,7 +44,7 @@ $ mysql-execute name=mysql
 DROP TABLE table_a CASCADE;
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_b;
-contains:mz_source is a mysql source, which does not support ALTER SOURCE...ADD SUBSOURCES
+contains:mz_source is a mysql source, which does not support ALTER SOURCE.
 
 # Adding a table with the same name as a running table does not allow you to add
 # the new table, even though its OID is the different.
@@ -62,7 +61,10 @@ INSERT INTO table_a VALUES (9, 'nine');
 
 # We are not aware that the new table_a is different
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:mz_source is a mysql source, which does not support ALTER SOURCE...ADD SUBSOURCES
+contains:mz_source is a mysql source, which does not support ALTER SOURCE.
+
+! ALTER SOURCE mz_source DROP SUBSOURCE table_a;
+contains:mz_source is a mysql source, which does not support ALTER SOURCE.
 
 > DROP SOURCE mz_source;
 
@@ -125,136 +127,138 @@ table_g               subsource
 # Error checking
 #
 
-! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_progress
-contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
-
-! ALTER SOURCE mz_source DROP SUBSOURCE table_a, mz_source_progress
-contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
-
-! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_progress, table_a
-contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
-
-! ALTER SOURCE mz_source DROP SUBSOURCE mz_source;
-contains:SOURCE "mz_source" is not a subsource of "mz_source"
-
-> CREATE TABLE mz_table (a int);
-
-! ALTER SOURCE mz_source DROP SUBSOURCE mz_table;
-contains:mz_table is a table not a source
-
-> DROP TABLE mz_table;
-
-> CREATE SOURCE "mz_source_too"
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (public.table_a AS t_a);
-
-! ALTER SOURCE mz_source DROP SUBSOURCE t_a;
-contains:SOURCE "t_a" is not a subsource of "mz_source"
-
-! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_too;
-contains:SOURCE "mz_source_too" is not a subsource of "mz_source"
-
-> DROP SOURCE mz_source_too;
-
-! ALTER SOURCE mz_source DROP SUBSOURCE dne;
-contains:unknown catalog item 'dne'
-
-> ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS dne;
-
-> ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS dne, dne, dne;
-
-> ALTER SOURCE IF EXISTS dne DROP SUBSOURCE IF EXISTS dne;
-
-> ALTER SOURCE IF EXISTS mz_source DROP SUBSOURCE IF EXISTS dne, dne, dne;
+# TODO #24975 (support ALTER SOURCE)
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_progress
+# contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE table_a, mz_source_progress
+# contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_progress, table_a
+# contains:SOURCE "mz_source_progress" is a progress collection and cannot be dropped independently of its primary source
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source;
+# contains:SOURCE "mz_source" is not a subsource of "mz_source"
+#
+# > CREATE TABLE mz_table (a int);
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_table;
+# contains:"materialize.public.mz_table" is a table not a source
+#
+# > DROP TABLE mz_table;
+#
+# > CREATE SOURCE "mz_source_too"
+#   FROM MYSQL CONNECTION mysql_conn
+#   FOR TABLES (public.table_a AS t_a);
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE t_a;
+# contains:SOURCE "t_a" is not a subsource of "mz_source"
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE mz_source_too;
+# contains:SOURCE "mz_source_too" is not a subsource of "mz_source"
+#
+# > DROP SOURCE mz_source_too;
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE dne;
+# contains:unknown catalog item 'dne'
+#
+# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS dne;
+#
+# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS dne, dne, dne;
+#
+# > ALTER SOURCE IF EXISTS dne DROP SUBSOURCE IF EXISTS dne;
+#
+# > ALTER SOURCE IF EXISTS mz_source DROP SUBSOURCE IF EXISTS dne, dne, dne;
 
 #
 # State checking
 #
 
-> ALTER SOURCE mz_source DROP SUBSOURCE table_a
-
-> SELECT * FROM table_b;
-1 one
-2 two
-
-> SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
-table_b               subsource
-table_c               subsource
-table_d               subsource
-table_e               subsource
-table_f               subsource
-table_g               subsource
-
-! SELECT * FROM table_a;
-contains: unknown catalog item 'table_a'
-
-# Makes progress after dropping subsources
-$ mysql-execute name=mysql
-INSERT INTO table_b VALUES (3, 'three');
-
-> SELECT * FROM table_b;
-1 one
-2 two
-3 three
-
-# IF EXISTS works
-> ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_a;
-
-# Multiple, repetitive tables work
-> ALTER SOURCE mz_source DROP SUBSOURCE table_b, table_c, table_b, table_c, table_b, table_c;
-
-# IF EXISTS works with multiple tables
-> ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_c, table_d;
-
-> CREATE MATERIALIZED VIEW mv_e AS SELECT pk + 1 FROM table_e;
-> CREATE MATERIALIZED VIEW mv_f AS SELECT pk + 1 FROM table_f;
-
-# Makes progress after dropping subsources
-$ mysql-execute name=mysql
-INSERT INTO table_e VALUES (3, 'three');
-
-> SELECT * FROM mv_e;
-2
-3
-4
-
-> SHOW MATERIALIZED VIEWS
-mv_e quickstart
-mv_f quickstart
-
-# RESTRICT works
-! ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e;
-contains:cannot drop source "table_e": still depended upon by materialized view "mv_e"
-
-! ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e RESTRICT;
-contains:cannot drop source "table_e": still depended upon by materialized view "mv_e"
-
-# CASCADE works
-> ALTER SOURCE mz_source DROP SUBSOURCE table_e CASCADE;
-
-# IF NOT EXISTS + CASCADE works
-> ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e, table_f CASCADE;
-
+# > ALTER SOURCE mz_source DROP SUBSOURCE table_a
+#
+# > SELECT * FROM table_b;
+# 1 one
+# 2 two
+#
+# > SHOW SUBSOURCES ON mz_source
+# mz_source_progress    progress
+# table_b               subsource
+# table_c               subsource
+# table_d               subsource
+# table_e               subsource
+# table_f               subsource
+# table_g               subsource
+#
+# ! SELECT * FROM table_a;
+# contains: unknown catalog item 'table_a'
+#
+# # Makes progress after dropping subsources
+# $ mysql-execute name=mysql
+# INSERT INTO table_b VALUES (3, 'three');
+#
+# > SELECT * FROM table_b;
+# 1 one
+# 2 two
+# 3 three
+#
+# # IF EXISTS works
+# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_a;
+#
+# # Multiple, repetitive tables work
+# > ALTER SOURCE mz_source DROP SUBSOURCE table_b, table_c, table_b, table_c, table_b, table_c;
+#
+# # IF EXISTS works with multiple tables
+# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_c, table_d;
+#
+# > CREATE MATERIALIZED VIEW mv_e AS SELECT pk + 1 FROM table_e;
+# > CREATE MATERIALIZED VIEW mv_f AS SELECT pk + 1 FROM table_f;
+#
+# # Makes progress after dropping subsources
+# $ mysql-execute name=mysql
+# INSERT INTO table_e VALUES (3, 'three');
+#
+# > SELECT * FROM mv_e;
+# 2
+# 3
+# 4
+#
+# > SHOW MATERIALIZED VIEWS
+# mv_e quickstart
+# mv_f quickstart
+#
+# # RESTRICT works
+# ! ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e;
+# contains:cannot drop source "table_e": still depended upon by materialized view "mv_e"
+#
+# ! ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e RESTRICT;
+# contains:cannot drop source "table_e": still depended upon by materialized view "mv_e"
+#
+# # CASCADE works
+# > ALTER SOURCE mz_source DROP SUBSOURCE table_e CASCADE;
+#
+# # IF NOT EXISTS + CASCADE works
+# > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e, table_f CASCADE;
+#
 # TODO: #25882 (text column entry not cascaded)
 # TEXT COLUMNS removed from table_f
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 # <null>
 
-> SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
-table_g               subsource
+# > SHOW SUBSOURCES ON mz_source
+# mz_source_progress    progress
+# table_g               subsource
 
-> SHOW MATERIALIZED VIEWS
+# > SHOW MATERIALIZED VIEWS
 
 # MySQL sources must retain at least one subsource, if nothing else than for parsing reasons, i.e.
 # empty input for subsources is invalid.
-! ALTER SOURCE mz_source DROP SUBSOURCE table_g;
-contains:SOURCE "mz_source" must retain at least one non-progress subsource
+# ! ALTER SOURCE mz_source DROP SUBSOURCE table_g;
+# contains:SOURCE "mz_source" must retain at least one non-progress subsource
 
 # Show that all table definitions have been updated
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE') FROM (SHOW CREATE SOURCE mz_source);
-"{\"mysql\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\"}"
+# > SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE') FROM (SHOW CREATE SOURCE mz_source);
+# "{\"mysql\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\"}"
 
 #
 # Add subsources

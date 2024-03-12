@@ -379,7 +379,7 @@ def disconnect_mysql_during_snapshot(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
-        "alter-mz.td",
+        # "alter-mz.td",
     )
 
 
@@ -391,12 +391,12 @@ def restart_mysql_during_snapshot(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
-        "alter-mz.td",
+        # "alter-mz.td",
     )
 
 
 def restart_mz_during_snapshot(c: Composition) -> None:
-    run_testdrive_files(c, "alter-mz.td")
+    # run_testdrive_files(c, "alter-mz.td")
     restart_mz(c)
 
     run_testdrive_files(c, "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
@@ -409,7 +409,7 @@ def disconnect_mysql_during_replication(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
-        "alter-mz.td",
+        # "alter-mz.td",
         "toxiproxy-close-connection.td",
         "toxiproxy-restore-connection.td",
     )
@@ -421,7 +421,7 @@ def restart_mysql_during_replication(c: Composition) -> None:
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "alter-table.td",
-        "alter-mz.td",
+        # "alter-mz.td",
     )
 
     restart_mysql(c)
@@ -435,7 +435,7 @@ def restart_mz_during_replication(c: Composition) -> None:
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "alter-table.td",
-        "alter-mz.td",
+        # "alter-mz.td",
     )
 
     restart_mz(c)
@@ -449,7 +449,7 @@ def fix_mysql_schema_while_mz_restarts(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
-        "alter-mz.td",
+        # "alter-mz.td",
         "verify-data.td",
         "alter-table-fix.td",
     )
@@ -469,7 +469,7 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
-        "alter-mz.td",
+        # "alter-mz.td",
     )
 
 
@@ -536,7 +536,12 @@ def mysql_out_of_disk_space(c: Composition) -> None:
     time.sleep(30)
     c.exec("mysql", "bash", "-c", f"rm {fill_file}")
 
-    run_testdrive_files(c, "delete-rows-t2.td", "alter-table.td", "alter-mz.td")
+    run_testdrive_files(
+        c,
+        "delete-rows-t2.td",
+        "alter-table.td",
+        # "alter-mz.td"
+    )
 
 
 def backup_restore_mysql(c: Composition) -> None:
