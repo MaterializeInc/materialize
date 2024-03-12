@@ -7,7 +7,5 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ mysql-connect name=mysql url=mysql://root@${arg.mysql-host} password=${arg.mysql-root-password}
-
-$ mysql-execute name=mysql
-RESET MASTER;
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
+running

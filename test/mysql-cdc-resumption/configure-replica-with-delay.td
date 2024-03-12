@@ -10,4 +10,6 @@
 $ mysql-connect name=mysql url=mysql://root@${arg.mysql-host} password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
-RESET MASTER;
+STOP REPLICA;
+CHANGE REPLICATION SOURCE TO SOURCE_HOST='${arg.mysql-replication-master-host}', SOURCE_PORT=3306, SOURCE_USER='root', SOURCE_PASSWORD='${arg.mysql-root-password}', SOURCE_AUTO_POSITION=1, MASTER_DELAY=${arg.mysql-replica-delay-in-sec};
+START REPLICA;

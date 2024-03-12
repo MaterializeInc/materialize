@@ -10,7 +10,7 @@
 # This test "reverts" a schema change that causes a subsource to
 # enter a failed state.
 
-$ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
+$ mysql-connect name=mysql url=mysql://root@${arg.mysql-host} password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
 USE public;

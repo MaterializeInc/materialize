@@ -101,7 +101,239 @@ def workflow_reset_gtid(c: Composition) -> None:
         # No end confirmation here, since we expect the source to be in a bad state
 
 
-def initialize(c: Composition) -> None:
+def workflow_master_changes(c: Composition) -> None:
+    """
+    mysql-replica-1 and mysql-replica-2 replicate mysql. The source is attached to mysql-replica-2. mysql is
+    killed and mysql-replica-1 becomes the new master. mysql-replica-2 is configured to replicate from mysql-replica-1.
+    """
+
+    with c.override(
+        Materialized(sanity_restart=False),
+        MySql(
+            name="mysql-replica-1",
+            version=MySql.DEFAULT_VERSION,
+            additional_args=[
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+                "--skip-replica-start",
+                "--server-id=2",
+                # "--log-bin=mysql-bin",
+                # "--binlog-format=row",
+                # "--binlog-row-image=full",
+            ],
+        ),
+        MySql(
+            name="mysql-replica-2",
+            version=MySql.DEFAULT_VERSION,
+            additional_args=[
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+                "--skip-replica-start",
+                "--server-id=3",
+                # "--log-bin=mysql-bin",
+                # "--binlog-format=row",
+                # "--binlog-row-image=full",
+            ],
+        ),
+    ):
+        initialize(c, create_source=False)
+
+        host_data_master = "mysql"
+        host_for_mz_source = "mysql-replica-2"
+
+        c.up("mysql-replica-1", "mysql-replica-2")
+
+        # configure mysql-replica-1 to replicate mysql
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host="mysql-replica-1",
+        )
+        # configure mysql-replica-2 to replicate mysql
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host="mysql-replica-2",
+        )
+        # create source pointing to mysql-replica-2
+        run_testdrive_files(
+            c,
+            f"--var=mysql-source-host={host_for_mz_source}",
+            "create-source.td",
+        )
+
+        run_testdrive_files(
+            c,
+            "verify-source-running.td",
+        )
+
+        c.kill("mysql")
+        host_data_master = "mysql-replica-1"
+
+        # let mysql-replica-2 replicate from mysql-replica-1
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host=host_for_mz_source,
+        )
+
+        run_testdrive_files(
+            c,
+            "verify-source-running.td",
+        )
+
+        # delete rows in mysql-replica-1
+        run_testdrive_files(c, "delete-rows-t1.td", mysql_host=host_data_master)
+
+        # It may take some time until mysql-replica-2 catches up.
+        time.sleep(15)
+
+        run_testdrive_files(
+            c,
+            "verify-rows-deleted-t1.td",
+        )
+
+
+def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
+    """
+    mysql-replica-1 replicates mysql. The source is attached to mysql. mz switches the connection to mysql-replica-1.
+    Changing the connection should not brick the source and the source should still work if mysql is killed.
+    """
+
+    with c.override(
+        Materialized(sanity_restart=False),
+        MySql(
+            name="mysql-replica-1",
+            version=MySql.DEFAULT_VERSION,
+            additional_args=[
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+                "--skip-replica-start",
+                "--server-id=2",
+            ],
+        ),
+    ):
+        initialize(c)
+
+        host_data_master = "mysql"
+        host_for_mz_source = "mysql"
+
+        c.up("mysql-replica-1")
+
+        # configure replica
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host="mysql-replica-1",
+        )
+
+        # give the replica some time to replicate the current state
+        time.sleep(3)
+
+        run_testdrive_files(
+            c,
+            "delete-rows-t1.td",
+            "verify-rows-deleted-t1.td",
+        )
+
+        # change connection to replica
+        host_for_mz_source = "mysql-replica-1"
+        run_testdrive_files(
+            c,
+            f"--var=mysql-source-host={host_for_mz_source}",
+            "alter-source-connection.td",
+        )
+
+        run_testdrive_files(
+            c,
+            "verify-source-running.td",
+        )
+
+        c.kill("mysql")
+
+        time.sleep(3)
+
+        run_testdrive_files(
+            c,
+            "verify-source-running.td",
+        )
+
+
+def workflow_switch_to_lagging_replica(c: Composition) -> None:
+    """
+    mysql-replica-1 replicates mysql. The source is attached to mysql. mysql-replica-1 is configured to have a
+    replication delay and lags behind. mz switches the connection to mysql-replica-1, which exhibits a lower GTID.
+    """
+
+    with c.override(
+        Materialized(sanity_restart=False),
+        MySql(
+            name="mysql-replica-1",
+            version=MySql.DEFAULT_VERSION,
+            additional_args=[
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+                "--skip-replica-start",
+                "--server-id=2",
+            ],
+        ),
+    ):
+        initialize(c)
+
+        host_data_master = "mysql"
+        host_for_mz_source = "mysql"
+        replica_lag_in_sec = 300
+
+        c.up("mysql-replica-1")
+
+        # configure replica
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            "configure-replica.td",
+            mysql_host="mysql-replica-1",
+        )
+
+        # give the replica some time to replicate the current state
+        time.sleep(3)
+
+        # add delay to the replica
+        run_testdrive_files(
+            c,
+            f"--var=mysql-replication-master-host={host_data_master}",
+            f"--var=mysql-replica-delay-in-sec={replica_lag_in_sec}",
+            "configure-replica-with-delay.td",
+            mysql_host="mysql-replica-1",
+        )
+
+        run_testdrive_files(
+            c,
+            "delete-rows-t1.td",
+            "verify-rows-deleted-t1.td",
+        )
+
+        # change connection to replica lagging behind
+        host_for_mz_source = "mysql-replica-1"
+        run_testdrive_files(
+            c,
+            f"--var=mysql-source-host={host_for_mz_source}",
+            "alter-source-connection.td",
+        )
+
+        # TODO: #25836 (no detection of lower GTID)
+        # run_testdrive_files(
+        #     c,
+        #     "verify-source-stalled.td",
+        # )
+
+        # No end confirmation here, since we expect the source to be in a bad state
+
+
+def initialize(c: Composition, create_source: bool = True) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized", "mysql", "toxiproxy")
 
@@ -112,6 +344,13 @@ def initialize(c: Composition) -> None:
         "populate-tables.td",
         "configure-materialize.td",
     )
+
+    if create_source:
+        run_testdrive_files(
+            c,
+            "--var=mysql-source-host=toxiproxy",
+            "create-source.td",
+        )
 
 
 def restart_mysql(c: Composition) -> None:
@@ -294,10 +533,9 @@ def backup_restore_mysql(c: Composition) -> None:
     # run_testdrive_files(c, "verify-source-failed.td")
 
 
-def run_testdrive_files(
-    c: Composition,
-    *files: str,
-) -> None:
+def run_testdrive_files(c: Composition, *files: str, mysql_host: str = "mysql") -> None:
     c.run_testdrive_files(
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}", *files
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        f"--var=mysql-host={mysql_host}",
+        *files,
     )
