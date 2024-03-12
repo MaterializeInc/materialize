@@ -304,23 +304,28 @@ class ResultComparator:
             ].to_sql(SqlDialectAdjuster(), True)
 
             if not self.is_value_equal(result_value1, result_value2):
-                validation_outcome.add_error(
-                    self.ignore_filter,
-                    ValidationError(
-                        query_execution,
-                        ValidationErrorType.CONTENT_MISMATCH,
-                        "Value differs",
-                        value1=result_value1,
-                        value2=result_value2,
-                        strategy1=result1.strategy,
-                        strategy2=result2.strategy,
-                        sql1=result1.sql,
-                        sql2=result2.sql,
-                        col_index=col_index,
-                        concerned_expression=expression,
-                        location=f"row index {row_index}, column index {col_index} ('{expression}')",
-                    ),
-                )
+                error_type = ValidationErrorType.CONTENT_MISMATCH
+                error_message = "Value differs"
+            else:
+                continue
+
+            validation_outcome.add_error(
+                self.ignore_filter,
+                ValidationError(
+                    query_execution,
+                    error_type,
+                    error_message,
+                    value1=result_value1,
+                    value2=result_value2,
+                    strategy1=result1.strategy,
+                    strategy2=result2.strategy,
+                    sql1=result1.sql,
+                    sql2=result2.sql,
+                    col_index=col_index,
+                    concerned_expression=expression,
+                    location=f"row index {row_index}, column index {col_index} ('{expression}')",
+                ),
+            )
 
     def is_value_equal(self, value1: Any, value2: Any) -> bool:
         if value1 == value2:
