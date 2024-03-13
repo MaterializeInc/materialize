@@ -752,14 +752,16 @@ where
 mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
+    use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::Hashable;
     use futures::future::BoxFuture;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::RetryParameters;
-    use mz_persist_client::PersistLocation;
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use mz_persist_client::stats::PartStats;
+    use mz_persist_client::{PersistLocation, ShardIdSchema};
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema, VecU8Schema};
     use rand::rngs::SmallRng;
     use rand::{RngCore, SeedableRng};
     use timely::progress::Antichain;
@@ -1425,5 +1427,86 @@ mod tests {
 
         log.assert_snapshot(d0, 5).await;
         log.assert_snapshot(d1, 5).await;
+    }
+
+    // A simulation of a new format to migrate to from TxnsCodecDefault.
+    //
+    // The new format is the same but with "new-" prepended to the val.
+    #[derive(Debug)]
+    struct TxnsCodecNew;
+
+    impl TxnsCodec for TxnsCodecNew {
+        type Key = <TxnsCodecDefault as TxnsCodec>::Key;
+        type Val = <TxnsCodecDefault as TxnsCodec>::Val;
+        fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema) {
+            TxnsCodecDefault::schemas()
+        }
+        fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
+            let (data_id, buf) = TxnsCodecDefault::encode(e);
+            let new_buf = "new-".as_bytes().into_iter().chain(&buf).copied().collect();
+            (data_id, new_buf)
+        }
+        fn decode(data_id: Self::Key, buf: Self::Val) -> TxnsEntry {
+            // Strip "new-" if present, but don't require it because we're
+            // required to parse the old format.
+            let buf = match buf.strip_prefix("new-".as_bytes()) {
+                Some(x) => x.to_owned(),
+                None => buf,
+            };
+            TxnsCodecDefault::decode(data_id, buf)
+        }
+        fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+            TxnsCodecDefault::should_fetch_part(data_id, stats)
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    #[ignore] // TODO(txn): Regression test for #25992, unskip in the PR that fixes it
+    async fn txns_codec_format_migration() {
+        let client = PersistClient::new_for_tests().await;
+        let mut old = TxnsHandle::expect_open(client.clone()).await;
+        let txns_id = old.txns_id();
+
+        // Register a data shard and commit a txn, but don't apply or tidy (so
+        // both the register and append records are still in the txns shard).
+        let data_id = old.expect_register(1).await;
+        let _tidy = old
+            .expect_commit_at(2, data_id, &[""], &old.new_log())
+            .await;
+
+        // Now restart with a new TxnsCodec. Call forget_all to apply the
+        // outstanding txn and forget the shard. After this, the contents of the
+        // txns shard should consolidate out. If we get anything wrong in the
+        // migration, it won't.
+        let metrics = Arc::clone(&old.metrics);
+        drop(old);
+        let mut new = TxnsHandle::<String, (), u64, i64, u64, TxnsCodecNew>::open(
+            3,
+            client.clone(),
+            metrics,
+            txns_id,
+            Arc::new(StringSchema),
+            Arc::new(UnitSchema),
+        )
+        .await;
+        let (_, tidy) = new.forget_all(4).await.unwrap();
+        let () = new.tidy_at(5, tidy).await.unwrap();
+        let mut contents = {
+            let mut read = client
+                .open_leased_reader::<ShardId, Vec<u8>, u64, i64>(
+                    txns_id,
+                    Arc::new(ShardIdSchema),
+                    Arc::new(VecU8Schema),
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .unwrap();
+            read.snapshot_and_fetch(Antichain::from_elem(5))
+                .await
+                .unwrap()
+        };
+        consolidate_updates(&mut contents);
+        assert_eq!(contents, Vec::new());
     }
 }
