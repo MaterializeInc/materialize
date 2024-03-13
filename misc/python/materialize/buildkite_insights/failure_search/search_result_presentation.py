@@ -117,13 +117,19 @@ def print_match(
 
 
 def print_summary(
-    pipeline_slug: str, builds_data: list[Any], count_matches: int
+    pipeline_slug: str, builds_data: list[Any], count_matches: int, max_results: int
 ) -> None:
     if len(builds_data) == 0:
         print("Found no builds!")
     else:
         most_recent_build_number = builds_data[0]["number"]
+        suppressed_results_info = (
+            f"Showing only the first {max_results} matches. "
+            if count_matches > max_results
+            else ""
+        )
         print(
             f"{count_matches} match(es) in {len(builds_data)} searched builds of pipeline '{pipeline_slug}'. "
+            f"{suppressed_results_info}"
             f"The most recent considered build was #{most_recent_build_number}."
         )
