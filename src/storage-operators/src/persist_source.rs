@@ -534,8 +534,13 @@ impl PendingWork {
         let fetched_part = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         let mut row_buf = None;
+        let row_override = map_filter_project
+            .as_ref()
+            .map(|p| p.ignores_input())
+            .unwrap_or(false)
+            .then(|| (SourceData(Ok(Row::default())), ()));
         while let Some(((key, val), time, diff)) =
-            fetched_part.next_with_storage(&mut row_buf, &mut None)
+            fetched_part.next_with_storage(&mut row_buf, &mut None, row_override.clone())
         {
             if until.less_equal(&time) {
                 continue;
