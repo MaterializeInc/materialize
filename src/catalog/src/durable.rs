@@ -28,23 +28,24 @@ use mz_storage_types::controller::PersistTxnTablesImpl;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
-pub use crate::durable::impls::persist::metrics::Metrics;
-use crate::durable::impls::persist::UnopenedPersistCatalogState;
+pub use crate::durable::metrics::Metrics;
 use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
     SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
+use crate::durable::persist::UnopenedPersistCatalogState;
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
 pub use crate::durable::upgrade::CATALOG_VERSION;
 
 pub mod debug;
 mod error;
-mod impls;
 pub mod initialize;
+mod metrics;
 pub mod objects;
+mod persist;
 mod transaction;
 mod upgrade;
 

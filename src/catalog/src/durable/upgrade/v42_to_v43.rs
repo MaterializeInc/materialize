@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::durable::upgrade::persist::MigrationAction;
+use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v42 as v42, objects_v43 as v43};
 
 /// No-op migration for removing storage objects.

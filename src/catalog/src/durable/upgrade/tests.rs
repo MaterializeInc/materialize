@@ -15,7 +15,7 @@ use std::io::Write;
 use mz_persist_types::Codec;
 use mz_storage_types::sources::SourceData;
 
-use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
+use crate::durable::objects::state_update::StateUpdateKindRaw;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
 static PROTO_DIRECTORY: Lazy<String> =

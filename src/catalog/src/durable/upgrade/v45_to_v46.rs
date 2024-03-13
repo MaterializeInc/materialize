@@ -10,7 +10,7 @@
 use mz_stash::upgrade::WireCompatible;
 use mz_stash::wire_compatible;
 
-use crate::durable::upgrade::persist::MigrationAction;
+use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v45 as v45, objects_v46 as v46};
 
 wire_compatible!(v45::ClusterConfig with v46::ClusterConfig);

@@ -12,7 +12,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use uuid::Uuid;
 
-use crate::durable::impls::persist::{shard_id, UnopenedPersistCatalogState, UPGRADE_SEED};
+use crate::durable::persist::{shard_id, UnopenedPersistCatalogState, UPGRADE_SEED};
 use crate::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state_with_version,
     OpenableDurableCatalogState,

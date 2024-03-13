@@ -15,8 +15,8 @@ use mz_repr::Diff;
 use mz_storage_types::sources::SourceData;
 use proptest_derive::Arbitrary;
 
-use crate::durable::impls::persist::Timestamp;
 use crate::durable::objects::serialization::proto;
+use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::Epoch;
 
@@ -61,7 +61,7 @@ pub struct StateUpdate<T: IntoStateUpdateKindRaw = StateUpdateKind> {
 
 impl StateUpdate {
     /// Convert a [`TransactionBatch`] to a list of [`StateUpdate`]s at timestamp `ts`.
-    pub(super) fn from_txn_batch(txn_batch: TransactionBatch, ts: Timestamp) -> Vec<StateUpdate> {
+    pub(crate) fn from_txn_batch(txn_batch: TransactionBatch, ts: Timestamp) -> Vec<StateUpdate> {
         fn from_batch<K, V>(
             batch: Vec<(K, V, Diff)>,
             ts: Timestamp,
@@ -630,8 +630,7 @@ mod tests {
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
 
-    use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
-    use crate::durable::impls::persist::StateUpdateKind;
+    use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindRaw};
 
     proptest! {
         #[mz_ore::test]

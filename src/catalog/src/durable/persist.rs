@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-pub(crate) mod metrics;
-pub(crate) mod state_update;
 #[cfg(test)]
 mod tests;
 
@@ -48,16 +46,17 @@ use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
-use crate::durable::impls::persist::metrics::Metrics;
-use crate::durable::impls::persist::state_update::{IntoStateUpdateKindRaw, StateUpdateKindRaw};
-pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
 use crate::durable::initialize::{
     DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
 };
+use crate::durable::metrics::Metrics;
 use crate::durable::objects::serialization::proto;
+use crate::durable::objects::state_update::{
+    IntoStateUpdateKindRaw, StateUpdate, StateUpdateKind, StateUpdateKindRaw,
+};
 use crate::durable::objects::{AuditLogKey, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
-use crate::durable::upgrade::persist::upgrade;
+use crate::durable::upgrade::upgrade;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,

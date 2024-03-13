@@ -32,7 +32,7 @@ use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
 use std::time::Duration;
 
-use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
+use crate::durable::objects::state_update::StateUpdateKindRaw;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,

@@ -11,7 +11,7 @@ use std::string::ToString;
 
 use mz_stash::wire_compatible;
 
-use crate::durable::upgrade::persist::MigrationAction;
+use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v44 as v44, objects_v45 as v45};
 
 wire_compatible!(v44::ServerConfigurationKey with v45::ServerConfigurationKey);
