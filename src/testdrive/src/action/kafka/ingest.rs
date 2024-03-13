@@ -342,6 +342,7 @@ pub async fn run_ingest(
             let row = action::substitute_vars(
                 row,
                 &btreemap! { "kafka-ingest.iteration".into() => iteration.to_string() },
+                &state.default_arg_vars.clone(),
                 &None,
                 false,
             )?;

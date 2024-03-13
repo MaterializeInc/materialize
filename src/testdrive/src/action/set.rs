@@ -75,6 +75,18 @@ pub fn run_max_tries(
     Ok(ControlFlow::Continue)
 }
 
+pub fn run_set_arg_default(
+    cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    for (key, val) in cmd.args {
+        let arg_key = format!("arg.{key}");
+        state.default_arg_vars.insert(arg_key, val);
+    }
+
+    Ok(ControlFlow::Continue)
+}
+
 pub fn set_vars(cmd: BuiltinCommand, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
     for (key, val) in cmd.args {
         if val.is_empty() {
