@@ -187,11 +187,19 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 > SELECT * FROM mv_gs;
 10000000
 
+# `mv_gs` consumes a non-trivial amount of memory because of the big `generate_series`, so let's drop it.
+> DROP MATERIALIZED VIEW mv_gs;
+> SELECT mz_unsafe.mz_sleep(1);
+<null>
+
 ## Test turning replicas off and on, part 4:
 ## - Turn the replica off while it's in a non-caught-up state after an input change.
 ## - Turn the replica off while it's still rehydrating after turning a replica on.
 ## - More than 1 replicas.
 ## - MV that reads from an index.
+> DELETE FROM tg;
+> INSERT INTO tg VALUES (100);
+
 > CREATE MATERIALIZED VIEW mv_gs2
   IN CLUSTER refresh_cluster
   WITH (REFRESH EVERY '4 sec') AS
@@ -207,9 +215,9 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 
 # Wait for the first refresh.
 > SELECT * FROM mv_gs2;
-10000000
+100
 > SELECT * FROM mv_gs2_index;
-10000000
+100
 
 > INSERT INTO tg VALUES (10000000);
 
@@ -220,13 +228,13 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 <null>
 
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
-> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 3);
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 2);
 
 # Check that we recover.
 > SELECT * FROM mv_gs2;
-20000000
+10000100
 > SELECT * FROM mv_gs2_index;
-20000000
+10000100
 
 ## REFRESH AT + REFRESH EVERY
 
