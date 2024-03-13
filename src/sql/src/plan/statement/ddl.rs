@@ -48,22 +48,23 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, AvroSchema, AvroSchemaOption,
     AvroSchemaOptionName, ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ColumnOption, CommentObjectType, CommentStatement, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
-    DropOwnedStatement, Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName,
-    KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
-    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
+    ClusterScheduleOptionValue, ColumnOption, CommentObjectType, CommentStatement,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
+    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
+    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
+    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
     RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
     TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName,
@@ -3360,7 +3361,12 @@ generate_extracted_config!(
     (Managed, bool),
     (Replicas, Vec<ReplicaDefinition<Aug>>),
     (ReplicationFactor, u32),
-    (Size, String)
+    (Size, String),
+    (
+        Schedule,
+        ClusterScheduleOptionValue,
+        Default(ClusterScheduleOptionValue::Manual)
+    )
 );
 
 generate_extracted_config!(
@@ -3391,6 +3397,7 @@ pub fn plan_create_cluster(
         seen: _,
         size,
         disk: disk_in,
+        schedule,
     }: ClusterOptionExtracted = options.try_into()?;
 
     let managed = managed.unwrap_or_else(|| replicas.is_none());
@@ -3408,6 +3415,9 @@ pub fn plan_create_cluster(
         let Some(size) = size else {
             sql_bail!("SIZE must be specified for managed clusters");
         };
+        if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
+            bail_unsupported!("cluster schedules other than MANUAL");
+        }
         if disk_in.is_some() {
             scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
         }
@@ -3497,6 +3507,11 @@ pub fn plan_create_cluster(
         }
         if !features.is_empty() {
             sql_bail!("FEATURES not supported for unmanaged clusters");
+        }
+        if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
+            sql_bail!(
+                "cluster schedules other than MANUAL are not supported for unmanaged clusters"
+            );
         }
 
         let mut replicas = vec![];
@@ -4564,12 +4579,16 @@ pub fn plan_alter_cluster(
                 seen: _,
                 size,
                 disk,
+                schedule,
             }: ClusterOptionExtracted = set_options.try_into()?;
 
             match managed.unwrap_or_else(|| cluster.is_managed()) {
                 true => {
                     if replica_defs.is_some() {
                         sql_bail!("REPLICAS not supported for managed clusters");
+                    }
+                    if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
+                        bail_unsupported!("cluster schedules other than MANUAL");
                     }
 
                     if let Some(replication_factor) = replication_factor {
@@ -4613,6 +4632,9 @@ pub fn plan_alter_cluster(
                     }
                     if disk.is_some() {
                         sql_bail!("DISK not supported for unmanaged clusters");
+                    }
+                    if !matches!(schedule, ClusterScheduleOptionValue::Manual) {
+                        sql_bail!("cluster schedules other than MANUAL are not supported for unmanaged clusters");
                     }
                 }
             }
@@ -4699,6 +4721,7 @@ pub fn plan_alter_cluster(
                     Replicas => options.replicas = Reset,
                     ReplicationFactor => options.replication_factor = Reset,
                     Size => options.size = Reset,
+                    Schedule => options.schedule = Reset,
                 }
             }
         }

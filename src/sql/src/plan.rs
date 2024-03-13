@@ -45,8 +45,9 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ConnectionOptionName, CreateSourceSubsource, QualifiedReplica,
-    TransactionIsolationLevel, TransactionMode, WithOptionValue,
+    AlterSourceAddSubsourceOption, ClusterScheduleOptionValue, ConnectionOptionName,
+    CreateSourceSubsource, QualifiedReplica, TransactionIsolationLevel, TransactionMode,
+    WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
@@ -1558,6 +1559,7 @@ pub struct PlanClusterOption {
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
     pub disk: AlterOptionParameter<bool>,
+    pub schedule: AlterOptionParameter<ClusterScheduleOptionValue>,
 }
 
 impl Default for PlanClusterOption {
@@ -1572,6 +1574,7 @@ impl Default for PlanClusterOption {
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
             disk: AlterOptionParameter::Unchanged,
+            schedule: AlterOptionParameter::Unchanged,
         }
     }
 }
