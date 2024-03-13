@@ -9,8 +9,6 @@
 
 from materialize.mzcompose.service import Service
 
-FIVETRAN_TESTER_VERSION = "024.0222.002"
-
 
 class FivetranDestinationTester(Service):
     def __init__(
@@ -28,7 +26,7 @@ class FivetranDestinationTester(Service):
         super().__init__(
             name="fivetran-destination-tester",
             config={
-                "image": f"fivetrandocker/sdk-destination-tester:{FIVETRAN_TESTER_VERSION}",
+                "mzbuild": "fivetran-destination-tester",
                 "command": command,
                 "environment": environment,
                 "volumes": volumes_extra,
