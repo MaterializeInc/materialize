@@ -175,6 +175,7 @@ table_g               subsource
 # State checking
 #
 
+# TODO #24975 (support ALTER SOURCE)
 # > ALTER SOURCE mz_source DROP SUBSOURCE table_a
 #
 # > SELECT * FROM table_b;
@@ -240,7 +241,6 @@ table_g               subsource
 # # IF NOT EXISTS + CASCADE works
 # > ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e, table_f CASCADE;
 #
-# TODO: #25882 (text column entry not cascaded)
 # TEXT COLUMNS removed from table_f
 # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 # <null>
