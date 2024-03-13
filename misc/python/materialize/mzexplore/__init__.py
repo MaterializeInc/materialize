@@ -8,7 +8,10 @@
 # by the Apache License, Version 2.0.
 
 # These are actually used in materialize.cli.mzexplore
-from materialize.mzexplore import extract  # noqa: F401
+from materialize.mzexplore import (
+    analyze,  # noqa: F401
+    extract,  # noqa: F401
+)
 from materialize.mzexplore.common import (
     ExplaineeType,  # noqa: F401
     ExplainFlag,  # noqa: F401

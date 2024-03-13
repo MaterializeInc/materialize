@@ -21,7 +21,9 @@ from pg8000.dbapi import DatabaseError
 
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import (
+    CreateFile,
     ExplaineeType,
+    ExplainFile,
     ExplainFlag,
     ExplainFormat,
     ExplainStage,
@@ -82,31 +84,36 @@ def defs(
             item_name = sql.identifier(item["name"])
             fqname = f"{item_database}.{item_schema}.{item_name}"
 
-            if item["type"] == "index":
-                show_create_query = f"SHOW CREATE INDEX {fqname}"
-            elif item["type"] == "materialized-view":
-                show_create_query = f"SHOW CREATE MATERIALIZED VIEW {fqname}"
-            elif item["type"] == "source" and not item["name"].endswith("_progress"):
-                show_create_query = f"SHOW CREATE SOURCE {fqname}"
-            elif item["type"] == "table":
-                show_create_query = f"SHOW CREATE TABLE {fqname}"
-            elif item["type"] == "view":
-                show_create_query = f"SHOW CREATE VIEW {fqname}"
-            else:  # "connection", "secret"
+            try:
+                item_type = ItemType(item["type"])
+            except ValueError:
+                warn(f"Unsupported item type `{item['type']}` for {fqname}")
+                continue
+
+            create_file = CreateFile(
+                database=item["database"],
+                schema=item["schema"],
+                name=item["name"],
+                item_type=item_type,
+            )
+
+            if create_file.skip():
+                continue
+
+            show_create_query = item_type.show_create(fqname)
+            if show_create_query is None:
                 continue
 
             try:
+                info(f"Extracting {item['type']} def in `{create_file.path()}`")
                 create_sql = db.query_one(show_create_query)["create_sql"]
                 item["create_sql"] = sql.try_mzfmt(create_sql) if mzfmt else create_sql
 
-                base = Path(item["type"], item["database"], item["schema"])
-                path = base.joinpath(f"{item['name']}.sql")
+                # Ensure that the parent folder exists.
+                (target / create_file.folder()).mkdir(parents=True, exist_ok=True)
 
-                (target / base).mkdir(parents=True, exist_ok=True)
-
-                # Save definitions in files.
-                info(f"Extracting {item['type']} def in `{path}`")
-                with (target / path).open("w") as file:
+                # Write the definition into the file.
+                with (target / create_file.path()).open("w") as file:
                     file.write(output_template.substitute(item))
             except DatabaseError as e:
                 warn(f"Cannot export def {fqname}: {e}")
@@ -162,36 +169,35 @@ def plans(
             try:
                 item_type = ItemType(item["type"])
             except ValueError:
-                warn(f"Unsupported item type {item['type']} for {fqname}")
+                warn(f"Unsupported item type `{item['type']}` for {fqname}")
                 continue
 
-            base = Path(item["type"], item["database"], item["schema"])
-
-            plans: dict[str, str] = {}
+            plans: dict[ExplainFile, str] = {}
 
             if ExplaineeType.CATALOG_ITEM.contains(explainee_type):
                 # If the item can be explained, explain the DDL
-                explainee = explain_item(item_type, fqname)
+                explainee = explain_item(item_type, fqname, False)
                 if explainee is not None:
-                    supported_stages = supported_explain_stages(item_type, create=False)
+                    supported_stages = supported_explain_stages(
+                        item_type, optimize=False
+                    )
                     for stage in explain_stages:
                         if stage not in supported_stages:
                             continue
 
-                        file_name = ".".join(
-                            str(part)
-                            for part in [
-                                item["name"],
-                                ExplaineeType.CATALOG_ITEM,
-                                stage.name.lower(),
-                                suffix,
-                                explain_format.suffix(),
-                            ]
-                            if part is not None and part != ""
+                        explain_file = ExplainFile(
+                            database=item["database"],
+                            schema=item["schema"],
+                            name=item["name"],
+                            suffix=suffix,
+                            item_type=item_type,
+                            explainee_type=ExplaineeType.CATALOG_ITEM,
+                            stage=stage,
+                            ext=explain_format.ext(),
                         )
-                        info(f"Explaining {stage} for {explainee} in `{file_name}`")
+                        info(f"Explaining {stage} for {explainee} in `{explain_file}`")
                         try:
-                            plans[file_name] = explain(
+                            plans[explain_file] = explain(
                                 db,
                                 stage,
                                 explainee,
@@ -204,38 +210,42 @@ def plans(
 
             if ExplaineeType.CREATE_STATEMENT.contains(explainee_type):
                 # If the DDL for the plan exists, explain it as well
-                supported_stages = supported_explain_stages(item_type, create=True)
+                supported_stages = supported_explain_stages(item_type, optimize=True)
 
-                create_path = base.joinpath("{name}.sql".format(**item))
-                if not (target / create_path).is_file():
+                create_file = CreateFile(
+                    database=item["database"],
+                    schema=item["schema"],
+                    name=item["name"],
+                    item_type=item_type,
+                )
+                if not (target / create_file.path()).is_file():
                     if set.intersection(supported_stages, explain_stages):
                         # No CREATE file, but a supported stage is requested
                         info(
                             f"WARNING: Skipping EXPLAIN CREATE for {fqname}: "
-                            f"CREATE statement path `{create_path}` does not exist."
+                            f"CREATE statement path `{target / create_file.path()}` does not exist."
                         )
                     continue
 
-                explainee = (target / create_path).read_text()
+                explainee = (target / create_file.path()).read_text()
 
                 for stage in explain_stages:
                     if stage not in supported_stages:
                         continue
 
-                    file_name = ".".join(
-                        str(part)
-                        for part in [
-                            item["name"],
-                            ExplaineeType.CREATE_STATEMENT,
-                            stage.name.lower(),
-                            suffix,
-                            "txt",
-                        ]
-                        if part is not None
+                    explain_file = ExplainFile(
+                        database=item["database"],
+                        schema=item["schema"],
+                        name=item["name"],
+                        suffix=suffix,
+                        item_type=item_type,
+                        explainee_type=ExplaineeType.CREATE_STATEMENT,
+                        stage=stage,
+                        ext=explain_format.ext(),
                     )
-                    info(f"Explaining {stage} for CREATE {fqname} in `{file_name}`")
+                    info(f"Explaining {stage} for CREATE {fqname} in `{explain_file}`")
                     try:
-                        plans[file_name] = explain(
+                        plans[explain_file] = explain(
                             db,
                             stage,
                             explainee,
@@ -246,9 +256,44 @@ def plans(
                         warn(f"Cannot explain {stage} for CREATE {fqname}: {e}")
                         continue
 
-            for file_name, plan in plans.items():
-                explain_path = base.joinpath(file_name)
-                with (target / explain_path).open("w") as file:
+            if ExplaineeType.REPLAN_ITEM.contains(explainee_type):
+                # If the item can be explained, explain the DDL
+                explainee = explain_item(item_type, fqname, True)
+                if explainee is not None:
+                    supported_stages = supported_explain_stages(item_type, True)
+                    for stage in explain_stages:
+                        if stage not in supported_stages:
+                            continue
+
+                        explain_file = ExplainFile(
+                            database=item["database"],
+                            schema=item["schema"],
+                            name=item["name"],
+                            suffix=suffix,
+                            item_type=item_type,
+                            explainee_type=ExplaineeType.REPLAN_ITEM,
+                            stage=stage,
+                            ext=explain_format.ext(),
+                        )
+                        info(f"Explaining {stage} for {explainee} in `{explain_file}`")
+                        try:
+                            plans[explain_file] = explain(
+                                db,
+                                stage,
+                                explainee,
+                                explain_flags,
+                                explain_format,
+                            )
+                        except DatabaseError as e:
+                            warn(f"Cannot explain {stage} for {explainee}: {e}")
+                            continue
+
+            for explain_file, plan in plans.items():
+                # Ensure that the parent folder exists.
+                (target / explain_file.folder()).mkdir(parents=True, exist_ok=True)
+
+                # Write the plan into the file.
+                with (target / explain_file.path()).open("w") as file:
                     file.write(plan)
 
 
@@ -288,18 +333,19 @@ def explain(
         return next(iter(db.query_one(explain_query).values()))
 
 
-def explain_item(item_type: ItemType, fqname: str) -> str | None:
+def explain_item(item_type: ItemType, fqname: str, replan: bool) -> str | None:
+    prefix = "REPLAN" if replan else ""
     if item_type == ItemType.MATERIALIZED_VIEW:
-        return f"MATERIALIZED VIEW {fqname}"
+        return " ".join((prefix, "MATERIALIZED VIEW", fqname))
     if item_type == ItemType.INDEX:
-        return f"INDEX {fqname}"
+        return " ".join((prefix, "INDEX", fqname))
     else:
         return None
 
 
-def supported_explain_stages(item_type: ItemType, create: bool) -> set[ExplainStage]:
+def supported_explain_stages(item_type: ItemType, optimize: bool) -> set[ExplainStage]:
     if item_type in {ItemType.MATERIALIZED_VIEW, ItemType.INDEX}:
-        if create:
+        if optimize:
             return set(ExplainStage)
         else:
             return set([ExplainStage.OPTIMIZED_PLAN, ExplainStage.PHYSICAL_PLAN])
