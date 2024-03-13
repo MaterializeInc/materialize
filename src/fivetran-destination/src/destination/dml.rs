@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::pin::Pin;
@@ -27,7 +26,7 @@ use tokio_util::io::ReaderStream;
 
 use crate::crypto::AsyncAesDecrypter;
 use crate::destination::{
-    config, FIVETRAN_SYSTEM_COLUMN_DELETE, FIVETRAN_SYSTEM_COLUMN_ID, FIVETRAN_SYSTEM_COLUMN_SYNCED,
+    config, ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE, FIVETRAN_SYSTEM_COLUMN_SYNCED,
 };
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::write_batch_request::FileParams;
@@ -501,26 +500,11 @@ async fn get_scratch_table<'a>(
     let columns = table
         .columns
         .iter()
-        .map(|col| {
-            let mut ty: Cow<'static, str> = utils::to_materialize_type(col.r#type())?.into();
-            if let Some(d) = &col.decimal {
-                ty.to_mut()
-                    .push_str(&format!("({}, {})", d.precision, d.scale));
-            }
-
-            Ok(ColumnMetadata {
-                name: col.name.to_string(),
-                ty,
-                is_primary: col.primary_key || col.name.to_lowercase() == FIVETRAN_SYSTEM_COLUMN_ID,
-            })
-        })
+        .map(ColumnMetadata::try_from)
         .collect::<Result<Vec<_>, OpError>>()?;
 
     let create_scratch_table = || async {
-        let defs = columns
-            .iter()
-            .map(|col| format!("{} {}", col.name, col.ty))
-            .join(",");
+        let defs = columns.iter().map(|col| col.to_column_def()).join(",");
         let create_table_stmt = format!("CREATE TABLE {qualified_scratch_table_name} ({defs})");
         client
             .execute(&create_table_stmt, &[])
@@ -671,17 +655,6 @@ async fn copy_files(
     tracing::info!(row_count, "copied rows into {temporary_table}");
 
     Ok(row_count)
-}
-
-/// Metadata about a column that is relevant to operations peformed by the destination.
-#[derive(Debug)]
-struct ColumnMetadata {
-    /// Name of the column in the destination table.
-    name: String,
-    /// Type of the column in the destination table.
-    ty: Cow<'static, str>,
-    /// Is this column a primary key.
-    is_primary: bool,
 }
 
 #[derive(Debug)]

@@ -7,12 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use mz_pgrepr::Type;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
 use tokio_postgres::Client;
 
-use crate::destination::{config, FIVETRAN_SYSTEM_COLUMN_DELETE};
+use crate::destination::{config, ColumnMetadata, FIVETRAN_SYSTEM_COLUMN_DELETE};
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{
     AlterTableRequest, Column, CreateTableRequest, DataType, DescribeTableRequest, Table,
@@ -132,26 +133,15 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
         total_columns.push(delete_column);
     }
 
-    let mut defs = vec![];
-    let mut primary_key_columns = vec![];
-    for column in total_columns {
-        let name = escape::escape_identifier(&column.name);
-        let mut ty = utils::to_materialize_type(column.r#type())?.to_string();
-        if let Some(d) = column.decimal {
-            ty += &format!("({}, {})", d.precision, d.scale);
-        }
+    let columns = total_columns
+        .iter()
+        .map(ColumnMetadata::try_from)
+        .collect::<Result<Vec<_>, OpError>>()?;
 
-        defs.push(format!("{name} {ty}"));
-
-        if column.primary_key {
-            primary_key_columns.push(name);
-        }
-    }
-
+    let defs = columns.iter().map(|col| col.to_column_def()).join(",");
     let sql = format!(
         r#"BEGIN; CREATE SCHEMA IF NOT EXISTS {schema}; COMMIT;
         BEGIN; CREATE TABLE {qualified_table_name} ({defs}); COMMIT;"#,
-        defs = defs.join(","),
     );
 
     let (_dbname, client) = config::connect(request.configuration).await?;
@@ -162,9 +152,10 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
     // If Fivetran creates a table with primary keys, it expects a DescribeTableRequest to report
     // those columns as primary keys. But Materialize doesn't support primary keys, so we need to
     // store this metadata somewhere else. For now we do it in a COMMENT.
-    for column_name in primary_key_columns {
+    for column in columns.iter().filter(|col| col.is_primary) {
         let stmt = format!(
             "COMMENT ON COLUMN {qualified_table_name}.{column_name} IS {magic_comment}",
+            column_name = column.name,
             magic_comment = escape::escape_literal(PRIMARY_KEY_MAGIC_STRING),
         );
         client
