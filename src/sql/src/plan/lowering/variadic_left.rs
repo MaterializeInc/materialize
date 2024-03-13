@@ -41,6 +41,9 @@ pub(crate) fn attempt_left_join_magic(
     use mz_expr::{Id, LocalId};
 
     let oa = get_outer.arity();
+    if oa > 0 {
+        return Ok(None);
+    }
 
     // Will contain a list of let binding obligations.
     // We may modify the values if we find promising prior values.
@@ -320,14 +323,15 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
                 expr1,
                 expr2,
             } => {
-                if let MirScalarExpr::Column(c1) = &**expr1 {
-                    if let MirScalarExpr::Column(c2) = &**expr2 {
-                        if c1 < c2 {
-                            equations.push((*c1, *c2));
-                        } else {
-                            equations.push((*c2, *c1));
-                        }
+                if let (MirScalarExpr::Column(c1), MirScalarExpr::Column(c2)) = (&**expr1, &**expr2)
+                {
+                    if c1 < c2 {
+                        equations.push((*c1, *c2));
+                    } else {
+                        equations.push((*c2, *c1));
                     }
+                } else {
+                    return None;
                 }
             }
             _ => return None,
