@@ -39,13 +39,34 @@ impl crate::Transform for FlatMapToMap {
 impl FlatMapToMap {
     /// Turns `FlatMap` into `Map` if only one row is produced by flatmap.
     pub fn action(relation: &mut MirRelationExpr) {
-        if let MirRelationExpr::FlatMap { func, exprs, .. } = relation {
+        if let MirRelationExpr::FlatMap { func, exprs, input } = relation {
             if let TableFunc::Wrap { width, .. } = func {
                 if *width >= exprs.len() {
-                    if let MirRelationExpr::FlatMap { exprs, input, .. } = relation.take_dangerous()
-                    {
-                        *relation = input.map(exprs);
-                    }
+                    *relation = input.take_dangerous().map(std::mem::take(exprs));
+                }
+            } else if let TableFunc::UnnestArray { el_typ } = func {
+                let func = func.clone();
+                let exprs = exprs.clone();
+                use mz_expr::MirScalarExpr;
+                use mz_repr::{ColumnType, RowArena};
+                if let MirScalarExpr::Literal(Ok(row), ..) = &exprs[0] {
+                    let temp_storage = RowArena::default();
+                    if let Ok(mut iter) = func.eval(&[row.iter().next().unwrap()], &temp_storage) {
+                        match (iter.next(), iter.next()) {
+                            (None, _) => {
+                                // If there are no elements in the literal array, no output.
+                                relation.take_safely();
+                            }
+                            (Some((row, 1)), None) => {
+                                *relation =
+                                    input.take_dangerous().map(vec![MirScalarExpr::Literal(
+                                        Ok(row),
+                                        func.output_type().column_types[0].clone(),
+                                    )]);
+                            }
+                            _ => {}
+                        }
+                    };
                 }
             }
         }
