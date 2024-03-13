@@ -233,8 +233,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
             )
             psql_urls.append("postgresql://materialize@mz_other:6875/materialize")
         case ReferenceImplementation.POSTGRES:
-            # PG with at least version 16.2 is required due to #25926
-            participants.append(Postgres(image="postgres:16.2", ports=["15432:5432"]))
+            participants.append(Postgres(ports=["15432:5432"]))
             psql_urls.append("postgresql://postgres:postgres@postgres/postgres")
         case None:
             pass
