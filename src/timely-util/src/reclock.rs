@@ -31,18 +31,16 @@
 //! Instead, the `source` collection must be captured (e.g using timely's capture facilities) and
 //! the raw data be sent into the `Pusher` constructed and returned by the reclock operator.
 
-use std::collections::VecDeque;
-use std::fmt::{self, Debug};
 use std::iter::FromIterator;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{consolidation, AsCollection, Collection};
 use timely::communication::{Message, Pull, Push};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -52,106 +50,226 @@ use timely::progress::{Antichain, Timestamp};
 /// into the corresponding `reclocked` collection varying over some time `IntoTime` using the
 /// provided `remap` collection.
 ///
-/// Each record and its original `FromTime` timestamp are transformed through `logic` before being
-/// produced in the `reclocked` collection.
-///
 /// In order for the operator to read the `source` collection a `Pusher` is returned which can be
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
-pub fn reclock<G, D1, D2, FromTime, R, L>(
+pub fn reclock<G, D, FromTime, IntoTime, R>(
     remap_collection: &Collection<G, FromTime, i64>,
     as_of: Antichain<G::Timestamp>,
-    mut logic: L,
 ) -> (
-    Box<dyn Push<Message<Event<FromTime, (D1, FromTime, R)>>>>,
-    Collection<G, D2, R>,
+    Box<dyn Push<Message<Event<FromTime, (D, FromTime, R)>>>>,
+    Collection<G, D, R>,
 )
 where
-    G: Scope,
-    G::Timestamp: Lattice + TotalOrder,
-    D1: timely::Data,
-    D2: timely::Data,
+    G: Scope<Timestamp = IntoTime>,
+    D: timely::Data,
     FromTime: Timestamp,
+    IntoTime: Timestamp + Lattice + TotalOrder,
     R: Semigroup,
-    L: FnMut(D1, FromTime) -> D2 + 'static,
 {
     let mut scope = remap_collection.scope();
     let mut builder = OperatorBuilder::new("Reclock".into(), scope.clone());
     let info = builder.operator_info();
     let channel_id = scope.new_identifier();
+    // Here we create a channel that can be used to send data from a foreign scope into this
+    // operator. The channel is associated with this operator's address so that it is activated
+    // every time events are availalbe for consumption. This mechanism is similar to Timely's input
+    // handles where data can be introduced into a timely scope from an exogenous source.
     let (pusher, mut puller) =
-        scope.pipeline::<Event<FromTime, (D1, FromTime, R)>>(channel_id, &info.address);
+        scope.pipeline::<Event<FromTime, (D, FromTime, R)>>(channel_id, &info.address);
 
     let mut remap_input = builder.new_input(&remap_collection.inner, Pipeline);
     let (mut output, reclocked) = builder.new_output();
 
-    builder.build(move |caps| {
-        let [cap]: [_; 1] = caps.try_into().expect("one output");
+    builder.build(move |mut caps| {
+        let mut capset = CapabilitySet::from_elem(caps.pop().unwrap());
+        capset.downgrade(&as_of.borrow());
 
-        // Remap updates beyond the upper
-        let mut accepted_bindings = Vec::new();
-        let mut replayer = BindingReplay::new(cap, as_of.borrow());
+        // ## Definitions
+        //
+        // remap_frontier: The IntoTime frontier of `remap`
+        // pending_remap: Received remap bindings that are beyond `remap_frontier`
+        //
+        // remap_trace: A collection trace of `remap`
+        // remap_upper: The upper frontier of `remap_trace`
+        // remap_since: The frontier beyond which `remap_trace` accumulates to correct values
+        //
+        // reclockable_frontier:
+        //   The FromTime frontier with the property that all source updates not beyond it can be
+        //   immediately reclocked and emitted to the output. Because IntoTime is totally ordered
+        //   the value of this frontier is simply the accumulation of `remap_trace`, which will
+        //   accumulate to the most "recent" FromTime frontier available.
+        //
+        // pending_source_updates: Received source updates beyond `reclockable_frontier`
+        //
+        //
+        // ## Core logic
+        //
+        // 1. Receive new `remap` updates and put them in `pending_remap`
+        // 2. Extract bindings not beyond `remap_frontier` and append them in `remap_trace`
+        // 3. Set `remap_upper = remap_frontier`
+        // 4. Update `reclockable_frontier`
+        // 5. Receive new
+        // 5. stash =
+        //
+        //
+        // The updates in pending_source_updates have already been processed
+        //
+        //
+        // source_frontier: The FromTime frontier of `pending_source_updates`
+        //
+        // reclocked_source_data: The reclocked source updates, i.e the output of this operator
+        // reclocked_source_frontier: The IntoTime frontier of `reclocked_source_data`
+        //
+        //
+        //
+        //   The value of `reclockable_frontier` is
+        //   `remap_trace[t_into]` at the maximum `t_into` that is beyond `remap_since` and not
+        //   beyond `remap_upper`. If `remap_upper <= remap_since` then this frontier is not
+        //   defined. When this frontier is defined is has the property that a source update is
+        //   ready to be reclocked iff it happens at a `t_from` that is not beyond it.
+        //     reclockable_frontier = remap[max{t_into: remap_since <= t_into < remap_upper}]
+        //
+        // reclockable_updates:
+        //   The set of updates in `pending_source_updates` that are not beyond `reclockable_frontier`.
+        //   For these updates the operator has all the information needed to reclock them.
+        //     reclockable_updates = {(data, t_from, diff) ∈ pending_source_updates: !(t_from <= reclockable_frontier) }
+        //
+        // reclock(t_from) -> t_into
+        //   The reclock function computes the `t_into` that a time `t_from` should be
+        //   reclocked to given our current knowledge of `remap_trace`. This function is only
+        //   defined for `t_from` times that are not beyond `reclockable_frontier`. Its value
+        //   is the minimum `t_time` that is beyond `remap_since` such that `t_from` is not beyond
+        //   `remap_trace[t_into]`.
+        //     reclock(t_from) = \min_{t_into: remap_since <= t_into} !(remap_trace[t_into] <= t_from)
+        //
+        // ### Core logic
+        //
+        // On each execution the operator will:
+        // 1. Accept new bindings into `pending_remap` and new source data into `pending_source_updates`
+        // 2. Extract bindings not beyond `remap_upper` and commit them into `remap_trace`.
+        // 3. Compute `reclockable_frontier`
+        // 4. Extract `reclockable_updates` from `deferred_source_updates`, transform them using the `reclock`
+        //    function, and output the result into `reclocked`
+        // 5. Advance `reclocked_frontier`
+        // 6. Advance `remap_since` to `reclocked_frontier` and compact `remap_trace`
+        //
+        // Each of these steps are marked below in the code
 
-        // The upper frontier of updates in source_batches
-        let mut source_upper = MutableAntichain::new_bottom(Timestamp::minimum());
-        // Batches of data waiting to be reclocked
-        let mut source_batches = VecDeque::new();
+        let mut remap_upper = Antichain::from_elem(IntoTime::minimum());
+        let mut remap_since = as_of;
+        let mut pending_remap = Vec::new();
+        let mut remap_trace = Vec::new();
 
+        let mut deferred_source_updates: Vec<ChainBatch<_, _, _>> = Vec::new();
+        let mut source_frontier = MutableAntichain::new_bottom(FromTime::minimum());
+
+        let mut stash = Vec::new();
+        let mut tmp_updates = vec![];
         let mut vector = Vec::new();
         move |frontiers| {
-            // Accept new bindings
+            let Some(cap) = capset.get(0) else {
+                return;
+            };
+            let mut output = output.activate();
+            let mut session = output.session(cap);
+
+            // STEP 1. Accept new bindings into `pending_remap` and new source data into `deferred_source_updates`
             while let Some((_, data)) = remap_input.next() {
                 data.swap(&mut vector);
-                accepted_bindings.append(&mut vector);
-            }
-            // Extract ready batches from accepted bindings and update the replayer
-            let upper = frontiers[0].frontier();
-            if PartialOrder::less_than(&replayer.upper(), &upper) {
-                accepted_bindings.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-                // The times are totally ordered so we can binary search to find the prefix that is
-                // not beyond the upper and extract it into a batch.
-                let idx = accepted_bindings.partition_point(|(_, t, _)| !upper.less_equal(t));
-                replayer.append_batch(accepted_bindings.drain(0..idx), upper.to_owned());
+                pending_remap.append(&mut vector);
             }
 
-            // Accept new data
+            // STEP 2. Extract bindings not beyond `remap_frontier` and commit them into `remap_trace`.
+            let prev_remap_upper = std::mem::replace(&mut remap_upper, frontiers[0].frontier().to_owned());
+            if PartialOrder::less_than(&prev_remap_upper, &remap_upper) {
+                consolidation::consolidate_updates(&mut pending_remap);
+                pending_remap.sort_unstable_by(
+                    |(_, t1, _): &(FromTime, IntoTime, i64), (_, t2, _)| t1.cmp(t2),
+                );
+                let idx = pending_remap.partition_point(|(_, t, _)| !remap_upper.less_equal(t));
+                remap_trace.extend(pending_remap.drain(0..idx));
+            }
+
+            // Receive new source data and reclock with our current knowledge of remap_trace
             while let Some(event) = puller.pull() {
                 match event.as_mut() {
                     Event::Progress(changes) => {
-                        source_upper.update_iter(changes.drain(..));
+                        source_frontier.update_iter(changes.drain(..));
                     }
-                    Event::Messages(_, data) => {
-                        // Sorting by the linear extension before computing the chain decomposition
-                        // of the batch leads to an optimal chain decomposition for a number of
-                        // concrete Timestamp implementations that we are interested in.
-                        data.sort_unstable_by(|a: &(D1, FromTime, R), b| a.1.cmp(&b.1));
-                        source_batches.push_back(ChainBatch::from_iter(data.drain(..)));
-                    }
+                    Event::Messages(_, data) => stash.extend(data.drain(..)),
                 }
+            }
+            stash.sort_unstable_by(|(_, t1, _): &(D, FromTime, R), (_, t2, _)| t1.cmp(t2));
+            let mut new_source_updates = ChainBatch::from_iter(stash.drain(..));
+
+            // If any timestamp of the since frontier is beyond the upper we cannot proceed
+            if remap_since.iter().any(|t| remap_upper.less_equal(t)) {
+                return;
             }
 
-            // Reclock accepted data
-            let mut output = output.activate();
-            while let Some((frontier, cap)) = replayer.active_binding() {
-                let mut session = output.session(cap);
-                let into_t = cap.time();
-                source_batches.retain_mut(|batch| {
-                    session.give_iterator(
-                        batch
-                            .extract(frontier)
-                            .map(|(d, t, r)| (logic(d, t), into_t.clone(), r)),
-                    );
-                    // Retain non-empty batches
-                    !batch.is_empty()
-                });
-                // If we won't receive any more data for this binding we can go to the next one
-                if PartialOrder::less_equal(&frontier, &source_upper.frontier()) {
-                    replayer.step();
-                } else {
-                    // Otherwise yield and wait for more data
-                    break;
+            // We are now ready to step through the remap bindings in time order and perform the
+            // following actions:
+            // 1. Consider the entirety of the bindings to peel updates off of `new_source_updates`
+            // 2. Consider only newly added bindings to peel updates off of `deferred_source_updates`
+            // 3. Reclock `source_frontier` to calculate the new since frontier of the remap trace
+            let mut cur_time = IntoTime::minimum();
+            cur_time.advance_by(remap_since.borrow());
+            let mut cur_binding = MutableAntichain::new();
+
+            let mut remap = remap_trace.iter().peekable();
+            let mut reclocked_source_frontier = remap_upper.clone();
+            loop {
+                // 0. Load relevant updates for current time into `cur_binding`
+                while let Some((t_from, _, diff)) = remap.next_if(|(_, t, _)| t == &cur_time) {
+                    tmp_updates.push((t_from.clone(), *diff));
+                }
+                cur_binding.update_iter(tmp_updates.drain(..));
+                let cur_binding = cur_binding.frontier();
+
+                // 1. Extract updates from `new_source_updates`
+                for (data, _, diff) in new_source_updates.extract(cur_binding) {
+                    session.give((data, cur_time.clone(), diff));
+                }
+
+                // 2. Extract updates from `deferred_source_updates` if we're looking at a new binding
+                if prev_remap_upper.less_equal(&cur_time) {
+                    deferred_source_updates.retain_mut(|batch| {
+                        for (data, _, diff) in batch.extract(cur_binding) {
+                            session.give((data, cur_time.clone(), diff));
+                        }
+                        // Retain non-empty batches
+                        !batch.is_empty()
+                    })
+                }
+
+                // 3. Reclock `source_frontier`
+                if !PartialOrder::less_equal(&cur_binding, &source_frontier.frontier()) {
+                    reclocked_source_frontier.insert(cur_time);
+                }
+
+                // Advance to the next binding if there is any
+                match remap.peek() {
+                    Some((_, t, _)) => cur_time = t.clone(),
+                    None => break,
                 }
             }
+            capset.downgrade(&reclocked_source_frontier.borrow());
+
+            // Compact remap trace
+            remap_since = reclocked_source_frontier;
+            for (_, t, _) in remap_trace.iter_mut() {
+                t.advance_by(remap_since.borrow());
+            }
+            consolidation::consolidate_updates(&mut remap_trace);
+            remap_trace
+                .sort_unstable_by(|(_, t1, _): &(FromTime, IntoTime, i64), (_, t2, _)| t1.cmp(t2));
+
+            // If source updates remain they get deferred for the future.
+            if !new_source_updates.is_empty() {
+                deferred_source_updates.push(new_source_updates);
+            }
+            // TODO: Tidy up deferred chain batches
         }
     });
 
@@ -172,6 +290,7 @@ impl<D, T: Timestamp, R> ChainBatch<D, T, R> {
         &'a mut self,
         upper: AntichainRef<'a, T>,
     ) -> impl Iterator<Item = (D, T, R)> + 'a {
+        self.chains.retain(|chain| !chain.is_empty());
         self.chains
             .iter_mut()
             .map(move |chain| {
@@ -210,122 +329,6 @@ impl<D, T: Timestamp, R> FromIterator<(D, T, R)> for ChainBatch<D, T, R> {
     }
 }
 
-/// A struct that reveals the frontiers encoded in a remap collection in time order.
-struct BindingReplay<FromTime, IntoTime: Timestamp + TotalOrder> {
-    /// The upper frontier of bindings received so far. An `Option<Capability>` is sufficient to
-    /// describe a frontier because `IntoTime` is required to be totally ordered.
-    upper_capability: Option<Capability<IntoTime>>,
-    /// A queue of bindings sorted by time
-    bindings: VecDeque<(FromTime, IntoTime, i64)>,
-    /// An option representing whether an active binding exists. The option carries the capability
-    /// that should be used to send all the source data corresponding to its time.
-    active_binding: Option<Capability<IntoTime>>,
-    /// The accumulated frontier of the current active binding.
-    frontier: MutableAntichain<FromTime>,
-}
-
-impl<FromTime, IntoTime> BindingReplay<FromTime, IntoTime>
-where
-    FromTime: Timestamp,
-    IntoTime: Timestamp + Lattice + TotalOrder,
-{
-    /// Constructs a new replayer with a given initial capability. The provided capability must be
-    /// at the minimum timestamp.
-    fn new(cap: Capability<IntoTime>, as_of: AntichainRef<IntoTime>) -> Self {
-        assert_eq!(
-            cap.time(),
-            &IntoTime::minimum(),
-            "capability not the initial capability"
-        );
-
-        // The minimum timestamp advanced by the as_of frontier will accumulate to the minimum
-        // FromTime binding and so that becomes the first binding this replayer will report.
-        let mut min_ts = IntoTime::minimum();
-        min_ts.advance_by(as_of);
-        let first_binding = cap.delayed(&min_ts);
-
-        BindingReplay {
-            upper_capability: Some(cap),
-            bindings: VecDeque::new(),
-            frontier: MutableAntichain::new(),
-            active_binding: Some(first_binding),
-        }
-    }
-
-    /// The upper frontier of bindings received so far.
-    fn upper(&self) -> AntichainRef<IntoTime> {
-        let times = match self.upper_capability.as_deref() {
-            Some(time) => std::slice::from_ref(time),
-            None => &[],
-        };
-        AntichainRef::new(times)
-    }
-
-    /// Informs the replayer about the next batch of bindings in the `remap` collection. Each call
-    /// to `append_batch` must provide complete batches, where complete means that all future calls
-    /// to `append_batch` will contain updates that are beyond the provided `upper`.
-    fn append_batch<I>(&mut self, data: I, upper: Antichain<IntoTime>)
-    where
-        I: IntoIterator<Item = (FromTime, IntoTime, i64)>,
-    {
-        self.bindings.extend(data.into_iter());
-        if self.active_binding.is_none() {
-            self.active_binding = self.upper_capability.clone();
-            self.step();
-        }
-        match (self.upper_capability.as_mut(), upper.as_option()) {
-            (Some(cap), Some(time)) => cap.downgrade(time),
-            (_, None) => self.upper_capability = None,
-            (None, Some(_)) => unreachable!(),
-        }
-    }
-
-    /// Reveals the currently active binding and its accosiated `FromTime` frontier.
-    fn active_binding(&mut self) -> Option<(AntichainRef<FromTime>, &Capability<IntoTime>)> {
-        match self.active_binding.as_ref() {
-            // When the replayer initializes the active binding to the minimum timestamp we don't
-            // yet know the FromTime frontier that corresponds to it so we must wait for the first
-            // batch to arrive.
-            Some(cap) if self.upper().less_equal(cap.time()) => None,
-            Some(cap) => {
-                // Accumulate the bindings that are not beyond cap.time() into self.frontier to
-                // compute the FromTime frontier that corresponds to this IntoTime.
-                let idx = self
-                    .bindings
-                    .iter()
-                    .position(|b| &b.1 != cap.time())
-                    .unwrap_or(self.bindings.len());
-                let updates = self.bindings.drain(0..idx).map(|(from, _, r)| (from, r));
-                self.frontier.update_iter(updates);
-
-                Some((self.frontier.frontier(), cap))
-            }
-            None => None,
-        }
-    }
-
-    /// Steps the replayer to the next binding if one exists.
-    fn step(&mut self) {
-        match self.bindings.front().cloned() {
-            Some((_, into, _)) => self.active_binding.as_mut().unwrap().downgrade(&into),
-            None => self.active_binding = None,
-        }
-    }
-}
-
-impl<FromTime: Debug, IntoTime: Timestamp + TotalOrder> Debug
-    for BindingReplay<FromTime, IntoTime>
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BindingReplay")
-            .field("upper", &self.upper_capability.as_deref())
-            .field("bindings", &self.bindings)
-            .field("active_binding", &self.active_binding.as_deref())
-            .field("frontier", &&*self.frontier.frontier())
-            .finish()
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::sync::mpsc::{Receiver, TryRecvError};
@@ -361,7 +364,7 @@ mod test {
     /// * A `ReclockedStream` that allows observing the result of the reclocking process
     fn harness<D, F, R>(as_of: Antichain<IntoTime>, test_logic: F) -> R
     where
-        D: timely::Data + Debug,
+        D: timely::Data,
         F: FnOnce(&mut Worker<Thread>, BindingHandle, DataHandle<D>, ReclockedStream<D>) -> R
             + Send
             + Sync
@@ -374,7 +377,7 @@ mod test {
                     scope.scoped::<IntoTime, _, _>("IntoScope", move |scope| {
                         let (binding_handle, binding_collection) = scope.new_collection();
                         let (data_pusher, reclocked_collection) =
-                            reclock(&binding_collection, as_of, |d, _| d);
+                            reclock(&binding_collection, as_of);
                         let reclocked_capture = reclocked_collection.inner.capture();
                         (binding_handle, data_pusher, reclocked_capture)
                     });
@@ -462,7 +465,7 @@ mod test {
                 assert_eq!(
                     reclocked.try_recv(),
                     Ok(Event::Messages(
-                        1000u64,
+                        0u64,
                         vec![(1, 1000, 1), (1, 1000, 1), (3, 1000, 1)]
                     ))
                 );
@@ -523,6 +526,7 @@ mod test {
                 bindings.flush();
 
                 // The initial frontier should now map to the minimum between the two partitions
+                step(worker);
                 step(worker);
                 assert_eq!(
                     reclocked.try_recv(),
@@ -595,7 +599,7 @@ mod test {
                 step(worker);
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Messages(1000, vec![(1, 1000, 1), (2, 1000, 1)]))
+                    Ok(Event::Messages(0, vec![(1, 1000, 1), (2, 1000, 1)]))
                 );
                 assert_eq!(
                     reclocked.try_recv(),
@@ -621,7 +625,7 @@ mod test {
                 assert_eq!(
                     reclocked.try_recv(),
                     Ok(Event::Messages(
-                        2000,
+                        1001,
                         vec![(3, 2000, 1), (3, 2000, 1), (4, 2000, 1)]
                     ))
                 );
@@ -675,11 +679,11 @@ mod test {
                 step(worker);
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Progress(vec![(0, -1), (1000, 1)]))
+                    Ok(Event::Messages(0, vec![(50, 3000, 1),]))
                 );
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Messages(3000, vec![(50, 3000, 1),]))
+                    Ok(Event::Progress(vec![(0, -1), (1000, 1)]))
                 );
                 assert_eq!(
                     reclocked.try_recv(),
@@ -763,10 +767,10 @@ mod test {
             },
         );
 
-        let expected = vec![
-            (1500, vec![(1, 1500, 1), (2, 1500, 1)]),
-            (2000, vec![(3, 2000, 1), (4, 2000, 1)]),
-        ];
+        let expected = vec![(
+            1500,
+            vec![(1, 1500, 1), (2, 1500, 1), (3, 2000, 1), (4, 2000, 1)],
+        )];
         assert_eq!(expected, reclock_compact_remap);
         assert_eq!(expected, compact_reclock_remap);
     }
