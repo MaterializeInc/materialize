@@ -156,6 +156,7 @@ use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
@@ -1355,6 +1356,8 @@ pub struct Coordinator {
 
     /// Coordinator metrics.
     metrics: Metrics,
+    /// Optimizer metrics.
+    optimizer_metrics: OptimizerMetrics,
 
     /// Tracing handle.
     tracing_handle: TracingHandle,
@@ -2038,6 +2041,7 @@ impl Coordinator {
                         compute_instance.clone(),
                         entry.id(),
                         optimizer_config.clone(),
+                        self.optimizer_metrics(),
                     );
 
                     // MIR ⇒ MIR optimization (global)
@@ -2090,6 +2094,7 @@ impl Coordinator {
                         mv.refresh_schedule.clone(),
                         debug_name,
                         optimizer_config.clone(),
+                        self.optimizer_metrics(),
                     );
 
                     // MIR ⇒ MIR optimization (global)
@@ -2611,6 +2616,12 @@ impl Coordinator {
         Arc::clone(&self.catalog)
     }
 
+    /// Obtain a handle to the optimizer metrics, suitable for giving
+    /// out to non-Coordinator thread tasks.
+    fn optimizer_metrics(&self) -> OptimizerMetrics {
+        self.optimizer_metrics.clone()
+    }
+
     /// Obtain a writeable Catalog reference.
     fn catalog_mut(&mut self) -> &mut Catalog {
         // make_mut will cause any other Arc references (from owned_catalog) to
@@ -2909,6 +2920,7 @@ pub fn serve(
 
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
+        let optimizer_metrics = OptimizerMetrics::register_into(&metrics_registry);
         let segment_client_clone = segment_client.clone();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
@@ -2989,6 +3001,7 @@ pub fn serve(
                     storage_usage_collection_interval,
                     segment_client,
                     metrics,
+                    optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,

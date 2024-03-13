@@ -56,6 +56,7 @@ pub mod copy_to;
 pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
+pub mod metrics;
 pub mod peek;
 pub mod subscribe;
 pub mod view;

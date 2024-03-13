@@ -37,6 +37,7 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,
@@ -54,8 +55,10 @@ pub struct Optimizer {
     select_id: GlobalId,
     /// Data required to do a COPY TO query.
     copy_to_context: CopyToContext,
-    // Optimizer config.
+    /// Optimizer config.
     config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
 }
 
 impl Optimizer {
@@ -65,6 +68,7 @@ impl Optimizer {
         select_id: GlobalId,
         copy_to_context: CopyToContext,
         config: OptimizerConfig,
+        metrics: OptimizerMetrics,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -73,6 +77,7 @@ impl Optimizer {
             select_id,
             copy_to_context,
             config,
+            metrics,
         }
     }
 

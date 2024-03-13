@@ -32,6 +32,7 @@ use crate::optimize::dataflows::{
     dataflow_import_id_bundle, prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot,
     DataflowBuilder, ExprPrepStyle,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,
@@ -58,8 +59,10 @@ pub struct Optimizer {
     up_to: Option<Timestamp>,
     /// A human-readable name exposed internally (useful for debugging).
     debug_name: String,
-    // Optimizer config.
+    /// Optimizer config.
     config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
@@ -86,6 +89,7 @@ impl Optimizer {
         up_to: Option<Timestamp>,
         debug_name: String,
         config: OptimizerConfig,
+        metrics: OptimizerMetrics,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -98,6 +102,7 @@ impl Optimizer {
             up_to,
             debug_name,
             config,
+            metrics,
         }
     }
 

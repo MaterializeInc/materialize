@@ -42,6 +42,7 @@ use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerConfig, OptimizerError,
@@ -56,8 +57,10 @@ pub struct Optimizer {
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported index arrangement.
     exported_index_id: GlobalId,
-    // Optimizer config.
+    /// Optimizer config.
     config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
 }
 
 impl Optimizer {
@@ -66,6 +69,7 @@ impl Optimizer {
         compute_instance: ComputeInstanceSnapshot,
         exported_index_id: GlobalId,
         config: OptimizerConfig,
+        metrics: OptimizerMetrics,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -73,6 +77,7 @@ impl Optimizer {
             compute_instance,
             exported_index_id,
             config,
+            metrics,
         }
     }
 }

@@ -785,7 +785,7 @@ impl CatalogState {
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
 
                 // Build an optimizer for this VIEW.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
                 // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                 let raw_expr = view.expr;
@@ -932,7 +932,7 @@ impl CatalogState {
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
 
                 // Build an optimizer for this VIEW.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
                 // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                 let raw_expr = view.expr;
@@ -955,7 +955,7 @@ impl CatalogState {
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
                 // Build an optimizer for this VIEW.
                 // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
                 let raw_expr = materialized_view.expr;
                 let optimized_expr = optimizer.optimize(raw_expr.clone())?;

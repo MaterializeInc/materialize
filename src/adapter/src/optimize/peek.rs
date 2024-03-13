@@ -33,6 +33,7 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, MirDataflowDescription, Optimize, OptimizeMode,
     OptimizerConfig, OptimizerError,
@@ -52,8 +53,10 @@ pub struct Optimizer {
     select_id: GlobalId,
     /// A transient GlobalId to be used when constructing a PeekPlan.
     index_id: GlobalId,
-    // Optimizer config.
+    /// Optimizer config.
     config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
 }
 
 impl Optimizer {
@@ -64,6 +67,7 @@ impl Optimizer {
         select_id: GlobalId,
         index_id: GlobalId,
         config: OptimizerConfig,
+        metrics: OptimizerMetrics,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -73,6 +77,7 @@ impl Optimizer {
             select_id,
             index_id,
             config,
+            metrics,
         }
     }
 

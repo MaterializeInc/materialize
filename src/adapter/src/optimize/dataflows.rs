@@ -265,7 +265,7 @@ impl<'a> DataflowBuilder<'a> {
             return Ok(()); // Do nothing if not explicitly requested.
         }
 
-        let mut view_optimizer = view::Optimizer::new(config.clone());
+        let mut view_optimizer = view::Optimizer::new(config.clone(), None);
         for desc in df_desc.objects_to_build.iter_mut().rev() {
             if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
                 continue; // Skip descriptions that do not reference proper views.

@@ -271,7 +271,8 @@ impl Coordinator {
             .override_from(&explain_ctx);
 
         // Build an optimizer for this VIEW.
-        let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+        let mut optimizer =
+            optimize::view::Optimizer::new(optimizer_config, Some(self.optimizer_metrics()));
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(

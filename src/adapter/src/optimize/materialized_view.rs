@@ -44,6 +44,7 @@ use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{
     optimize_mir_local, trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize,
     OptimizeMode, OptimizerConfig, OptimizerError,
@@ -69,8 +70,10 @@ pub struct Optimizer {
     refresh_schedule: Option<RefreshSchedule>,
     /// A human-readable name exposed internally (useful for debugging).
     debug_name: String,
-    // Optimizer config.
+    /// Optimizer config.
     config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
 }
 
 impl Optimizer {
@@ -84,6 +87,7 @@ impl Optimizer {
         refresh_schedule: Option<RefreshSchedule>,
         debug_name: String,
         config: OptimizerConfig,
+        metrics: OptimizerMetrics,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -96,6 +100,7 @@ impl Optimizer {
             refresh_schedule,
             debug_name,
             config,
+            metrics,
         }
     }
 }

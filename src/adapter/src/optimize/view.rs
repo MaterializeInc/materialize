@@ -15,20 +15,27 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
 
+use crate::optimize::metrics::OptimizerMetrics;
 use crate::optimize::{optimize_mir_local, trace_plan, Optimize, OptimizerConfig, OptimizerError};
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
-    // Optimizer config.
+    /// Optimizer config.
     config: OptimizerConfig,
+    /// Optimizer metrics.
+    ///
+    /// Allowed to be `None` for cases where view optimization is invoked outside of the
+    /// coordinator context and the metrics are not available.
+    metrics: Option<OptimizerMetrics>,
 }
 
 impl Optimizer {
-    pub fn new(config: OptimizerConfig) -> Self {
+    pub fn new(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
         Self {
             typecheck_ctx: empty_context(),
             config,
+            metrics,
         }
     }
 }
