@@ -16,7 +16,7 @@
         "c12": "STRING",
         "c13": "JSON"
       },
-      "primary_key": ["c1"]
+      "primary_key": ["c12"]
     }
   },
   "ops": [
