@@ -503,6 +503,11 @@ where
         .await
     }
 
+    /// WIP
+    pub async fn expire(self) {
+        self.txns_cache.expire().await
+    }
+
     /// "Applies" all committed txns <= the given timestamp, ensuring that reads
     /// at that timestamp will not block.
     ///

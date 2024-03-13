@@ -302,6 +302,12 @@ where
         }
     }
 
+    /// WIP
+    pub async fn force_expire_leased_readers(&mut self) {
+        let maintenance = self.machine.force_expire_leased_readers().await;
+        maintenance.start_performing(&self.machine, &self.gc);
+    }
+
     /// Returns aggregate statistics about the contents of the shard TVC at the
     /// given frontier.
     ///

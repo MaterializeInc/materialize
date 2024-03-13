@@ -575,11 +575,18 @@ where
             .apply_unbatched_idempotent_cmd(
                 &metrics.cmds.compare_and_downgrade_since,
                 |_seqno, _cfg, state| {
-                    state.compare_and_downgrade_since::<O>(
+                    let ret = state.compare_and_downgrade_since::<O>(
                         reader_id,
                         expected_opaque,
                         (new_opaque, new_since),
-                    )
+                    );
+                    // tracing::info!(
+                    //     "WIP after CaDS to {:?}\n{:?}\n{:?}",
+                    //     new_since,
+                    //     state.critical_readers,
+                    //     state.leased_readers,
+                    // );
+                    ret
                 },
             )
             .await;
@@ -588,6 +595,18 @@ where
             Ok(since) => (Ok(since), maintenance),
             Err((opaque, since)) => (Err((opaque, since)), maintenance),
         }
+    }
+
+    pub async fn force_expire_leased_readers(&mut self) -> RoutineMaintenance {
+        let metrics = Arc::clone(&self.applier.metrics);
+        let (_seqno, (), maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_seqno, _cfg, state| {
+                tracing::info!("WIP force expiring {:?}", state.leased_readers);
+                state.leased_readers.clear();
+                ControlFlow::Continue(())
+            })
+            .await;
+        maintenance
     }
 
     pub async fn heartbeat_leased_reader(

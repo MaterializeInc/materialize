@@ -271,7 +271,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
 }
 
 /// The in-mem representation of an update in the txns shard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TxnsEntry {
     /// A data shard register operation.
     ///
