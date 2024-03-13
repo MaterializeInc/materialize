@@ -1733,6 +1733,7 @@ pub enum ClusterFeatureName {
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
     EnableEquivalencePropagation,
+    EnableVariadicLeftJoinLowering,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -3095,6 +3096,7 @@ pub enum ExplainPlanOptionName {
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
     EnableEquivalencePropagation,
+    EnableVariadicLeftJoinLowering,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

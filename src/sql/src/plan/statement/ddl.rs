@@ -3307,7 +3307,8 @@ generate_extracted_config!(
     (ReoptimizeImportedViews, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
-    (EnableEquivalencePropagation, Option<bool>, Default(None))
+    (EnableEquivalencePropagation, Option<bool>, Default(None)),
+    (EnableVariadicLeftJoinLowering, Option<bool>, Default(None))
 );
 
 pub fn plan_create_cluster(
@@ -3385,6 +3386,7 @@ pub fn plan_create_cluster(
             enable_eager_delta_joins,
             enable_new_outer_join_lowering,
             enable_equivalence_propagation,
+            enable_variadic_left_join_lowering,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -3392,6 +3394,7 @@ pub fn plan_create_cluster(
             enable_eager_delta_joins,
             enable_new_outer_join_lowering,
             enable_equivalence_propagation,
+            enable_variadic_left_join_lowering,
             ..Default::default()
         };
 
