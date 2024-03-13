@@ -9,8 +9,6 @@
 
 from materialize.mzcompose.service import Service
 
-FIVETRAN_TESTER_VERSION = "024.0222.002"
-
 
 class FivetranDestinationTester(Service):
     def __init__(
