@@ -221,8 +221,6 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 3);
-> SELECT mz_unsafe.mz_sleep(2);
-<null>
 
 # Check that we recover.
 > SELECT * FROM mv_gs2;
