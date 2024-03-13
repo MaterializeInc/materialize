@@ -331,15 +331,25 @@ async fn test_balancer() {
             host = balancer_https_internal.ip(),
             port = balancer_https_internal.port()
         );
-        let resp = client
-            .get(&metrics_url)
-            .send()
-            .await
-            .unwrap()
-            .text()
+        Retry::default()
+            .retry_async(|_| async {
+                let resp = client
+                    .get(&metrics_url)
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap();
+                if !resp.contains("mz_balancer_tenant_connection_active") {
+                    return Err("mz_balancer_tenant_connection_active");
+                }
+                if !resp.contains("mz_balancer_tenant_connection_rx") {
+                    return Err("mz_balancer_tenant_connection_rx");
+                }
+                Ok(())
+            })
             .await
             .unwrap();
-        assert_contains!(&resp, "mz_balancer_tenant_connection_active");
-        assert_contains!(&resp, "mz_balancer_tenant_connection_rx");
     }
 }
