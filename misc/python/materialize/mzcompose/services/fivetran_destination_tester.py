@@ -28,7 +28,7 @@ class FivetranDestinationTester(Service):
         super().__init__(
             name="fivetran-destination-tester",
             config={
-                "image": f"fivetrandocker/sdk-destination-tester:{FIVETRAN_TESTER_VERSION}",
+                "mzbuild": "fivetran-destination-tester",
                 "command": command,
                 "environment": environment,
                 "volumes": volumes_extra,
