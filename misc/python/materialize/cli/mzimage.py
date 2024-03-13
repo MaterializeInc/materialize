@@ -35,6 +35,8 @@ def main() -> int:
             rimage.run(args.image_args)
         elif args.command == "acquire":
             deps.acquire()
+        elif args.command == "ensure":
+            deps.ensure()
         elif args.command == "fingerprint":
             print(rimage.fingerprint())
         elif args.command == "spec":
@@ -91,6 +93,11 @@ def _parse_args() -> argparse.Namespace:
 
     add_image_subcommand(
         "acquire", description="Download or build an image.", help="acquire an image"
+    )
+    add_image_subcommand(
+        "ensure",
+        description="Ensure an image exists in the remote registry.",
+        help="ensure an image",
     )
 
     run_parser = add_image_subcommand(
