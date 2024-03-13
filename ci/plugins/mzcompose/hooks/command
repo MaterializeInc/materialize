@@ -9,7 +9,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+# Disable pipefail for the upload_artifact function, which can have failures in pipes and should still keep working
+set -eu +o pipefail
 
 . misc/shlib/shlib.bash
 
@@ -86,15 +87,16 @@ upload_artifact() {
         if [ -s "$artifact" ]; then
             buildkite-agent artifact upload --log-level error "$artifact"
             i=0
-            while read -r socket; do
+            all_sockets="$(mzcompose --mz-quiet exec "$cservice" ps aux 2> /dev/null | grep "/usr/local/bin/clusterd" | grep -v grep | sed -e "s/.* --internal-http-listen-addr=\(\/tmp\/[^ ]*\) .*/\1/")"
+            while IFS= read -r socket; do
                 artifact_socket=$(echo "$artifact" | sed -e "s#prof/#prof/clusterd$i-#")
-                if mzcompose --mz-quiet exec "$cservice" curl --silent --unix-socket "$socket" http:/prof/heap > "$artifact_socket" 2> /dev/null; then
+                if mzcompose --mz-quiet exec "$cservice" curl --silent --unix-socket "$socket" http:/prof/heap > "$artifact_socket" 2> /dev/null || true; then
                     if [ -s "$artifact_socket" ]; then
-                        buildkite-agent artifact upload --log-level error "$artifact_socket"
+                        buildkite-agent artifact upload --log-level error "$artifact_socket" || true
                     fi
                 fi
                 ((i++))
-            done <<< "$(mzcompose --mz-quiet exec "$cservice" ps aux | grep "/usr/local/bin/clusterd" | grep -v grep | sed -e "s/.* --internal-http-listen-addr=\(\/tmp\/[^ ]*\) .*/\1/" 2> /dev/null)"
+            done <<< "$all_sockets"
         else
             # For clusterd
             if mzcompose --mz-quiet exec "$cservice" curl --silent http://127.0.0.1:6878/heap > "$artifact" 2> /dev/null; then
