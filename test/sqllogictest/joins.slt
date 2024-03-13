@@ -165,43 +165,30 @@ Explained Query:
     Project (#0, #1) // { arity: 2 }
       Join on=(#0 = #2) type=differential // { arity: 3 }
         implementation
-          %1[#0]UKA » %0:l[#0]K
+          %1[#0]UKA » %0:l0[#0]K
         ArrangeBy keys=[[#0]] // { arity: 2 }
-          ReadStorage materialize.public.l // { arity: 2 }
+          Get l0 // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
-          Distinct project=[#0] // { arity: 1 }
+          Distinct project=[(#0 + 1)] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Join on=(#1 = #2 = #3) type=delta // { arity: 4 }
+              Join on=(#0 = #1) type=differential // { arity: 2 }
                 implementation
-                  %0:l1 » %1[#0]UKA » %2[#0]UKA
-                  %1 » %2[#0]UKA » %0:l1[#1]Kf
-                  %2 » %1[#0]UKA » %0:l1[#1]Kf
-                ArrangeBy keys=[[#1]] // { arity: 2 }
-                  Filter (#0 = (#1 + 1)) // { arity: 2 }
-                    Get l1 // { arity: 2 }
+                  %1[#0]UKA » %0:l1[#0]K
                 ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Distinct project=[#0] // { arity: 1 }
-                    Project (#1) // { arity: 1 }
-                      Filter (#1) IS NOT NULL // { arity: 2 }
-                        Get l1 // { arity: 2 }
+                  Get l1 // { arity: 1 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct project=[(#0 + 1)] // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Filter (#0) IS NOT NULL // { arity: 2 }
-                        ReadStorage materialize.public.l // { arity: 2 }
+                    Get l1 // { arity: 1 }
   With
     cte l1 =
-      CrossJoin type=differential // { arity: 2 }
-        implementation
-          %0[×] » %1:l0[×]
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Distinct project=[#0] // { arity: 1 }
-            Get l0 // { arity: 1 }
-        ArrangeBy keys=[[]] // { arity: 1 }
-          Get l0 // { arity: 1 }
-    cte l0 =
       Project (#0) // { arity: 1 }
+        Get l0 // { arity: 2 }
+    cte l0 =
+      Filter (#0) IS NOT NULL // { arity: 2 }
         ReadStorage materialize.public.l // { arity: 2 }
+
+Source materialize.public.l
+  filter=((#0) IS NOT NULL)
 
 EOF
 

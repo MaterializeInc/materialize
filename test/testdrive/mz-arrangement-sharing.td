@@ -46,7 +46,6 @@ DistinctByErrorCheck
   );
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
 "ArrangeBy[[Column(0)]] [val: empty]"
 "ArrangeBy[[Column(0)]]"
 "Arranged DistinctBy [val: empty]"
