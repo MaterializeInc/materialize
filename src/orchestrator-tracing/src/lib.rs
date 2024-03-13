@@ -92,6 +92,52 @@ pub struct TracingCliArgs {
     /// Only respected when `--log-format` is `text`.
     #[clap(long, env = "LOG_PREFIX")]
     pub log_prefix: Option<String>,
+    /// OpenTelemetry batch flag defaults are based on the
+    /// `BatchConfig::default()` in the opentelemetry_sdk crate.
+    /// <https://docs.rs/opentelemetry_sdk/0.21.2/opentelemetry_sdk/trace/struct.BatchConfig.html>
+    ///
+    /// The max number of tracing spans to queue before dropping.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_MAX_BATCH_QUEUE_SIZE",
+        default_value = "2048",
+        requires = "opentelemetry-endpoint"
+    )]
+    pub opentelemetry_max_batch_queue_size: usize,
+    /// The max number of spans to export in a single batch.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_MAX_EXPORT_BATCH_SIZE",
+        default_value = "512",
+        requires = "opentelemetry-endpoint"
+    )]
+    pub opentelemetry_max_export_batch_size: usize,
+    /// The max number of concurrent export tasks.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_MAX_CONCURRENT_EXPORTS",
+        default_value = "1",
+        requires = "opentelemetry-endpoint"
+    )]
+    pub opentelemetry_max_concurrent_exports: usize,
+    /// The delay between sequential sending of batches.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_SCHED_DELAY",
+        default_value = "5000ms",
+        requires = "opentelemetry-endpoint",
+        parse(try_from_str = humantime::parse_duration)
+    )]
+    pub opentelemetry_sched_delay: Duration,
+    /// The max time to attempt exporting a batch.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_MAX_EXPORT_TIMEOUT",
+        default_value = "30s",
+        requires = "opentelemetry-endpoint",
+        parse(try_from_str = humantime::parse_duration)
+    )]
+    pub opentelemetry_max_export_timeout: Duration,
     /// Export OpenTelemetry tracing events to the provided endpoint.
     ///
     /// The specified endpoint should speak the OTLP/HTTP protocol. If the
@@ -231,6 +277,11 @@ impl TracingCliArgs {
                         .map(|header| (header.key.clone(), header.value.clone()))
                         .collect(),
                     filter: self.startup_opentelemetry_filter.clone().into(),
+                    max_batch_queue_size: self.opentelemetry_max_batch_queue_size,
+                    max_export_batch_size: self.opentelemetry_max_export_batch_size,
+                    max_concurrent_exports: self.opentelemetry_max_concurrent_exports,
+                    batch_scheduled_delay: self.opentelemetry_sched_delay,
+                    max_export_timeout: self.opentelemetry_max_export_timeout,
                     resource: Resource::new(
                         self.opentelemetry_resource
                             .iter()
@@ -339,6 +390,11 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 startup_log_filter,
                 log_prefix,
                 log_format,
+                opentelemetry_max_batch_queue_size,
+                opentelemetry_max_export_batch_size,
+                opentelemetry_max_concurrent_exports,
+                opentelemetry_sched_delay,
+                opentelemetry_max_export_timeout,
                 opentelemetry_endpoint,
                 opentelemetry_header,
                 startup_opentelemetry_filter: _,
@@ -369,6 +425,23 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                             .expect("opentelemetry-header had non-ascii value"),
                     ));
                 }
+                args.push(format!(
+                    "--opentelemetry-max-batch-queue-size={opentelemetry_max_batch_queue_size}",
+                ));
+                args.push(format!(
+                    "--opentelemetry-max-export-batch-size={opentelemetry_max_export_batch_size}",
+                ));
+                args.push(format!(
+                    "--opentelemetry-max-concurrent-exports={opentelemetry_max_concurrent_exports}",
+                ));
+                args.push(format!(
+                    "--opentelemetry-sched-delay={}ms",
+                    opentelemetry_sched_delay.as_millis(),
+                ));
+                args.push(format!(
+                    "--opentelemetry-max-export-timeout={}ms",
+                    opentelemetry_max_export_timeout.as_millis(),
+                ));
             }
             #[cfg(feature = "tokio-console")]
             if let Some(tokio_console_listen_addr) = tokio_console_listen_addr {

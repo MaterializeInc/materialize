@@ -143,6 +143,17 @@ pub struct OpenTelemetryConfig {
     pub headers: HeaderMap,
     /// A filter which determines which events are exported.
     pub filter: EnvFilter,
+    /// How many spans can be queued before dropping.
+    pub max_batch_queue_size: usize,
+    /// How many spans to process in a single batch
+    pub max_export_batch_size: usize,
+    /// How many concurrent export tasks to allow.
+    /// More tasks can lead to more memory consumed by the exporter.
+    pub max_concurrent_exports: usize,
+    /// Delay between consecutive batch exports.
+    pub batch_scheduled_delay: Duration,
+    /// How long to wait for a batch to be sent before dropping it.
+    pub max_export_timeout: Duration,
     /// `opentelemetry::sdk::resource::Resource` to include with all
     /// traces.
     pub resource: Resource,
@@ -365,6 +376,12 @@ where
             .tonic()
             .with_channel(channel)
             .with_metadata(MetadataMap::from_headers(otel_config.headers));
+        let batch_config = opentelemetry_sdk::trace::BatchConfig::default()
+            .with_max_queue_size(otel_config.max_batch_queue_size)
+            .with_max_export_batch_size(otel_config.max_export_batch_size)
+            .with_max_concurrent_exports(otel_config.max_concurrent_exports)
+            .with_scheduled_delay(otel_config.batch_scheduled_delay)
+            .with_max_export_timeout(otel_config.max_export_timeout);
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
             .with_trace_config(
@@ -380,6 +397,7 @@ where
                 ),
             )
             .with_exporter(exporter)
+            .with_batch_config(batch_config)
             .install_batch(opentelemetry_sdk::runtime::Tokio)
             .unwrap();
 
