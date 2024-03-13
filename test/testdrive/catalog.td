@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default replicas=1
+$ set-arg-default single-replica-cluster=quickstart
+
 # Testdrive accounts for multi-replica runs by creating additional clusters,
 # which affect the output of this test––instead just don't run this test.
 

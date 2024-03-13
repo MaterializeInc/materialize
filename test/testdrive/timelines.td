@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-storage-size=1
+$ set-arg-default single-replica-cluster=quickstart
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_materialize = true
 

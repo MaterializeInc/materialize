@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 #
 # Tests in support of https://github.com/MaterializeInc/materialize/pull/6471
 # "optimize topk when limit=1 and input is monotonic (append-only)"

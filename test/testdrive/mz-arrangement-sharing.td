@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-replica-size=1
+
 # When updating this file, make sure that the number of arrangements doesn't
 # increase unexpectedly. This is to prevent issues like this:
 # https://github.com/MaterializeInc/materialize/issues/20179

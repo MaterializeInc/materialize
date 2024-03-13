@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-replica-size=1
+
 # Regression test for https://github.com/MaterializeInc/materialize/issues/13790
 
 # The contents of the introspection tables depend on the replica size

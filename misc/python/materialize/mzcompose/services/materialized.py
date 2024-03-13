@@ -130,7 +130,7 @@ class Materialized(Service):
             command += ["--orchestrator-process-propagate-crashes"]
 
         self.default_storage_size = (
-            default_size
+            str(default_size)
             if image
             and "latest" not in image
             and "devel" not in image

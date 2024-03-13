@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default replicas=1
+$ set-arg-default default-replica-size=1
+
 # The expected number of rows in system tables depends on the number of replicas
 $ skip-if
 SELECT ${arg.replicas} > 1;

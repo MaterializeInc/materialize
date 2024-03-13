@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-replica-size=1
+$ set-arg-default single-replica-cluster=quickstart
+
 # Test creating and dropping various views and sources that depend upon
 # on another, and indices on those views and sources.
 

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Test the cardinality of TPCH tables. For tables that have a random
 # cardinality, don't depend on exact count that could change if the rng
 # implementation changes, just check that it's within the spec range.

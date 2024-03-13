@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Regression test for #7170, in which non-nullable fields of nullable records
 # were not correctly handled.
 

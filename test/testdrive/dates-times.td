@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # This test exercises dates and times at the boundary (e.g., by sending them
 # through pgwire). Operations on dates and times are more thoroughly tested in
 # dates-times.slt.

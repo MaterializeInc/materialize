@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Additional test for materialized views, on top of those in
 # test/sqllogictest/materialized_views.slt
 

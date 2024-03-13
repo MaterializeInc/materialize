@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-storage-size=1
+
 # 'date' is days since the start of the UNiX epoch
 
 $ set date={"type": "record", "name": "date_field", "fields": [ { "name": "f1", "type": { "logicalType": "date", "type": "int" } } ] }

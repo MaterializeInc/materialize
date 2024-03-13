@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Test `mz_internal.mz_object_dependencies`.
 
 $ skip-consistency-checks reason="workflow uses SSH keys which we currently can't check"

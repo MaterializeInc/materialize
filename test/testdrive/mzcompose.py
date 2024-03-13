@@ -101,6 +101,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             user="mz_system",
         )
 
+        non_default_testdrive_vars = []
+
         if args.replicas > 1:
             c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
             # Make sure a replica named 'r1' always exists
@@ -131,22 +133,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 port=6877,
             )
 
-            single_replica_cluster = "testdrive_single_replica_cluster"
-        else:
-            single_replica_cluster = "quickstart"
+            non_default_testdrive_vars.append(f"--var=replicas={args.replicas}")
+            non_default_testdrive_vars.append(
+                "--var=single-replica-cluster=testdrive_single_replica_cluster"
+            )
+
+        if args.default_size != 1:
+            non_default_testdrive_vars.append(
+                f"--var=default-replica-size={materialized.default_replica_size}"
+            )
+            non_default_testdrive_vars.append(
+                f"--var=default-storage-size={materialized.default_storage_size}"
+            )
 
         junit_report = ci_util.junit_report_filename(c.name)
 
         try:
             junit_report = ci_util.junit_report_filename(c.name)
             print(f"Passing through arguments to testdrive {passthrough_args}\n")
+            # do not set default args, they should be set in the td file using set-arg-default to easen the execution
+            # without mzcompose
             for file in args.files:
                 c.run_testdrive_files(
                     f"--junit-report={junit_report}",
-                    f"--var=replicas={args.replicas}",
-                    f"--var=default-replica-size={materialized.default_replica_size}",
-                    f"--var=default-storage-size={materialized.default_storage_size}",
-                    f"--var=single-replica-cluster={single_replica_cluster}",
+                    *non_default_testdrive_vars,
                     *passthrough_args,
                     file,
                 )

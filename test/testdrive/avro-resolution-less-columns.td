@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 #
 # Allow a writer schema that has a smaller number of columns if the reader schema has specified a default
 #

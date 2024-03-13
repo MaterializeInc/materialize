@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-replica-size=1
+
 # Test for a subset of the information returned by introspection sources.
 # The test focuses on computing answers that are independent of particular
 # timing measurement data, even if these stable answers may take some time

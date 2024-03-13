@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-storage-size=1
+
 # Test expected population of mz_audit_events after some DDL statements.
 
 $ set-regex match=u\d+ replacement=<GID>

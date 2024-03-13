@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default replicas=1
+
 # Exercises Webhook sources.
 
 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Tests that assert the privileges that are assumed to be always granted to #
 # the mz_support user. This test can be rewritten to validate the output of the
 # `connection=mz_support` command once we have `SET ROLE` working.
