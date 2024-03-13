@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Test monotonicity analyses which derive from ENVELOPE NONE sources.
 # Note that these only test the implementation for monotonic sources,
 # they do not test that the analysis doesn't have false positives on

@@ -16,6 +16,9 @@
 $ nop
 
 # [btv] uncomment if we bring back classic debezium mode
+#
+# $ set-arg-default single-replica-cluster=quickstart
+#
 # $ set pg-dbz-schema={
 #     "type": "record",
 #     "name": "envelope",

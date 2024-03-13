@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-storage-size=1
+
 $ kafka-create-topic topic=input_csv partitions=1
 $ kafka-create-topic topic=input_csv_partitioned partitions=2
 $ kafka-create-topic topic=input_proto

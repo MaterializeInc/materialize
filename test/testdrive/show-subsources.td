@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Create a load generator source that has several subsources.
 > CREATE SOURCE lga
   IN CLUSTER ${arg.single-replica-cluster}

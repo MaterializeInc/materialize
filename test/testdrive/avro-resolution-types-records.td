@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 #
 # Attempt to push a double value inside a record into a int source. According to the schema registry
 # this is allowed, so it is up to Materialize to reject it.

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-storage-size=1
+
 $ kafka-create-topic topic=request-log
 $ kafka-ingest topic=request-log format=bytes
 123.17.127.5 - - [22/Jan/2020 18:59:52] "GET / HTTP/1.1" 200 -

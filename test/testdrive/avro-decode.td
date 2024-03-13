@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default default-storage-size=1
+
 # Test complex reordered/resolved schemas.
 # The schemas are mostly a copy and paste from test_complex_resolutions
 # in mod avro. The code duplication is warranted because making that

@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Create sources and verify they can ingest data while `environmentd` is online.
 
 $ kafka-create-topic topic=data partitions=1

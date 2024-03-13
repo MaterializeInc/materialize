@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Verify that envelope types are correctly reported in mz_sinks
 
 > CREATE CONNECTION kafka_conn

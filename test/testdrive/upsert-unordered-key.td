@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 # Must be a subset of the keys in the rows AND
 # in a different order than the value.
 $ set keyschema={

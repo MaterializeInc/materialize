@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 $ set-regex match=cluster1|quickstart replacement=<CLUSTER_NAME>
 
 ! INSERT INTO t VALUES (1, 'a');
