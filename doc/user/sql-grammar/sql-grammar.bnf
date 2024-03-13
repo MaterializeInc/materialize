@@ -105,6 +105,10 @@ create_connection_postgres ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'POSTGRES'
   '(' field '='? val ( ',' field '='? val )* ')'
   ('WITH' with_options)?
+create_connection_mysql ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'MYSQL'
+  '(' field '='? val ( ',' field '='? val )* ')'
+  ('WITH' with_options)?
 create_connection_aws_privatelink ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'AWS' 'PRIVATELINK'
   '(' field '='? val ( ',' field '='? val )* ')'
@@ -190,6 +194,18 @@ create_source_postgres ::=
   ('IN CLUSTER' cluster_name)?
   'FROM' 'POSTGRES' 'CONNECTION' connection_name
   '(' 'PUBLICATION' publication_name ( ( ',' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? ) ')'
+  ('FOR ALL TABLES'
+    | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')'
+    | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'
+  )
+  ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
+  // ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+create_source_mysql ::=
+  'CREATE SOURCE' ('IF NOT EXISTS')? src_name
+  ('IN CLUSTER' cluster_name)?
+  'FROM' 'MYSQL' 'CONNECTION' connection_name
+  ( ( '(' 'TEXT COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? )? )
+      ( ( ',' 'IGNORE COLUMNS' ('(' (column_name) ( ( ',' column_name ) )* ')')? ')' )? )
   ('FOR ALL TABLES'
     | 'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')'
     | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'
