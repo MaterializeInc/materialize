@@ -122,6 +122,23 @@ class ItemType(str, Enum):
         """Return the SQL string corresponding to this item type."""
         return self.replace("-", " ").upper()
 
+    def show_create(self, fqname: str) -> str | None:
+        """
+        Return a show create query for an item of the given type identified by
+        the given `fqname` or `None` for item types that are currently not
+        supported.
+        """
+        if self in [
+            ItemType.INDEX,
+            ItemType.MATERIALIZED_VIEW,
+            ItemType.SOURCE,
+            ItemType.TABLE,
+            ItemType.VIEW,
+        ]:
+            return f"SHOW CREATE {self.sql()} {fqname}"
+        else:  # unsupported item type
+            return None
+
 
 @dataclass(frozen=True)
 class CreateFile:

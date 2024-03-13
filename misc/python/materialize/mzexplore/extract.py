@@ -100,17 +100,8 @@ def defs(
             if create_file.skip():
                 continue
 
-            if item_type == ItemType.INDEX:
-                show_create_query = f"SHOW CREATE INDEX {fqname}"
-            elif item_type == ItemType.MATERIALIZED_VIEW:
-                show_create_query = f"SHOW CREATE MATERIALIZED VIEW {fqname}"
-            elif item_type == ItemType.SOURCE:
-                show_create_query = f"SHOW CREATE SOURCE {fqname}"
-            elif item_type == ItemType.TABLE:
-                show_create_query = f"SHOW CREATE TABLE {fqname}"
-            elif item_type == ItemType.VIEW:
-                show_create_query = f"SHOW CREATE VIEW {fqname}"
-            else:  # "connection", "secret"
+            show_create_query = item_type.show_create(fqname)
+            if show_create_query is None:
                 continue
 
             try:
