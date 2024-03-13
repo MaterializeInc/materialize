@@ -526,7 +526,9 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None, None)
             .await?;
-        Self::open_debug_catalog_inner(storage, now, environment_id).await
+        let system_parameter_defaults = BTreeMap::default();
+        Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
+            .await
     }
 
     /// Opens a read only debug persist backed catalog defined by `persist_client` and
@@ -537,6 +539,7 @@ impl Catalog {
         persist_client: PersistClient,
         now: NowFn,
         environment_id: EnvironmentId,
+        system_parameter_defaults: BTreeMap<String, String>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
             mz_catalog::durable::test_persist_backed_catalog_state(
@@ -548,13 +551,20 @@ impl Catalog {
         let storage = openable_storage
             .open_read_only(&test_bootstrap_args())
             .await?;
-        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+        Self::open_debug_catalog_inner(
+            storage,
+            now,
+            Some(environment_id),
+            system_parameter_defaults,
+        )
+        .await
     }
 
     async fn open_debug_catalog_inner(
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
+        system_parameter_defaults: BTreeMap<String, String>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0, 0)));
@@ -577,7 +587,7 @@ impl Catalog {
                     skip_migrations: true,
                     cluster_replica_sizes: Default::default(),
                     builtin_cluster_replica_size: "1".into(),
-                    system_parameter_defaults: Default::default(),
+                    system_parameter_defaults,
                     remote_system_parameters: None,
                     availability_zones: vec![],
                     egress_ips: vec![],

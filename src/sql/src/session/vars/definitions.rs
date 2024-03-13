@@ -2101,7 +2101,7 @@ feature_flags!(
     {
         name: enable_equivalence_propagation,
         desc: "Enable the EquivalencePropagation transform in the optimizer",
-        default: true, // TODO(aalexandrov): revert this to false
+        default: false,
         internal: true,
         enable_for_item_parsing: false,
     },
