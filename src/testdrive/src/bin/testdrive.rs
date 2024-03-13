@@ -306,7 +306,9 @@ async fn main() {
         args.consistency_checks,
     );
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
-        eprintln!("    Shard: {}/{}", shard + 1, shard_count);
+        if shard != 0 || shard_count != 1 {
+            eprintln!("    Shard: {}/{}", shard + 1, shard_count);
+        }
     }
 
     let mut arg_vars = BTreeMap::new();

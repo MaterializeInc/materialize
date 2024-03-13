@@ -154,7 +154,9 @@ async fn main() -> ExitCode {
     };
 
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
-        eprintln!("Shard: {}/{}", shard + 1, shard_count);
+        if shard != 0 || shard_count != 1 {
+            eprintln!("Shard: {}/{}", shard + 1, shard_count);
+        }
     }
 
     if args.rewrite_results {
