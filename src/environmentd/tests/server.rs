@@ -4165,3 +4165,77 @@ async fn test_durable_oids() {
         assert_ne!(table_oid, view_oid);
     }
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_double_encoded_json() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.expect("success");
+
+    client
+        .execute("CREATE TABLE t1 (a jsonb)", &[])
+        .await
+        .unwrap();
+    client
+        .execute("GRANT ALL PRIVILEGES ON TABLE t1 TO PUBLIC", &[])
+        .await
+        .unwrap();
+
+    client
+        .execute(r#"INSERT INTO t1 VALUES ('{ "type": "foo" }')"#, &[])
+        .await
+        .unwrap();
+    client
+        .execute(
+            r#"INSERT INTO t1 VALUES ('" { \"type\": \"foo\" } "')"#,
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let http_client = reqwest::Client::new();
+    let http_url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr(),
+    ))
+    .unwrap();
+    let query = serde_json::json!({
+        "query": "SELECT a FROM t1"
+    });
+
+    let result: serde_json::Value = http_client
+        .post(http_url)
+        .json(&query)
+        .send()
+        .await
+        .expect("failed to send SQL")
+        .json()
+        .await
+        .expect("invalid JSON");
+    let rows = result
+        .as_object()
+        .unwrap()
+        .get("results")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .get("rows")
+        .unwrap();
+
+    insta::assert_debug_snapshot!(rows, @r###"
+    Array [
+        Array [
+            Object {
+                "type": String("foo"),
+            },
+        ],
+        Array [
+            String(" { \"type\": \"foo\" } "),
+        ],
+    ]
+    "###);
+}
