@@ -2843,8 +2843,8 @@ pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
             mz_catalog.mz_sources AS subsources
                 JOIN
                     mz_internal.mz_object_dependencies AS deps
-                    ON subsources.id = deps.referenced_object_id
-                JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.object_id
+                    ON subsources.id = deps.object_id
+                JOIN mz_catalog.mz_sources AS sources ON sources.id = deps.referenced_object_id
     ),
      -- Determine which collection's ID to use for the status
     id_of_status_to_use AS
