@@ -180,7 +180,7 @@ impl AdapterNotice {
             AdapterNotice::RbacUserDisabled => Severity::Notice,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
-            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Debug,
+            AdapterNotice::AutoRunOnIntrospectionCluster => Severity::Notice,
             AdapterNotice::AlterIndexOwner { .. } => Severity::Warning,
             AdapterNotice::CannotRevoke { .. } => Severity::Warning,
             AdapterNotice::NonApplicablePrivilegeTypes { .. } => Severity::Notice,
@@ -230,6 +230,7 @@ impl AdapterNotice {
                 }
             },
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
+            AdapterNotice::AutoRunOnIntrospectionCluster => Some("See: https://materialize.com/s/auto-routing".into()),
             AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
             AdapterNotice::UnknownSessionDatabase(_) => Some(
                 "Create the database with CREATE DATABASE \
@@ -405,7 +406,7 @@ impl fmt::Display for AdapterNotice {
             ),
             AdapterNotice::AutoRunOnIntrospectionCluster => write!(
                 f,
-                "query was automatically run on the \"mz_introspection\" cluster"
+                "query was automatically run on the \"mz_introspection\" cluster to improve performance"
             ),
             AdapterNotice::AlterIndexOwner { name } => {
                 write!(f, "cannot change owner of {}", name.quoted())
