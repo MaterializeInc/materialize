@@ -168,7 +168,6 @@ pub struct State {
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
     cmd_vars: BTreeMap<String, String>,
-    default_arg_vars: BTreeMap<String, String>,
     seed: u32,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
@@ -662,25 +661,21 @@ impl Run for PosCommand {
             Command::Builtin(builtin, _) => Some(builtin.name.clone()),
             _ => None,
         };
-        let subst = |msg: &str,
-                     vars: &BTreeMap<String, String>,
-                     default_vars: &BTreeMap<String, String>| {
-            substitute_vars(msg, vars, default_vars, &ignore_prefix, false).map_err(wrap_err)
+        let subst = |msg: &str, vars: &BTreeMap<String, String>| {
+            substitute_vars(msg, vars, &ignore_prefix, false).map_err(wrap_err)
         };
-        let subst_re = |msg: &str,
-                        vars: &BTreeMap<String, String>,
-                        default_vars: &BTreeMap<String, String>| {
-            substitute_vars(msg, vars, default_vars, &ignore_prefix, true).map_err(wrap_err)
+        let subst_re = |msg: &str, vars: &BTreeMap<String, String>| {
+            substitute_vars(msg, vars, &ignore_prefix, true).map_err(wrap_err)
         };
 
         let r = match self.command {
             Command::Builtin(mut builtin, version_constraint) => {
                 handle_version!(version_constraint);
                 for val in builtin.args.values_mut() {
-                    *val = subst(val, &state.cmd_vars, &state.default_arg_vars)?;
+                    *val = subst(val, &state.cmd_vars)?;
                 }
                 for line in &mut builtin.input {
-                    *line = subst(line, &state.cmd_vars, &state.default_arg_vars)?;
+                    *line = subst(line, &state.cmd_vars)?;
                 }
                 match builtin.name.as_ref() {
                     "check-consistency" => consistency::run_consistency_checks(state).await,
@@ -750,11 +745,11 @@ impl Run for PosCommand {
             }
             Command::Sql(mut sql, version_constraint) => {
                 handle_version!(version_constraint);
-                sql.query = subst(&sql.query, &state.cmd_vars, &state.default_arg_vars)?;
+                sql.query = subst(&sql.query, &state.cmd_vars)?;
                 if let SqlOutput::Full { expected_rows, .. } = &mut sql.expected_output {
                     for row in expected_rows {
                         for col in row {
-                            *col = subst(col, &state.cmd_vars, &state.default_arg_vars)?;
+                            *col = subst(col, &state.cmd_vars)?;
                         }
                     }
                 }
@@ -762,21 +757,17 @@ impl Run for PosCommand {
             }
             Command::FailSql(mut sql, version_constraint) => {
                 handle_version!(version_constraint);
-                sql.query = subst(&sql.query, &state.cmd_vars, &state.default_arg_vars)?;
+                sql.query = subst(&sql.query, &state.cmd_vars)?;
                 sql.expected_error = match &sql.expected_error {
-                    SqlExpectedError::Contains(s) => SqlExpectedError::Contains(subst(
-                        s,
-                        &state.cmd_vars,
-                        &state.default_arg_vars,
-                    )?),
-                    SqlExpectedError::Exact(s) => {
-                        SqlExpectedError::Exact(subst(s, &state.cmd_vars, &state.default_arg_vars)?)
+                    SqlExpectedError::Contains(s) => {
+                        SqlExpectedError::Contains(subst(s, &state.cmd_vars)?)
                     }
-                    SqlExpectedError::Regex(s) => SqlExpectedError::Regex(subst_re(
-                        s,
-                        &state.cmd_vars,
-                        &state.default_arg_vars,
-                    )?),
+                    SqlExpectedError::Exact(s) => {
+                        SqlExpectedError::Exact(subst(s, &state.cmd_vars)?)
+                    }
+                    SqlExpectedError::Regex(s) => {
+                        SqlExpectedError::Regex(subst_re(s, &state.cmd_vars)?)
+                    }
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
                 sql::run_fail_sql(sql, state).await
@@ -791,7 +782,6 @@ impl Run for PosCommand {
 fn substitute_vars(
     msg: &str,
     vars: &BTreeMap<String, String>,
-    default_vars: &BTreeMap<String, String>,
     ignore_prefix: &Option<String>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
@@ -807,12 +797,6 @@ fn substitute_vars(
         }
 
         if let Some(val) = vars.get(name) {
-            if regex_escape {
-                regex::escape(val)
-            } else {
-                val.to_string()
-            }
-        } else if let Some(val) = default_vars.get(name) {
             if regex_escape {
                 regex::escape(val)
             } else {
@@ -1003,7 +987,6 @@ pub async fn create_state(
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
         cmd_vars: BTreeMap::new(),
-        default_arg_vars: BTreeMap::new(),
         seed,
         temp_path,
         _tempfile,
