@@ -142,62 +142,60 @@ foo left join bar on foo.a = bar.a
 ----
 Explained Query:
   Return
-    Union
-      Map (null, null)
-        Union
-          Negate
-            Project (#0..=#7)
-              Get l4
-          Get l3
-      Project (#0..=#7, #6, #8)
-        Get l4
+    Project (#0..=#2, #14, #15, #17..=#19, #21, #22)
+      Map ((#5) IS NULL, case when #13 then null else #0 end, case when #13 then null else #4 end, (#9) IS NULL, case when #16 then null else #1 end, case when #16 then null else #7 end, case when #16 then null else #8 end, (#12) IS NULL, case when #20 then null else #10 end, case when #20 then null else #11 end)
+        Join on=(#0 = #3 AND #1 = #6 AND #10 = case when (#9) IS NULL then null else #7 end) type=delta
+          ArrangeBy keys=[[#0], [#1]]
+            ReadStorage materialize.public.foo
+          ArrangeBy keys=[[#0]]
+            Union
+              Map (true)
+                ReadStorage materialize.public.bar
+              Map (null, null)
+                Threshold
+                  Union
+                    Negate
+                      Project (#0)
+                        ReadStorage materialize.public.bar
+                    Distinct project=[#0]
+                      Project (#0)
+                        Get l0
+          ArrangeBy keys=[[#0], [case when (#3) IS NULL then null else #1 end]]
+            Union
+              Map (true)
+                ReadStorage materialize.public.baz
+              Map (null, null, null)
+                Threshold
+                  Union
+                    Negate
+                      Project (#0)
+                        ReadStorage materialize.public.baz
+                    Distinct project=[#0]
+                      Project (#1)
+                        Get l0
+          ArrangeBy keys=[[#0]]
+            Union
+              Map (true)
+                ReadStorage materialize.public.quux
+              Map (null, null)
+                Threshold
+                  Union
+                    Negate
+                      Project (#0)
+                        ReadStorage materialize.public.quux
+                    Distinct project=[#0]
+                      Union
+                        Project (#1)
+                          ReadStorage materialize.public.baz
+                        Constant
+                          - (null)
   With
-    cte l4 =
-      Project (#0..=#7, #9)
-        Join on=(#6 = #8) type=differential
-          ArrangeBy keys=[[#6]]
-            Filter (#6) IS NOT NULL
-              Get l3
-          ArrangeBy keys=[[#0]]
-            ReadStorage materialize.public.quux
-    cte l3 =
-      Union
-        Map (null, null, null)
-          Union
-            Negate
-              Project (#0..=#4)
-                Get l2
-            Get l1
-        Project (#0..=#4, #1, #5, #6)
-          Get l2
-    cte l2 =
-      Project (#0..=#4, #6, #7)
-        Join on=(#1 = #5) type=differential
-          ArrangeBy keys=[[#1]]
-            Get l1
-          ArrangeBy keys=[[#0]]
-            ReadStorage materialize.public.baz
-    cte l1 =
-      Union
-        Map (null, null)
-          Union
-            Negate
-              Project (#0..=#2)
-                Get l0
-            ReadStorage materialize.public.foo
-        Project (#0..=#2, #0, #3)
-          Get l0
     cte l0 =
-      Project (#0..=#2, #4)
-        Join on=(#0 = #3) type=differential
-          ArrangeBy keys=[[#0]]
-            ReadStorage materialize.public.foo
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
-              ReadStorage materialize.public.bar
-
-Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+      Union
+        Project (#0, #1)
+          ReadStorage materialize.public.foo
+        Constant
+          - (null, null)
 
 EOF
 
@@ -213,39 +211,72 @@ foo left join bar on foo.a = bar.a
 Explained Query:
   Return
     Union
-      Get l1
+      Get l4
       Map (0)
         Union
           Negate
             Project ()
-              Get l1
+              Get l4
           Constant
             - ()
   With
-    cte l1 =
+    cte l4 =
       Reduce aggregates=[count(*)]
         Project ()
-          Union
-            Map (null)
+          Join on=(#0 = #2 AND #1 = #3 AND #6 = case when (#5) IS NULL then null else #4 end) type=delta
+            ArrangeBy keys=[[#0], [#1]]
+              Get l0
+            ArrangeBy keys=[[#0]]
               Union
-                Negate
-                  Project ()
-                    Get l0
-                Project ()
-                  ReadStorage materialize.public.foo
-            Get l0
+                Get l2
+                Threshold
+                  Union
+                    Negate
+                      Get l2
+                    Distinct project=[#0]
+                      Project (#0)
+                        Get l1
+            ArrangeBy keys=[[#0], [case when (#2) IS NULL then null else #1 end]]
+              Union
+                Project (#0, #1, #3)
+                  Map (true)
+                    ReadStorage materialize.public.baz
+                Map (null, null)
+                  Threshold
+                    Union
+                      Negate
+                        Project (#0)
+                          ReadStorage materialize.public.baz
+                      Distinct project=[#0]
+                        Project (#1)
+                          Get l1
+            ArrangeBy keys=[[#0]]
+              Union
+                Get l3
+                Threshold
+                  Union
+                    Negate
+                      Get l3
+                    Distinct project=[#0]
+                      Union
+                        Project (#1)
+                          ReadStorage materialize.public.baz
+                        Constant
+                          - (null)
+    cte l3 =
+      Project (#0)
+        ReadStorage materialize.public.quux
+    cte l2 =
+      Project (#0)
+        ReadStorage materialize.public.bar
+    cte l1 =
+      Union
+        Get l0
+        Constant
+          - (null, null)
     cte l0 =
-      Project (#2)
-        Join on=(#0 = #1) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#1)
-              ReadStorage materialize.public.foo
-          ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              ReadStorage materialize.public.baz
-
-Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+      Project (#0, #1)
+        ReadStorage materialize.public.foo
 
 EOF
 
@@ -258,48 +289,41 @@ foo left join baz on foo.b = baz.b
 where foo.a = 7;
 ----
 Explained Query:
-  Return
-    Union
-      Map (null, null)
-        Union
-          Negate
-            Project (#0..=#5)
-              Get l3
-          Get l2
-      Project (#0..=#5, #4, #6)
-        Get l3
-  With
-    cte l3 =
-      Project (#0..=#5, #7)
-        Join on=(#4 = #6) type=differential
-          ArrangeBy keys=[[#4]]
-            Filter (#4) IS NOT NULL
-              Get l2
-          ArrangeBy keys=[[#0]]
-            ReadStorage materialize.public.quux
-    cte l2 =
-      Union
-        Map (null, null, null)
+  Project (#0..=#2, #11..=#13, #15, #16)
+    Map ((#6) IS NULL, case when #10 then null else #1 end, case when #10 then null else #4 end, case when #10 then null else #5 end, (#9) IS NULL, case when #14 then null else #7 end, case when #14 then null else #8 end)
+      Join on=(#1 = #3 AND #7 = case when (#6) IS NULL then null else #4 end) type=delta
+        ArrangeBy keys=[[#1]]
+          Filter (#0 = 7)
+            ReadStorage materialize.public.foo
+        ArrangeBy keys=[[#0], [case when (#3) IS NULL then null else #1 end]]
           Union
-            Negate
-              Project (#0..=#2)
-                Get l1
-            Get l0
-        Project (#0..=#2, #1, #3, #4)
-          Get l1
-    cte l1 =
-      Project (#0..=#2, #4, #5)
-        Join on=(#1 = #3) type=differential
-          ArrangeBy keys=[[#1]]
-            Get l0
-          ArrangeBy keys=[[#0]]
-            ReadStorage materialize.public.baz
-    cte l0 =
-      Filter (#0 = 7)
-        ReadStorage materialize.public.foo
-
-Source materialize.public.foo
-  filter=((#0 = 7))
+            Map (true)
+              ReadStorage materialize.public.baz
+            Map (null, null, null)
+              Threshold
+                Union
+                  Negate
+                    Project (#0)
+                      ReadStorage materialize.public.baz
+                  Distinct project=[#0]
+                    Project (#1)
+                      ReadStorage materialize.public.foo
+        ArrangeBy keys=[[#0]]
+          Union
+            Map (true)
+              ReadStorage materialize.public.quux
+            Map (null, null)
+              Threshold
+                Union
+                  Negate
+                    Project (#0)
+                      ReadStorage materialize.public.quux
+                  Distinct project=[#0]
+                    Union
+                      Project (#1)
+                        ReadStorage materialize.public.baz
+                      Constant
+                        - (null)
 
 EOF
 
@@ -807,72 +831,68 @@ select * from c0;
 ----
 Explained Query:
   Return
-    Get l5
+    Get l1
   With Mutually Recursive
-    cte l5 =
+    cte l1 =
       Distinct project=[#0..=#2]
         Union
-          Project (#7..=#9)
-            Map ((#0 + #3), (#1 + #4), (#2 || smallint_to_text((#5 + #6))))
-              Union
-                Map (null)
+          Project (#11..=#13)
+            Map ((#7) IS NULL, (#0 + case when (#4) IS NULL then null else #0 end), (#1 + case when #10 then null else #1 end), (#2 || smallint_to_text((case when #10 then null else #6 end + case when (#9) IS NULL then null else #8 end))))
+              Join on=(#0 = #3 AND #1 = #5 AND #8 = case when (#7) IS NULL then null else #6 end) type=delta
+                ArrangeBy keys=[[#0], [#1]]
+                  Get l1
+                ArrangeBy keys=[[#0]]
                   Union
-                    Negate
-                      Get l4
-                    Get l3
-                Project (#0..=#5, #5)
-                  Get l4
+                    Project (#0, #2)
+                      Map (true)
+                        ReadStorage materialize.public.bar
+                    Map (null)
+                      Threshold
+                        Union
+                          Negate
+                            Project (#0)
+                              ReadStorage materialize.public.bar
+                          Distinct project=[#0]
+                            Project (#0)
+                              Get l0
+                ArrangeBy keys=[[#0], [case when (#2) IS NULL then null else #1 end]]
+                  Union
+                    Project (#0, #1, #3)
+                      Map (true)
+                        ReadStorage materialize.public.baz
+                    Map (null, null)
+                      Threshold
+                        Union
+                          Negate
+                            Project (#0)
+                              ReadStorage materialize.public.baz
+                          Distinct project=[#0]
+                            Project (#1)
+                              Get l0
+                ArrangeBy keys=[[#0]]
+                  Union
+                    Project (#0, #2)
+                      Map (true)
+                        ReadStorage materialize.public.quux
+                    Map (null)
+                      Threshold
+                        Union
+                          Negate
+                            Project (#0)
+                              ReadStorage materialize.public.quux
+                          Distinct project=[#0]
+                            Union
+                              Project (#1)
+                                ReadStorage materialize.public.baz
+                              Constant
+                                - (null)
           ReadStorage materialize.public.foo
-    cte l4 =
-      Project (#0..=#5)
-        Join on=(#5 = #6) type=differential
-          ArrangeBy keys=[[#5]]
-            Filter (#5) IS NOT NULL
-              Get l3
-          ArrangeBy keys=[[#0]]
-            Project (#0)
-              ReadStorage materialize.public.quux
-    cte l3 =
-      Union
-        Map (null, null)
-          Union
-            Negate
-              Project (#0..=#3)
-                Get l2
-            Get l1
-        Project (#0..=#3, #1, #4)
-          Get l2
-    cte l2 =
-      Project (#0..=#3, #5)
-        Join on=(#1 = #4) type=differential
-          ArrangeBy keys=[[#1]]
-            Filter (#1) IS NOT NULL
-              Get l1
-          ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              ReadStorage materialize.public.baz
-    cte l1 =
-      Union
-        Map (null)
-          Union
-            Negate
-              Get l0
-            Get l5
-        Project (#0..=#2, #0)
-          Get l0
     cte l0 =
-      Project (#0..=#2)
-        Join on=(#0 = #3) type=differential
-          ArrangeBy keys=[[#0]]
-            Filter (#0) IS NOT NULL
-              Get l5
-          ArrangeBy keys=[[#0]]
-            Project (#0)
-              Filter (#0) IS NOT NULL
-                ReadStorage materialize.public.bar
-
-Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+      Union
+        Project (#0, #1)
+          Get l1
+        Constant
+          - (null, null)
 
 EOF
 
@@ -896,31 +916,64 @@ select * from c0;
 ----
 Explained Query:
   Return // { arity: 3 }
-    Get l1 // { arity: 3 }
+    Get l3 // { arity: 3 }
   With Mutually Recursive
-    cte l1 =
+    cte l3 =
       Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
           Project (#0..=#2) // { arity: 3 }
-            Union // { arity: 4 }
-              Map (null) // { arity: 4 }
+            Join on=(#0 = #3 AND #1 = #4 AND #7 = case when (#6) IS NULL then null else #5 end) type=delta // { arity: 8 }
+              ArrangeBy keys=[[#0], [#1]] // { arity: 3 }
+                Get l3 // { arity: 3 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Union // { arity: 1 }
+                  Get l1 // { arity: 1 }
+                  Threshold // { arity: 1 }
+                    Union // { arity: 1 }
+                      Negate // { arity: 1 }
+                        Get l1 // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
+                        Project (#0) // { arity: 1 }
+                          Get l0 // { arity: 2 }
+              ArrangeBy keys=[[#0], [case when (#2) IS NULL then null else #1 end]] // { arity: 3 }
                 Union // { arity: 3 }
-                  Negate // { arity: 3 }
-                    Project (#0..=#2) // { arity: 3 }
-                      Get l0 // { arity: 4 }
-                  Get l1 // { arity: 3 }
-              Get l0 // { arity: 4 }
+                  Project (#0, #1, #3) // { arity: 3 }
+                    Map (true) // { arity: 4 }
+                      ReadStorage materialize.public.baz // { arity: 3 }
+                  Map (null, null) // { arity: 3 }
+                    Threshold // { arity: 1 }
+                      Union // { arity: 1 }
+                        Negate // { arity: 1 }
+                          Project (#0) // { arity: 1 }
+                            ReadStorage materialize.public.baz // { arity: 3 }
+                        Distinct project=[#0] // { arity: 1 }
+                          Project (#1) // { arity: 1 }
+                            Get l0 // { arity: 2 }
+              ArrangeBy keys=[[#0]] // { arity: 1 }
+                Union // { arity: 1 }
+                  Get l2 // { arity: 1 }
+                  Threshold // { arity: 1 }
+                    Union // { arity: 1 }
+                      Negate // { arity: 1 }
+                        Get l2 // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
+                        Union // { arity: 1 }
+                          Project (#1) // { arity: 1 }
+                            ReadStorage materialize.public.baz // { arity: 3 }
+                          Constant // { arity: 1 }
+                            - (null)
           ReadStorage materialize.public.foo // { arity: 3 }
+    cte l2 =
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.quux // { arity: 2 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.bar // { arity: 2 }
     cte l0 =
-      Project (#0..=#2, #4) // { arity: 4 }
-        Join on=(#1 = #3) type=differential // { arity: 5 }
-          ArrangeBy keys=[[#1]] // { arity: 3 }
-            Get l1 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Project (#0, #1) // { arity: 2 }
-              ReadStorage materialize.public.baz // { arity: 3 }
-
-Source materialize.public.bar
-  filter=((#0) IS NOT NULL)
+      Union // { arity: 2 }
+        Project (#0, #1) // { arity: 2 }
+          Get l3 // { arity: 3 }
+        Constant // { arity: 2 }
+          - (null, null)
 
 EOF

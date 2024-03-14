@@ -711,14 +711,14 @@ ReduceMinsMaxes
 "Arrange ReduceMinsMaxes"                     1
 "ArrangeAccumulable [val: empty]"             3
 "ArrangeBy[[Column(0), Column(2)]]"           1
-"ArrangeBy[[Column(0)]] [val: empty]"         1
+"ArrangeBy[[Column(0)]] [val: empty]"         4
 "ArrangeBy[[Column(0)]]-errors"              21
-"ArrangeBy[[Column(0)]]"                     41
+"ArrangeBy[[Column(0)]]"                     42
 "ArrangeBy[[Column(1), Column(3)]]"           2
 "ArrangeBy[[Column(1)]]-errors"               4
-"ArrangeBy[[Column(1)]]"                     12
+"ArrangeBy[[Column(1)]]"                     11
 "ArrangeBy[[Column(2)]]-errors"               9
-"ArrangeBy[[Column(2)]]"                     15
+"ArrangeBy[[Column(2)]]"                     13
 "ArrangeBy[[Column(3)]]"                      2
 "ArrangeBy[[Column(4)]]-errors"               2
 "ArrangeBy[[Column(4)]]"                      5
@@ -726,6 +726,8 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(5)]]"                      2
 "ArrangeBy[[Column(18)]]"                     1
 "ArrangeBy[[Column(18)]]-errors"              1
+"ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
+"ArrangeBy[[]]"                               1
 "Arranged DistinctBy [val: empty]"            8
 "Arranged MinsMaxesHierarchical input"        7
 "Arranged ReduceInaccumulable"                1
@@ -741,6 +743,7 @@ ReduceMinsMaxes
 "ReduceInaccumulable Error Check"             1
 "ReduceInaccumulable"                         1
 "ReduceMinsMaxes"                             1
+"Threshold local [val: empty]"                4
 
 > SET CLUSTER TO arrangement_sharing
 
