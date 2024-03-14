@@ -1078,6 +1078,15 @@ impl MirRelationExpr {
         }
     }
 
+    /// Constructs the expression for getting a local collection.
+    pub fn local_get(id: LocalId, typ: RelationType) -> Self {
+        MirRelationExpr::Get {
+            id: Id::Local(id),
+            typ,
+            access_strategy: AccessStrategy::UnknownOrLocal,
+        }
+    }
+
     /// Constructs the expression for getting a global collection
     pub fn global_get(id: GlobalId, typ: RelationType) -> Self {
         MirRelationExpr::Get {

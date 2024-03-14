@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
-use mz_expr::{AccessStrategy, MirRelationExpr, MirScalarExpr};
+use mz_expr::{MirRelationExpr, MirScalarExpr};
 
 use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
 use crate::plan::PlanError;
@@ -38,10 +38,20 @@ pub(crate) fn attempt_left_join_magic(
     cte_map: &mut CteMap,
     config: &Config,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
-    use mz_expr::{Id, LocalId};
+    use mz_expr::LocalId;
+
+    tracing::debug!(
+        inputs = rights.len() + 1,
+        outer_arity = get_outer.arity(),
+        "attempt_left_join_magic"
+    );
 
     let oa = get_outer.arity();
     if oa > 0 {
+        // Bail out in correlated contexts for now. Even though the code below
+        // supports them, we want to test this code path more thoroughly before
+        // enabling this.
+        tracing::debug!(case = 1, oa, "attempt_left_join_magic");
         return Ok(None);
     }
 
@@ -49,7 +59,11 @@ pub(crate) fn attempt_left_join_magic(
     // We may modify the values if we find promising prior values.
     let mut bindings = Vec::new();
     let mut augmented = Vec::new();
+    // A vector associating result columns with their corresponding input number
+    // (where 0 idicates columns from the outer context).
     let mut bound_to = (0..oa).map(|_| 0).collect::<Vec<_>>();
+    // A vector associating inputs with their arities (where the [0] entry
+    // correponds to the arity of the outer context).
     let mut arities = vec![oa];
 
     // Left relation, its type, and its arity.
@@ -63,11 +77,7 @@ pub(crate) fn attempt_left_join_magic(
     // We may use these relations multiple times to extract augmenting values.
     let id = LocalId::new(id_gen.allocate_id());
     // The join body that we will iteratively develop.
-    let mut body = MirRelationExpr::Get {
-        id: Id::Local(id),
-        typ: left.typ(),
-        access_strategy: AccessStrategy::UnknownOrLocal,
-    };
+    let mut body = MirRelationExpr::local_get(id, left.typ());
     bindings.push((id, body.clone(), left));
     bound_to.extend((0..la).map(|_| 1));
     arities.push(la);
@@ -84,6 +94,7 @@ pub(crate) fn attempt_left_join_magic(
         // Correlated right expressions are handled in a different branch than standard
         // outer join lowering, and I don't know what they mean. Fail conservatively.
         if right.is_correlated() {
+            tracing::debug!(case = 2, index, "attempt_left_join_magic");
             return Ok(None);
         }
 
@@ -99,11 +110,7 @@ pub(crate) fn attempt_left_join_magic(
         let mut right_type = right.typ();
         // Create a binding for `right`, unadulterated.
         let id = LocalId::new(id_gen.allocate_id());
-        let get_right = MirRelationExpr::Get {
-            id: Id::Local(id),
-            typ: right_type.clone(),
-            access_strategy: AccessStrategy::UnknownOrLocal,
-        };
+        let get_right = MirRelationExpr::local_get(id, right_type.clone());
         // Create a binding for the augmented right, which we will form here but use before we do.
         // We want the join to be based off of the augmented relation, but we don't yet know how
         // to augment it until we decorrelate `on`. So, we use a `Get` binding that we backfill.
@@ -112,11 +119,7 @@ pub(crate) fn attempt_left_join_magic(
         }
         right_type.keys.clear();
         let aug_id = LocalId::new(id_gen.allocate_id());
-        let aug_right = MirRelationExpr::Get {
-            id: Id::Local(aug_id),
-            typ: right_type,
-            access_strategy: AccessStrategy::UnknownOrLocal,
-        };
+        let aug_right = MirRelationExpr::local_get(aug_id, right_type);
 
         bindings.push((id, get_right.clone(), right));
         bound_to.extend((0..ra).map(|_| 2 + index));
@@ -142,6 +145,7 @@ pub(crate) fn attempt_left_join_magic(
         // if `on` added any new columns, .. no clue what to do.
         // Return with failure, to avoid any confusion.
         if product.typ().column_types.len() > oa + ba + ra + 1 {
+            tracing::debug!(case = 3, index, "attempt_left_join_magic");
             return Ok(None);
         }
 
@@ -153,6 +157,7 @@ pub(crate) fn attempt_left_join_magic(
         let equations = if let Some(list) = decompose_equations(&on) {
             list
         } else {
+            tracing::debug!(case = 4, index, "attempt_left_join_magic");
             return Ok(None);
         };
 
@@ -164,12 +169,14 @@ pub(crate) fn attempt_left_join_magic(
         for (left, right) in equations.iter().cloned() {
             // If the right reference is not actually to `right`, bail out.
             if right < oa + ba {
+                tracing::debug!(case = 5, index, "attempt_left_join_magic");
                 return Ok(None);
             }
             // Only columns not from the outer scope introduce bindings.
             if left >= oa {
                 if let Some(bound) = bound_input {
                     if bound_to[left] != bound {
+                        tracing::debug!(case = 6, index, "attempt_left_join_magic");
                         return Ok(None);
                     }
                 }
@@ -279,6 +286,7 @@ pub(crate) fn attempt_left_join_magic(
 
             assert_eq!(oa + ba, body.arity());
         } else {
+            tracing::debug!(case = 7, index, "attempt_left_join_magic");
             return Ok(None);
         }
     }
@@ -300,6 +308,7 @@ pub(crate) fn attempt_left_join_magic(
         };
     }
 
+    tracing::debug!(case = 0, "attempt_left_join_magic");
     Ok(Some(body))
 }
 
