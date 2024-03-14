@@ -1,0 +1,48 @@
+
+1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+   client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
+   command to securely store the password for the `materialize` MySQL user
+   you created [earlier](#step-2-create-a-user-for-replication):
+
+    ```sql
+    CREATE SECRET mysqlpass AS '<PASSWORD>';
+    ```
+
+1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
+   connection object with access and authentication details for Materialize to
+   use:
+
+    ```sql
+    CREATE CONNECTION mysql_connection TO MYSQL (
+        HOST <host>,
+        PORT 3306,
+        USER 'materialize',
+        PASSWORD SECRET mysqlpass,
+        SSL MODE REQUIRED
+    );
+    ```
+
+    - Replace `<host>` with your MySQL endpoint.
+
+1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
+   to your Azure instance and start ingesting data:
+
+    ```sql
+    CREATE SOURCE mz_source
+      FROM mysql CONNECTION mysql_connection
+      FOR ALL TABLES;
+    ```
+
+    - By default, the source will be created in the active cluster; to use a
+      different cluster, use the `IN CLUSTER` clause.
+
+    - To ingest data from specific schemas or tables, use the `FOR SCHEMAS
+      (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` options
+      instead of `FOR ALL TABLES`.
+
+    - To handle unsupported data types, use the `TEXT COLUMNS` or `IGNORE
+      COLUMNS` options. Check out the [reference documentation](/sql/create-source/mysql/#supported-types)
+      for guidance.
+
+1. After source creation, you can handle upstream [schema changes](/sql/create-source/mysql/#schema-changes)
+   by dropping and recreating the source.

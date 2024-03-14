@@ -1,18 +1,16 @@
 ---
-title: "Ingest data from Amazon RDS"
-description: "How to stream data from Amazon RDS for PostgreSQL to Materialize"
+title: "Ingest data from Amazon Aurora"
+description: "How to stream data from Amazon Aurora for PostgreSQL to Materialize"
 aliases:
-  - /guides/cdc-postgres/
-  - /integrations/cdc-postgres/
-  - /connect-sources/cdc-postgres-direct/
+  - /ingest-data/postgres-amazon-aurora/
 menu:
   main:
     parent: "postgresql"
-    name: "Amazon RDS"
-    weight: 5
+    name: "Amazon Aurora"
+    identifier: "pg-amazon-aurora"
 ---
 
-This page shows you how to stream data from [Amazon RDS for PostgreSQL](https://aws.amazon.com/rds/postgresql/)
+This page shows you how to stream data from [Amazon Aurora for PostgreSQL](https://aws.amazon.com/rds/aurora/)
 to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
 ## Before you begin
@@ -24,66 +22,14 @@ to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
 protocol to track changes in your database and propagate them to Materialize.
 
-As a first step, you need to make sure logical replication is enabled.
+For guidance on enabling logical replication in Aurora, see the
+[Aurora documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html#AuroraPostgreSQL.Replication.Logical.Configure).
 
-1. As a user with the `rds_superuser` role, use `psql` (or your preferred SQL
-   client) to connect to your database.
-
-1. Check if logical replication is enabled:
-
-    ``` sql
-    SELECT name, setting
-      FROM pg_settings
-      WHERE name = 'rds.logical_replication';
-    ```
-    <p></p>
-
-    ```nofmt
-            name             | setting
-    -------------------------+---------
-    rds.logical_replication  | off
-    (1 row)
-    ```
-
-    - If logical replication is off, continue to the next step.
-
-    - If logical replication is already on, skip to [Step 2. Create a publication](#step-2-create-a-publication).
-
-1. [Create a custom RDS parameter group](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Creating).
-
-    - Set **Parameter group family** to your PostgreSQL version.
-    - Set **Type** to **DB Parameter Group**.
-
-1. Edit the new parameter group and set the `rds.logical_replication` parameter
-   to `1`.
-
-1. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
-
-    Use the **Apply Immediately** option. The database must be rebooted in order
-    for the parameter group association to take effect. Keep in mind that
-    rebooting the RDS instance can affect database performance.
-
-    Do not move on to the next step until the database **Status**
-    is **Available** in the RDS Console.
-
-1. Back in the SQL client connected to Materialize, verify that replication is
-   now enabled:
-
-    ``` sql
-    SELECT name, setting
-      FROM pg_settings
-      WHERE name = 'rds.logical_replication';
-    ```
-    <p></p>
-
-    ``` nofmt
-            name             | setting
-    -------------------------+---------
-    rds.logical_replication  | on
-    (1 row)
-    ```
-
-    If replication is still not enabled, [reboot the database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_RebootInstance.html).
+{{< note >}}
+Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations)
+logical replication, so it's not possible to use this service with
+Materialize.
+{{</ note >}}
 
 ## Step 2. Create a publication
 
@@ -116,8 +62,8 @@ Select the option that works best for you.
     SELECT * FROM mz_egress_ips;
     ```
 
-1. In the RDS Console, [add an inbound rule to your RDS security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/working-with-security-groups.html#adding-security-group-rule)
-   for each IP address from the previous step.
+1. [Add an inbound rule to your Aurora security group](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Overview.RDSSecurityGroups.html)
+    for each IP address from the previous step.
 
     In each rule:
 
@@ -131,11 +77,11 @@ Select the option that works best for you.
 {{< public-preview />}}
 
 [AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
-Materialize to your RDS instance without exposing traffic to the public
+Materialize to your Aurora instance without exposing traffic to the public
 internet. To use AWS PrivateLink, you create a network load balancer in the
-same VPC as your RDS instance and a VPC endpoint service that Materialize
+same VPC as your Aurora instance and a VPC endpoint service that Materialize
 connects to. The VPC endpoint service then routes requests from Materialize to
-RDS via the network load balancer.
+Aurora via the network load balancer.
 
 {{< note >}}
 Materialize provides a Terraform module that automates the creation and
@@ -143,24 +89,22 @@ configuration of AWS resources for a PrivateLink connection. For more details,
 see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
 {{</ note >}}
 
-1. Get the IP address of your RDS instance. You'll need this address to register
-   your RDS instance as the target for the network load balancer in the next
-   step.
+1. Get the IP address of your Aurora instance.
 
-    To get the IP address of your RDS instance:
+    You'll need this address to register your Aurora instance as the target for
+    the network load balancer in the next step.
 
-    1. Select your database in the RDS Console.
+    To get the IP address of your database instance:
 
-    1. Find your RDS endpoint under **Connectivity & security**.
-
-    1. Use the `dig` or `nslooklup` command to find the IP address that the
-    endpoint resolves to:
+    1. Select your database in the RDS Console. 1. Find your Aurora endpoint
+    under **Connectivity & security**. 1. Use the `dig` or `nslooklup` command
+    to find the IP address that the endpoint resolves to:
 
        ```sh
-       dig +short <RDS_ENDPOINT>
+       dig +short <AURORA_ENDPOINT>
        ```
 
-1. [Create a dedicated target group for your RDS instance](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html).
+1. [Create a dedicated target group for your Aurora instance](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html).
 
     - Choose the **IP addresses** type.
 
@@ -168,14 +112,14 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
 
     - Choose the same VPC as your RDS instance.
 
-    - Use the IP address from the previous step to register your RDS instance as
-      the target.
+    - Use the IP address from the previous step to register your Aurora instance
+      as the target.
 
-    **Warning:** The IP address of your RDS instance can change without notice.
-      For this reason, it's best to set up automation to regularly check the IP
-      of the instance and update your target group accordingly. You can use a
-      lambda function to automate this process - see Materialize's
-      [Terraform module for AWS PrivateLink](https://github.com/MaterializeInc/terraform-aws-rds-privatelink/blob/main/lambda_function.py)
+    **Warning:** The IP address of your Aurora instance can change without
+      notice. For this reason, it's best to set up automation to regularly
+      check the IP of the instance and update your target group accordingly.
+      You can use a lambda function to automate this process - see
+      Materialize's [Terraform module for AWS PrivateLink](https://github.com/MaterializeInc/terraform-aws-rds-privatelink/blob/main/lambda_function.py)
       for an example. Another approach is to [configure an EC2 instance as an
       RDS router](https://aws.amazon.com/blogs/database/how-to-use-amazon-rds-and-amazon-aurora-with-a-static-ip-address/)
       for your network load balancer.
@@ -190,7 +134,8 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
       and **5432** and select the target group you created in the previous
       step.
 
-1. In the security group of your RDS instance, [allow traffic from the the network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+1. In the security group of your Aurora instance, [allow traffic from the the
+   network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
 
     If [client IP preservation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-target-groups.html#client-ip-preservation)
     is disabled, the easiest approach is to add an inbound rule with the VPC
@@ -198,8 +143,9 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
     entire VPC CIDR, you can add inbound rules for the private IP addresses of
     the load balancer subnets.
 
-    - To find the VPC CIDR, go to your network load balancer and look
+    - To find the VPC CIDR, go to the network load balancer and look
       under **Network mapping**.
+
     - To find the private IP addresses of the load balancer subnets, go
       to **Network Interfaces**, search for the name of the network load
       balancer, and look on the **Details** tab for each matching network
@@ -213,7 +159,7 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
     - After creating the VPC endpoint service, note its **Service name**. You'll
       use this service name when connecting Materialize later.
 
-    **Remarks**: By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
+    **Remarks** By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
       while still strictly managing who can view your endpoint via IAM,
       Materialze will be able to seamlessly recreate and migrate endpoints as
       we work to stabilize this feature.
@@ -238,17 +184,17 @@ configuration of resources for an SSH tunnel. For more details, see the
 {{</ note >}}
 
 1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html)
-   to serve as your SSH bastion host.
+    to serve as your SSH bastion host.
 
     - Make sure the instance is publicly accessible and in the same VPC as your
       RDS instance.
+
     - Add a key pair and note the username. You'll use this username when
       connecting Materialize to your bastion host.
 
     **Warning:** Auto-assigned public IP addresses can change in [certain cases](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-instance-addressing.html#concepts-public-addresses).
-
-    For this reason, it's best to associate an [elastic IP address](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-instance-addressing.html#ip-addressing-eips)
-    to your bastion host.
+      For this reason, it's best to associate an [elastic IP address](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-instance-addressing.html#ip-addressing-eips)
+      to your bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
@@ -264,6 +210,7 @@ configuration of resources for an SSH tunnel. For more details, see the
        to your SSH bastion host's security group.
 
         In each rule:
+
         - Set **Type** to **PostgreSQL**.
         - Set **Source** to the IP address in CIDR notation.
 
@@ -324,16 +271,22 @@ start by selecting the relevant option.
       );
     ```
 
-    - Replace `<host>` with your RDS endpoint. To find your RDS endpoint, select
-      your database in the RDS Console, and look under **Connectivity &
-      security**.
+    - Replace `<host>` with the **Writer** endpoint for your Aurora database. To
+      find the endpoint, select your database in the RDS Console, then click
+      the **Connectivity & security** tab and look for the endpoint with
+      type **Writer**.
+
+        <div class="warning">
+            <strong class="gutter">WARNING!</strong>
+            You must use the <strong>Writer</strong> endpoint for the database. Using a <strong>Reader</strong> endpoint will not work.
+        </div>
 
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your RDS instance and start ingesting data from the publication you created
-   [earlier](#step-2-create-a-publication):
+   to your Aurora instance and start ingesting data from the publication you
+   created [earlier](#step-2-create-a-publication).
 
     ```sql
     CREATE SOURCE mz_source
@@ -377,8 +330,7 @@ start by selecting the relevant option.
       subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
       not **Availability Zone** (e.g., `us-east-1d`).
 
-1. Retrieve the AWS principal for the AWS PrivateLink connection you just
-   created:
+1. Retrieve the AWS principal for the AWS PrivateLink connection you just created:
 
     ```sql
     SELECT principal
@@ -419,8 +371,8 @@ start by selecting the relevant option.
     ```
 
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
-   another connection object, this time with database access and authentication
-   details for Materialize to use:
+another connection object, this time with database access and authentication
+details for Materialize to use:
 
     ```sql
     CREATE CONNECTION pg_connection TO POSTGRES (
@@ -433,15 +385,15 @@ start by selecting the relevant option.
       );
     ```
 
-    - Replace `<host>` with your RDS endpoint. To find your RDS endpoint, select
-      your database in the RDS Console, and look under **Connectivity &
+    - Replace `<host>` with your Aurora endpoint. To find your Aurora endpoint,
+      select your database in the RDS Console, and look under **Connectivity &
       security**.
 
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your RDS instance via AWS PrivateLink and start ingesting data from the
+   to your Aurora instance via AWS PrivateLink and start ingesting data from the
    publication you created [earlier](#step-2-create-a-publication):
 
     ```sql
@@ -487,7 +439,8 @@ start by selecting the relevant option.
         mz_connections.name,
         mz_ssh_tunnel_connections.*
     FROM
-        mz_connections JOIN
+        mz_connections
+    JOIN
         mz_ssh_tunnel_connections USING(id)
     WHERE
         mz_connections.name = 'ssh_connection';
@@ -503,7 +456,8 @@ start by selecting the relevant option.
     ```
 
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
-   connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+   connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection)
+   command:
 
     ```sql
     VALIDATE CONNECTION ssh_connection;
@@ -512,7 +466,7 @@ start by selecting the relevant option.
     If no validation error is returned, move to the next step.
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-   password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SECRET pgpass AS '<PASSWORD>';
@@ -533,16 +487,16 @@ start by selecting the relevant option.
       );
     ```
 
-    - Replace `<host>` with your RDS endpoint. To find your RDS endpoint, select
-      your database in the RDS Console, and look under **Connectivity &
+    - Replace `<host>` with your Aurora endpoint. To find your Aurora endpoint,
+      select your database in the RDS Console, and look under **Connectivity &
       security**.
 
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your RDS instance and start ingesting data from the publication you created
-   [earlier](#step-2-create-a-publication):
+   to your Aurora instance and start ingesting data from the publication you
+   created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SOURCE mz_source

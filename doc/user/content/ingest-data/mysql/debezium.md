@@ -5,12 +5,12 @@ aliases:
   - /guides/cdc-mysql/
   - /integrations/cdc-mysql/
   - /connect-sources/cdc-mysql/
+  - /ingest-data/cdc-mysql/
 menu:
   main:
     parent: "mysql"
     name: "Using Kafka and Debezium"
     identifier: "mysql-dbz"
-    weight: 10
 ---
 
 Change Data Capture (CDC) allows you to track and propagate changes in a MySQL

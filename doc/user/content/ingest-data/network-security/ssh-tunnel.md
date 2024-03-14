@@ -1,6 +1,6 @@
 ---
 title: "SSH tunnel connections"
-description: "How to connect Materialize to a Kafka broker, or a PostgreSQL database using an SSH tunnel connection to a SSH bastion server"
+description: "How to connect Materialize to a Kafka broker, a MySQL database, or PostgreSQL database using an SSH tunnel connection to a SSH bastion server"
 menu:
   main:
     parent: "network-security"
@@ -9,8 +9,6 @@ aliases:
   - /integrations/postgres-bastion/
   - /ops/network-security/ssh-tunnel/
   - /connect-sources/ssh-tunnel/
-
-
 ---
 
 {{% network-security/ssh-tunnel %}}
@@ -61,11 +59,34 @@ CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 ```
-{{< /tab >}} {{< /tabs >}}
+{{< /tab >}}
+
+{{< tab "MySQL">}}
+```sql
+CREATE SECRET mysqlpass AS '<POSTGRES_PASSWORD>';
+
+    CREATE CONNECTION mysql_connection TO MYSQL (
+    HOST '<host>',
+    SSH TUNNEL ssh_connection,
+    );
+```
+
+You can reuse this MySQL connection across multiple [`CREATE SOURCE`](/sql/create-source/postgres/)
+statements:
+
+```sql
+    CREATE SOURCE mz_source
+      FROM mysql CONNECTION mysql_connection
+      FOR ALL TABLES;
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`: Kafka](/sql/create-source/kafka/)
+- [`CREATE SOURCE`: MySQL](/sql/create-source/mysql)
 - [`CREATE SOURCE`: PostgreSQL](/sql/create-source/postgres/)

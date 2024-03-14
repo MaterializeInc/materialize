@@ -87,11 +87,14 @@ PostgreSQL 11+ is supported as a [**source**](/get-started/key-concepts/#sources
 
 ### MySQL
 
-MySQL is indirectly supported as a [**source**](/get-started/key-concepts/#sources) through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a MySQL instance as a source requires enabling **row-based replication**.
+MySQL 5.7+ is supported as a [**source**](/get-started/key-concepts/#sources)
+both through the [direct MySQL source](/sql/create-source/mysql/) and through
+[Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a MySQL
+database as a source requires enabling [**GTID-based binlog replication**](/sql/create-source/mysql/#change-data-capture).
 
 | Service                | Support level                    | Notes                                                                                                |             |
 | ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------- |
-| MySQL _(direct)_       | {{< supportLevel researching >}} | Not supported yet {{% gh 8078 %}}. Subscribe via "Notify Me" to register interest.                   | [](#notify) |
+| MySQL _(direct)_       | {{< supportLevel beta >}} | See the [source documentation](/sql/create-source/mysql/) for more details, and the relevant integration guide for step-by-step instructions:<p></p><ul><li>[Amazon RDS for MySQL](/ingest-data/mysql/amazon-rds)</li><li>[Amazon Aurora for MySQL](/ingest-data/mysql/amazon-aurora)</li><li>[Azure DB for MySQL](/ingest-data/mysql/azure-db)</li><li>[Google Cloud SQL for MySQL](/ingest-data/mysql/google-cloud-sql)</li><li>[Self-hosted MySQL](/ingest-data/mysql/self-hosted)</li></ul> |
 | MySQL _(via Debezium)_ | {{< supportLevel production >}}  | See the [MySQL CDC guide](/integrations/cdc-mysql/) for a step-by-step breakdown of the integration. |             |
 
 ### Other databases

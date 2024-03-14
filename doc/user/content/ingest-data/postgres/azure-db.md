@@ -1,11 +1,13 @@
 ---
 title: "Ingest data from Azure DB"
 description: "How to stream data from Azure DB for PostgreSQL to Materialize"
+aliases:
+  - /ingest-data/postgres-azure-db/
 menu:
   main:
     parent: "postgresql"
     name: "Azure DB"
-    weight: 15
+    identifier: "pg-azuredb"
 ---
 
 This page shows you how to stream data from [Azure DB for PostgreSQL](https://azure.microsoft.com/en-us/products/postgresql)

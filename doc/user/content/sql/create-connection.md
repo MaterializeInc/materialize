@@ -609,6 +609,84 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< /tabs >}}
 
+### MySQL
+
+{{< private-preview />}}
+
+A MySQL connection establishes a link to a [MySQL] server. You can use
+MySQL connections to create [sources](/sql/create-source/mysql).
+
+#### Syntax {#mysql-syntax}
+
+{{< diagram "create-connection-mysql.svg" >}}
+
+#### Connection options {#mysql-options}
+
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:|-----------------------------
+`HOST`                      | `text`           | ✓        | Database hostname.
+`PORT`                      | `integer`        |          | Default: `3306`. Port number to connect to at the server host.
+`USER`                      | `text`           | ✓        | Database username.
+`PASSWORD`                  | secret           |          | Password for the connection.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
+`SSL MODE`                  | `text`           |          | Default: `disabled`. Enables SSL connections if set to `required`, `verify_ca`, or `verify_identity`. See the [MySQL documentatation](https://dev.mysql.com/doc/refman/8.0/en/using-encrypted-connections.html) for more details.
+`SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
+`SSL KEY`                   | secret           |          | Client SSL key in PEM format.
+
+#### `WITH` options {#mysql-with-options}
+
+Field         | Value     | Description
+--------------|-----------|-------------------------------------
+`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
+
+#### Example {#mysql-example}
+
+```sql
+CREATE SECRET mysqlpass AS '<POSTGRES_PASSWORD>';
+
+CREATE CONNECTION mysql_connection TO MYSQL (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    PORT 3306,
+    USER 'root',
+    PASSWORD SECRET mysqlpass
+);
+```
+
+#### Network security {#mysql-network-security}
+
+If your MySQL server is not exposed to the public internet, you can tunnel
+the connection through an SSH bastion host.
+
+{{< tabs >}}
+{{< tab "SSH tunnel">}}
+
+##### Connection options {#mysql-ssh-options}
+
+Field                       | Value            | Required | Description
+----------------------------|------------------|:--------:|-----------------------------
+`SSH TUNNEL`                | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic should be routed.
+
+##### Example {#mysql-ssh-example}
+
+```sql
+CREATE CONNECTION tunnel TO SSH TUNNEL (
+    HOST 'bastion-host',
+    PORT 22,
+    USER 'materialize',
+);
+
+CREATE CONNECTION mysql_connection TO MYSQL (
+    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
+    SSH TUNNEL ssh_connection,
+);
+```
+
+For step-by-step instructions on creating SSH tunnel connections and configuring
+an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
+
+{{< /tab >}}
+{{< /tabs >}}
+
 ### PostgreSQL
 
 A Postgres connection establishes a link to a single database of a
@@ -626,7 +704,7 @@ Field                       | Value            | Required | Description
 `PORT`                      | `integer`        |          | Default: `5432`. Port number to connect to at the server host.
 `DATABASE`                  | `text`           | ✓        | Target database.
 `USER`                      | `text`           | ✓        | Database username.
-`PASSWORD`                  | secret           |          | Password for the connection
+`PASSWORD`                  | secret           |          | Password for the connection.
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 `SSL MODE`                  | `text`           |          | Default: `disable`. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
 `SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
@@ -796,8 +874,8 @@ CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
 ### SSH tunnel
 
 An SSH tunnel connection establishes a link to an SSH bastion server. You can
-use SSH tunnel connections in [Kafka connections](#kafka), and
-[Postgres connections](#postgresql).
+use SSH tunnel connections in [Kafka connections](#kafka), [MySQL connections](#mysql),
+and [Postgres connections](#postgresql).
 
 #### Syntax {#ssh-tunnel-syntax}
 
@@ -872,10 +950,11 @@ for most connection types on connection creation:
 
 Connection type             | Validated by default |
 ----------------------------|----------------------|
-PostgreSQL                  | ✓                    |
+AWS                         |                      |
 Kafka                       | ✓                    |
 Confluent Schema Registry   | ✓                    |
-AWS                         |                      |
+MySQL                       | ✓                    |
+PostgreSQL                  | ✓                    |
 SSH Tunnel                  |                      |
 AWS PrivateLink             |                      |
 
@@ -907,6 +986,7 @@ The privileges required to execute this statement are:
 [AWS PrivateLink]: https://aws.amazon.com/privatelink/
 [Confluent Schema Registry]: https://docs.confluent.io/platform/current/schema-registry/index.html#sr-overview
 [Kafka]: https://kafka.apache.org
+[MySQL]: https://www.mysql.com/
 [PostgreSQL]: https://www.postgresql.org
 [`ALTER CONNECTION`]: /sql/alter-connection
 [`CREATE SOURCE`]: /sql/create-source
