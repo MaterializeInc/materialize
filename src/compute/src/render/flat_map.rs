@@ -34,13 +34,14 @@ where
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
             let mut datums = DatumVec::new();
             let mut datums_mfp = DatumVec::new();
-            let mut table_func_output = Vec::with_capacity(1024);
-
-            // Into which we accumulate result update triples.
-            let mut oks_output = Vec::with_capacity(1024);
-            let mut err_output = Vec::with_capacity(1024);
 
             move |(input_row, mut time, diff)| {
+                let mut table_func_output = Vec::new();
+
+                // Into which we accumulate result update triples.
+                let mut oks_output = Vec::new();
+                let mut err_output = Vec::new();
+
                 let temp_storage = RowArena::new();
 
                 // Unpack datums for expression evaluation.
@@ -100,9 +101,11 @@ where
                         &mut err_output,
                     );
                 }
+                // About to be dropped, but here to remind us in case we ever re-use it.
+                table_func_output.clear();
 
-                let oks = oks_output.drain(..).map(Ok);
-                let err = err_output.drain(..).map(Err);
+                let oks = oks_output.into_iter().map(Ok);
+                let err = err_output.into_iter().map(Err);
                 oks.chain(err).collect::<Vec<_>>()
             }
         });
