@@ -215,8 +215,8 @@ fn to_grpc<T>(response: Result<T, OpError>) -> Result<Response<T>, Status> {
 /// Metadata about a column that is relevant to operations peformed by the destination.
 #[derive(Debug)]
 struct ColumnMetadata {
-    /// Name of the column in the destination table.
-    name: String,
+    /// Name of the column in the destination table, with necessary characters escaped.
+    escaped_name: String,
     /// Type of the column in the destination table.
     ty: Cow<'static, str>,
     /// Is this column a primary key.
@@ -226,7 +226,7 @@ struct ColumnMetadata {
 impl ColumnMetadata {
     /// Returns a [`String`] that is suitable for use when creating a table.
     fn to_column_def(&self) -> String {
-        let mut def = format!("{} {}", self.name, self.ty);
+        let mut def = format!("{} {}", self.escaped_name, self.ty);
 
         if self.is_primary {
             def.push_str(" NOT NULL");
@@ -240,7 +240,7 @@ impl TryFrom<&crate::fivetran_sdk::Column> for ColumnMetadata {
     type Error = OpError;
 
     fn try_from(value: &crate::fivetran_sdk::Column) -> Result<Self, Self::Error> {
-        let name = escape::escape_identifier(&value.name);
+        let escaped_name = escape::escape_identifier(&value.name);
         let mut ty: Cow<'static, str> = utils::to_materialize_type(value.r#type())?.into();
         if let Some(d) = &value.decimal {
             ty.to_mut()
@@ -250,7 +250,7 @@ impl TryFrom<&crate::fivetran_sdk::Column> for ColumnMetadata {
             value.primary_key || value.name.to_lowercase() == FIVETRAN_SYSTEM_COLUMN_ID;
 
         Ok(ColumnMetadata {
-            name,
+            escaped_name,
             ty,
             is_primary,
         })

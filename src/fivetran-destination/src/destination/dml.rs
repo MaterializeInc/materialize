@@ -266,7 +266,7 @@ async fn replace_files(
             SELECT {cols}
             FROM {qualified_temp_table_name}
         )"#,
-        cols = matching_cols.map(|col| &col.name).join(","),
+        cols = matching_cols.map(|col| &col.escaped_name).join(","),
     );
     let rows_changed = client.execute(&delete_stmt, &[]).await?;
     tracing::info!(rows_changed, "deleted rows from {qualified_table_name}");
@@ -277,7 +277,7 @@ async fn replace_files(
         INSERT INTO {qualified_table_name} ({cols})
         SELECT {cols} FROM {qualified_temp_table_name}
         "#,
-        cols = columns.iter().map(|col| &col.name).join(","),
+        cols = columns.iter().map(|col| &col.escaped_name).join(","),
     );
     let rows_changed = client.execute(&insert_stmt, &[]).await?;
     tracing::info!(rows_changed, "inserted rows to {qualified_table_name}");
@@ -426,7 +426,7 @@ async fn delete_files(
         )"#,
         deleted_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_DELETE),
         synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED),
-        cols = matching_cols.map(|col| &col.name).join(","),
+        cols = matching_cols.map(|col| &col.escaped_name).join(","),
     );
     let total_count = client
         .execute(&merge_stmt, &[&synced_time])

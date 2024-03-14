@@ -155,7 +155,7 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
     for column in columns.iter().filter(|col| col.is_primary) {
         let stmt = format!(
             "COMMENT ON COLUMN {qualified_table_name}.{column_name} IS {magic_comment}",
-            column_name = column.name,
+            column_name = column.escaped_name,
             magic_comment = escape::escape_literal(PRIMARY_KEY_MAGIC_STRING),
         );
         client
