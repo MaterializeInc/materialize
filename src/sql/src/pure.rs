@@ -1114,11 +1114,10 @@ async fn purify_create_source(
             validate_subsource_names(&validated_requested_subsources)?;
 
             // TODO(roshan): Implement privileges check for MySQL
-            let new_subsources =
+            let mut new_subsources =
                 mysql::generate_targeted_subsources(&scx, validated_requested_subsources)?;
 
             *referenced_subsources = None;
-            subsources.extend(new_subsources);
 
             // Retrieve the current @gtid_executed value of the server to mark as the effective
             // initial snapshot point such that we can ensure consistency if the initial source
@@ -1133,6 +1132,13 @@ async fn purify_create_source(
                 tables,
                 initial_gtid_set,
             };
+
+            add_output_index_to_subsources(&mut new_subsources, |name| {
+                details.output_idx_for_name(name)
+            });
+
+            subsources.extend(new_subsources);
+
             options.push(MySqlConfigOption {
                 name: MySqlConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(

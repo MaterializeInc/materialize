@@ -165,14 +165,7 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
     }
 
     fn output_idx_for_name(&self, name: &mz_sql_parser::ast::UnresolvedItemName) -> Option<usize> {
-        self.details
-            .tables
-            .iter()
-            .position(|t| {
-                let inner = &name.0;
-                t.schema_name == inner[0].as_str() && t.name == inner[1].as_str()
-            })
-            .map(|idx| idx + 1)
+        self.details.output_idx_for_name(name)
     }
 }
 
@@ -218,6 +211,21 @@ pub struct MySqlSourceDetails {
     /// one or more tables before the initial snapshot of all tables is complete.
     #[proptest(strategy = "any_gtidset()")]
     pub initial_gtid_set: String,
+}
+
+impl MySqlSourceDetails {
+    pub fn output_idx_for_name(
+        &self,
+        name: &mz_sql_parser::ast::UnresolvedItemName,
+    ) -> Option<usize> {
+        self.tables
+            .iter()
+            .position(|t| {
+                let inner = &name.0;
+                t.schema_name == inner[1].as_str() && t.name == inner[2].as_str()
+            })
+            .map(|idx| idx + 1)
+    }
 }
 
 fn any_gtidset() -> impl Strategy<Value = String> {
