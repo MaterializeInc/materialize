@@ -28,8 +28,7 @@ steps:
       # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
       - id: build-x86_64
         label: Build x86_64
-        # TODO: Stay on stable, but switch to nightly in mkpipeline.py
-        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -40,7 +39,7 @@ steps:
 
       - id: build-aarch64
         label: Build aarch64
-        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -51,7 +50,7 @@ steps:
 
       - id: build-wasm
         label: Build WASM
-        command: bin/ci-builder run nightly bin/pyactivate -m ci.deploy.npm --no-release
+        command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm --no-release
         inputs:
           - "*"
         depends_on: []
@@ -79,7 +78,7 @@ steps:
 
       - id: devel-docker-tags
         label: Tag development docker images
-        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.dev_tag
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.dev_tag
         inputs:
           - "*"
         depends_on:
@@ -101,7 +100,7 @@ steps:
     steps:
       - id: lint-fast
         label: Lint and rustfmt
-        command: bin/ci-builder run nightly ci/test/lint-fast.sh
+        command: bin/ci-builder run stable ci/test/lint-fast.sh
         inputs:
           - "*"
         depends_on: []
@@ -113,7 +112,7 @@ steps:
 
       - id: lint-slow
         label: Clippy and doctests
-        command: bin/ci-builder run nightly ci/test/lint-slow.sh
+        command: bin/ci-builder run stable ci/test/lint-slow.sh
         inputs:
           - Cargo.lock
           - "**/Cargo.toml"
@@ -145,7 +144,7 @@ steps:
 
       - id: lint-deps
         label: Lint dependencies
-        command: bin/ci-builder run nightly ci/test/lint-deps.sh
+        command: bin/ci-builder run stable ci/test/lint-deps.sh
         inputs:
           - Cargo.lock
           - "**/Cargo.toml"
@@ -159,7 +158,7 @@ steps:
 
       - id: vet-check
         label: Cargo vet Check
-        command: bin/ci-builder run nightly cargo vet check --locked
+        command: bin/ci-builder run stable cargo vet check --locked
         inputs:
           - Cargo.lock
           - misc/cargo-vet/config.toml
@@ -172,7 +171,7 @@ steps:
 
       - id: lint-docs
         label: Lint docs
-        command: bin/ci-builder run nightly ci/test/lint-docs.sh
+        command: bin/ci-builder run stable ci/test/lint-docs.sh
         inputs:
           - doc/user
           - src/adapter/src/catalog
@@ -187,7 +186,7 @@ steps:
 
       - id: preview-docs
         label: Preview docs
-        command: bin/ci-builder run nightly ci/test/preview-docs.sh
+        command: bin/ci-builder run stable ci/test/preview-docs.sh
         inputs: [doc/user]
         depends_on: []
         timeout_in_minutes: 30
@@ -221,7 +220,6 @@ steps:
               composition: cargo-test
         agents:
           queue: builder-linux-aarch64
-        sanitizer: skip # TODO(def-): This should work but --no-default-profiles still enables jemalloc in cargo tests somehow
 
       - id: miri-test
         label: Miri test (fast)
@@ -734,7 +732,7 @@ steps:
   - id: coverage-pr-analyze
     label: Analyze code coverage for PR
     timeout_in_minutes: 20
-    command: bin/ci-builder run nightly ci/test/coverage_report.sh
+    command: bin/ci-builder run stable ci/test/coverage_report.sh
     inputs: ["*"]
     priority: 1
     agents:

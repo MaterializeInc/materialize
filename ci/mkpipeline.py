@@ -142,6 +142,12 @@ so it is executed.""",
             if step.get("sanitizer") == "skip":
                 step["skip"] = True
 
+            # Nightly required for sanitizers
+            if step.get("id") in ("build-x86_64", "build-aarch64"):
+                step[
+                    "command"
+                ] = "bin/ci-builder run nightly bin/pyactivate -m ci.test.build"
+
         for step in pipeline["steps"]:
             visit(step)
             # Groups can't be nested, so handle them explicitly here instead of recursing
@@ -173,6 +179,8 @@ so it is executed.""",
                 step["skip"] = True
             if step.get("id") == "build-x86_64":
                 step["name"] = "Build x86_64 with coverage"
+            if step.get("id") == "build-aarch":
+                step["name"] = "Build aarch64 with coverage"
     else:
         for step in steps(pipeline):
             if step.get("coverage") == "only":
@@ -359,7 +367,7 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
     for step in steps(pipeline):
         if (
             "id" in step
-            and step["id"] not in ("analyze", "build-x86_64")
+            and step["id"] not in ("analyze", "build-x86_64", "build-aarch64")
             and "skip" not in step
         ):
             selection_step["fields"][0]["options"].append({"value": step["id"]})

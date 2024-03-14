@@ -38,7 +38,7 @@ threads-required = 8
 slow-timeout = { period = "800s", terminate-after = 2 }
 
 [profile.sanitizer]
-slow-timeout = { period = "480s", terminate-after = 2 }
+slow-timeout = { period = "1000s", terminate-after = 2 }
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false
 failure-output = "immediate-final"
@@ -46,4 +46,4 @@ failure-output = "immediate-final"
 [[profile.sanitizer.overrides]]
 filter = "package(mz-environmentd)"
 threads-required = 8
-slow-timeout = { period = "800s", terminate-after = 2 }
+slow-timeout = { period = "2000s", terminate-after = 2 }

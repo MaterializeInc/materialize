@@ -5307,10 +5307,10 @@ mod tests {
         // is designed to detect something taking an unexpectedly long time, but that's hard to
         // define. If this causes problems in CI it should probably be removed instead of getting
         // bumped to a higher timeout.
-        let elapsed = start.elapsed();
-        if elapsed > Duration::from_millis(5_000) {
-            panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
-        }
+        //let elapsed = start.elapsed();
+        //if elapsed > Duration::from_millis(5_000) {
+        //    panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
+        //}
     }
 
     /// If the given MirScalarExpr

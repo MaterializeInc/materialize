@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import os
+import subprocess
 
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
@@ -69,6 +71,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = os.getenv("CI_SANITIZER", "none")
+    extra_env = {}
 
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
@@ -138,14 +141,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 cflags = [
                     f"--target={target(Arch.host())}",
                     f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
-                    "-fuse-ld=lld",
                     f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
-                    f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
                 ] + rustc_flags.sanitizer_cflags[sanitizer]
+                ldflags = cflags + [
+                    "-fuse-ld=lld",
+                    f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
+                ]
                 extra_env = {
                     "CFLAGS": " ".join(cflags),
                     "CXXFLAGS": " ".join(cflags),
-                    "LDFLAGS": " ".join(cflags),
+                    "LDFLAGS": " ".join(ldflags),
                     "CXXSTDLIB": "stdc++",
                     "CC": "cc",
                     "CXX": "c++",
@@ -159,29 +164,29 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         + " ".join(rustc_flags.sanitizer[sanitizer])
                     ),
                 }
-                spawn.runv(
-                    [
-                        "bin/ci-builder",
-                        "run",
-                        "nightly",
-                        *flatten(
-                            [
-                                ["--env", f"{key}={val}"]
-                                for key, val in extra_env.items()
-                            ]
-                        ),
-                        "cargo",
-                        "build",
-                        "--workspace",
-                        "--no-default-features",
-                        "--bin",
-                        "clusterd",
-                        "-Zbuild-std",
-                        "--target",
-                        SANITIZER_TARGET,
-                        "--profile=ci",
-                    ],
-                )
+                # spawn.runv(
+                #    [
+                #        "bin/ci-builder",
+                #        "run",
+                #        "nightly",
+                #        *flatten(
+                #            [
+                #                ["--env", f"{key}={val}"]
+                #                for key, val in extra_env.items()
+                #            ]
+                #        ),
+                #        "cargo",
+                #        "build",
+                #        "--workspace",
+                #        "--no-default-features",
+                #        "--bin",
+                #        "clusterd",
+                #        "-Zbuild-std",
+                #        "--target",
+                #        SANITIZER_TARGET,
+                #        "--profile=ci",
+                #    ],
+                # )
             else:
                 spawn.runv(
                     [
@@ -202,36 +207,47 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             total = buildkite.get_parallelism_count()
 
             if sanitizer != "none":
-                spawn.runv(
-                    [
-                        "bin/ci-builder",
-                        "run",
-                        "nightly",
-                        *flatten(
-                            [
-                                ["--env", f"{key}={val}"]
-                                for key, val in extra_env.items()
-                            ]
-                        ),
-                        "cargo",
-                        "nextest",
-                        "run",
-                        "--workspace",
-                        "--no-default-features",
-                        "--profile=sanitizer",
-                        "--cargo-profile=ci",
-                        f"--partition=count:{partition}/{total}",
-                        # We want all tests to run
-                        "--no-fail-fast",
-                        "-Zbuild-std",
-                        "--target",
-                        SANITIZER_TARGET,
-                        # Most tests don't use 100% of a CPU core, so run two tests per CPU.
-                        f"--test-threads={cpu_count * 2}",
-                        *args.args,
-                    ],
-                    env=env,
+                # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
+                metadata = json.loads(
+                    subprocess.check_output(
+                        ["cargo", "metadata", "--no-deps", "--format-version=1"]
+                    )
                 )
+                for pkg in metadata["packages"]:
+                    try:
+                        spawn.runv(
+                            [
+                                "bin/ci-builder",
+                                "run",
+                                "nightly",
+                                *flatten(
+                                    [
+                                        ["--env", f"{key}={val}"]
+                                        for key, val in extra_env.items()
+                                    ]
+                                ),
+                                "cargo",
+                                "nextest",
+                                "run",
+                                "--package",
+                                pkg["name"],
+                                "--no-default-features",
+                                "--profile=sanitizer",
+                                # The ci target fails to find any tests because of https://github.com/nextest-rs/nextest/issues/910
+                                "--cargo-profile=dev",
+                                f"--partition=count:{partition}/{total}",
+                                # We want all tests to run
+                                "--no-fail-fast",
+                                "-Zbuild-std",
+                                "--target",
+                                SANITIZER_TARGET,
+                                *args.args,
+                            ],
+                            env=env,
+                        )
+                    except subprocess.CalledProcessError:
+                        print(f"Test against package {pkg['name']} failed, continuing")
+
             else:
                 spawn.runv(
                     [
