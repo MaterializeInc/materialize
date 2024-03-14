@@ -11,7 +11,7 @@
 //!
 //! See row.proto for details.
 
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use chrono::Timelike;
 use dec::Decimal;
 use enum_dispatch::enum_dispatch;
@@ -802,7 +802,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::Timestamp(x) => DatumType::Timestamp(x.into_proto()),
             Datum::TimestampTz(x) => DatumType::TimestampTz(x.into_proto()),
             Datum::Interval(x) => DatumType::Interval(x.into_proto()),
-            Datum::Bytes(x) => DatumType::Bytes(x.to_vec()),
+            Datum::Bytes(x) => DatumType::Bytes(Bytes::copy_from_slice(x)),
             Datum::String(x) => DatumType::String(x.to_owned()),
             Datum::Array(x) => DatumType::Array(ProtoArray {
                 elements: Some(ProtoRow {
