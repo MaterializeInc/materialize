@@ -33,11 +33,19 @@ where
         let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
         let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
             let mut datums = DatumVec::new();
+            let mut datums_mfp = DatumVec::new();
+
             move |(input_row, mut time, diff)| {
+                let mut table_func_output = Vec::new();
+
+                // Into which we accumulate result update triples.
+                let mut oks_output = Vec::new();
+                let mut err_output = Vec::new();
+
                 let temp_storage = RowArena::new();
-                // Unpack datums and capture its length (to rewind MFP eval).
-                let mut datums_local = datums.borrow_with(&input_row);
-                let datums_len = datums_local.len();
+
+                // Unpack datums for expression evaluation.
+                let datums_local = datums.borrow_with(&input_row);
                 let exprs = exprs
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage))
@@ -51,51 +59,54 @@ where
                     Err(e) => return vec![(Err((e.into(), time, diff)))],
                 };
 
-                use crate::render::RenderTimestamp;
-                let event_time = time.event_time().clone();
+                // Draw rows out of the table func evaluation.
+                // Consolidate them as we acculumate them, and when we are "full" apply
+                // the MFP and record and perhaps consolidate the results.
+                for (output_row, r) in output_rows {
+                    table_func_output.push((output_row, r));
+                    if table_func_output.len() == table_func_output.capacity() {
+                        // Consolidate the collection of things we will append to `input_row`.
+                        differential_dataflow::consolidation::consolidate(&mut table_func_output);
+                        if table_func_output.len() > table_func_output.capacity() / 2 {
+                            drain_through_mfp(
+                                &input_row,
+                                &mut time,
+                                &diff,
+                                &mut datums_mfp,
+                                &table_func_output,
+                                &mfp_plan,
+                                &until,
+                                &mut oks_output,
+                                &mut err_output,
+                            );
 
-                // Declare borrows outside the closure so that appropriately lifetimed
-                // borrows are moved in and used by `mfp.evaluate`.
-                let until = &until;
-                let temp_storage = &temp_storage;
-                let mfp_plan = &mfp_plan;
-                let output_rows_vec: Vec<_> = output_rows.collect();
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let row_builder = &mut row_builder;
-                output_rows_vec
-                    .iter()
-                    .flat_map(move |(output_row, r)| {
-                        // Remove any additional columns added in prior evaluation.
-                        datums_local.truncate(datums_len);
-                        // Extend datums with additional columns, replace some with dummy values.
-                        datums_local.extend(output_row.iter());
-                        mfp_plan
-                            .evaluate(
-                                &mut datums_local,
-                                temp_storage,
-                                event_time,
-                                diff * *r,
-                                |time| !until.less_equal(time),
-                                row_builder,
-                            )
-                            .collect::<Vec<_>>()
-                    })
-                    .map(|x| match x {
-                        Ok((row, event_time, diff)) => {
-                            // Copy the whole time, and re-populate event time.
-                            let mut time = time.clone();
-                            *time.event_time() = event_time;
-                            Ok((row, time, diff))
+                            // Double the capacity of the table func output buffer.
+                            table_func_output.clear();
+                            table_func_output.reserve(2 * table_func_output.capacity());
                         }
-                        Err((e, event_time, diff)) => {
-                            // Copy the whole time, and re-populate event time.
-                            let mut time = time.clone();
-                            *time.event_time() = event_time;
-                            Err((e, time, diff))
-                        }
-                    })
-                    .collect::<Vec<_>>()
+                    }
+                }
+
+                // Drain any straggler extensions.
+                if !table_func_output.is_empty() {
+                    drain_through_mfp(
+                        &input_row,
+                        &mut time,
+                        &diff,
+                        &mut datums_mfp,
+                        &table_func_output,
+                        &mfp_plan,
+                        &until,
+                        &mut oks_output,
+                        &mut err_output,
+                    );
+                }
+                // About to be dropped, but here to remind us in case we ever re-use it.
+                table_func_output.clear();
+
+                let oks = oks_output.into_iter().map(Ok);
+                let err = err_output.into_iter().map(Err);
+                oks.chain(err).collect::<Vec<_>>()
             }
         });
 
@@ -104,5 +115,78 @@ where
         let new_err_collection = errs.as_collection();
         let err_collection = err_collection.concat(&new_err_collection);
         CollectionBundle::from_collections(ok_collection, err_collection)
+    }
+}
+
+use crate::render::DataflowError;
+use mz_expr::MfpPlan;
+use mz_repr::{Diff, Row, Timestamp};
+use timely::progress::Antichain;
+
+/// Drains a list of extensions to `input_row` through a supplied `MfpPlan` and into output buffers.
+fn drain_through_mfp<T>(
+    input_row: &Row,
+    input_time: &mut T,
+    input_diff: &Diff,
+    datum_vec: &mut DatumVec,
+    extensions: &[(Row, Diff)],
+    mfp_plan: &MfpPlan,
+    until: &Antichain<Timestamp>,
+    oks_output: &mut Vec<(Row, T, Diff)>,
+    err_output: &mut Vec<(DataflowError, T, Diff)>,
+) where
+    T: crate::render::RenderTimestamp,
+{
+    let temp_storage = RowArena::new();
+    let binding = SharedRow::get();
+    let mut row_builder = binding.borrow_mut();
+
+    let mut datums_local = datum_vec.borrow_with(input_row);
+    let datums_len = datums_local.len();
+
+    let event_time = input_time.event_time().clone();
+
+    for (cols, diff) in extensions.iter() {
+        // Arrange `datums_local` to reflect the intended output pre-mfp.
+        datums_local.truncate(datums_len);
+        datums_local.extend(cols.iter());
+
+        let results = mfp_plan.evaluate(
+            &mut datums_local,
+            &temp_storage,
+            event_time,
+            diff * *input_diff,
+            |time| !until.less_equal(time),
+            &mut row_builder,
+        );
+
+        for result in results {
+            match result {
+                Ok((row, event_time, diff)) => {
+                    // Copy the whole time, and re-populate event time.
+                    let mut time = input_time.clone();
+                    *time.event_time() = event_time;
+                    oks_output.push((row, time, diff));
+                    if oks_output.len() == oks_output.capacity() {
+                        differential_dataflow::consolidation::consolidate_updates(oks_output);
+                        if oks_output.len() > oks_output.capacity() / 2 {
+                            oks_output.reserve(2 * oks_output.capacity() - oks_output.len());
+                        }
+                    }
+                }
+                Err((err, event_time, diff)) => {
+                    // Copy the whole time, and re-populate event time.
+                    let mut time = input_time.clone();
+                    *time.event_time() = event_time;
+                    err_output.push((err, time, diff));
+                    if err_output.len() == err_output.capacity() {
+                        differential_dataflow::consolidation::consolidate_updates(err_output);
+                        if err_output.len() > err_output.capacity() / 2 {
+                            err_output.reserve(2 * err_output.capacity() - err_output.len());
+                        }
+                    }
+                }
+            }
+        }
     }
 }
