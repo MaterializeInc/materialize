@@ -16,7 +16,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement, Ident,
-    IdentError, Value, WithOptionValue,
+    IdentError, WithOptionValue,
 };
 
 use crate::catalog::SubsourceCatalog;
@@ -83,8 +83,7 @@ pub(super) fn generate_targeted_subsources(
 
     // Now that we have an explicit list of validated requested subsources we can create them
     for RequestedSubsource {
-        // TODO: move MySQL sources to new structure
-        upstream_name: _,
+        upstream_name,
         subsource_name,
         table,
     } in validated_requested_subsources.into_iter()
@@ -147,8 +146,8 @@ pub(super) fn generate_targeted_subsources(
             constraints,
             if_not_exists: false,
             with_options: vec![CreateSubsourceOption {
-                name: CreateSubsourceOptionName::References,
-                value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                name: CreateSubsourceOptionName::ExternalReference,
+                value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
             }],
         };
         subsources.push(subsource);
