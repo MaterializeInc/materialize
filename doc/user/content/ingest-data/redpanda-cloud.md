@@ -157,7 +157,7 @@ possible configurations in the [reference documentation](/sql/create-source/kafk
 
 {{< tab "Use AWS PrivateLink">}}
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 [AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
 Materialize to your Redpanda Cloud instance without exposing traffic to the
