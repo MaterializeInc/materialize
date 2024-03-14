@@ -1775,7 +1775,7 @@ where
                 let drop_notif = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
                         pending_collection_drops.push(id);
-                        Some(self.persist_table_worker.drop_handle(id))
+                        Some(self.persist_table_worker.drop_handles(vec![id]))
                     }
                     DataSource::Webhook | DataSource::Introspection(_)
                         if read_frontier.is_empty() =>

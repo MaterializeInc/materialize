@@ -279,9 +279,9 @@ pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampM
 enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Register(T, Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
-    DropHandle {
-        /// Table that we want to drop our handle for.
-        id: GlobalId,
+    DropHandles {
+        /// Tables that we want to drop our handle for.
+        ids: Vec<GlobalId>,
         /// Notifies us when all resources have been cleaned up.
         tx: oneshot::Sender<()>,
     },
@@ -411,13 +411,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         }
     }
 
-    /// Drops the handle associated with `id` from this worker.
+    /// Drops the handles associated with `ids` from this worker.
     ///
     /// Note that this does not perform any other cleanup, such as finalizing
     /// the handle's shard.
-    pub(crate) fn drop_handle(&self, id: GlobalId) -> BoxFuture<'static, ()> {
+    pub(crate) fn drop_handles(&self, ids: Vec<GlobalId>) -> BoxFuture<'static, ()> {
         let (tx, rx) = oneshot::channel();
-        self.send(PersistTableWriteCmd::DropHandle { id, tx });
+        self.send(PersistTableWriteCmd::DropHandles { ids, tx });
         Box::pin(rx.map(|_| ()))
     }
 
@@ -449,8 +449,8 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 PersistTableWriteCmd::Update(_id, _write_handle) => {
                     unimplemented!("TODO: Support migrations on persist-txn backed collections")
                 }
-                PersistTableWriteCmd::DropHandle { id, tx } => {
-                    self.drop_handle(id).instrument(span).await;
+                PersistTableWriteCmd::DropHandles { ids, tx } => {
+                    self.drop_handles(ids).instrument(span).await;
                     // We don't care if our waiter has gone away.
                     let _ = tx.send(());
                 }
@@ -534,18 +534,22 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         }
     }
 
-    async fn drop_handle(&mut self, id: GlobalId) {
-        tracing::info!(?id, "drop tables");
-        // n.b. this should only remove the handle from the persist
-        // worker and not take any additional action such as closing
-        // the shard it's connected to because dataflows might still
-        // be using it.
-        if let Some(data_id) = self.write_handles.remove(&id) {
+    async fn drop_handles(&mut self, ids: Vec<GlobalId>) {
+        tracing::info!(?ids, "drop tables");
+        let data_ids = ids
+            .into_iter()
+            // n.b. this should only remove the handle from the persist
+            // worker and not take any additional action such as closing
+            // the shard it's connected to because dataflows might still
+            // be using it.
+            .filter_map(|id| self.write_handles.remove(&id))
+            .collect::<Vec<_>>();
+        if !data_ids.is_empty() {
             // We don't currently get a timestamp allocated for this, thread one
             // through if inventing one here becomes an issue.
             let mut ts = T::minimum();
             loop {
-                match self.txns.forget(ts, data_id).await {
+                match self.txns.forget(ts, data_ids.clone()).await {
                     Ok(tidy) => {
                         self.tidy.merge(tidy);
                         break;

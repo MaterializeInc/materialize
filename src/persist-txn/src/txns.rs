@@ -17,6 +17,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
@@ -317,10 +318,15 @@ where
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
     /// undefined behavior, and (potentially sticky) panics.
-    #[instrument(level = "debug", fields(ts = ?forget_ts, shard = %data_id))]
-    pub async fn forget(&mut self, forget_ts: T, data_id: ShardId) -> Result<Tidy, T> {
+    #[instrument(level = "debug", fields(ts = ?forget_ts))]
+    pub async fn forget(
+        &mut self,
+        forget_ts: T,
+        data_ids: impl IntoIterator<Item = ShardId>,
+    ) -> Result<Tidy, T> {
         let op = &Arc::clone(&self.metrics).forget;
         op.run(async {
+            let data_ids = data_ids.into_iter().collect::<Vec<_>>();
             let mut txns_upper = self
                 .txns_write
                 .shared_upper()
@@ -329,51 +335,64 @@ where
             loop {
                 self.txns_cache.update_ge(&txns_upper).await;
 
-                let (key, val) = C::encode(TxnsEntry::Register(data_id, T::encode(&forget_ts)));
-                let updates = if self.txns_cache.registered_at(&data_id, &txns_upper) {
-                    vec![((&key, &val), &forget_ts, -1)]
-                } else {
+                let data_ids_debug = || {
+                    data_ids
+                        .iter()
+                        .map(|x| format!("{:.9}", x.to_string()))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                let updates = data_ids
+                    .iter()
                     // Never registered or already forgotten. This could change in
                     // `[txns_upper, forget_ts]` (due to races) so close off that
                     // interval before returning, just don't write any updates.
-                    vec![]
-                };
+                    .filter(|data_id| self.txns_cache.registered_at(data_id, &txns_upper))
+                    .map(|data_id| C::encode(TxnsEntry::Register(*data_id, T::encode(&forget_ts))))
+                    .collect::<Vec<_>>();
+                let updates = updates
+                    .iter()
+                    .map(|(key, val)| ((key, val), &forget_ts, -1))
+                    .collect::<Vec<_>>();
 
                 // If the txns_upper has passed forget_ts, we can no longer write.
                 if forget_ts < txns_upper {
                     debug!(
-                        "txns forget {:.9} at {:?} mismatch current={:?}",
-                        data_id.to_string(),
+                        "txns forget {} at {:?} mismatch current={:?}",
+                        data_ids_debug(),
                         forget_ts,
                         txns_upper,
                     );
                     return Err(txns_upper);
                 }
 
-                // Ensure the latest write has been applied, so we don't run into
+                // Ensure the latest writes for each shard has been applied, so we don't run into
                 // any issues trying to apply it later.
                 //
                 // NB: It's _very_ important for correctness to get this from the
                 // unapplied batches (which compact themselves naturally) and not
                 // from the writes (which are artificially compacted based on when
                 // we need reads for).
-                let data_latest_unapplied = self
-                    .txns_cache
-                    .unapplied_batches
-                    .values()
-                    .rev()
-                    .find(|(x, _, _)| x == &data_id);
-                if let Some((_, _, latest_write)) = data_latest_unapplied {
-                    debug!(
-                        "txns forget {:.9} applying latest write {:?}",
-                        data_id.to_string(),
-                        latest_write,
-                    );
-                    let latest_write = latest_write.clone();
-                    let _tidy = self.apply_le(&latest_write).await;
+                {
+                    let data_ids: HashSet<_> = data_ids.iter().cloned().collect();
+                    let data_latest_unapplied = self
+                        .txns_cache
+                        .unapplied_batches
+                        .values()
+                        .rev()
+                        .find(|(x, _, _)| data_ids.contains(x));
+                    if let Some((_, _, latest_write)) = data_latest_unapplied {
+                        debug!(
+                            "txns forget {} applying latest write {:?}",
+                            data_ids_debug(),
+                            latest_write,
+                        );
+                        let latest_write = latest_write.clone();
+                        let _tidy = self.apply_le(&latest_write).await;
+                    }
                 }
                 let res = crate::small_caa(
-                    || format!("txns forget {:.9}", data_id.to_string()),
+                    || format!("txns forget {}", data_ids_debug()),
                     &mut self.txns_write,
                     &updates,
                     txns_upper,
@@ -383,8 +402,8 @@ where
                 match res {
                     Ok(()) => {
                         debug!(
-                            "txns forget {:.9} at {:?} success",
-                            data_id.to_string(),
+                            "txns forget {} at {:?} success",
+                            data_ids_debug(),
                             forget_ts
                         );
                         break;
@@ -400,7 +419,9 @@ where
             // Note: Ordering here matters, we want to generate the Tidy work _before_ removing the
             // handle because the work will create a handle to the shard.
             let tidy = self.apply_le(&forget_ts).await;
-            self.datas.data_write.remove(&data_id);
+            for data_id in &data_ids {
+                self.datas.data_write.remove(data_id);
+            }
 
             Ok(tidy)
         })
@@ -755,6 +776,7 @@ mod tests {
     use differential_dataflow::Hashable;
     use futures::future::BoxFuture;
     use mz_ore::cast::CastFrom;
+    use mz_ore::collections::CollectionExt;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::RetryParameters;
@@ -793,11 +815,21 @@ mod tests {
         }
 
         pub(crate) async fn expect_register(&mut self, register_ts: u64) -> ShardId {
-            let data_id = ShardId::new();
-            self.register(register_ts, [writer(&self.datas.client, data_id).await])
-                .await
-                .unwrap();
-            data_id
+            self.expect_registers(register_ts, 1).await.into_element()
+        }
+
+        pub(crate) async fn expect_registers(
+            &mut self,
+            register_ts: u64,
+            amount: usize,
+        ) -> Vec<ShardId> {
+            let data_ids: Vec<_> = (0..amount).map(|_| ShardId::new()).collect();
+            let mut writers = Vec::new();
+            for data_id in &data_ids {
+                writers.push(writer(&self.datas.client, *data_id).await);
+            }
+            self.register(register_ts, writers).await.unwrap();
+            data_ids
         }
 
         pub(crate) async fn expect_commit_at(
@@ -902,36 +934,48 @@ mod tests {
         let log = txns.new_log();
 
         // Can forget a data_shard that has not been registered.
-        txns.forget(1, ShardId::new()).await.unwrap();
+        txns.forget(1, [ShardId::new()]).await.unwrap();
+
+        // Can forget multiple data_shards that have not been registered.
+        txns.forget(2, (0..5).map(|_| ShardId::new()))
+            .await
+            .unwrap();
 
         // Can forget a registered shard.
-        let d0 = txns.expect_register(2).await;
-        txns.forget(3, d0).await.unwrap();
+        let d0 = txns.expect_register(3).await;
+        txns.forget(4, [d0]).await.unwrap();
+
+        // Can forget multiple registered shards.
+        let ds = txns.expect_registers(5, 5).await;
+        txns.forget(6, ds.clone()).await.unwrap();
 
         // Forget is idempotent.
-        txns.forget(4, d0).await.unwrap();
+        txns.forget(7, [d0]).await.unwrap();
+        txns.forget(8, ds.clone()).await.unwrap();
 
         // Cannot forget at an already closed off time. An error is returned
         // with the first time that a registration would succeed.
-        let d1 = txns.expect_register(5).await;
-        assert_eq!(txns.forget(5, d1).await.unwrap_err(), 6);
+        let d1 = txns.expect_register(9).await;
+        assert_eq!(txns.forget(9, [d1]).await.unwrap_err(), 10);
 
         // Write to txns and to d0 directly.
         let mut d0_write = writer(&client, d0).await;
-        txns.expect_commit_at(6, d1, &["d1"], &log).await;
-        let updates = [(("d0".to_owned(), ()), 6, 1)];
+        txns.expect_commit_at(10, d1, &["d1"], &log).await;
+        let updates = [(("d0".to_owned(), ()), 10, 1)];
         d0_write
-            .compare_and_append(&updates, d0_write.shared_upper(), Antichain::from_elem(7))
+            .compare_and_append(&updates, d0_write.shared_upper(), Antichain::from_elem(11))
             .await
             .unwrap()
             .unwrap();
-        log.record((d0, "d0".into(), 6, 1));
+        log.record((d0, "d0".into(), 10, 1));
 
         // Can register and forget an already registered and forgotten shard.
-        txns.register(7, [writer(&client, d0).await]).await.unwrap();
+        txns.register(11, [writer(&client, d0).await])
+            .await
+            .unwrap();
         let mut forget_expected = vec![d0, d1];
         forget_expected.sort();
-        assert_eq!(txns.forget_all(8).await.unwrap().0, forget_expected);
+        assert_eq!(txns.forget_all(12).await.unwrap().0, forget_expected);
 
         // Close shard to writes
         d0_write
@@ -940,8 +984,21 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let () = log.assert_snapshot(d0, 8).await;
-        let () = log.assert_snapshot(d1, 8).await;
+        let () = log.assert_snapshot(d0, 12).await;
+        let () = log.assert_snapshot(d1, 12).await;
+
+        for di in ds {
+            let mut di_write = writer(&client, di).await;
+
+            // Close shards to writes
+            di_write
+                .compare_and_append_batch(&mut [], di_write.shared_upper(), Antichain::new())
+                .await
+                .unwrap()
+                .unwrap();
+
+            let () = log.assert_snapshot(di, 8).await;
+        }
     }
 
     #[mz_ore::test(tokio::test)]
@@ -1013,7 +1070,7 @@ mod tests {
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
             info!("{} forget", ts);
-            txns.forget(ts, d0).await.unwrap();
+            txns.forget(ts, [d0]).await.unwrap();
             step_some_past(&mut subs, ts).await;
             if ts % 11 == 0 {
                 txns.compact_to(ts).await;
@@ -1225,7 +1282,7 @@ mod tests {
         async fn forget(&mut self, data_id: ShardId) {
             self.retry_ts_err(&mut |w: &mut StressWorker| {
                 debug!("stress forget {:.9} at {}", data_id.to_string(), w.ts);
-                Box::pin(async move { w.txns.forget(w.ts, data_id).await.map(|_| ()) })
+                Box::pin(async move { w.txns.forget(w.ts, [data_id]).await.map(|_| ()) })
             })
             .await
         }
