@@ -1,16 +1,11 @@
 ---
 title: "Ingest data from Amazon RDS for MySQL"
 description: "How to stream data from Amazon RDS for MySQL to Materialize"
-aliases:
-  - /guides/cdc-postgres/
-  - /integrations/cdc-postgres/
-  - /connect-sources/cdc-postgres-direct/
 menu:
   main:
     parent: "mysql"
     name: "Amazon RDS"
     identifier: "amazon-rds-mysql"
-    weight: 5
 ---
 
 This page shows you how to stream data from [Amazon RDS for MySQL](https://aws.amazon.com/rds/mysql/)

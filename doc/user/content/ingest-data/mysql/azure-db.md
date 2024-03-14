@@ -1,16 +1,15 @@
 ---
-title: "Ingest data from Google Cloud SQL for MySQL"
-description: "How to stream data from Google Cloud SQL for MySQL to Materialize"
+title: "Ingest data from Azure DB for MySQL"
+description: "How to stream data from Azure DB for MySQL to Materialize"
 menu:
   main:
-    parent: "MySQL"
-    name: "Google Cloud SQL"
-    identifier: "cloud-sql-mysql"
-    weight: 20
+    parent: "mysql"
+    name: "Azure DB"
+    indentifier: "azure-db-mysql"
 ---
 
-This page shows you how to stream data from [Google Cloud SQL for MySQL](https://cloud.google.com/sql/MySQL)
-to Materialize using the[MySQL source](/sql/create-source/mysql/).
+This page shows you how to stream data from [Azure DB for MySQL](https://azure.microsoft.com/en-us/products/MySQL)
+to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 ## Before you begin
 
@@ -18,8 +17,13 @@ to Materialize using the[MySQL source](/sql/create-source/mysql/).
 
 ## Step 1. Enable GTID-based replication
 
-Before creating a source in Materialize, you **must** configure Google Cloud SQL
-for MySQL for GTID-based binlog replication. This requires the following
+{{< note >}}
+GTID-based replication is supported for Azure DB for MySQL [flexible server](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/overview-single).
+It is **not supported** for single server databases.
+{{</ note >}}
+
+Before creating a source in Materialize, you **must** configure Azure DB for
+MySQL for GTID-based binlog replication. This requires the following
 configuration changes:
 
 Configuration parameter          | Value  | Details
@@ -30,7 +34,8 @@ Configuration parameter          | Value  | Details
 `enforce_gtid_consistency`       | `ON`   |
 `replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
 
-For guidance on enabling GTID-based binlog replication in Cloud SQL, see the [Cloud SQL documentation](https://cloud.google.com/sql/docs/mysql/replication).
+For guidance on enabling GTID-based binlog replication in Azure DB, see the
+[Azure documentation](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/how-to-data-in-replication?tabs=shell%2Ccommand-line#configure-the-source-mysql-server).
 
 ## Step 2. Create a user for replication
 
@@ -62,8 +67,8 @@ Select the option that works best for you.
     SELECT * FROM mz_egress_ips;
     ```
 
-1. Update your Google Cloud SQL firewall rules to allow traffic from each IP
-   address from the previous step.
+1. Update your [Azure DB firewall rules](https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure?view=azuresql)
+   to allow traffic from each IP address from the previous step.
 
 {{< /tab >}}
 
@@ -74,15 +79,15 @@ instance to serve as an SSH bastion host, configure the bastion host to allow
 traffic only from Materialize, and then configure your database's private
 network to allow traffic from the bastion host.
 
-1. [Launch a GCE instance](https://cloud.google.com/compute/docs/instances/create-start-instance) to serve as your SSH bastion host.
+1. [Launch an Azure VM with a static public IP address](https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/virtual-network-deploy-static-pip-arm-portal?toc=%2Fazure%2Fvirtual-machines%2Ftoc.json)
+to serve as your SSH bastion host.
 
-    - Make sure the instance is publicly accessible and in the same VPC as your
+    - Make sure the VM is publicly accessible and in the same VPC as your
       database.
     - Add a key pair and note the username. You'll use this username when
       connecting Materialize to your bastion host.
-    - Make sure the VM has a [static public IP address](https://cloud.google.com/compute/docs/ip-addresses/reserve-static-external-ip-address).
-      You'll use this IP address when connecting Materialize to your bastion
-      host.
+    - Make sure the VM has a static public IP address. You'll use this IP
+      address when connecting Materialize to your bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
@@ -94,11 +99,11 @@ network to allow traffic from the bastion host.
        SELECT * FROM mz_egress_ips;
        ```
 
-    1. Update your SSH bastion host's firewall rules to allow traffic from each
-    IP address from the previous step.
+    1. Update your SSH bastion host's [firewall rules](https://learn.microsoft.com/en-us/azure/virtual-network/tutorial-filter-network-traffic?toc=%2Fazure%2Fvirtual-machines%2Ftoc.json)
+    to allow traffic from each IP address from the previous step.
 
-1. Update your Google Cloud SQL firewall rules to allow traffic from the SSH
-bastion host.
+1. Update your [Azure DB firewall rules](https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure?view=azuresql)
+   to allow traffic from the SSH bastion host.
 
 {{< /tab >}}
 
@@ -135,6 +140,10 @@ networking configuration, so start by selecting the relevant option.
 {{< /tab >}}
 
 {{< /tabs >}}
+
+[//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
+new progress metrics in mz_source_statistics + console monitoring, when
+available(also for PostgreSQL)."
 
 ## Step 6. Check the ingestion status
 
