@@ -65,6 +65,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_columnation_lgalloc": "true",
     "enable_comment": "true",
     "enable_compute_chunked_stack": "true",
+    "enable_copy_to_expr": "true",
     "enable_disk_cluster_replicas": "true",
     "enable_eager_delta_joins": "true",
     "enable_equivalence_propagation": "true",

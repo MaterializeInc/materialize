@@ -42,7 +42,9 @@ class Testdrive(Service):
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
         aws_region: str | None = None,
-        aws_endpoint: str | None = "http://localstack:4566",
+        aws_endpoint: str | None = "http://minio:9000",
+        aws_access_key_id: str | None = "minioadmin",
+        aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
         external_cockroach: bool = False,
         external_minio: bool = False,
@@ -87,6 +89,15 @@ class Testdrive(Service):
 
         if aws_endpoint and not aws_region:
             entrypoint.append(f"--aws-endpoint={aws_endpoint}")
+            entrypoint.append(f"--var=aws-endpoint={aws_endpoint}")
+
+        if aws_access_key_id:
+            entrypoint.append(f"--aws-access-key-id={aws_access_key_id}")
+            entrypoint.append(f"--var=aws-access-key-id={aws_access_key_id}")
+
+        if aws_secret_access_key:
+            entrypoint.append(f"--aws-secret-access-key={aws_secret_access_key}")
+            entrypoint.append(f"--var=aws-secret-access-key={aws_secret_access_key}")
 
         if validate_catalog_store:
             entrypoint.append("--validate-catalog-store")

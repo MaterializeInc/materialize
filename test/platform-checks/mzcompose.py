@@ -46,7 +46,7 @@ SERVICES = [
         # Workaround for #19810
         restart="on-failure:5",
     ),
-    Minio(setup_materialize=True),
+    Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Postgres(),
     MySql(),
@@ -98,7 +98,7 @@ SERVICES = [
         volumes_extra=["secrets:/share/secrets"],
     ),
     TestdriveService(
-        default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
+        default_timeout="5s",
         materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
         no_reset=True,
         seed=1,
