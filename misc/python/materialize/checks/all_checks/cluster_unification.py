@@ -33,9 +33,12 @@ class UnifiedCluster(Check):
             # Create either a source or a view as first object in cluster
             Testdrive(
                 """
-                > CREATE SOURCE shared_cluster_storage_first_source
+                >[version<9300] CREATE SOURCE shared_cluster_storage_first_source
                   IN CLUSTER shared_cluster_storage_first
                   FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
+                >[version>=9300] CREATE SOURCE shared_cluster_storage_first_source
+                  IN CLUSTER shared_cluster_storage_first
+                  FROM LOAD GENERATOR COUNTER
 
                 > CREATE MATERIALIZED VIEW shared_cluster_compute_first_mv
                   IN CLUSTER shared_cluster_compute_first
@@ -50,9 +53,12 @@ class UnifiedCluster(Check):
             # now already contains an object
             Testdrive(
                 """
-                > CREATE SOURCE shared_cluster_compute_first_source
+                >[version<9300] CREATE SOURCE shared_cluster_compute_first_source
                   IN CLUSTER shared_cluster_compute_first
                   FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
+                >[version>=9300] CREATE SOURCE shared_cluster_compute_first_source
+                  IN CLUSTER shared_cluster_compute_first
+                  FROM LOAD GENERATOR COUNTER
 
                 > CREATE MATERIALIZED VIEW shared_cluster_storage_first_mv
                   IN CLUSTER shared_cluster_storage_first
