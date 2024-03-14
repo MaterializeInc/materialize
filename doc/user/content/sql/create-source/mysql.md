@@ -30,9 +30,9 @@ _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
 **CONNECTION** _connection_name_ | The name of the MySQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#mysql) documentation page.
-**FOR ALL TABLES** | Create subsources for all tables in all schemas upstream.
+**FOR ALL TABLES** | Create subsources for all tables in all schemas upstream. The [`mysql` system schema](https://dev.mysql.com/doc/refman/8.3/en/system-schema.html) is ignored.
 **FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas upstream.
-**FOR TABLES (** _table_list_ **)** | Create subsources for specific tables upstream.
+**FOR TABLES (** _table_list_ **)** | Create subsources for specific tables upstream. Requires fully-qualified table names (`<schema>.<table>`).
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 
 ### `CONNECTION` options
@@ -40,7 +40,7 @@ _src_name_  | The name for the source.
 Field                                | Value                           | Description
 -------------------------------------|---------------------------------|-------------------------------------
 `IGNORE COLUMNS`                     | A list of fully-qualified names | Ignore specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
-`TEXT COLUMNS`                       | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are unsupported in Materialize.
+`TEXT COLUMNS`                       | A list of fully-qualified names | Decode data as `text` for specific columns that contain MySQL types that are [unsupported in Materialize](#supported-types).
 
 ## Features
 
@@ -78,10 +78,9 @@ Configuration parameter          | Value  | Details
 `binlog_row_image`               | `FULL` |
 `gtid_mode`                      | `ON`   |
 `enforce_gtid_consistency`       | `ON`   |
-`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a MySQL read-replica for replication, rather than the MySQL primary.
+`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
 
-
-If you're running MySQL as a managed service, further configuration changes
+If you're running MySQL using a managed service, further configuration changes
 might be required. For step-by-step instructions on enabling GTID-based binlog
 replication for your MySQL service, see the integration guides.
 
@@ -148,6 +147,11 @@ initially created, and is validated against the upstream schema upon restart.
 If you create new tables upstream after creating a MySQL source and want to
 replicate them to Materialize, the source must be dropped and recreated.
 
+{{< note >}}
+Support for dropping and recreating individual subsources is planned for a future
+release {{% gh 24975 %}}.
+{{< /note >}}
+
 ##### MySQL schemas
 
 `CREATE SOURCE` will attempt to create each upstream table in the same schema as
@@ -177,9 +181,9 @@ The following metadata is available for each source as a progress subsource:
 
 Field              | Type                                                    | Details
 -------------------|---------------------------------------------------------|--------------
-`source_id_lower`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  |
-`source_id_upper`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  |
-`transaction_id`   | [`uint8`](/sql/types/uint/#uint8-info)
+`source_id_lower`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  | The lower-bound GTID `source_id` of the GTIDs covered by this range.
+`source_id_upper`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  | The upper-bound GTID `source_id` of the GTIDs covered by this range.
+`transaction_id`   | [`uint8`](/sql/types/uint/#uint8-info)                  | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range.
 
 And can be queried using:
 
@@ -188,10 +192,12 @@ SELECT transaction_id
 FROM <src_name>_progress;
 ```
 
-The reported transaction ID should increase as Materialize consumes **new**
-binlog records from the upstream MySQL database. For more details on
-monitoring source ingestion progress and debugging related issues, see
-[Troubleshooting](/ops/troubleshooting/).
+Progress metadata is represented as a [GTID set](https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html)
+of future possible GTIDs, which is similar to the [`gtid_executed`](https://dev.mysql.com/doc/refman/8.0/en/replication-options-gtids.html#sysvar_gtid_executed)
+system variable on a MySQL replica. The reported `transaction_id` should
+increase as Materialize consumes **new** binlog records from the upstream MySQL
+database. For more details on monitoring source ingestion progress and
+debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
@@ -235,12 +241,17 @@ Materialize natively supports the following MySQL types:
 </ul>
 
 Replicating tables that contain **unsupported [data types](/sql/types/)** is
-possible via the `TEXT COLUMNS` option. The specified columns will be treated
-as `text`, and will thus not offer the expected MySQL type features. For
-example:
+possible via the [`TEXT COLUMNS` option](#handling-unsupported-types) for the
+following types:
 
-* [`enum`]: the implicit ordering of the original MySQL `enum` type is not
-  preserved, as Materialize will sort values as `text`.
+<ul style="column-count: 1">
+<li><code>enum</code></li>
+<li><code>year</code></li>
+</ul>
+
+The specified columns will be treated as `text`, and will thus not offer the
+expected MySQL type features. For any unsupported data types not listed above,
+use the [`IGNORE COLUMNS`](#ignoring-columns) option.
 
 ##### Truncation
 
@@ -341,7 +352,7 @@ CREATE SOURCE mz_source
 
 #### Handling unsupported types
 
-If you're replicating tables that use [data types](/sql/types/) unsupported by
+If you're replicating tables that use [data types unsupported]() by
 Materialize, use the `TEXT COLUMNS` option to decode data as `text` for the
 affected columns. This option expects the upstream fully-qualified names of the
 replicated table and column (i.e. as defined in your MySQL database).
@@ -371,8 +382,12 @@ CREATE SOURCE mz_source
 ### Handling schema changes
 
 To handle upstream [schema changes](#schema-changes), drop and recreate the
-source. Support for the [`ALTER SOURCE...{ DROP | ADD } SUBSOURCE`](/sql/alter-source/#context)
-syntax is planned for a future release.
+source.
+
+{{< note >}}
+Support for dropping and recreating individual subsources is planned for a future
+release {{% gh 24975 %}}.
+{{< /note >}}
 
 ## Related pages
 

@@ -28,7 +28,7 @@ Materialize bundles **native connectors** that allow ingesting data from the fol
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
-- [MySQL](/integrations/#mysql)
+- [MySQL](/sql/create-source/mysql)
 - [Other databases](/integrations/#other-databases)
 {{</ linkbox >}}
 {{< linkbox title="Webhooks" >}}

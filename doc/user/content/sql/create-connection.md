@@ -629,7 +629,7 @@ Field                       | Value            | Required | Description
 `USER`                      | `text`           | ✓        | Database username.
 `PASSWORD`                  | secret           |          | Password for the connection.
 `SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`SSL MODE`                  | `text`           |          | Default: `disabled`. Enables SSL connections if set to `required`, `verify_ca`, or `verify_full`.
+`SSL MODE`                  | `text`           |          | Default: `disabled`. Enables SSL connections if set to `required`, `verify_ca`, or `verify_identity`. See the [MySQL documentatation](https://dev.mysql.com/doc/refman/8.0/en/using-encrypted-connections.html) for more details.
 `SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
 `SSL KEY`                   | secret           |          | Client SSL key in PEM format.
 
@@ -875,7 +875,7 @@ CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
 
 An SSH tunnel connection establishes a link to an SSH bastion server. You can
 use SSH tunnel connections in [Kafka connections](#kafka), [MySQL connections](#mysql),
-and[Postgres connections](#postgresql).
+and [Postgres connections](#postgresql).
 
 #### Syntax {#ssh-tunnel-syntax}
 
