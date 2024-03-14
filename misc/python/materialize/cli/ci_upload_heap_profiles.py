@@ -11,10 +11,15 @@
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
 from threading import Thread
+
+CLUSTERD_COMMAND_RE = re.compile(
+    r"--internal-http-listen-addr=(?P<socket>[^ ]*).*--opentelemetry-resource=cluster_id=(?P<cluster_id>[^ ]*).*--opentelemetry-resource=replica_id=(?P<replica_id>[^ ]*)"
+)
 
 
 def main() -> int:
@@ -25,7 +30,7 @@ def main() -> int:
     )
 
     parser.add_argument("composition", type=str)
-    parser.add_argument("--upload", action="store_true", default=True)
+    parser.add_argument("--upload", action=argparse.BooleanOptionalAction, default=True)
 
     args = parser.parse_args()
     mzcompose = ["bin/mzcompose", "--find", args.composition, "--mz-quiet"]
@@ -78,26 +83,26 @@ def main() -> int:
                 )
             )
 
-            clusterd_sockets = [
-                line.split("--internal-http-listen-addr=")[1].split(" ")[0]
-                for line in subprocess.run(
-                    mzcompose + ["exec", service["Service"], "ps", "aux"],
-                    text=True,
-                    capture_output=True,
-                ).stdout.splitlines()
-                if "--internal-http-listen-addr=" in line
-            ]
-            for i, socket in enumerate(clusterd_sockets):
-                threads.append(
-                    Thread(
-                        target=run,
-                        args=(
-                            service["Service"],
-                            ["--unix-socket", socket, "http:/prof/heap"],
-                            f"-clusterd{i}",
-                        ),
+            for line in subprocess.run(
+                mzcompose + ["exec", service["Service"], "ps", "aux"],
+                text=True,
+                capture_output=True,
+            ).stdout.splitlines():
+                if match := CLUSTERD_COMMAND_RE.search(line):
+                    threads.append(
+                        Thread(
+                            target=run,
+                            args=(
+                                service["Service"],
+                                [
+                                    "--unix-socket",
+                                    match.group("socket"),
+                                    "http:/prof/heap",
+                                ],
+                                f"-cluster-{match.group('cluster_id')}-replica-{match.group('replica_id')}",
+                            ),
+                        )
                     )
-                )
 
     for thread in threads:
         thread.start()
