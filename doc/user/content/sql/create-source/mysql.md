@@ -106,7 +106,7 @@ available.
 
 As an example, [Amazon RDS for MySQL](/ingest-data/mysql-amazon-rds/) has its
 own configuration parameter for binlog retention ([`binlog retention hours`](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_set_configuration-usage-notes.binlog-retention-hours))
-that overrides `binlog_expire_logs_seconds` and is set to `0` by default.
+that overrides `binlog_expire_logs_seconds` and is set to `NULL` by default.
 
 #### Creating a source
 
