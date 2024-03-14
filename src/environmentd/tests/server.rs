@@ -279,10 +279,17 @@ ORDER BY mseh.began_at;",
             redacted_sql: r.get(6),
         };
         assert_eq!(r.sample_rate, 1.0);
-        assert_eq!(
-            r.sql,
+
+        let expected_sql = if r.sql.contains("SECRET") {
+            mz_sql::parse::parse(&r.sql)
+                .unwrap()
+                .into_element()
+                .ast
+                .to_ast_string_redacted()
+        } else {
             stmt.chars().filter(|&ch| ch != ';').collect::<String>()
-        );
+        };
+        assert_eq!(r.sql, expected_sql);
         assert_eq!(r.finished_status, "success");
         assert!(r.prepared_at <= r.began_at);
         assert!(r.began_at <= r.finished_at);
