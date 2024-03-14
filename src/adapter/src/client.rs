@@ -36,8 +36,6 @@ use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
 use mz_sql::session::vars::{OwnedVarInput, Var, CLUSTER};
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::StatementKind;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -540,10 +538,7 @@ impl SessionClient {
         let params = vec![];
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
-        let redacted_sql = stmt.to_ast_string_redacted();
-        let logging =
-            self.session()
-                .mint_logging(sql, redacted_sql, now, Some(StatementKind::from(&stmt)));
+        let logging = self.session().mint_logging(sql, Some(&stmt), now);
         self.session().set_portal(
             name,
             desc,

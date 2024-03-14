@@ -70,7 +70,7 @@ where
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FormatMode {
     /// Simple is the normal way of printing for human consumption. Identifiers are quoted only if
-    /// necessary.
+    /// necessary and sensative information is redacted.
     Simple,
     /// SimpleRedacted is like Simple, but strips out string and number literals.
     /// This makes SQL queries be "usage data", rather than "customer data" according to our
@@ -105,6 +105,11 @@ where
     // Whether the AST should be optimized for persistence.
     pub fn stable(&self) -> bool {
         self.mode == FormatMode::Stable
+    }
+
+    /// Whether the AST should be printed out in a more human readable format.
+    pub fn simple(&self) -> bool {
+        matches!(self.mode, FormatMode::Simple | FormatMode::SimpleRedacted)
     }
 
     /// Whether the AST should be printed in redacted form
