@@ -5,8 +5,7 @@ menu:
   main:
     parent: "mysql"
     name: "Amazon Aurora"
-    identifier: "amazon-aurora-mysql"
-    weight: 10
+    identifier: "mysql-amazon-aurora"
 ---
 
 {{< private-preview />}}

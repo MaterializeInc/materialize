@@ -5,7 +5,7 @@ menu:
   main:
     parent: "mysql"
     name: "Google Cloud SQL"
-    identifier: "cloud-sql-mysql"
+    identifier: "mysql-google-cloudsql"
 ---
 
 {{< private-preview />}}

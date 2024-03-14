@@ -1,11 +1,13 @@
 ---
 title: "Ingest data from self-hosted PostgreSQL"
 description: "How to stream data from self-hosted PostgreSQL database to Materialize"
+aliases:
+  - /ingest-data/postgres-self-hosted/
 menu:
   main:
     parent: "postgresql"
     name: "Self-hosted"
-    weight: 25
+    identifier: "pg-self-hosted"
 ---
 
 This page shows you how to stream data from a self-hosted PostgreSQL database to

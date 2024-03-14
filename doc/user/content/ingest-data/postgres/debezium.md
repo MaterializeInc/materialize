@@ -3,12 +3,12 @@ title: "PostgreSQL CDC using Kafka and Debezium"
 description: "How to propagate Change Data Capture (CDC) data from a PostgreSQL database to Materialize"
 aliases:
   - /connect-sources/cdc-postgres-kafka-debezium/
+  - /ingest-data/cdc-postgres-kafka-debezium/
 menu:
   main:
     parent: "postgresql"
     name: "Using Kafka and Debezium"
     identifier: "pg-dbz"
-    weight: 50
 ---
 
 Change Data Capture (CDC) allows you to track and propagate changes in a

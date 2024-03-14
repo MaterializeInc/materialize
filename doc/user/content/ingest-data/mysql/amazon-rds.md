@@ -5,7 +5,7 @@ menu:
   main:
     parent: "mysql"
     name: "Amazon RDS"
-    identifier: "amazon-rds-mysql"
+    identifier: "mysql-amazon-rds"
 ---
 
 {{< private-preview />}}

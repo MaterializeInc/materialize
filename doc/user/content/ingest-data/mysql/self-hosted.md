@@ -5,6 +5,7 @@ menu:
   main:
     parent: "mysql"
     name: "Self-hosted"
+    identifier: "mysql-self-hosted"
 ---
 
 {{< private-preview />}}
