@@ -240,3 +240,21 @@ COMMIT execution-finished
 "SELECT 'transaction statement 1'"
 "SELECT 'transaction statement 2'"
 ROLLBACK
+
+# Test that SECRETs have their values redacted.
+
+> CREATE SECRET my_super_secret AS '123';
+
+> SELECT redacted_sql FROM mz_internal.mz_recent_activity_log_redacted WHERE statement_type = 'create_secret';
+"CREATE SECRET my_super_secret AS '<REDACTED>'"
+
+> SELECT sql FROM mz_internal.mz_recent_activity_log WHERE statement_type = 'create_secret';
+"CREATE SECRET my_super_secret AS '<REDACTED>'"
+
+> ALTER SECRET my_super_secret AS '456';
+
+> SELECT redacted_sql FROM mz_internal.mz_recent_activity_log_redacted WHERE statement_type = 'alter_secret';
+"ALTER SECRET my_super_secret AS '<REDACTED>'"
+
+> SELECT sql FROM mz_internal.mz_recent_activity_log WHERE statement_type = 'alter_secret';
+"ALTER SECRET my_super_secret AS '<REDACTED>'"

@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tracing::{info, warn, Instrument};
@@ -22,7 +23,8 @@ use uuid::Uuid;
 
 use mz_catalog::builtin::{
     Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS, BUILTIN_PREFIXES,
-    BUILTIN_ROLES,
+    BUILTIN_ROLES, MZ_PREPARED_STATEMENT_HISTORY, MZ_SQL_TEXT, MZ_STATEMENT_EXECUTION_HISTORY,
+    MZ_STATEMENT_LIFECYCLE_HISTORY,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -392,7 +394,7 @@ impl Catalog {
             let AllocatedBuiltinSystemIds {
                 all_builtins,
                 new_builtins,
-                migrated_builtins,
+                mut migrated_builtins,
             } = Catalog::allocate_system_ids(
                 &mut txn,
                 BUILTINS::iter()
@@ -754,6 +756,31 @@ impl Catalog {
             )?;
 
             let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
+
+            // Run a one-time migration to clear the existing sources.
+            //
+            // TODO(parkmycar): Remove after v0.92.
+            const ACTIVITY_LOG_ONE_TIME_MIGRATION: &str = "activity_log_v_0_92_migration";
+            let ran_migration = txn.get_config(ACTIVITY_LOG_ONE_TIME_MIGRATION.to_string()).is_some();
+            if !ran_migration {
+                let candidates = [
+                    MZ_PREPARED_STATEMENT_HISTORY.name,
+                    MZ_SQL_TEXT.name,
+                    MZ_STATEMENT_LIFECYCLE_HISTORY.name,
+                    MZ_STATEMENT_EXECUTION_HISTORY.name,
+                ];
+                let to_migrate: Vec<_> = txn
+                    .get_system_items()
+                    .filter(|mapping| {
+                        mapping.description.schema_name == MZ_INTERNAL_SCHEMA && candidates.contains(&mapping.description.object_name.as_str())
+                    })
+                    .map(|mapping| mapping.unique_identifier.id)
+                    .collect();
+                tracing::info!(?to_migrate, "running one time migration");
+                migrated_builtins.extend(to_migrate);
+
+                txn.set_config(ACTIVITY_LOG_ONE_TIME_MIGRATION.to_string(), Some(1))?;
+            }
 
             let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
                 &state,

@@ -1620,7 +1620,12 @@ impl<T: AstInfo> AstDisplay for CreateSecretStatement<T> {
         }
         f.write_node(&self.name);
         f.write_str(" AS ");
-        f.write_node(&self.value);
+
+        if f.redacted() {
+            f.write_str("'<REDACTED>'");
+        } else {
+            f.write_node(&self.value);
+        }
     }
 }
 impl_display_t!(CreateSecretStatement);
@@ -2294,7 +2299,12 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
         }
         f.write_node(&self.name);
         f.write_str(" AS ");
-        f.write_node(&self.value);
+
+        if f.redacted() {
+            f.write_str("'<REDACTED>'");
+        } else {
+            f.write_node(&self.value);
+        }
     }
 }
 
