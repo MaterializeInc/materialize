@@ -8,6 +8,8 @@ menu:
     indentifier: "azure-db-mysql"
 ---
 
+{{< private-preview />}}
+
 This page shows you how to stream data from [Azure DB for MySQL](https://azure.microsoft.com/en-us/products/MySQL)
 to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
@@ -15,7 +17,7 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based replication
+## Step 1. Enable GTID-based binlog replication
 
 {{< note >}}
 GTID-based replication is supported for Azure DB for MySQL [flexible server](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/overview-single).
@@ -23,11 +25,12 @@ It is **not supported** for single server databases.
 {{</ note >}}
 
 Before creating a source in Materialize, you **must** configure Azure DB for
-MySQL for GTID-based binlog replication. This requires the following
-configuration changes:
+MySQL for GTID-based binlog replication. This requires enabling binlog replication and
+the following additional configuration changes:
 
 Configuration parameter          | Value  | Details
 ---------------------------------|--------| -------------------------------
+`log_bin`                        | `ON`   |
 `binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
 `binlog_row_image`               | `FULL` |
 `gtid_mode`                      | `ON`   |

@@ -8,6 +8,8 @@ menu:
     identifier: "cloud-sql-mysql"
 ---
 
+{{< private-preview />}}
+
 This page shows you how to stream data from [Google Cloud SQL for MySQL](https://cloud.google.com/sql/MySQL)
 to Materialize using the[MySQL source](/sql/create-source/mysql/).
 
@@ -15,7 +17,7 @@ to Materialize using the[MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based replication
+## Step 1. Enable GTID-based binlog replication
 
 Before creating a source in Materialize, you **must** configure Google Cloud SQL
 for MySQL for GTID-based binlog replication. This requires the following
@@ -23,6 +25,7 @@ configuration changes:
 
 Configuration parameter          | Value  | Details
 ---------------------------------|--------| -------------------------------
+`log_bin`                        | `ON`   |
 `binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
 `binlog_row_image`               | `FULL` |
 `gtid_mode`                      | `ON`   |

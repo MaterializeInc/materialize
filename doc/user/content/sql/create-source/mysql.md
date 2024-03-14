@@ -74,6 +74,7 @@ configuration changes:
 
 Configuration parameter          | Value  | Details
 ---------------------------------|--------| -------------------------------
+`log_bin`                        | `ON`   |
 `binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
 `binlog_row_image`               | `FULL` |
 `gtid_mode`                      | `ON`   |
@@ -395,8 +396,8 @@ release {{% gh 24975 %}}.
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
 - MySQL integration guides:
-  - [Amazon RDS](/ingest-data/mysql-amazon-rds/)
-  - [Amazon Aurora](/ingest-data/mysql-amazon-aurora/)
-  - [Azure DB](/ingest-data/mysql-azure-db/)
-  - [Google Cloud SQL](/ingest-data/mysql-google-cloud-sql/)
-  - [Self-hosted](/ingest-data/mysql-self-hosted/)
+  - [Amazon RDS](/ingest-data/mysql/amazon-rds/)
+  - [Amazon Aurora](/ingest-data/mysql/amazon-aurora/)
+  - [Azure DB](/ingest-data/mysql/azure-db/)
+  - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
+  - [Self-hosted](/ingest-data/mysql/self-hosted/)

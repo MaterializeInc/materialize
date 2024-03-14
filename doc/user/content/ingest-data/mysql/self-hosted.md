@@ -1,13 +1,13 @@
 ---
 title: "Ingest data from self-hosted MySQL"
 description: "How to stream data from self-hosted MySQL database to Materialize"
-draft: true
 menu:
   main:
-    parent: "MySQL"
+    parent: "mysql"
     name: "Self-hosted"
-    weight: 25
 ---
+
+{{< private-preview />}}
 
 This page shows you how to stream data from a self-hosted MySQL database to
 Materialize using the [MySQL source](/sql/create-source/mysql/).
@@ -16,35 +16,24 @@ Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable GTID-based replication
+## Step 1. Enable GTID-based binlog replication
 
-Materialize uses MySQL's [logical replication](https://www.MySQL.org/docs/current/logical-replication.html)
-protocol to track changes in your database and propagate them to Materialize.
+Before creating a source in Materialize, you **must** configure your MySQL
+database for GTID-based binlog replication. This requires the following
+configuration changes:
 
-As a first step, you need to make sure logical replication is enabled.
+Configuration parameter          | Value  | Details
+---------------------------------|--------| -------------------------------
+`log_bin`                        | `ON`   |
+`binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
+`binlog_row_image`               | `FULL` |
+`gtid_mode`                      | `ON`   | In the AWS console, this parameter appears as `gtid-mode`.
+`enforce_gtid_consistency`       | `ON`   |
+`binlog retention hours`         | 168    |
+`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
 
-1. As a _superuser_, use `psql` (or your preferred SQL client) to connect to your
-   MySQL database.
-
-1. Check if logical replication is enabled:
-
-    ```sql
-    SHOW wal_level;
-    ```
-
-    The `wal_level` setting must be set to `logical`. If it's set to any other
-    value, change it to `logical` in the database configuration file
-    (`MySQL.conf`).
-
-1. Restart the database in order for the new `wal_level` to take effect. Keep in
-   mind that restarting can affect database performance.
-
-1. Back in the SQL client connected to MySQL, verify that replication is
-   now enabled:
-
-    ```sql
-    SHOW wal_level;
-    ```
+For guidance on enabling GTID-based binlog replication, see the
+[MySQL documentation](https://dev.mysql.com/blog-archive/enabling-gtids-without-downtime-in-mysql-5-7-6/).
 
 ## Step 2. Create a user for replication
 
@@ -78,125 +67,6 @@ Select the option that works best for you.
 
 1. Update your database firewall rules to allow traffic from each IP address
    from the previous step.
-
-{{< /tab >}}
-
-{{< tab "Use AWS PrivateLink">}}
-
-{{< public-preview />}}
-
-Materialize can connect to a MySQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
-service. Your MySQL database must be running on AWS in order to use this
-option.
-
-1. #### Create a target group
-
-    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html)
-    for your mysql instance with the following details:
-
-    a. Target type as **IP address**.
-
-    b. Protocol as **TCP**.
-
-    c. Port as **5432**, or the port that you are using in case it is not 5432.
-
-    d. Make sure that the target group is in the same VPC as the MySQL
-    instance.
-
-    e. Click next, and register the respective MySQL instance to the target
-    group using its IP address.
-
-1. #### Create a Network Load Balancer (NLB)
-
-    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html)
-    that is **enabled for the same subnets** that the MySQL instance is
-    in.
-
-1. #### Create TCP listener
-
-    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html)
-    for your MySQL instance that forwards to the corresponding target
-    group you created.
-
-1. #### Verify security groups and health checks
-
-    Once the TCP listener has been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
-    are passing and that the target is reported as healthy.
-
-    If you have set up a security group for your MySQL instance, you must
-    ensure that it allows traffic on the health check port.
-
-    **Remarks**:
-
-    a. Network Load Balancers do not have associated security groups. Therefore,
-    the security groups for your targets must use IP addresses to allow
-    traffic.
-
-    b. You can't use the security groups for the clients as a source in the
-    security groups for the targets. Therefore, the security groups for your
-    targets must use the IP addresses of the clients to allow traffic. For more
-    details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
-
-1. #### Create a VPC endpoint service
-
-    Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
-    and associate it with the **Network Load Balancer** that you’ve just
-    created.
-
-    Note the **service name** that is generated for the endpoint service.
-
-    **Remarks**:
-
-    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
-    while still strictly managing who can view your endpoint via IAM,
-    Materialze will be able to seamlessly recreate and migrate endpoints as we
-    work to stabilize this feature.
-
-1. #### Create an AWS PrivateLink Connection
-
-     In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the
-     endpoint service that you created in the previous step.
-
-     ```sql
-    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-        SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
-        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
-    );
-    ```
-
-    Update the list of the availability zones to match the ones that you are
-    using in your AWS account.
-
-1. #### Configure the AWS PrivateLink service
-
-    Retrieve the AWS principal for the AWS PrivateLink connection you just
-    created:
-
-    ```sql
-    SELECT principal
-    FROM mz_aws_privatelink_connections plc
-    JOIN mz_connections c ON plc.id = c.id
-    WHERE c.name = 'privatelink_svc';
-    ```
-
-    ```
-       id   |                                 principal
-    --------+---------------------------------------------------------------------------
-     u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
-    ```
-
-    Follow the instructions in the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html)
-    to configure your VPC endpoint service to accept connections from the
-    provided AWS principal.
-
-    If your AWS PrivateLink service is configured to require acceptance of
-    connection requests, you must manually approve the connection request from
-    Materialize after executing the `CREATE CONNECTION` statement. For more
-    details, check the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
-
-    **Note:** It might take some time for the endpoint service connection to
-      show up, so you would need to wait for the endpoint service connection to
-      be ready before you create a source.
 
 {{< /tab >}}
 
@@ -249,215 +119,26 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 ## Step 5. Start ingesting data
 
-Now that you've configured your database network and created an ingestion
-cluster, you can connect Materialize to your MySQL database and start
-ingesting data. The exact steps depend on your networking configuration, so
-start by selecting the relevant option.
+Now that you've configured your database network, you can connect Materialize to
+your MySQL database and start ingesting data. The exact steps depend on your
+networking configuration, so start by selecting the relevant option.
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
-
-1. In the SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
-   command to securely store the password for the `materialize` MySQL user you
-   created [earlier](#step-2-create-a-publication):
-
-    ```sql
-    CREATE SECRET pgpass AS '<PASSWORD>';
-    ```
-
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
-   connection object with access and authentication details for Materialize to
-   use:
-
-    ```sql
-    CREATE CONNECTION pg_connection TO mysql (
-      HOST '<host>',
-      PORT 5432,
-      USER 'materialize',
-      PASSWORD SECRET pgpass,
-      SSL MODE 'require',
-      DATABASE '<database>'
-      );
-    ```
-
-    - Replace `<host>` with your database endpoint.
-
-    - Replace `<database>` with the name of the database containing the tables
-      you want to replicate to Materialize.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your database and start ingesting data from the publication you created
-   [earlier](#step-2-create-a-publication):
-
-    ```sql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_mysql
-      FROM mysql CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
-
+{{% mysql-direct/ingesting-data/allow-materialize-ips %}}
 {{< /tab >}}
 
 {{< tab "Use an SSH tunnel">}}
-
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#ssh-tunnel)
-   command to create an SSH tunnel connection:
-
-    ```sql
-    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
-        HOST '<SSH_BASTION_HOST>',
-        PORT <SSH_BASTION_PORT>,
-        USER '<SSH_BASTION_USER>'
-    );
-    ```
-
-    - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#step-3-configure-network-security).
-
-    - Replace `<SSH_BASTION_USER>` with the username for the key pair you
-      created for your SSH bastion host.
-
-1. Get Materialize's public keys for the SSH tunnel connection you just
-   created:
-
-    ```sql
-    SELECT
-        mz_connections.name,
-        mz_ssh_tunnel_connections.*
-    FROM
-        mz_connections JOIN
-        mz_ssh_tunnel_connections USING(id)
-    WHERE
-        mz_connections.name = 'ssh_connection';
-    ```
-
-1. Log in to your SSH bastion host and add Materialize's public keys to the
-   `authorized_keys` file, for example:
-
-    ```sh
-    # Command for Linux
-    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
-    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
-    ```
-
-1. Back in the SQL client connected to Materialize, validate the SSH tunnel
-   connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection)
-   command:
-
-    ```sql
-    VALIDATE CONNECTION ssh_connection;
-    ```
-
-    If no validation error is returned, move to the next step.
-
-1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-   password for the `materialize` MySQL user you created [earlier](#step-2-create-a-publication):
-
-    ```sql
-    CREATE SECRET pgpass AS '<PASSWORD>';
-    ```
-
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
-   another connection object, this time with database access and authentication
-   details for Materialize to use:
-
-    ```sql
-    CREATE CONNECTION pg_connection TO mysql (
-      HOST '<host>',
-      PORT 5432,
-      USER 'materialize',
-      PASSWORD SECRET pgpass,
-      DATABASE '<database>',
-      SSH TUNNEL ssh_connection
-      );
-    ```
-
-    - Replace `<host>` with your database endpoint.
-
-    - Replace `<database>` with the name of the database containing the tables
-      you want to replicate to Materialize.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your Azure instance and start ingesting data from the publication you
-   created [earlier](#step-2-create-a-publication):
-
-    ```sql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_mysql
-      FROM mysql CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
-
-1. After source creation, you can handle upstream [schema changes](/sql/create-source/mysql/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP} SUBSOURCE`](/sql/alter-source/#context)
-   syntax.
-
-{{< /tab >}}
-
-{{< tab "AWS PrivateLink">}}
-
-1. Back in the SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
-   command to securely store the password for the `materialize` MySQL user you
-   created [earlier](#step-2-create-a-publication):
-
-    ```sql
-    CREATE SECRET pgpass AS '<PASSWORD>';
-    ```
-
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
-   another connection object, this time with database access and authentication
-   details for Materialize to use:
-
-    ```sql
-    CREATE CONNECTION pg_connection TO mysql (
-        HOST '<host>',
-        PORT 5432,
-        USER mysql,
-        PASSWORD SECRET pgpass,
-        DATABASE <database>,
-        AWS PRIVATELINK privatelink_svc
-    );
-    ```
-
-    - Replace `<host>` with your database endpoint.
-
-    - Replace `<database>` with the name of the database containing the tables
-      you want to replicate to Materialize.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your database and start ingesting data from the publication you created
-   [earlier](#step-2-create-a-publication):
-
-    ```sql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_mysql
-      FROM mysql CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
-
+{{% mysql-direct/ingesting-data/use-ssh-tunnel %}}
 {{< /tab >}}
 
 {{< /tabs >}}
+
+
+[//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
+new progress metrics in mz_source_statistics + console monitoring, when
+available(also for PostgreSQL)."
 
 ## Step 6. Check the ingestion status
 
