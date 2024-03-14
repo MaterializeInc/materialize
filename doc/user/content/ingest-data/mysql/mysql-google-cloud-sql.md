@@ -1,10 +1,11 @@
 ---
-title: "Ingest data from Google Cloud SQL"
+title: "Ingest data from Google Cloud SQL for MySQL"
 description: "How to stream data from Google Cloud SQL for MySQL to Materialize"
 menu:
   main:
     parent: "MySQL"
     name: "Google Cloud SQL"
+    identifier: "cloud-sql-mysql"
     weight: 20
 ---
 
@@ -15,17 +16,25 @@ to Materialize using the[MySQL source](/sql/create-source/mysql/).
 
 {{% mysql-direct/before-you-begin %}}
 
-## Step 1. Enable logical replication
+## Step 1. Enable GTID-based replication
 
-Materialize uses MySQL's [logical replication](https://www.MySQL.org/docs/current/logical-replication.html)
-protocol to track changes in your database and propagate them to Materialize.
+Before creating a source in Materialize, you **must** configure Google Cloud SQL
+for MySQL for GTID-based binlog replication. This requires the following
+configuration changes:
 
-For guidance on enabling logical replication in Cloud SQL, see the [Cloud SQL
-documentation](https://cloud.google.com/sql/docs/mysql/replication/configure-logical-replication#configuring-your-MySQL-instance).
+Configuration parameter          | Value  | Details
+---------------------------------|--------| -------------------------------
+`binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
+`binlog_row_image`               | `FULL` |
+`gtid_mode`                      | `ON`   |
+`enforce_gtid_consistency`       | `ON`   |
+`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
 
-## Step 2. Create a publication
+For guidance on enabling GTID-based binlog replication in Cloud SQL, see the [Cloud SQL documentation](https://cloud.google.com/sql/docs/mysql/replication).
 
-{{% mysql-direct/create-a-publication-other %}}
+## Step 2. Create a user for replication
+
+{{% mysql-direct/create-a-user-for-replication %}}
 
 ## Step 3. Configure network security
 
@@ -108,10 +117,12 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 ## Step 5. Start ingesting data
 
-Now that you've configured your database network and created an ingestion
-cluster, you can connect Materialize to your MySQL database and start
-ingesting data. The exact steps depend on your networking configuration, so
-start by selecting the relevant option.
+[//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
+adapt to that, rather than just state SSL MODE REQUIRED."
+
+Now that you've configured your database network, you can connect Materialize to
+your MySQL database and start ingesting data. The exact steps depend on your
+networking configuration, so start by selecting the relevant option.
 
 {{< tabs >}}
 
