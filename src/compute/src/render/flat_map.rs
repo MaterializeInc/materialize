@@ -101,8 +101,8 @@ where
                     );
                 }
 
-                let oks = oks_output.drain(..).map(|x| Ok(x));
-                let err = err_output.drain(..).map(|x| Err(x));
+                let oks = oks_output.drain(..).map(Ok);
+                let err = err_output.drain(..).map(Err);
                 oks.chain(err).collect::<Vec<_>>()
             }
         });
@@ -138,7 +138,7 @@ fn drain_through_mfp<T>(
     let binding = SharedRow::get();
     let mut row_builder = binding.borrow_mut();
 
-    let mut datums_local = datum_vec.borrow_with(&input_row);
+    let mut datums_local = datum_vec.borrow_with(input_row);
     let datums_len = datums_local.len();
 
     let event_time = input_time.event_time().clone();
