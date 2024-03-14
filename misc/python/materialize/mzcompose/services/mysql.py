@@ -13,19 +13,28 @@ from materialize.mzcompose.service import (
 )
 
 
-class MySql(Service):
-    DEFAULT_ROOT_PASSWORD = "p@ssw0rd"
-    DEFAULT_VERSION = "8.0.35"
-
-    DEFAULT_ADDITIONAL_ARGS = [
+def create_mysql_server_args(server_id: str, is_master: bool) -> list[str]:
+    args = [
         "--log-bin=mysql-bin",
         "--gtid_mode=ON",
         "--enforce_gtid_consistency=ON",
         "--binlog-format=row",
-        "--log-slave-updates",
         "--binlog-row-image=full",
-        "--server-id=1",
+        f"--server-id={server_id}",
     ]
+
+    if not is_master:
+        args.append("--log-slave-updates")
+        args.append("--skip-replica-start")
+
+    return args
+
+
+class MySql(Service):
+    DEFAULT_ROOT_PASSWORD = "p@ssw0rd"
+    DEFAULT_VERSION = "8.0.35"
+
+    DEFAULT_ADDITIONAL_ARGS = create_mysql_server_args(server_id="1", is_master=True)
 
     def __init__(
         self,
