@@ -13,7 +13,6 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 ALTER SYSTEM SET enable_connection_validation_syntax = true
-ALTER SYSTEM SET enable_default_kafka_ssh_tunnel = true
 
 > CREATE CONNECTION IF NOT EXISTS thancred TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
