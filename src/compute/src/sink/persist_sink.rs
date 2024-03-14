@@ -891,162 +891,143 @@ where
                 }
             }
 
-            // We may have the opportunity to commit updates.
-            if !PartialOrder::less_equal(&desired_frontier, &persist_frontier) {
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        CAN emit: \
-                        persist_frontier: {:?}, \
-                        desired_frontier: {:?}",
-                    persist_frontier,
-                    desired_frontier
-                );
-                // Advance all updates to `persist`'s frontier.
-                for (row, time, diff) in correction.0.iter_mut() {
-                    let time_before = *time;
-                    time.advance_by(persist_frontier.borrow());
-                    if sink_id.is_user() && &time_before != time {
-                        trace!(
-                            "persist_sink {sink_id}/{shard_id}: \
-                                advanced {:?}, {}, {} to {}",
-                            row,
-                            time_before,
-                            diff,
-                            time
-                        );
-                    }
+            trace!(
+                "persist_sink {sink_id}/{shard_id}: \
+                    in-flight batches: {:?}, \
+                    batch_descriptions_frontier: {:?}, \
+                    desired_frontier: {:?} \
+                    persist_frontier: {:?}",
+                in_flight_batches,
+                batch_descriptions_frontier,
+                desired_frontier,
+                persist_frontier
+            );
+
+            // Advance all updates to `persist`'s frontier.
+            for (row, time, diff) in correction.0.iter_mut() {
+                let time_before = *time;
+                time.advance_by(persist_frontier.borrow());
+                if sink_id.is_user() && &time_before != time {
+                    trace!(
+                        "persist_sink {sink_id}/{shard_id}: \
+                            advanced {:?}, {}, {} to {}",
+                        row,
+                        time_before,
+                        diff,
+                        time
+                    );
                 }
+            }
 
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        in-flight batches: {:?}, \
-                        batch_descriptions_frontier: {:?}, \
-                        desired_frontier: {:?} \
-                        persist_frontier: {:?}",
-                    in_flight_batches,
-                    batch_descriptions_frontier,
-                    desired_frontier,
-                    persist_frontier
+            // We can write updates for a given batch description when
+            // a) the batch is not beyond `batch_descriptions_frontier`,
+            // and b) we know that we have seen all updates that would
+            // fall into the batch, from `desired_frontier`.
+            let ready_batches = in_flight_batches
+                .keys()
+                .filter(|(lower, upper)| {
+                    !PartialOrder::less_equal(&batch_descriptions_frontier, lower)
+                        && !PartialOrder::less_than(&desired_frontier, upper)
+                        && !PartialOrder::less_than(&persist_frontier, lower)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            trace!(
+                "persist_sink {sink_id}/{shard_id}: \
+                    ready batches: {:?}",
+                ready_batches,
+            );
+
+            if !ready_batches.is_empty() {
+                // Consolidate updates only when they are required by an
+                // attempt to write out new updates. Otherwise, we might
+                // spend a lot of time "consolidating" the same updates
+                // over and over again, with no changes.
+                correction.with_correction_buffer(
+                    sink_metrics,
+                    sink_worker_metrics,
+                    consolidate_updates,
                 );
 
-                // We can write updates for a given batch description when
-                // a) the batch is not beyond `batch_descriptions_frontier`,
-                // and b) we know that we have seen all updates that would
-                // fall into the batch, from `desired_frontier`.
-                let ready_batches = in_flight_batches
-                    .keys()
-                    .filter(|(lower, upper)| {
-                        !PartialOrder::less_equal(&batch_descriptions_frontier, lower)
-                            && !PartialOrder::less_than(&desired_frontier, upper)
-                            && !PartialOrder::less_than(&persist_frontier, lower)
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
-
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        ready batches: {:?}",
-                    ready_batches,
-                );
-
-                if !ready_batches.is_empty() {
-                    // Consolidate updates only when they are required by an
-                    // attempt to write out new updates. Otherwise, we might
-                    // spend a lot of time "consolidating" the same updates
-                    // over and over again, with no changes.
+                // `correction` starts large as it diffs the initial snapshots,
+                // but in steady state contains substantially fewer updates.
+                // We should regularly shrink it to an appropriate size.
+                // We use a 4x threshold here to ensure that we cannot enter
+                // a resizing cycle without a linear-in-`correction.len()`
+                // number of updates. E.g. a 2x threshold could result in
+                // an allocation that must soon after be re-doubled back to
+                // the current size, then halved, then doubled. We want that
+                // pattern to require a linear number of updates rather than
+                // a constant number.
+                if correction.0.len() < correction.0.capacity() / 4 {
                     correction.with_correction_buffer(
                         sink_metrics,
                         sink_worker_metrics,
-                        consolidate_updates,
+                        Vec::shrink_to_fit,
                     );
+                }
+            }
 
-                    // `correction` starts large as it diffs the initial snapshots,
-                    // but in steady state contains substantially fewer updates.
-                    // We should regularly shrink it to an appropriate size.
-                    // We use a 4x threshold here to ensure that we cannot enter
-                    // a resizing cycle without a linear-in-`correction.len()`
-                    // number of updates. E.g. a 2x threshold could result in
-                    // an allocation that must soon after be re-doubled back to
-                    // the current size, then halved, then doubled. We want that
-                    // pattern to require a linear number of updates rather than
-                    // a constant number.
-                    if correction.0.len() < correction.0.capacity() / 4 {
-                        correction.with_correction_buffer(
-                            sink_metrics,
-                            sink_worker_metrics,
-                            Vec::shrink_to_fit,
-                        );
-                    }
+            for batch_description in ready_batches.into_iter() {
+                let cap = in_flight_batches.remove(&batch_description).unwrap();
+
+                if sink_id.is_user() {
+                    trace!(
+                        "persist_sink {sink_id}/{shard_id}: \
+                            emitting done batch: {:?}, cap: {:?}",
+                        batch_description,
+                        cap
+                    );
                 }
 
-                for batch_description in ready_batches.into_iter() {
-                    let cap = in_flight_batches.remove(&batch_description).unwrap();
+                let (batch_lower, batch_upper) = batch_description;
 
-                    if sink_id.is_user() {
-                        trace!(
-                            "persist_sink {sink_id}/{shard_id}: \
-                                emitting done batch: {:?}, cap: {:?}",
-                            batch_description,
-                            cap
-                        );
-                    }
+                let mut to_append = correction
+                    .0
+                    .iter()
+                    .filter(|(_, time, _)| {
+                        batch_lower.less_equal(time) && !batch_upper.less_equal(time)
+                    })
+                    .peekable();
 
-                    let (batch_lower, batch_upper) = batch_description;
+                if to_append.peek().is_some() {
+                    // We want to pass along the data directly if `to_append` is small, but to avoid
+                    // having to iterate through everything twice we'll check if `correction`
+                    // is small as a reasonable proxy.
+                    let minimum_batch_updates = persist_clients.cfg().sink_minimum_batch_updates();
+                    let batch_or_data = if correction.0.len() >= minimum_batch_updates {
+                        let batch = write
+                            .batch(
+                                to_append.map(|(data, time, diff)| {
+                                    ((SourceData(data.clone()), ()), time, diff)
+                                }),
+                                batch_lower.clone(),
+                                batch_upper.clone(),
+                            )
+                            .await
+                            .expect("invalid usage");
 
-                    let mut to_append = correction
-                        .0
-                        .iter()
-                        .filter(|(_, time, _)| {
-                            batch_lower.less_equal(time) && !batch_upper.less_equal(time)
-                        })
-                        .peekable();
+                        if sink_id.is_user() {
+                            trace!(
+                                "persist_sink {sink_id}/{shard_id}: \
+                                wrote batch from worker {}: ({:?}, {:?})",
+                                worker_index,
+                                batch.lower(),
+                                batch.upper()
+                            );
+                        }
+                        BatchOrData::Batch(batch.into_transmittable_batch())
+                    } else {
+                        BatchOrData::Data {
+                            lower: batch_lower.clone(),
+                            upper: batch_upper.clone(),
+                            contents: to_append.cloned().collect(),
+                        }
+                    };
 
-                    if to_append.peek().is_some() {
-                        // We want to pass along the data directly if `to_append` is small, but to avoid
-                        // having to iterate through everything twice we'll check if `correction`
-                        // is small as a reasonable proxy.
-                        let minimum_batch_updates =
-                            persist_clients.cfg().sink_minimum_batch_updates();
-                        let batch_or_data = if correction.0.len() >= minimum_batch_updates {
-                            let batch = write
-                                .batch(
-                                    to_append.map(|(data, time, diff)| {
-                                        ((SourceData(data.clone()), ()), time, diff)
-                                    }),
-                                    batch_lower.clone(),
-                                    batch_upper.clone(),
-                                )
-                                .await
-                                .expect("invalid usage");
-
-                            if sink_id.is_user() {
-                                trace!(
-                                    "persist_sink {sink_id}/{shard_id}: \
-                                    wrote batch from worker {}: ({:?}, {:?})",
-                                    worker_index,
-                                    batch.lower(),
-                                    batch.upper()
-                                );
-                            }
-                            BatchOrData::Batch(batch.into_transmittable_batch())
-                        } else {
-                            BatchOrData::Data {
-                                lower: batch_lower.clone(),
-                                upper: batch_upper.clone(),
-                                contents: to_append.cloned().collect(),
-                            }
-                        };
-
-                        output.give(&cap, batch_or_data).await;
-                    }
+                    output.give(&cap, batch_or_data).await;
                 }
-            } else {
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        cannot emit: persist_frontier: {:?}, desired_frontier: {:?}",
-                    persist_frontier,
-                    desired_frontier
-                );
             }
         }
     });
