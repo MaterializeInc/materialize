@@ -277,7 +277,11 @@ pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampM
 /// Commands for [PersistTableWriteWorker].
 #[derive(Debug)]
 enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
-    Register(T, Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>),
+    Register(
+        T,
+        Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
+        tokio::sync::oneshot::Sender<()>,
+    ),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandle {
         /// Table that we want to drop our handle for.
@@ -292,6 +296,18 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     },
     Shutdown,
+}
+
+impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
+    fn name(&self) -> &'static str {
+        match self {
+            PersistTableWriteCmd::Register(_, _, _) => "PersistTableWriteCmd::Register",
+            PersistTableWriteCmd::Update(_, _) => "PersistTableWriteCmd::Update",
+            PersistTableWriteCmd::DropHandle { .. } => "PersistTableWriteCmd::DropHandle",
+            PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
+            PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
+        }
+    }
 }
 
 async fn append_work<T2: Timestamp + Lattice + Codec64>(
@@ -373,8 +389,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         &self,
         register_ts: T,
         ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
-    ) {
-        self.send(PersistTableWriteCmd::Register(register_ts, ids_handles))
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        // We expect this to be awaited, so keep the span connected.
+        let span = info_span!("PersistTableWriteCmd::Register");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let cmd = PersistTableWriteCmd::Register(register_ts, ids_handles, tx);
+        self.inner.send_with_span(span, cmd);
+        rx
     }
 
     /// Update the existing write handle associated with `id` to `write_handle`.
@@ -441,10 +462,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
     ) {
         while let Some((span, command)) = rx.recv().await {
             match command {
-                PersistTableWriteCmd::Register(register_ts, ids_handles) => {
+                PersistTableWriteCmd::Register(register_ts, ids_handles, tx) => {
                     self.register(register_ts, ids_handles)
                         .instrument(span)
-                        .await
+                        .await;
+                    // We don't care if our waiter has gone away.
+                    let _ = tx.send(());
                 }
                 PersistTableWriteCmd::Update(_id, _write_handle) => {
                     unimplemented!("TODO: Support migrations on persist-txn backed collections")
@@ -692,8 +715,13 @@ where
     }
 
     fn send(&self, cmd: PersistTableWriteCmd<T>) {
-        let mut span = info_span!(parent: None, "PersistTableWriteWorkerInner::send");
+        let mut span =
+            info_span!(parent: None, "PersistTableWriteWorkerInner::send", otel.name = cmd.name());
         OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+        self.send_with_span(span, cmd)
+    }
+
+    fn send_with_span(&self, span: Span, cmd: PersistTableWriteCmd<T>) {
         match self.tx.send((span, cmd)) {
             Ok(()) => (), // All good!
             Err(e) => {
