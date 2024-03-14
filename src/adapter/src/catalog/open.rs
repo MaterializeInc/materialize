@@ -761,7 +761,7 @@ impl Catalog {
             //
             // TODO(parkmycar): Remove after v0.92.
             const ACTIVITY_LOG_ONE_TIME_MIGRATION: &str = "activity_log_v_0_92_migration";
-            let ran_migration = txn.get_config(ACTIVITY_LOG_ONE_TIME_MIGRATION.to_string())?.is_some();
+            let ran_migration = txn.get_config(ACTIVITY_LOG_ONE_TIME_MIGRATION.to_string()).is_some();
             if !ran_migration {
                 let candidates = [
                     MZ_PREPARED_STATEMENT_HISTORY.name,

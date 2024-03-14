@@ -1232,12 +1232,12 @@ impl<'a> Transaction<'a> {
     }
 
     /// Get the value of a persisted config.
-    pub fn get_config(&mut self, key: String) -> Result<Option<u64>, CatalogError> {
+    pub fn get_config(&mut self, key: String) -> Option<u64> {
         let val = self
             .configs
             .get(&ConfigKey { key })
             .map(|entry| entry.value);
-        Ok(val)
+        val
     }
 
     /// Updates the catalog `persist_txn_tables` "config" value to
