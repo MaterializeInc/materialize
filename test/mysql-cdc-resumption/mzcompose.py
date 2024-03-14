@@ -59,6 +59,7 @@ def workflow_disruptions(c: Composition) -> None:
         restart_mz_during_replication,
         fix_mysql_schema_while_mz_restarts,
         verify_no_snapshot_reingestion,
+        transaction_with_rollback,
     ]
 
     scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
@@ -515,6 +516,50 @@ def corrupt_bin_log(c: Composition) -> None:
     run_testdrive_files(
         c,
         "verify-source-stalled.td",
+    )
+
+
+def transaction_with_rollback(c: Composition) -> None:
+    """
+    Rollback a tx in MySQL.
+    """
+
+    # needed for verify-data to succeed in the end (triggered by the workflow)
+    run_testdrive_files(
+        c,
+        "delete-rows-t1.td",
+        "delete-rows-t2.td",
+    )
+
+    mysql_conn = pymysql.connect(
+        host="localhost",
+        user="root",
+        password=MySql.DEFAULT_ROOT_PASSWORD,
+        database="mysql",
+        port=c.default_port("mysql"),
+    )
+
+    mysql_conn.autocommit(False)
+    with mysql_conn.cursor() as cur:
+        cur.execute("INSERT INTO public.t1 VALUES (1, 'text')")
+
+        time.sleep(2)
+
+        cur.execute("INSERT INTO public.t1 VALUES (2, 'text')")
+
+        time.sleep(2)
+
+        cur.execute("ROLLBACK")
+
+    run_testdrive_files(
+        c,
+        "verify-source-running.td",
+    )
+
+    # needed for verify-data to succeed in the end (triggered by the workflow)
+    run_testdrive_files(
+        c,
+        "alter-table.td",
     )
 
 
