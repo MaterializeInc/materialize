@@ -4238,4 +4238,39 @@ async fn test_double_encoded_json() {
         ],
     ]
     "###);
+
+    let ws_url = server.ws_addr();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    let _ws_init = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+
+    let json = "{\"query\":\"SELECT a FROM t1;\"}";
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+    let _starting = read_msg();
+    let _columns = read_msg();
+    
+    let row_1 = read_msg();
+    insta::assert_debug_snapshot!(row_1, @r###"
+    Row(
+        [
+            Object {
+                "type": String("foo"),
+            },
+        ],
+    )
+    "###);
+    let row_2 = read_msg();
+    insta::assert_debug_snapshot!(row_2, @r###"
+    Row(
+        [
+            String(" { \"type\": \"foo\" } "),
+        ],
+    )
+    "###);
 }
