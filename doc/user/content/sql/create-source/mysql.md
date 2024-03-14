@@ -163,7 +163,7 @@ an alternative destination schema in Materialize.
 ```sql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
-  FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1);
+  FOR TABLES (schema1.table_1 AS s1_table_1, schema2.table_1 AS s2_table_1);
 ```
 
 ### Monitoring source progress
