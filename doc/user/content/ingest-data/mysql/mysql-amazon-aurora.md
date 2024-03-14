@@ -165,7 +165,7 @@ networking configuration, so start by selecting the relevant option.
 1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
    client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
    command to securely store the password for the `materialize` MySQL user you
-   created [earlier](#step-2-create-a-publication):
+   created [earlier](#step-2-create-a-user-for-replication):
 
     ```sql
     CREATE SECRET mysqlpass AS '<PASSWORD>';

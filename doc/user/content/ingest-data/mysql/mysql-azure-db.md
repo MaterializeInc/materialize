@@ -1,20 +1,16 @@
 ---
-title: "Ingest data from Amazon RDS for MySQL"
-description: "How to stream data from Amazon RDS for MySQL to Materialize"
-aliases:
-  - /guides/cdc-postgres/
-  - /integrations/cdc-postgres/
-  - /connect-sources/cdc-postgres-direct/
+title: "Ingest data from Azure DB for MySQL"
+description: "How to stream data from Azure DB for MySQL to Materialize"
 menu:
   main:
     parent: "mysql"
-    name: "Amazon RDS"
-    identifier: "amazon-rds-mysql"
-    weight: 5
+    name: "Azure DB"
+    indentifier: "azure-db-mysql"
+    weight: 15
 ---
 
-This page shows you how to stream data from [Amazon RDS for MySQL](https://aws.amazon.com/rds/mysql/)
-to Materialize using the [MySQL source](/sql/create-source/mysql).
+This page shows you how to stream data from [Azure DB for MySQL](https://azure.microsoft.com/en-us/products/MySQL)
+to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 ## Before you begin
 
@@ -22,42 +18,25 @@ to Materialize using the [MySQL source](/sql/create-source/mysql).
 
 ## Step 1. Enable GTID-based replication
 
-Before creating a source in Materialize, you **must** configure Amazon RDS for
-GTID-based binlog replication. This requires the following configuration
-changes:
+{{< note >}}
+GTID-based replication is supported for Azure DB for MySQL [flexible server](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/overview-single).
+It is **not supported** for single server databases.
+{{</ note >}}
+
+Before creating a source in Materialize, you **must** configure Azure DB for
+MySQL for GTID-based binlog replication. This requires the following
+configuration changes:
 
 Configuration parameter          | Value  | Details
 ---------------------------------|--------| -------------------------------
 `binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
 `binlog_row_image`               | `FULL` |
-`gtid_mode`                      | `ON`   | In the AWS console, this parameter appears as `gtid-mode`.
+`gtid_mode`                      | `ON`   |
 `enforce_gtid_consistency`       | `ON`   |
-`binlog retention hours`         | 168    |
 `replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
 
-For guidance on enabling GTID-based binlog replication in RDS, see the
-[Amazon RDS for MySQL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-replication-gtid.html).
-
-1. [Enable automated backups in your RDS instance](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html#USER_WorkingWithAutomatedBackups.Enabling)
-by setting the backup retention period to a value greater than `0` to enable
-binary logging.
-
-1. [Create a custom RDS parameter group](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Creating).
-
-    - Set **Parameter group family** to your MySQL version.
-    - Set **Type** to **DB Parameter Group**.
-
-1. Edit the new parameter group to set the parameters to the values specified in
-   the table above.
-
-1. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
-
-    Use the **Apply Immediately** option. The database must be rebooted in order
-    for the parameter group association to take effect. Keep in mind that
-    rebooting the RDS instance can affect database performance.
-
-    Do not move on to the next step until the database **Status**
-    is **Available** in the RDS Console.
+For guidance on enabling GTID-based binlog replication in Azure DB, see the
+[Azure documentation](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/how-to-data-in-replication?tabs=shell%2Ccommand-line#configure-the-source-mysql-server).
 
 ## Step 2. Create a user for replication
 
@@ -65,15 +44,11 @@ binary logging.
 
 ## Step 3. Configure network security
 
-{{< note >}}
-Support for AWS PrivateLink connections is planned for a future release.
-{{< /note >}}
-
 There are various ways to configure your database's network to allow Materialize
 to connect:
 
 - **Allow Materialize IPs:** If your database is publicly accessible, you can
-    configure your database's security group to allow connections from a set of
+    configure your database's firewall to allow connections from a set of
     static Materialize IP addresses.
 
 - **Use an SSH tunnel:** If your database is running in a private network, you
@@ -93,13 +68,8 @@ Select the option that works best for you.
     SELECT * FROM mz_egress_ips;
     ```
 
-1. In the RDS Console, [add an inbound rule to your RDS security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/working-with-security-groups.html#adding-security-group-rule)
-   for each IP address from the previous step.
-
-    In each rule:
-
-    - Set **Type** to **MySQL**.
-    - Set **Source** to the IP address in CIDR notation.
+1. Update your [Azure DB firewall rules](https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure?view=azuresql)
+   to allow traffic from each IP address from the previous step.
 
 {{< /tab >}}
 
@@ -110,24 +80,15 @@ instance to serve as an SSH bastion host, configure the bastion host to allow
 traffic only from Materialize, and then configure your database's private
 network to allow traffic from the bastion host.
 
-{{< note >}}
-Materialize provides a Terraform module that automates the creation and
-configuration of resources for an SSH tunnel. For more details, see the
-[Terraform module repository](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion).
-{{</ note >}}
+1. [Launch an Azure VM with a static public IP address](https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/virtual-network-deploy-static-pip-arm-portal?toc=%2Fazure%2Fvirtual-machines%2Ftoc.json)
+to serve as your SSH bastion host.
 
-1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html)
-   to serve as your SSH bastion host.
-
-    - Make sure the instance is publicly accessible and in the same VPC as your
-      RDS instance.
+    - Make sure the VM is publicly accessible and in the same VPC as your
+      database.
     - Add a key pair and note the username. You'll use this username when
       connecting Materialize to your bastion host.
-
-    **Warning:** Auto-assigned public IP addresses can change in [certain cases](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-instance-addressing.html#concepts-public-addresses).
-
-    For this reason, it's best to associate an [elastic IP address](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-instance-addressing.html#ip-addressing-eips)
-    to your bastion host.
+    - Make sure the VM has a static public IP address. You'll use this IP
+      address when connecting Materialize to your bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
@@ -139,19 +100,11 @@ configuration of resources for an SSH tunnel. For more details, see the
        SELECT * FROM mz_egress_ips;
        ```
 
-    1. For each static egress IP, [add an inbound rule](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-security-groups.html)
-       to your SSH bastion host's security group.
+    1. Update your SSH bastion host's [firewall rules](https://learn.microsoft.com/en-us/azure/virtual-network/tutorial-filter-network-traffic?toc=%2Fazure%2Fvirtual-machines%2Ftoc.json)
+    to allow traffic from each IP address from the previous step.
 
-        In each rule:
-        - Set **Type** to **MySQL**.
-        - Set **Source** to the IP address in CIDR notation.
-
-1. In the security group of your RDS instance, [add an inbound rule](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html)
+1. Update your [Azure DB firewall rules](https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure?view=azuresql)
    to allow traffic from the SSH bastion host.
-
-    - Set **Type** to **All TCP**.
-    - Set **Source** to **Custom** and select the bastion host's security
-      group.
 
 {{< /tab >}}
 
@@ -173,10 +126,9 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
 adapt to that, rather than just state SSL MODE REQUIRED."
 
-Now that you've configured your database network and created an ingestion
-cluster, you can connect Materialize to your MySQL database and start
-ingesting data. The exact steps depend on your networking configuration, so
-start by selecting the relevant option.
+Now that you've configured your database network, you can connect Materialize to
+your MySQL database and start ingesting data. The exact steps depend on your
+networking configuration, so start by selecting the relevant option.
 
 {{< tabs >}}
 
@@ -184,8 +136,8 @@ start by selecting the relevant option.
 
 1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
    client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
-   command to securely store the password for the `materialize` MySQL user you
-   created [earlier](#step-2-create-a-user-for-replication):
+   command to securely store the password for the `materialize` MySQL user
+   you created [earlier](#step-2-create-a-user-for-replication):
 
     ```sql
     CREATE SECRET mysqlpass AS '<PASSWORD>';
@@ -205,12 +157,10 @@ start by selecting the relevant option.
     );
     ```
 
-    - Replace `<host>` with your RDS endpoint. To find your RDS endpoint, select
-      your database in the RDS Console, and look under **Connectivity &
-      security**.
+    - Replace `<host>` with your Azure DB endpoint.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your RDS instance and start ingesting data:
+   to your Azure instance and start ingesting data:
 
     ```sql
     CREATE SOURCE mz_source
@@ -269,7 +219,7 @@ start by selecting the relevant option.
     ```
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
-   `authorized_keys` file, for example:
+`authorized_keys` file, for example:
 
     ```sh
     # Command for Linux
@@ -278,7 +228,8 @@ start by selecting the relevant option.
     ```
 
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
-   connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+   connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection)
+   command:
 
     ```sql
     VALIDATE CONNECTION ssh_connection;
@@ -299,17 +250,15 @@ start by selecting the relevant option.
 
     ```sql
     CREATE CONNECTION mysql_connection TO MYSQL (
-        HOST '<host>',
-        SSH TUNNEL ssh_connection,
+    HOST '<host>',
+    SSH TUNNEL ssh_connection,
     );
     ```
 
-    - Replace `<host>` with your RDS endpoint. To find your RDS endpoint, select
-      your database in the RDS Console, and look under **Connectivity &
-      security**.
+    - Replace `<host>` with your Azure DB endpoint.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your RDS instance and start ingesting data:
+to your Azure instance and start ingesting data:
 
     ```sql
     CREATE SOURCE mz_source
@@ -338,12 +287,12 @@ available(also for PostgreSQL)."
 
 ## Step 6. Check the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+{{% mysql-direct/check-the-ingestion-status %}}
 
 ## Step 7. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+{{% mysql-direct/right-size-the-cluster %}}
 
 ## Next steps
 
-{{% postgres-direct/next-steps %}}
+{{% mysql-direct/next-steps %}}
