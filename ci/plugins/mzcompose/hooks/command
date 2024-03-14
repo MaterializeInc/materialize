@@ -17,6 +17,10 @@ mzcompose() {
     stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
+faketty() {
+    script -qfc "$(printf "%q " "$@")" /dev/null
+}
+
 service=${BUILDKITE_PLUGIN_MZCOMPOSE_RUN:-default}
 run_args=("$service")
 if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
@@ -78,44 +82,12 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
-upload_artifact() {
-    cservice="$1"
-    artifact="$2"
-    # For materialized
-    if mzcompose --mz-quiet exec "$cservice" curl --silent http://127.0.0.1:6878/prof/heap > "$artifact" 2> /dev/null; then
-        if [ -s "$artifact" ]; then
-            buildkite-agent artifact upload --log-level error "$artifact"
-            i=0
-            while read -r socket; do
-                artifact_socket=$(echo "$artifact" | sed -e "s#prof/#prof/clusterd$i-#")
-                if mzcompose --mz-quiet exec "$cservice" curl --silent --unix-socket "$socket" http:/prof/heap > "$artifact_socket" 2> /dev/null; then
-                    if [ -s "$artifact_socket" ]; then
-                        buildkite-agent artifact upload --log-level error "$artifact_socket"
-                    fi
-                fi
-                ((i++))
-            done <<< "$(mzcompose --mz-quiet exec "$cservice" ps aux | grep "/usr/local/bin/clusterd" | grep -v grep | sed -e "s/.* --internal-http-listen-addr=\(\/tmp\/[^ ]*\) .*/\1/" 2> /dev/null)"
-        else
-            # For clusterd
-            if mzcompose --mz-quiet exec "$cservice" curl --silent http://127.0.0.1:6878/heap > "$artifact" 2> /dev/null; then
-                if [ -s "$artifact" ]; then
-                    # shellcheck disable=SC2034
-                    artifact_uuid=$(buildkite-agent artifact upload --log-level info "$artifact" | grep "Uploading artifact" | sed -e "s/Uploading artifact \([^ ]*\) .*/\1/")
-                fi
-            fi
-        fi
-    fi
-}
-
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
-    rm -rf prof
-    mkdir prof
     (while true; do
-        sleep 10
-        for cservice in $(mzcompose --mz-quiet ps --services 2> /dev/null); do
-            artifact=$(date "+prof/$cservice-%Y-%m-%d_%H:%M:%S.pb.gz")
-            upload_artifact "$cservice" "$artifact" &
-        done
+        sleep 5
+        # faketty because otherwise docker will complain about not being inside
+        # of a TTY when run in a background job
+        faketty bin/ci-builder run stable bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
     done
     ) &
 fi
