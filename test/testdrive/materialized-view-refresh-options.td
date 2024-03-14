@@ -173,19 +173,21 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 ## Turn the replica off _during_ the first refresh, and then turn the replica back on immediately.
 
 > CREATE TABLE tg (a int);
-> INSERT INTO tg VALUES (10000000);
+> INSERT INTO tg VALUES (1000000);
 
 # Refreshing this will take a non-trivial amount of time.
+# The `*2/2` stuff is to make it take more CPU time without increasing memory consumption.
 > CREATE MATERIALIZED VIEW mv_gs
   IN CLUSTER refresh_cluster
   WITH (REFRESH AT CREATION) AS
-  SELECT count(*) FROM (SELECT generate_series(1,a) FROM tg);
+  SELECT sum(x*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2)
+  FROM (SELECT generate_series(1,a) as x FROM tg);
 
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 1);
 
 > SELECT * FROM mv_gs;
-10000000
+500000500000
 
 # `mv_gs` consumes a non-trivial amount of memory because of the big `generate_series`, so let's drop it.
 > DROP MATERIALIZED VIEW mv_gs;
@@ -203,7 +205,8 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 > CREATE MATERIALIZED VIEW mv_gs2
   IN CLUSTER refresh_cluster
   WITH (REFRESH EVERY '4 sec') AS
-  SELECT count(*) FROM (SELECT generate_series(1,a) FROM tg);
+  SELECT sum(x*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2)
+  FROM (SELECT generate_series(1,a) as x FROM tg);
 
 > CREATE DEFAULT INDEX
   IN CLUSTER refresh_cluster
@@ -211,15 +214,16 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 > CREATE MATERIALIZED VIEW mv_gs2_index
   IN CLUSTER refresh_cluster
   WITH (REFRESH EVERY '4 sec') AS
-  SELECT count(*) FROM (SELECT generate_series(1,a) FROM tg);
+  SELECT sum(x*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2*2/2)
+  FROM (SELECT generate_series(1,a) as x FROM tg);
 
 # Wait for the first refresh.
 > SELECT * FROM mv_gs2;
-100
+5050
 > SELECT * FROM mv_gs2_index;
-100
+5050
 
-> INSERT INTO tg VALUES (10000000);
+> INSERT INTO tg VALUES (1000000);
 
 # Mess with the replicas before the MV could catch up with the above insert.
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
@@ -232,9 +236,12 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 
 # Check that we recover.
 > SELECT * FROM mv_gs2;
-10000100
+500000505050
 > SELECT * FROM mv_gs2_index;
-10000100
+500000505050
+
+> DROP MATERIALIZED VIEW mv_gs2;
+> DROP MATERIALIZED VIEW mv_gs2_index;
 
 ## REFRESH AT + REFRESH EVERY
 
@@ -375,3 +382,5 @@ true
   FROM mz_internal.mz_compute_operator_hydration_statuses h JOIN mz_objects o ON (h.object_id = o.id)
   WHERE name = 'mv10';
 true
+
+> DROP DATABASE materialized_view_refresh_options;
