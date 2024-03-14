@@ -81,7 +81,7 @@ pub fn run_set_arg_default(
 ) -> Result<ControlFlow, anyhow::Error> {
     for (key, val) in cmd.args {
         let arg_key = format!("arg.{key}");
-        state.default_arg_vars.insert(arg_key, val);
+        state.cmd_vars.entry(arg_key).or_insert(val);
     }
 
     Ok(ControlFlow::Continue)

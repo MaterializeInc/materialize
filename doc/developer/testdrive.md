@@ -407,6 +407,22 @@ $ set schema={
     }
 ```
 
+#### `$ set-arg-default name=value`
+
+Sets the default value for an argument variable passed on the command line. If
+`--var=name=cli-value` is specified on the command line, it will take precedence
+over the argument default.
+
+Note that the variable name should not include the `arg.` prefix. Testdrive will
+add that prefix automatically.
+
+```
+$ set cluster-size=small
+
+> CREATE CLUSTER (SIZE ${arg.size})
+```
+
+
 #### `$ set-from-file var=PATH`
 
 Sets the variable to the contents of the file at `PATH`.
