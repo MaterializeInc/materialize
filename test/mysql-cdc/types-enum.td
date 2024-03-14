@@ -50,18 +50,34 @@ contains:referenced tables use unsupported types
 val1 val1
 val2 val2
 
+# Add an additional enum value type
 $ mysql-execute name=mysql
-ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val2', 'val1', 'val3');
+ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val1', 'val2', 'val3');
 INSERT INTO enum_type VALUES ('val1', 'val1');
 
-# TODO: #26022 (enum reordering)
-# > SELECT * FROM enum_type;
-# val1 val1
-# val2 val2
-# val1 val1
+> SELECT * FROM enum_type;
+val1 val1
+val2 val2
+val1 val1
 
 $ mysql-execute name=mysql
 INSERT INTO enum_type VALUES ('val3', 'val3');
 
 ! SELECT * FROM enum_type;
 contains:received invalid enum value: 3 for column f1
+
+$ mysql-execute name=mysql
+DELETE FROM enum_type WHERE f1 = 'val3';
+
+> SELECT * FROM enum_type;
+val1 val1
+val2 val2
+val1 val1
+
+# Add an additional enum value type and change the ordering
+$ mysql-execute name=mysql
+ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val2', 'val1', 'val3', 'val4');
+INSERT INTO enum_type VALUES ('val1', 'val1');
+
+! SELECT * FROM enum_type;
+contains:incompatible schema change: column f1 in table enum_type has been altered

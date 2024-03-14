@@ -153,6 +153,10 @@ impl RustType<ProtoMySqlColumnMetaEnum> for MySqlColumnMetaEnum {
     }
 }
 
+trait IsCompatible {
+    fn is_compatible(&self, other: &Self) -> bool;
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub enum MySqlColumnMeta {
     /// The described column is an enum, with the given possible values.
@@ -161,6 +165,29 @@ pub enum MySqlColumnMeta {
     Json,
     /// The described column is a year value.
     Year,
+}
+
+impl IsCompatible for Option<MySqlColumnMeta> {
+    fn is_compatible(&self, other: &Option<MySqlColumnMeta>) -> bool {
+        match (self, other) {
+            (None, None) => true,
+            (Some(_), None) => false,
+            (None, Some(_)) => false,
+            (Some(MySqlColumnMeta::Enum(self_enum)), Some(MySqlColumnMeta::Enum(other_enum))) => {
+                // so as long as `self.values` is a compatible prefix of `other.values`, we can
+                // ignore extra values from `other.values`.
+                self_enum.values.len() <= other_enum.values.len()
+                    && self_enum
+                        .values
+                        .iter()
+                        .zip(other_enum.values.iter())
+                        .all(|(self_val, other_val)| self_val == other_val)
+            }
+            (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
+            (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
@@ -206,10 +233,10 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
     }
 }
 
-impl MySqlColumnDesc {
+impl IsCompatible for MySqlColumnDesc {
     /// Determines if two `MySqlColumnDesc` are compatible with one another in
     /// a way that Materialize can handle.
-    pub fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
+    fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
         self.name == other.name
             && match (&self.column_type, &other.column_type) {
                 (None, None) => true,
@@ -224,6 +251,8 @@ impl MySqlColumnDesc {
                 (Some(_), None) => false,
                 (None, Some(_)) => false,
             }
+            // Ensure any column metadata is compatible
+            && self.meta.is_compatible(&other.meta)
     }
 }
 
