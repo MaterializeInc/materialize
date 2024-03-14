@@ -14,13 +14,9 @@ follows:
 
 #### Incompatible schema changes
 
-{{< note >}}
-Support for dropping and recreating individual subsources is planned for a future
-release {{% gh 24975 %}}.
-{{< /note >}}
-
 All other schema changes to tables in MySQL will set the corresponding subsource
 into an error state, which prevents you from reading from the source.
 
 To handle incompatible [schema changes](#schema-changes), use [`DROP SOURCE`](/sql/drop-source/)
-to drop and recreate the source.
+to drop and recreate the source. Support for dropping and recreating individual
+subsources is planned for a future release {{% gh 24975 %}}.
