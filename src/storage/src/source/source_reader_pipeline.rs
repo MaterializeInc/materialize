@@ -35,6 +35,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
 use itertools::Itertools;
@@ -209,6 +210,7 @@ where
 
     let reclocked_resume_stream = reclock_committed_upper(
         &remap_stream,
+        config.as_of.clone(),
         committed_upper,
         id,
         Arc::clone(&source_metrics),
@@ -844,13 +846,14 @@ where
 /// into the `FromTime` frontier that is used with the source's `OffsetCommiter`.
 fn reclock_committed_upper<G, FromTime>(
     bindings: &Collection<G, FromTime, Diff>,
+    as_of: Antichain<G::Timestamp>,
     committed_upper: &Stream<G, ()>,
     id: GlobalId,
     metrics: Arc<SourceMetrics>,
 ) -> impl futures::stream::Stream<Item = Antichain<FromTime>> + 'static
 where
     G: Scope,
-    G::Timestamp: TotalOrder,
+    G::Timestamp: Lattice + TotalOrder,
     FromTime: SourceTimestamp,
 {
     let (tx, rx) = tokio::sync::watch::channel(Antichain::from_elem(FromTime::minimum()));
@@ -876,7 +879,10 @@ where
             // Accept new bindings
             while let Some((_, data)) = bindings.next() {
                 data.swap(&mut vector);
-                accepted_times.append(&mut vector);
+                accepted_times.extend(vector.drain(..).map(|(from, mut into, diff)| {
+                    into.advance_by(as_of.borrow());
+                    (from, into, diff)
+                }));
             }
             // Extract ready bindings
             let new_upper = frontiers[0].frontier();
@@ -889,16 +895,20 @@ where
                 upper = new_upper.to_owned();
             }
 
-            let committed_upper = frontiers[1].frontier();
-            if *upper != [Timestamp::minimum()] {
-                // Compute the frontier of the binding that is *less than* the committed upper.
-                let idx = ready_times.partition_point(|(_, t, _)| !committed_upper.less_than(t));
-                let updates = ready_times
-                    .drain(0..idx)
-                    .map(|(from_time, _, diff)| (from_time, diff));
-                source_upper.update_iter(updates);
+            // The received times only accumulate correctly for times beyond the as_of.
+            if as_of.iter().all(|t| !upper.less_equal(t)) {
+                let committed_upper = frontiers[1].frontier();
+                if as_of.iter().all(|t| !committed_upper.less_equal(t)) {
+                    // Compute the frontier of the binding that is *less than* the committed upper.
+                    let idx =
+                        ready_times.partition_point(|(_, t, _)| !committed_upper.less_than(t));
+                    let updates = ready_times
+                        .drain(0..idx)
+                        .map(|(from_time, _, diff)| (from_time, diff));
+                    source_upper.update_iter(updates);
 
-                tx.send_replace(source_upper.frontier().to_owned());
+                    tx.send_replace(source_upper.frontier().to_owned());
+                }
             }
 
             metrics
