@@ -3070,9 +3070,12 @@ where
                             let upper = write_handle.upper();
                             if !upper.is_empty() {
                                 let append = write_handle
-                                    .append(empty_batch, upper.clone(), Antichain::new())
+                                    .compare_and_append(
+                                        empty_batch,
+                                        upper.clone(),
+                                        Antichain::new(),
+                                    )
                                     .await?;
-
                                 if let Err(e) = append {
                                     warn!(
                                         "tried to finalize a shard with an advancing upper: {e:?}"

@@ -369,21 +369,19 @@ where
             // It's fine if we don't succeed here. This just means that
             // someone else already advanced the persist frontier further,
             // which is great!
-            let res = write
-                .append(
-                    empty_updates,
-                    current_persist_frontier.clone(),
-                    write_lower_bound.clone(),
-                )
-                .await
-                .expect("invalid usage");
-
-            if sink_id.is_user() {
-                trace!(
-                    "persist_sink {sink_id}/{shard_id}: \
-                        advancing to write_lower_bound result: {:?}",
-                    res
-                );
+            while PartialOrder::less_than(&current_persist_frontier, &write_lower_bound) {
+                let res = write
+                    .compare_and_append(
+                        empty_updates,
+                        current_persist_frontier.clone(),
+                        write_lower_bound.clone(),
+                    )
+                    .await
+                    .expect("invalid usage");
+                match res {
+                    Ok(()) => break,
+                    Err(err) => current_persist_frontier = err.current,
+                }
             }
 
             current_persist_frontier.clone_from(&write_lower_bound);

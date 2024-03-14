@@ -600,16 +600,22 @@ where
             let data_writes = FuturesUnordered::new();
             for data_id in self.txns_cache.all_registered_at(ts) {
                 let mut data_write = self.datas.take_write(&data_id).await;
-                let current = data_write.shared_upper();
+                let mut current = data_write.shared_upper();
                 let advance_to = ts.step_forward();
                 data_writes.push(async move {
-                    let empty: &[((K, V), T, D)] = &[];
-                    if current.less_than(&advance_to) {
-                        let () = data_write
-                            .append(empty, current, Antichain::from_elem(advance_to))
+                    while current.less_than(&advance_to) {
+                        let res = data_write
+                            .compare_and_append_batch(
+                                &mut [],
+                                current,
+                                Antichain::from_elem(advance_to.clone()),
+                            )
                             .await
-                            .expect("usage was valid")
-                            .expect("nothing before minimum timestamp");
+                            .expect("usage was valid");
+                        match res {
+                            Ok(()) => break,
+                            Err(err) => current = err.current,
+                        }
                     }
                     data_write
                 });

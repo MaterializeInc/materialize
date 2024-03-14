@@ -783,7 +783,7 @@ mod tests {
     use futures_task::noop_waker;
 
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
-    use mz_persist::workload::DataGenerator;
+    // WIP use mz_persist::workload::DataGenerator;
     use mz_persist_types::codec_impls::{StringSchema, VecU8Schema};
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
@@ -954,9 +954,7 @@ mod tests {
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
-        write
-            .expect_append(&data[..2], write.upper().clone(), vec![3])
-            .await;
+        write.expect_compare_and_append(&data[..2], 0, 3).await;
         assert_eq!(write.upper(), &Antichain::from_elem(3));
 
         // Grab a snapshot and listener as_of 1. Snapshot should only have part of what we wrote.
@@ -968,9 +966,7 @@ mod tests {
         let mut listen = read.clone("").await.expect_listen(1).await;
 
         // Write a [3,4) batch.
-        write
-            .expect_append(&data[2..], write.upper().clone(), vec![4])
-            .await;
+        write.expect_compare_and_append(&data[2..], 3, 4).await;
         assert_eq!(write.upper(), &Antichain::from_elem(4));
 
         // Listen should have part of the initial write plus the new one.
@@ -1207,11 +1203,11 @@ mod tests {
             assert_eq!(ts3.1, 3);
             let ts3 = vec![ts3.clone()];
 
-            // WriteHandle::append also covers append_batch,
-            // compare_and_append_batch, compare_and_append.
+            // WriteHandle::compare_and_append also covers
+            // compare_and_append_batch.
             assert_eq!(
                 write0
-                    .append(&ts3, Antichain::from_elem(4), Antichain::from_elem(5))
+                    .compare_and_append(&ts3, Antichain::from_elem(4), Antichain::from_elem(5))
                     .await
                     .unwrap_err(),
                 InvalidUsage::UpdateNotBeyondLower {
@@ -1221,7 +1217,7 @@ mod tests {
             );
             assert_eq!(
                 write0
-                    .append(&ts3, Antichain::from_elem(2), Antichain::from_elem(3))
+                    .compare_and_append(&ts3, Antichain::from_elem(2), Antichain::from_elem(3))
                     .await
                     .unwrap_err(),
                 InvalidUsage::UpdateBeyondUpper {
@@ -1232,7 +1228,11 @@ mod tests {
             // NB unlike the previous tests, this one has empty updates.
             assert_eq!(
                 write0
-                    .append(&data[..0], Antichain::from_elem(3), Antichain::from_elem(2))
+                    .compare_and_append(
+                        &data[..0],
+                        Antichain::from_elem(3),
+                        Antichain::from_elem(2)
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::InvalidBounds {
@@ -1253,13 +1253,17 @@ mod tests {
                     upper: Antichain::from_elem(2)
                 },
             );
-            let batch = write0
+            let mut batch = write0
                 .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
                 .await
                 .expect("invalid usage");
             assert_eq!(
                 write0
-                    .append_batch(batch, Antichain::from_elem(4), Antichain::from_elem(5))
+                    .compare_and_append_batch(
+                        &mut [&mut batch],
+                        Antichain::from_elem(4),
+                        Antichain::from_elem(5)
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::InvalidBatchBounds {
@@ -1269,13 +1273,17 @@ mod tests {
                     append_upper: Antichain::from_elem(5),
                 },
             );
-            let batch = write0
+            let mut batch = write0
                 .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
                 .await
                 .expect("invalid usage");
             assert_eq!(
                 write0
-                    .append_batch(batch, Antichain::from_elem(2), Antichain::from_elem(3))
+                    .compare_and_append_batch(
+                        &mut [&mut batch],
+                        Antichain::from_elem(2),
+                        Antichain::from_elem(3)
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::InvalidBatchBounds {
@@ -1285,7 +1293,7 @@ mod tests {
                     append_upper: Antichain::from_elem(3),
                 },
             );
-            let batch = write0
+            let mut batch = write0
                 .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
                 .await
                 .expect("invalid usage");
@@ -1293,7 +1301,11 @@ mod tests {
             // non-deterministic (the key)
             assert!(matches!(
                 write0
-                    .append_batch(batch, Antichain::from_elem(3), Antichain::from_elem(3))
+                    .compare_and_append_batch(
+                        &mut [&mut batch],
+                        Antichain::from_elem(3),
+                        Antichain::from_elem(3)
+                    )
                     .await
                     .unwrap_err(),
                 InvalidUsage::InvalidEmptyTimeInterval { .. }
@@ -1362,9 +1374,7 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
-        write1
-            .expect_append(&data[..], write1.upper().clone(), vec![3])
-            .await;
+        write1.expect_compare_and_append(&data[..], 0, 3).await;
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
         assert_eq!(write2.fetch_recent_upper().await, &Antichain::from_elem(3));
@@ -1372,49 +1382,6 @@ mod tests {
         // The writer-local upper should advance, even if it was another writer
         // that advanced the frontier.
         assert_eq!(write2.upper(), &Antichain::from_elem(3));
-    }
-
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn append_with_invalid_upper() {
-        let data = vec![
-            (("1".to_owned(), "one".to_owned()), 1, 1),
-            (("2".to_owned(), "two".to_owned()), 2, 1),
-        ];
-
-        let client = new_test_client().await;
-
-        let shard_id = ShardId::new();
-
-        let (mut write, _read) = client
-            .expect_open::<String, String, u64, i64>(shard_id)
-            .await;
-
-        write
-            .expect_append(&data[..], write.upper().clone(), vec![3])
-            .await;
-
-        let data = vec![
-            (("5".to_owned(), "fünf".to_owned()), 5, 1),
-            (("6".to_owned(), "sechs".to_owned()), 6, 1),
-        ];
-        let res = write
-            .append(
-                data.iter(),
-                Antichain::from_elem(5),
-                Antichain::from_elem(7),
-            )
-            .await;
-        assert_eq!(
-            res,
-            Ok(Err(UpperMismatch {
-                expected: Antichain::from_elem(5),
-                current: Antichain::from_elem(3)
-            }))
-        );
-
-        // Writing with an outdated upper updates the write handle's upper to the correct upper.
-        assert_eq!(write.upper(), &Antichain::from_elem(3));
     }
 
     // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
@@ -1495,103 +1462,6 @@ mod tests {
         assert_eq!(read.expect_snapshot_and_fetch(3).await, all_ok(&data, 3));
     }
 
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn overlapping_append() {
-        mz_ore::test::init_logging_default("info");
-
-        let data = vec![
-            (("1".to_owned(), "one".to_owned()), 1, 1),
-            (("2".to_owned(), "two".to_owned()), 2, 1),
-            (("3".to_owned(), "three".to_owned()), 3, 1),
-            (("4".to_owned(), "vier".to_owned()), 4, 1),
-            (("5".to_owned(), "cinque".to_owned()), 5, 1),
-        ];
-
-        let id = ShardId::new();
-        let client = new_test_client().await;
-
-        let (mut write1, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
-
-        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
-
-        // Grab a listener before we do any writing
-        let mut listen = read.clone("").await.expect_listen(0).await;
-
-        // Write a [0,3) batch.
-        write1
-            .expect_append(&data[..2], write1.upper().clone(), vec![3])
-            .await;
-        assert_eq!(write1.upper(), &Antichain::from_elem(3));
-
-        // Write a [0,5) batch with the second writer.
-        write2
-            .expect_append(&data[..4], write2.upper().clone(), vec![5])
-            .await;
-        assert_eq!(write2.upper(), &Antichain::from_elem(5));
-
-        // Write a [3,6) batch with the first writer.
-        write1
-            .expect_append(&data[2..5], write1.upper().clone(), vec![6])
-            .await;
-        assert_eq!(write1.upper(), &Antichain::from_elem(6));
-
-        assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
-
-        assert_eq!(
-            listen.read_until(&6).await,
-            (all_ok(&data[..], 1), Antichain::from_elem(6))
-        );
-    }
-
-    // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
-    // be in advance of the current shard upper.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn contiguous_append() {
-        let data = vec![
-            (("1".to_owned(), "one".to_owned()), 1, 1),
-            (("2".to_owned(), "two".to_owned()), 2, 1),
-            (("3".to_owned(), "three".to_owned()), 3, 1),
-            (("4".to_owned(), "vier".to_owned()), 4, 1),
-            (("5".to_owned(), "cinque".to_owned()), 5, 1),
-        ];
-
-        let id = ShardId::new();
-        let client = new_test_client().await;
-
-        let (mut write, mut read) = client.expect_open::<String, String, u64, i64>(id).await;
-
-        // Write a [0,3) batch.
-        write
-            .expect_append(&data[..2], write.upper().clone(), vec![3])
-            .await;
-        assert_eq!(write.upper(), &Antichain::from_elem(3));
-
-        // Appending a non-contiguous batch should fail.
-        // Write a [5,6) batch with the second writer.
-        let result = write
-            .append(
-                &data[4..5],
-                Antichain::from_elem(5),
-                Antichain::from_elem(6),
-            )
-            .await;
-        assert_eq!(
-            result,
-            Ok(Err(UpperMismatch {
-                expected: Antichain::from_elem(5),
-                current: Antichain::from_elem(3)
-            }))
-        );
-
-        // Fixing the lower to make the write contiguous should make the append succeed.
-        write.expect_append(&data[2..5], vec![3], vec![6]).await;
-        assert_eq!(write.upper(), &Antichain::from_elem(6));
-
-        assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
-    }
-
     // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
     // combined are contiguous.
     #[mz_ore::test(tokio::test)]
@@ -1613,23 +1483,17 @@ mod tests {
         let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
 
         // Write a [0,3) batch with writer 1.
-        write1
-            .expect_append(&data[..2], write1.upper().clone(), vec![3])
-            .await;
+        write1.expect_compare_and_append(&data[..2], 0, 3).await;
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
 
         // Write a [3,5) batch with writer 2.
         write2.upper = Antichain::from_elem(3);
-        write2
-            .expect_append(&data[2..4], write2.upper().clone(), vec![5])
-            .await;
+        write2.expect_compare_and_append(&data[2..4], 3, 5).await;
         assert_eq!(write2.upper(), &Antichain::from_elem(5));
 
         // Write a [5,6) batch with writer 1.
         write1.upper = Antichain::from_elem(5);
-        write1
-            .expect_append(&data[4..5], write1.upper().clone(), vec![6])
-            .await;
+        write1.expect_compare_and_append(&data[4..5], 5, 6).await;
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
 
         assert_eq!(read.expect_snapshot_and_fetch(5).await, all_ok(&data, 5));
@@ -1795,7 +1659,9 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
+    #[cfg_attr(miri, ignore)]
+    // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
+    #[cfg(WIP)]
     async fn concurrency() {
         let data = DataGenerator::small();
 

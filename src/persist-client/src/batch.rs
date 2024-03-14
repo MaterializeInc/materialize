@@ -1039,13 +1039,17 @@ mod tests {
 
         // Finish off the batch and verify that the keys and such get plumbed
         // correctly by reading the data back.
-        let batch = builder
+        let mut batch = builder
             .finish(&schemas, Antichain::from_elem(4))
             .await
             .expect("invalid usage");
         assert_eq!(batch.batch.parts.len(), 3);
         write
-            .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(4))
+            .compare_and_append_batch(
+                &mut [&mut batch],
+                Antichain::from_elem(0),
+                Antichain::from_elem(4),
+            )
             .await
             .expect("invalid usage")
             .expect("unexpected upper");
