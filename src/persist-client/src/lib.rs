@@ -314,6 +314,11 @@ impl PersistClient {
             .expect("in-mem location is valid")
     }
 
+    /// WIP
+    pub fn cfg(&self) -> &PersistConfig {
+        &self.cfg
+    }
+
     async fn make_machine<K, V, T, D>(
         &self,
         shard_id: ShardId,

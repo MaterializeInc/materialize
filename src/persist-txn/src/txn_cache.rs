@@ -458,6 +458,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 .get_mut(&data_id)
                 .and_then(|x| x.registered.back_mut())
                 .expect("data shard should be registered before forget");
+            // WIP
+            // if active_reg.forget_ts.replace(ts).is_some() {
+            //     mz_ore::halt!("WIP seems like we got fenced out");
+            // }
             assert_eq!(active_reg.forget_ts.replace(ts), None);
         } else {
             unreachable!("only +1/-1 diffs are used");

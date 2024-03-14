@@ -2294,134 +2294,7 @@ where
             .expect("should be valid shard id");
 
         // WIP explain hack
-        let txns_open_ts = {
-            let (mut write, mut read) = txns_client
-                .open::<SourceData, (), T, mz_repr::Diff>(
-                    txns_id,
-                    Arc::new(TxnsCodecRow::desc()),
-                    Arc::new(UnitSchema),
-                    Diagnostics {
-                        shard_name: "txns".into(),
-                        handle_purpose: "init_txns sanity check".into(),
-                    },
-                )
-                .await
-                .expect("codecs should match");
-
-            let mut txns = TxnsHandle::<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>::open(
-                T::minimum(),
-                txns_client.clone(),
-                Arc::clone(&txns_metrics),
-                txns_id,
-                Arc::new(RelationDesc::empty()),
-                Arc::new(UnitSchema),
-            )
-            .await;
-            let mut forget_ts = T::minimum();
-            loop {
-                match txns.forget_all(forget_ts.clone()).await {
-                    // WIP do we care about the tidy?
-                    Ok(_) => break,
-                    Err(ts) => {
-                        forget_ts = ts;
-                        continue;
-                    }
-                }
-            }
-            let () = txns.expire().await;
-
-            // snapshot_and_fetch guarantees that the returned data is
-            // consolidated.
-            let txns_shard_raw_contents = read
-                .snapshot_and_fetch(Antichain::from_elem(forget_ts.clone()))
-                .await
-                .expect("init_ts is readable");
-            if !txns_shard_raw_contents.is_empty() {
-                warn!(
-                    "txns_shard {} unexpectedly contains {} updates after forget_all, correcting",
-                    txns_id,
-                    txns_shard_raw_contents.len()
-                );
-                // WIP hacks need to get this from the ts oracle instead
-                let init_fixup_ts = TimestampManipulation::step_forward(&forget_ts);
-                let past_fixup = TimestampManipulation::step_forward(&init_fixup_ts);
-                let retractions = txns_shard_raw_contents
-                    .into_iter()
-                    .map(|((k, v), _t, d)| {
-                        (
-                            (k.expect("WIP"), v.expect("WIP")),
-                            init_fixup_ts.clone(),
-                            -d,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let () = write
-                    .compare_and_append(
-                        &retractions,
-                        Antichain::from_elem(init_fixup_ts.clone()),
-                        Antichain::from_elem(TimestampManipulation::step_forward(&past_fixup)),
-                    )
-                    .await
-                    .expect("WIP")
-                    .expect("WIP");
-                let txns_shard_raw_contents = read
-                    .snapshot_and_fetch(Antichain::from_elem(init_fixup_ts.clone()))
-                    .await
-                    .expect("init_ts is readable");
-                assert!(txns_shard_raw_contents.is_empty());
-                let () = write.expire().await;
-                let () = read.expire().await;
-                info!(
-                    "txns_shard {} has been corrected at {:?}",
-                    txns_id, init_fixup_ts,
-                );
-                let mut since = txns_client
-                    .open_critical_since::<SourceData, (), T, mz_repr::Diff, PersistEpoch>(
-                        txns_id,
-                        PersistClient::CONTROLLER_CRITICAL_SINCE,
-                        Diagnostics {
-                            shard_name: "txns".into(),
-                            handle_purpose: "init_txns sanity check".into(),
-                        },
-                    )
-                    .await
-                    .expect("WIP");
-                info!("txns_shard {} force expiring leased readers", txns_id);
-                let () = since.force_expire_leased_readers().await;
-                info!("txns_shard {} force expiring leased readers DONE", txns_id);
-                let epoch = since.opaque().clone();
-                let _ = since
-                    .compare_and_downgrade_since(
-                        &epoch,
-                        (&epoch, &Antichain::from_elem(past_fixup.clone())),
-                    )
-                    .await
-                    .expect("WIP");
-                info!(
-                    "txns_shard {} advanced past {:?} to {:?}",
-                    txns_id, init_fixup_ts, past_fixup
-                );
-
-                let read = txns_client
-                    .open_leased_reader::<SourceData, (), T, mz_repr::Diff>(
-                        txns_id,
-                        Arc::new(TxnsCodecRow::desc()),
-                        Arc::new(UnitSchema),
-                        Diagnostics {
-                            shard_name: "txns".into(),
-                            handle_purpose: "init_txns sanity check".into(),
-                        },
-                    )
-                    .await
-                    .expect("codecs should match");
-                info!("txns_shard overall since at {:?}", read.since());
-
-                init_fixup_ts
-            } else {
-                info!("txns_shard {} was correct at {:?}", txns_id, forget_ts);
-                forget_ts
-            }
-        };
+        let txns_open_ts = hack(&txns_client, txns_id, &txns_metrics).await;
 
         let txns = TxnsHandle::open(
             txns_open_ts,
@@ -3570,4 +3443,161 @@ where
             .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory)
             .await;
     }
+}
+
+async fn hack<T>(txns_client: &PersistClient, txns_id: ShardId, txns_metrics: &Arc<TxnMetrics>) -> T
+where
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + TimestampManipulation,
+{
+    let txns_state = match txns_client.inspect_shard::<T>(&txns_id).await {
+        Ok(x) => x,
+        Err(err) => {
+            tracing::warn!("WIP {}", err);
+            return T::minimum();
+        }
+    };
+    let txns_state = serde_json::to_value(txns_state).expect("state serialization error");
+    let txns_version = txns_state
+        .get("applier_version")
+        .cloned()
+        .expect("missing applier_version");
+    let txns_version: semver::Version =
+        serde_json::from_value(txns_version).expect("version deserialization error");
+    tracing::info!(
+        "WIP txns versions {} vs {}",
+        txns_version,
+        txns_client.cfg().build_version
+    );
+    if txns_version >= txns_client.cfg().build_version {
+        tracing::info!(
+            "WIP skipping txns hack on restart {} vs {}",
+            txns_version,
+            txns_client.cfg().build_version
+        );
+        return T::minimum();
+    }
+
+    let (mut write, mut read) = txns_client
+        .open::<SourceData, (), T, mz_repr::Diff>(
+            txns_id,
+            Arc::new(TxnsCodecRow::desc()),
+            Arc::new(UnitSchema),
+            Diagnostics {
+                shard_name: "txns".into(),
+                handle_purpose: "init_txns sanity check".into(),
+            },
+        )
+        .await
+        .expect("codecs should match");
+
+    let mut txns = TxnsHandle::<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>::open(
+        T::minimum(),
+        txns_client.clone(),
+        Arc::clone(txns_metrics),
+        txns_id,
+        Arc::new(RelationDesc::empty()),
+        Arc::new(UnitSchema),
+    )
+    .await;
+    let mut forget_ts = T::minimum();
+    loop {
+        match txns.forget_all(forget_ts.clone()).await {
+            // WIP do we care about the tidy?
+            Ok(_) => break,
+            Err(ts) => {
+                forget_ts = ts;
+                continue;
+            }
+        }
+    }
+    let () = txns.expire().await;
+
+    // snapshot_and_fetch guarantees that the returned data is
+    // consolidated.
+    let txns_shard_raw_contents = read
+        .snapshot_and_fetch(Antichain::from_elem(forget_ts.clone()))
+        .await
+        .expect("init_ts is readable");
+    if txns_shard_raw_contents.is_empty() {
+        info!("txns_shard {} was correct at {:?}", txns_id, forget_ts);
+        return forget_ts;
+    }
+
+    warn!(
+        "txns_shard {} unexpectedly contains {} updates after forget_all, correcting",
+        txns_id,
+        txns_shard_raw_contents.len()
+    );
+    // WIP hacks need to get this from the ts oracle instead
+    let init_fixup_ts = TimestampManipulation::step_forward(&forget_ts);
+    let past_fixup = TimestampManipulation::step_forward(&init_fixup_ts);
+    let retractions = txns_shard_raw_contents
+        .into_iter()
+        .map(|((k, v), _t, d)| {
+            (
+                (k.expect("WIP"), v.expect("WIP")),
+                init_fixup_ts.clone(),
+                -d,
+            )
+        })
+        .collect::<Vec<_>>();
+    let () = write
+        .compare_and_append(
+            &retractions,
+            Antichain::from_elem(init_fixup_ts.clone()),
+            Antichain::from_elem(TimestampManipulation::step_forward(&past_fixup)),
+        )
+        .await
+        .expect("WIP")
+        .expect("WIP");
+    let txns_shard_raw_contents = read
+        .snapshot_and_fetch(Antichain::from_elem(init_fixup_ts.clone()))
+        .await
+        .expect("init_ts is readable");
+    assert!(txns_shard_raw_contents.is_empty());
+    let () = write.expire().await;
+    let () = read.expire().await;
+    info!(
+        "txns_shard {} has been corrected at {:?}",
+        txns_id, init_fixup_ts,
+    );
+    let mut since = txns_client
+        .open_critical_since::<SourceData, (), T, mz_repr::Diff, PersistEpoch>(
+            txns_id,
+            PersistClient::CONTROLLER_CRITICAL_SINCE,
+            Diagnostics {
+                shard_name: "txns".into(),
+                handle_purpose: "init_txns sanity check".into(),
+            },
+        )
+        .await
+        .expect("WIP");
+    info!("txns_shard {} force expiring leased readers", txns_id);
+    let () = since.force_expire_leased_readers().await;
+    info!("txns_shard {} force expiring leased readers DONE", txns_id);
+    let epoch = since.opaque().clone();
+    let _ = since
+        .compare_and_downgrade_since(&epoch, (&epoch, &Antichain::from_elem(past_fixup.clone())))
+        .await
+        .expect("WIP");
+    info!(
+        "txns_shard {} advanced past {:?} to {:?}",
+        txns_id, init_fixup_ts, past_fixup
+    );
+
+    let read = txns_client
+        .open_leased_reader::<SourceData, (), T, mz_repr::Diff>(
+            txns_id,
+            Arc::new(TxnsCodecRow::desc()),
+            Arc::new(UnitSchema),
+            Diagnostics {
+                shard_name: "txns".into(),
+                handle_purpose: "init_txns sanity check".into(),
+            },
+        )
+        .await
+        .expect("codecs should match");
+    info!("txns_shard overall since at {:?}", read.since());
+
+    init_fixup_ts
 }

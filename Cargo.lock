@@ -6014,6 +6014,7 @@ dependencies = [
  "once_cell",
  "proptest",
  "prost",
+ "semver",
  "serde",
  "serde_json",
  "timely",
