@@ -65,6 +65,9 @@ class RepositoryDetails:
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
+        image_registry: The Docker image registry to pull images from and push
+            images to.
+        image_prefix: A prefix to apply to all Docker image names.
     """
 
     def __init__(
@@ -73,12 +76,16 @@ class RepositoryDetails:
         arch: Arch,
         release_mode: bool,
         coverage: bool,
+        image_registry: str,
+        image_prefix: str,
     ):
         self.root = root
         self.arch = arch
         self.release_mode = release_mode
         self.coverage = coverage
         self.cargo_workspace = cargo.Workspace(root)
+        self.image_registry = image_registry
+        self.image_prefix = image_prefix
 
     def cargo(
         self, subcommand: str, rustflags: list[str], channel: str | None = None
@@ -465,13 +472,16 @@ class Image:
                 f"--file={readme_path}",
                 *([f"--config={docker_config}/config.json"] if docker_config else []),
                 *([f"--short={self.description}"] if self.description else []),
-                f"materialize/{self.name}",
+                self.docker_name(),
             ]
         )
 
-    def docker_name(self, tag: str) -> str:
+    def docker_name(self, tag: str | None = None) -> str:
         """Return the name of the image on Docker Hub at the given tag."""
-        return f"materialize/{self.name}:{tag}"
+        name = f"{self.rd.image_registry}/{self.rd.image_prefix}{self.name}"
+        if tag:
+            name += f":{tag}"
+        return name
 
 
 class ResolvedImage:
@@ -510,7 +520,7 @@ class ResolvedImage:
         A spec is the unique identifier for the image given its current
         fingerprint. It is a valid Docker Hub name.
         """
-        return f"materialize/{self.name}:mzbuild-{self.fingerprint()}"
+        return self.image.docker_name(tag=f"mzbuild-{self.fingerprint()}")
 
     def write_dockerfile(self) -> IO[bytes]:
         """Render the Dockerfile without mzbuild directives.
@@ -809,6 +819,9 @@ class Repository:
         arch: The CPU architecture to build for.
         release_mode: Whether to build the repository in release mode.
         coverage: Whether to enable code coverage instrumentation.
+        image_registry: The Docker image registry to pull images from and push
+            images to.
+        image_prefix: A prefix to apply to all Docker image names.
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
@@ -821,8 +834,12 @@ class Repository:
         arch: Arch = Arch.host(),
         release_mode: bool = True,
         coverage: bool = False,
+        image_registry: str = "materialize",
+        image_prefix: str = "",
     ):
-        self.rd = RepositoryDetails(root, arch, release_mode, coverage)
+        self.rd = RepositoryDetails(
+            root, arch, release_mode, coverage, image_registry, image_prefix
+        )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
         for path, dirs, files in os.walk(self.root, topdown=True):
@@ -900,6 +917,16 @@ class Repository:
             type=Arch,
             choices=Arch,
         )
+        parser.add_argument(
+            "--image-registry",
+            default="materialize",
+            help="the Docker image registry to pull images from and push images to",
+        )
+        parser.add_argument(
+            "--image-prefix",
+            default="",
+            help="a prefix to apply to all Docker image names",
+        )
 
     @classmethod
     def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
@@ -909,7 +936,12 @@ class Repository:
         `Repository.install_arguments`.
         """
         return cls(
-            root, release_mode=args.release, coverage=args.coverage, arch=args.arch
+            root,
+            release_mode=args.release,
+            coverage=args.coverage,
+            arch=args.arch,
+            image_registry=args.image_registry,
+            image_prefix=args.image_prefix,
         )
 
     @property
@@ -960,7 +992,7 @@ def publish_multiarch_images(
     for images in zip(*dependency_sets):
         names = set(image.image.name for image in images)
         assert len(names) == 1, "dependency sets did not contain identical images"
-        name = f"materialize/{next(iter(names))}:{tag}"
+        name = images[0].image.docker_name(tag)
         spawn.runv(
             ["docker", "manifest", "create", name, *(image.spec() for image in images)]
         )
