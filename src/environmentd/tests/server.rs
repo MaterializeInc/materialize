@@ -4254,7 +4254,7 @@ async fn test_double_encoded_json() {
     };
     let _starting = read_msg();
     let _columns = read_msg();
-    
+
     let row_1 = read_msg();
     insta::assert_debug_snapshot!(row_1, @r###"
     Row(
