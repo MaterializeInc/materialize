@@ -99,6 +99,7 @@ mod tests {
 
     /// Tests local commands that do not requires interacting with any API.
     #[mz_ore::test]
+    #[cfg_attr(coverage, ignore)] // TODO: Reenable when #25976 is fixed
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_local() {
         init_config_file(true);
