@@ -1217,11 +1217,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted configuration.
-    pub(crate) fn set_config(
-        &mut self,
-        key: String,
-        value: Option<u64>,
-    ) -> Result<(), CatalogError> {
+    pub fn set_config(&mut self, key: String, value: Option<u64>) -> Result<(), CatalogError> {
         match value {
             Some(value) => {
                 let config = Config { key, value };
@@ -1233,6 +1229,15 @@ impl<'a> Transaction<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Get the value of a persisted config.
+    pub fn get_config(&mut self, key: String) -> Result<Option<u64>, CatalogError> {
+        let val = self
+            .configs
+            .get(&ConfigKey { key })
+            .map(|entry| entry.value);
+        Ok(val)
     }
 
     /// Updates the catalog `persist_txn_tables` "config" value to
