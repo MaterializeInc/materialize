@@ -103,6 +103,8 @@ optimizer_feature_flags!({
     enable_new_outer_join_lowering: bool,
     // Bound from `SystemVars::enable_reduce_mfp_fusion`.
     enable_reduce_mfp_fusion: bool,
+    // Enable joint HIR ⇒ MIR lowering of stacks of left joins.
+    enable_variadic_left_join_lowering: bool,
     // An exclusive upper bound on the number of results we may return from a
     // Persist fast-path peek. Required by the `create_fast_path_plan` call in
     // `peek::Optimizer`.

@@ -2105,6 +2105,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_variadic_left_join_lowering,
+        desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2115,6 +2122,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_equivalence_propagation: vars.enable_equivalence_propagation(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
+            enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

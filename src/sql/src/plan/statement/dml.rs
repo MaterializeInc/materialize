@@ -354,7 +354,8 @@ generate_extracted_config!(
     (ReoptimizeImportedViews, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
-    (EnableEquivalencePropagation, Option<bool>, Default(None))
+    (EnableEquivalencePropagation, Option<bool>, Default(None)),
+    (EnableVariadicLeftJoinLowering, Option<bool>, Default(None))
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
@@ -398,6 +399,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_eager_delta_joins: v.enable_eager_delta_joins,
                 enable_equivalence_propagation: v.enable_equivalence_propagation,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
+                enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
                 reoptimize_imported_views: v.reoptimize_imported_views,
                 ..Default::default()
             },

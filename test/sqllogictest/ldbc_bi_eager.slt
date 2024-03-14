@@ -860,66 +860,70 @@ Explained Query:
   Finish order_by=[#4 desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=100 output=[#0..=#4]
     Return // { arity: 5 }
       Map (((bigint_to_numeric((1 * #3)) + (2 * #1)) + (10 * #2))) // { arity: 5 }
-        Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(#1, 0)), sum(coalesce(#2, 0)), count(*)] // { arity: 4 }
-          Union // { arity: 3 }
-            Map (null) // { arity: 3 }
-              Union // { arity: 2 }
-                Negate // { arity: 2 }
-                  Project (#0, #1) // { arity: 2 }
-                    Get l3 // { arity: 3 }
+        Reduce group_by=[#0{creatorpersonid}] aggregates=[sum(coalesce(case when (#2) IS NULL then null else #1 end, 0)), sum(coalesce(case when (#4) IS NULL then null else #3 end, 0)), count(*)] // { arity: 4 }
+          Project (#1, #3, #4, #6, #7) // { arity: 5 }
+            Join on=(#0{messageid} = #2{parentmessageid} = #5{messageid}) type=delta // { arity: 8 }
+              implementation
+                %0:l0 » %1[#0]K » %2[#0]K
+                %1 » %0:l0[#0]Kef » %2[#0]K
+                %2 » %0:l0[#0]Kef » %1[#0]K
+              ArrangeBy keys=[[#0{messageid}]] // { arity: 2 }
                 Project (#1, #2) // { arity: 2 }
-                  Get l2 // { arity: 3 }
-            Get l3 // { arity: 3 }
+                  Filter (#0{name} = "Sikh_Empire") // { arity: 3 }
+                    Get l0 // { arity: 3 }
+              ArrangeBy keys=[[#0{parentmessageid}]] // { arity: 3 }
+                Union // { arity: 3 }
+                  Map (true) // { arity: 3 }
+                    Get l1 // { arity: 2 }
+                  Map (null, null) // { arity: 3 }
+                    Threshold // { arity: 1 }
+                      Union // { arity: 1 }
+                        Negate // { arity: 1 }
+                          Project (#0) // { arity: 1 }
+                            Get l1 // { arity: 2 }
+                        Get l3 // { arity: 1 }
+              ArrangeBy keys=[[#0{messageid}]] // { arity: 3 }
+                Union // { arity: 3 }
+                  Map (true) // { arity: 3 }
+                    Get l2 // { arity: 2 }
+                  Map (null, null) // { arity: 3 }
+                    Threshold // { arity: 1 }
+                      Union // { arity: 1 }
+                        Negate // { arity: 1 }
+                          Project (#0) // { arity: 1 }
+                            Get l2 // { arity: 2 }
+                        Get l3 // { arity: 1 }
     With
       cte l3 =
-        Project (#1, #2, #4) // { arity: 3 }
-          Join on=(#0{messageid} = #3{messageid}) type=differential // { arity: 5 }
-            implementation
-              %1[#0]UKA » %0:l2[#0]K
-            ArrangeBy keys=[[#0{messageid}]] // { arity: 3 }
-              Get l2 // { arity: 3 }
-            ArrangeBy keys=[[#0{messageid}]] // { arity: 2 }
-              Reduce group_by=[#0{messageid}] aggregates=[count(*)] // { arity: 2 }
-                Project (#2) // { arity: 1 }
-                  ReadIndex on=person_likes_message person_likes_message_personid=[*** full scan ***] // { arity: 3 }
+        Distinct project=[#0{messageid}] // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            Get l0 // { arity: 3 }
       cte l2 =
-        Union // { arity: 3 }
-          Map (null) // { arity: 3 }
-            Union // { arity: 2 }
-              Negate // { arity: 2 }
-                Project (#0, #1) // { arity: 2 }
-                  Get l1 // { arity: 3 }
-              Get l0 // { arity: 2 }
-          Get l1 // { arity: 3 }
+        Reduce group_by=[#0{messageid}] aggregates=[count(*)] // { arity: 2 }
+          Project (#2) // { arity: 1 }
+            ReadIndex on=person_likes_message person_likes_message_personid=[*** full scan ***] // { arity: 3 }
       cte l1 =
-        Project (#0, #1, #3) // { arity: 3 }
-          Join on=(#0{messageid} = #2{parentmessageid}) type=differential // { arity: 4 }
-            implementation
-              %1[#0]UKA » %0:l0[#0]K
-            ArrangeBy keys=[[#0{messageid}]] // { arity: 2 }
-              Get l0 // { arity: 2 }
-            ArrangeBy keys=[[#0{parentmessageid}]] // { arity: 2 }
-              Reduce group_by=[#0{parentmessageid}] aggregates=[count(*)] // { arity: 2 }
-                Project (#12) // { arity: 1 }
-                  Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
-                    ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
+        Reduce group_by=[#0{parentmessageid}] aggregates=[count(*)] // { arity: 2 }
+          Project (#12) // { arity: 1 }
+            Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }
+              ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
       cte l0 =
-        Project (#6, #17) // { arity: 2 }
-          Filter (#0{id}) IS NOT NULL // { arity: 21 }
-            Join on=(#0{id} = #7{tagid} AND #6{messageid} = #9{messageid}) type=delta // { arity: 21 }
+        Project (#1, #5, #16) // { arity: 3 }
+          Filter (#0{id}) IS NOT NULL // { arity: 20 }
+            Join on=(#0{id} = #6{tagid} AND #5{messageid} = #8{messageid}) type=delta // { arity: 20 }
               implementation
                 %0:tag » %1:message_hastag_tag[#2]KA » %2:message[#1]KA
-                %1:message_hastag_tag » %0:tag[#0]KAe » %2:message[#1]KA
-                %2:message » %1:message_hastag_tag[#1]KA » %0:tag[#0]KAe
-              ArrangeBy keys=[[#0{id}]] // { arity: 5 }
-                ReadIndex on=materialize.public.tag tag_name=[lookup value=("Sikh_Empire")] // { arity: 5 }
+                %1:message_hastag_tag » %0:tag[#0]KA » %2:message[#1]KA
+                %2:message » %1:message_hastag_tag[#1]KA » %0:tag[#0]KA
+              ArrangeBy keys=[[#0{id}]] // { arity: 4 }
+                ReadIndex on=tag tag_id=[delta join 1st input (full scan)] // { arity: 4 }
               ArrangeBy keys=[[#1{messageid}], [#2{tagid}]] // { arity: 3 }
                 ReadIndex on=message_hastag_tag message_hastag_tag_messageid=[delta join lookup] message_hastag_tag_tagid=[delta join lookup] // { arity: 3 }
               ArrangeBy keys=[[#1{messageid}]] // { arity: 13 }
                 ReadIndex on=message message_messageid=[delta join lookup] // { arity: 13 }
 
 Used Indexes:
-  - materialize.public.tag_name (lookup)
+  - materialize.public.tag_id (delta join 1st input (full scan))
   - materialize.public.message_hastag_tag_messageid (delta join lookup)
   - materialize.public.message_hastag_tag_tagid (delta join lookup)
   - materialize.public.person_likes_message_personid (*** full scan ***)
@@ -1428,64 +1432,50 @@ Explained Query:
   Finish order_by=[#4 desc nulls_first, #0 asc nulls_last] limit=100 output=[#0, #1, #3]
     Return // { arity: 5 }
       Map (coalesce(#2, 0), (bigint_to_numeric(#1) + #3)) // { arity: 5 }
-        Reduce group_by=[#0, #1] aggregates=[sum(#2)] // { arity: 3 }
-          Union // { arity: 3 }
-            Map (null) // { arity: 3 }
-              Union // { arity: 2 }
-                Negate // { arity: 2 }
-                  Project (#0, #1) // { arity: 2 }
-                    Join on=(#2{person2id} = #3{person2id}) type=differential // { arity: 4 }
-                      implementation
-                        %1[#0]UKA » %0:l10[#2]K
-                      ArrangeBy keys=[[#2{person2id}]] // { arity: 3 }
-                        Get l10 // { arity: 3 }
-                      ArrangeBy keys=[[#0{person2id}]] // { arity: 1 }
+        Reduce group_by=[#0, #1] aggregates=[sum(case when (#3) IS NULL then null else #2 end)] // { arity: 3 }
+          Project (#0, #1, #6, #7) // { arity: 4 }
+            Join on=(#0 = #2{person1id} AND #5{person2id} = case when (#4) IS NULL then null else #3{person2id} end) type=delta // { arity: 8 }
+              implementation
+                %0:l7 » %1[#0]K » %2[#0]K
+                %1 » %0:l7[#0]K » %2[#0]K
+                %2 » %1[case when (#2) IS NULL then null else #1 end]K » %0:l7[#0]K
+              ArrangeBy keys=[[#0]] // { arity: 2 }
+                Get l7 // { arity: 2 }
+              ArrangeBy keys=[[#0{person1id}], [case when (#2) IS NULL then null else #1{person2id} end]] // { arity: 3 }
+                Union // { arity: 3 }
+                  Project (#1..=#3) // { arity: 3 }
+                    Map (true) // { arity: 4 }
+                      ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
+                  Map (null, null) // { arity: 3 }
+                    Threshold // { arity: 1 }
+                      Union // { arity: 1 }
+                        Negate // { arity: 1 }
+                          Project (#1) // { arity: 1 }
+                            ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
+                        Distinct project=[#0] // { arity: 1 }
+                          Union // { arity: 1 }
+                            Get l8 // { arity: 1 }
+                            Constant // { arity: 1 }
+                              - (null)
+              ArrangeBy keys=[[#0{person2id}]] // { arity: 3 }
+                Union // { arity: 3 }
+                  Map (true) // { arity: 3 }
+                    Get l7 // { arity: 2 }
+                  Map (null, null) // { arity: 3 }
+                    Threshold // { arity: 1 }
+                      Union // { arity: 1 }
+                        Negate // { arity: 1 }
+                          Get l8 // { arity: 1 }
                         Distinct project=[#0{person2id}] // { arity: 1 }
-                          Project (#2) // { arity: 1 }
-                            Get l11 // { arity: 4 }
-                Project (#0, #1) // { arity: 2 }
-                  Get l10 // { arity: 3 }
-            Project (#0, #1, #3) // { arity: 3 }
-              Get l11 // { arity: 4 }
+                          Union // { arity: 1 }
+                            Project (#2) // { arity: 1 }
+                              ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
+                            Constant // { arity: 1 }
+                              - (null)
     With
-      cte l11 =
-        Project (#0..=#2, #4) // { arity: 4 }
-          Join on=(#2{person2id} = #3) type=differential // { arity: 5 }
-            implementation
-              %0:l10[#2]K » %1:l8[#0]K
-            ArrangeBy keys=[[#2{person2id}]] // { arity: 3 }
-              Filter (#2{person2id}) IS NOT NULL // { arity: 3 }
-                Get l10 // { arity: 3 }
-            Get l8 // { arity: 2 }
-      cte l10 =
-        Union // { arity: 3 }
-          Map (null) // { arity: 3 }
-            Union // { arity: 2 }
-              Negate // { arity: 2 }
-                Project (#0, #1) // { arity: 2 }
-                  Join on=(#0 = #2) type=differential // { arity: 3 }
-                    implementation
-                      %1[#0]UKA » %0:l7[#0]K
-                    ArrangeBy keys=[[#0]] // { arity: 2 }
-                      Get l7 // { arity: 2 }
-                    ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct project=[#0] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
-                          Get l9 // { arity: 3 }
-              Get l7 // { arity: 2 }
-          Get l9 // { arity: 3 }
-      cte l9 =
-        Project (#0, #1, #4) // { arity: 3 }
-          Join on=(#0 = #3{person1id}) type=differential // { arity: 5 }
-            implementation
-              %1:person_knows_person[#1]KA » %0:l8[#0]K
-            Get l8 // { arity: 2 }
-            ArrangeBy keys=[[#1{person1id}]] // { arity: 3 }
-              ReadIndex on=person_knows_person person_knows_person_person1id=[differential join] // { arity: 3 }
       cte l8 =
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
-            Get l7 // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Get l7 // { arity: 2 }
       cte l7 =
         Project (#3, #4) // { arity: 2 }
           Map (coalesce(#0{id}, #1{creatorpersonid}), (integer_to_bigint(case when (#0{id}) IS NULL then 0 else 100 end) + coalesce(#2, 0))) // { arity: 5 }
@@ -1564,7 +1554,7 @@ Used Indexes:
   - materialize.public.tag_name (lookup)
   - materialize.public.person_id (delta join lookup, delta join 1st input (full scan))
   - materialize.public.person_hasinterest_tag_tagid (*** full scan ***)
-  - materialize.public.person_knows_person_person1id (differential join)
+  - materialize.public.person_knows_person_person1id (*** full scan ***)
   - materialize.public.message_hastag_tag_messageid (delta join lookup)
   - materialize.public.message_hastag_tag_tagid (delta join lookup)
   - materialize.public.message_messageid (delta join lookup)

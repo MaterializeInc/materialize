@@ -51,6 +51,8 @@ use crate::plan::expr::{
 use crate::plan::{transform_expr, PlanError};
 use crate::session::vars::SystemVars;
 
+mod variadic_left;
+
 /// Maps a leveled column reference to a specific column.
 ///
 /// Leveled column references are nested, so that larger levels are
@@ -116,6 +118,7 @@ impl ColumnMap {
 type CteMap = BTreeMap<mz_expr::LocalId, CteDesc>;
 
 /// Information about needed when finding a reference to a CTE in scope.
+#[derive(Clone)]
 struct CteDesc {
     /// The new ID assigned to the lowered version of the CTE, which may not match
     /// the ID of the input CTE.
@@ -129,14 +132,17 @@ struct CteDesc {
 
 #[derive(Debug)]
 pub struct Config {
-    /// Enable outer join lowering implemented by #22343.
+    /// Enable outer join lowering implemented in #22343.
     pub enable_new_outer_join_lowering: bool,
+    /// Enable outer join lowering implemented in #25340.
+    pub enable_variadic_left_join_lowering: bool,
 }
 
 impl From<&SystemVars> for Config {
     fn from(vars: &SystemVars) -> Self {
         Self {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
+            enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
         }
     }
 }
@@ -580,6 +586,41 @@ impl HirRelationExpr {
                     on,
                     kind,
                 } => {
+                    if config.enable_variadic_left_join_lowering {
+                        // Attempt to extract a stack of left joins.
+                        if let JoinKind::LeftOuter = kind {
+                            let mut rights = vec![(&*right, &on)];
+                            let mut left_test = &left;
+                            while let Join {
+                                left,
+                                right,
+                                on,
+                                kind: JoinKind::LeftOuter,
+                            } = &**left_test
+                            {
+                                rights.push((&**right, on));
+                                left_test = left;
+                            }
+                            if rights.len() > 1 && get_outer.arity() == 0 {
+                                // Defensively clone `cte_map` as it may be mutated.
+                                let cte_map_clone = cte_map.clone();
+                                if let Ok(Some(magic)) = variadic_left::attempt_left_join_magic(
+                                    left_test,
+                                    rights,
+                                    id_gen,
+                                    get_outer.clone(),
+                                    col_map,
+                                    cte_map,
+                                    config,
+                                ) {
+                                    return Ok(magic);
+                                } else {
+                                    cte_map.clone_from(&cte_map_clone);
+                                }
+                            }
+                        }
+                    }
+
                     // Both join expressions should be decorrelated, and then joined by their
                     // leading columns to form only those pairs corresponding to the same row
                     // of `get_outer`.
