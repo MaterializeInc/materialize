@@ -49,11 +49,11 @@ Field                                | Value                           | Descrip
 {{< note >}}
 For step-by-step instructions on enabling GTID-based binlog replication for your
 MySQL service, see the integration guides:
-[Amazon RDS](/ingest-data/mysql-amazon-rds/),
-[Amazon Aurora](/ingest-data/mysql-amazon-aurora/),
-[Azure DB](/ingest-data/mysql-azure-db/),
-[Google Cloud SQL](/ingest-data/mysql-google-cloud-sql/),
-[Self-hosted](/ingest-data/mysql-self-hosted/).
+[Amazon RDS](/ingest-data/mysql/amazon-rds/),
+[Amazon Aurora](/ingest-data/mysql/amazon-aurora/),
+[Azure DB](/ingest-data/mysql/azure-db/),
+[Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
+[Self-hosted](/ingest-data/mysql/self-hosted/).
 {{< /note >}}
 
 The source uses MySQL's binlog replication protocol to **continually ingest
@@ -104,7 +104,7 @@ service-specific configuration parameter. It's important that you double-check
 if such a configuration exists, and ensure it's set to the maximum interval
 available.
 
-As an example, [Amazon RDS for MySQL](/ingest-data/mysql-amazon-rds/) has its
+As an example, [Amazon RDS for MySQL](/ingest-data/mysql/amazon-rds/) has its
 own configuration parameter for binlog retention ([`binlog retention hours`](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_set_configuration-usage-notes.binlog-retention-hours))
 that overrides `binlog_expire_logs_seconds` and is set to `NULL` by default.
 
@@ -269,11 +269,11 @@ DELETE FROM t;
 {{< warning >}}
 Before creating a MySQL source, you must enable GTID-based binlog replication in the
 upstream database. For step-by-step instructions, see the integration guide for
-your MySQL service: [Amazon RDS](/ingest-data/mysql-amazon-rds/),
-[Amazon Aurora](/ingest-data/mysql-amazon-aurora/),
-[Azure DB](/ingest-data/mysql-azure-db/),
-[Google Cloud SQL](/ingest-data/mysql-google-cloud-sql/),
-[Self-hosted](/ingest-data/mysql-self-hosted/).
+your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
+[Amazon Aurora](/ingest-data/mysql/amazon-aurora/),
+[Azure DB](/ingest-data/mysql/azure-db/),
+[Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
+[Self-hosted](/ingest-data/mysql/self-hosted/).
 {{< /warning >}}
 
 ### Creating a connection
@@ -352,8 +352,8 @@ CREATE SOURCE mz_source
 
 #### Handling unsupported types
 
-If you're replicating tables that use [data types unsupported]() by
-Materialize, use the `TEXT COLUMNS` option to decode data as `text` for the
+If you're replicating tables that use [data types unsupported](#supported-types)
+by Materialize, use the `TEXT COLUMNS` option to decode data as `text` for the
 affected columns. This option expects the upstream fully-qualified names of the
 replicated table and column (i.e. as defined in your MySQL database).
 
