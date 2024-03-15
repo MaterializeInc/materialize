@@ -1113,8 +1113,14 @@ where
                 "not sending `CreateDataflow`, because of empty `as_of`",
             );
         } else {
+            let collections: Vec<_> = augmented_dataflow.export_ids().collect();
             self.compute
                 .send(ComputeCommand::CreateDataflow(augmented_dataflow));
+
+            // TODO: defer scheduling until inputs are ready
+            for id in collections {
+                self.compute.send(ComputeCommand::Schedule(id));
+            }
         }
 
         Ok(())
