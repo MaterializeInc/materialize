@@ -80,9 +80,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         use_versions_from_docs=args.versions_source == "docs"
     )
 
+    current_version = MzVersion.parse_cargo()
+    min_upgradable_version = MzVersion.create(
+        current_version.major, current_version.minor - 1, 0
+    )
+
     for version in tested_versions:
-        priors = [v for v in all_versions if v <= version]
-        test_upgrade_from_version(c, f"{version}", priors, filter=args.filter)
+        priors = [
+            v for v in all_versions if v <= version and v >= min_upgradable_version
+        ]
+
+        if len(priors) == 0:
+            # this may happen when versions are marked as invalid
+            print("No versions to test!")
+        else:
+            test_upgrade_from_version(c, f"{version}", priors, filter=args.filter)
 
     test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
 
