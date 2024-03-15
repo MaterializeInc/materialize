@@ -44,6 +44,7 @@ use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::RetryParameters;
 use crate::fetch::{FetchedBlob, SerdeLeasedBatchPart};
 use crate::internal::state::BatchPart;
+use crate::project::ProjectionPushdown;
 use crate::read::SubscriptionLeaseReturner;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
@@ -76,6 +77,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
+    project: ProjectionPushdown,
 ) -> (
     Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
@@ -138,6 +140,7 @@ where
         should_fetch_part,
         listen_sleep,
         start_signal,
+        project,
     );
     tokens.push(descs_token);
 
@@ -184,6 +187,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
+    project: ProjectionPushdown,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
     K: Debug + Codec,
@@ -378,7 +382,9 @@ where
             let session_cap = cap_set.delayed(current_ts);
 
             for mut part_desc in parts {
-                // TODO: Push the filter down into the Subscribe?
+                part_desc.maybe_optimize(&cfg, &project);
+                // TODO: Push more of this logic into LeasedBatchPart like we've
+                // done for project?
                 if STATS_FILTER_ENABLED.get(&cfg) {
                     let (should_fetch, is_inline) = match &part_desc.part {
                         BatchPart::Hollow(x) => {
@@ -590,6 +596,7 @@ mod tests {
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
                         async {},
+                        ProjectionPushdown::FetchAll,
                     );
                     (stream.leave(), tokens)
                 });
@@ -658,6 +665,7 @@ mod tests {
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
                         async {},
+                        ProjectionPushdown::FetchAll,
                     );
                     (stream.leave(), tokens)
                 });

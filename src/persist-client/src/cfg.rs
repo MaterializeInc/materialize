@@ -32,9 +32,10 @@ use crate::internal::machine::{
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::{
-    OPTIMIZE_IGNORED_DATA_DECODE, PERSIST_SINK_MINIMUM_BATCH_UPDATES,
-    STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES, STORAGE_SOURCE_DECODE_FUEL,
+    PERSIST_SINK_MINIMUM_BATCH_UPDATES, STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES,
+    STORAGE_SOURCE_DECODE_FUEL,
 };
+use crate::project::OPTIMIZE_IGNORED_DATA_DECODE;
 use crate::read::READER_LEASE_DURATION;
 
 /// The tunable knobs for persist.
@@ -335,10 +336,11 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::state::WRITE_DIFFS_SUM)
         .add(&crate::internal::apply::ROUNDTRIP_SPINE)
         .add(&crate::iter::SPLIT_OLD_RUNS)
-        .add(&crate::operators::OPTIMIZE_IGNORED_DATA_DECODE)
         .add(&crate::operators::PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
+        .add(&crate::project::OPTIMIZE_IGNORED_DATA_DECODE)
+        .add(&crate::project::OPTIMIZE_IGNORED_DATA_FETCH)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)
