@@ -292,7 +292,7 @@ CREATE SECRET mysqlpass AS '<MYSQL_PASSWORD>';
 CREATE CONNECTION mysql_connection TO MYSQL (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 3306,
-    USER 'root',
+    USER 'materialize',
     PASSWORD SECRET mysqlpass
 );
 ```
@@ -307,14 +307,14 @@ through an SSH bastion host.
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
-    USER 'materialize',
+    USER 'materialize'
 );
 ```
 
 ```sql
 CREATE CONNECTION mysql_connection TO MYSQL (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    SSH TUNNEL ssh_connection,
+    SSH TUNNEL ssh_connection
 );
 ```
 
