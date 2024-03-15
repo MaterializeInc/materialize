@@ -35,7 +35,7 @@ class UnifiedCluster(Check):
                 """
                 > CREATE SOURCE shared_cluster_storage_first_source
                   IN CLUSTER shared_cluster_storage_first
-                  FROM LOAD GENERATOR COUNTER
+                  FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
 
                 > CREATE MATERIALIZED VIEW shared_cluster_compute_first_mv
                   IN CLUSTER shared_cluster_compute_first
@@ -52,7 +52,7 @@ class UnifiedCluster(Check):
                 """
                 > CREATE SOURCE shared_cluster_compute_first_source
                   IN CLUSTER shared_cluster_compute_first
-                  FROM LOAD GENERATOR COUNTER
+                  FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
 
                 > CREATE MATERIALIZED VIEW shared_cluster_storage_first_mv
                   IN CLUSTER shared_cluster_storage_first
