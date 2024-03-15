@@ -465,11 +465,13 @@ def get_failures_on_main() -> str | None:
     step_key = os.getenv("BUILDKITE_STEP_KEY")
     step_name = os.getenv("BUILDKITE_LABEL") or step_key
     parallel_job = os.getenv("BUILDKITE_PARALLEL_JOB")
+    current_build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
     if parallel_job is not None:
         parallel_job = int(parallel_job)
     assert pipeline_slug is not None
     assert step_key is not None
     assert step_name is not None
+    assert current_build_number is not None
 
     # This is only supposed to be invoked when the build step failed.
     builds_data = builds_api.get_builds(
@@ -494,9 +496,11 @@ def get_failures_on_main() -> str | None:
         selected_build_steps=[build_step_matcher],
     )
 
-    # remove build steps that are still running
+    # remove build steps that are still running and the current build
     last_build_step_outcomes = [
-        outcome for outcome in last_build_step_outcomes if outcome.completed
+        outcome
+        for outcome in last_build_step_outcomes
+        if outcome.completed and outcome.build_number != current_build_number
     ]
 
     if len(last_build_step_outcomes) > 8:
