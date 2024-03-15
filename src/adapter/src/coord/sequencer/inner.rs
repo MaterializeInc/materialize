@@ -557,7 +557,7 @@ impl Coordinator {
                             None,
                             vec![(
                                 source_id,
-                                CollectionDescription {
+                                CollectionDescription::<Timestamp> {
                                     desc: source.desc.clone(),
                                     data_source,
                                     since: None,
