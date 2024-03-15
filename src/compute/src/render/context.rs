@@ -303,14 +303,14 @@ where
         match self {
             SpecializedArrangement::RowUnit(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter(None));
-                datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                datums_borrow.extend(k.into_datum_iter());
+                datums_borrow.extend(v.into_datum_iter());
                 logic(&datums_borrow)
             }),
             SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter(None));
-                datums_borrow.extend(v.into_datum_iter(None));
+                datums_borrow.extend(k.into_datum_iter());
+                datums_borrow.extend(v.into_datum_iter());
                 logic(&datums_borrow)
             }),
         }
@@ -339,8 +339,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter(None));
-                        datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                        datums_borrow.extend(k.into_datum_iter());
+                        datums_borrow.extend(v.into_datum_iter());
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -352,8 +352,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter(None));
-                        datums_borrow.extend(v.into_datum_iter(None));
+                        datums_borrow.extend(k.into_datum_iter());
+                        datums_borrow.extend(v.into_datum_iter());
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -446,14 +446,14 @@ where
         match self {
             SpecializedArrangementImport::RowUnit(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter(None));
-                datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                datums_borrow.extend(k.into_datum_iter());
+                datums_borrow.extend(v.into_datum_iter());
                 logic(&datums_borrow)
             }),
             SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
                 let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter(None));
-                datums_borrow.extend(v.into_datum_iter(None));
+                datums_borrow.extend(k.into_datum_iter());
+                datums_borrow.extend(v.into_datum_iter());
                 logic(&datums_borrow)
             }),
         }
@@ -479,8 +479,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter(None));
-                        datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                        datums_borrow.extend(k.into_datum_iter());
+                        datums_borrow.extend(v.into_datum_iter());
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -492,8 +492,8 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter(None));
-                        datums_borrow.extend(v.into_datum_iter(None));
+                        datums_borrow.extend(k.into_datum_iter());
+                        datums_borrow.extend(v.into_datum_iter());
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,

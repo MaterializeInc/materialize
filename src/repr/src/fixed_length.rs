@@ -35,9 +35,9 @@ pub trait IntoRowByTypes: Sized {
     /// can be provided. If the Row buffer is used, then the reference returned is to it.
     /// Implementations are also free to place specific requirements on the given schema.
     #[inline]
-    fn into_row<'a>(&'a self, row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
+    fn into_row<'a>(&'a self, row_buf: &'a mut Row) -> &'a Row {
         let mut packer = row_buf.packer();
-        packer.extend(self.into_datum_iter(types));
+        packer.extend(self.into_datum_iter());
         row_buf
     }
 
@@ -45,13 +45,13 @@ pub trait IntoRowByTypes: Sized {
     /// by `types`.
     ///
     /// Implementations are free to place specific requirements on the given schema.
-    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a>;
+    fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a>;
 }
 
 impl<'b, T: IntoRowByTypes> IntoRowByTypes for &'b T {
     type DatumIter<'a> = T::DatumIter<'a> where T: 'a, Self: 'a;
-    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a> {
-        (**self).into_datum_iter(types)
+    fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
+        (**self).into_datum_iter()
     }
 }
 
@@ -66,8 +66,7 @@ impl IntoRowByTypes for Row {
     /// `Row` is already self-describing and can use variable-length types, so we are
     /// explicitly not validating the given schema.
     #[inline]
-    fn into_row<'a>(&'a self, _row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
-        assert!(types.is_none());
+    fn into_row<'a>(&'a self, _row_buf: &'a mut Row) -> &'a Row {
         self
     }
 
@@ -77,8 +76,7 @@ impl IntoRowByTypes for Row {
     /// `Row` is already self-describing and can use variable-length types, so we are
     /// explicitly not validating the given schema.
     #[inline]
-    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a> {
-        assert!(types.is_none());
+    fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
         self.iter()
     }
 }
@@ -182,10 +180,7 @@ impl IntoRowByTypes for () {
     /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
     /// unit values need to have an empty schema.
     #[inline]
-    fn into_row<'a>(&'a self, row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
-        let Some(&[]) = types else {
-            panic!("Non-empty schema with unit values")
-        };
+    fn into_row<'a>(&'a self, row_buf: &'a mut Row) -> &'a Row {
         debug_assert!(row_buf.is_empty());
         row_buf
     }
@@ -195,10 +190,7 @@ impl IntoRowByTypes for () {
     /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
     /// unit values need to have an empty schema.
     #[inline]
-    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a> {
-        let Some(&[]) = types else {
-            panic!("Non-empty schema with unit values")
-        };
+    fn into_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
         empty()
     }
 }

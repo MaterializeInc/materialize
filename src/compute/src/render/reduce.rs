@@ -377,7 +377,7 @@ where
                         }
 
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
+                        let datum_iter = key.into_datum_iter();
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
@@ -446,7 +446,7 @@ where
                     }
 
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.into_datum_iter(None);
+                    let datum_iter = key.into_datum_iter();
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
 
@@ -561,7 +561,7 @@ where
                 move |key, _input, output| {
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
-                    datums_local.extend(key.into_datum_iter(None));
+                    datums_local.extend(key.into_datum_iter());
 
                     // Note that the key contains all the columns in a `Distinct` and that `mfp_after` is
                     // required to preserve the key. Therefore, if `mfp_after` maps, then it must project
@@ -591,7 +591,7 @@ where
                     // If `mfp_after` can error, then evaluate it here.
                     let Some(mfp) = &mfp_after2 else { return };
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.into_datum_iter(None);
+                    let datum_iter = key.into_datum_iter();
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
 
@@ -660,7 +660,7 @@ where
         let output = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceFuseBasic", {
             move |key, input, output| {
                 let temp_storage = RowArena::new();
-                let datum_iter = key.into_datum_iter(None);
+                let datum_iter = key.into_datum_iter();
                 let mut datums_local = datums1.borrow();
                 datums_local.extend(datum_iter);
                 let key_len = datums_local.len();
@@ -689,7 +689,7 @@ where
                         // Since negative accumulations are checked in at least one component
                         // aggregate, we only need to look for MFP errors here.
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
+                        let datum_iter = key.into_datum_iter();
                         let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
 
@@ -787,11 +787,11 @@ where
                     // Note that in the non-positive case, this is wrong, but harmless because
                     // our other reduction will produce an error.
                     let count = usize::try_from(*w).unwrap_or(0);
-                    std::iter::repeat(v.into_datum_iter(None).next().unwrap()).take(count)
+                    std::iter::repeat(v.into_datum_iter().next().unwrap()).take(count)
                 });
 
                 let temp_storage = RowArena::new();
-                let datum_iter = key.into_datum_iter(None);
+                let datum_iter = key.into_datum_iter();
                 let mut datums_local = datums1.borrow();
                 datums_local.extend(datum_iter);
                 let key_len = datums_local.len();
@@ -850,7 +850,7 @@ where
                         });
 
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
+                        let datum_iter = key.into_datum_iter();
                         let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
                         datums_local.push(
@@ -1073,7 +1073,7 @@ where
                             // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                             let Some(mfp) = &mfp_after2 else { return };
                             let temp_storage = RowArena::new();
-                            let datum_iter = key.into_datum_iter(None);
+                            let datum_iter = key.into_datum_iter();
                             let mut datums_local = datums2.borrow();
                             datums_local.extend(datum_iter);
 
@@ -1105,7 +1105,7 @@ where
                 .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
                     move |key, source, target| {
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
+                        let datum_iter = key.into_datum_iter();
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
@@ -1288,7 +1288,7 @@ where
         let output = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMonotonic", {
             move |key, input, output| {
                 let temp_storage = RowArena::new();
-                let datum_iter = key.into_datum_iter(None);
+                let datum_iter = key.into_datum_iter();
                 let mut datums_local = datums1.borrow();
                 datums_local.extend(datum_iter);
                 let key_len = datums_local.len();
@@ -1314,7 +1314,7 @@ where
                 .mz_reduce_abelian::<_, RowErrSpine<_, _>>("ReduceMonotonic Error Check", {
                     move |key, input, output| {
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
+                        let datum_iter = key.into_datum_iter();
                         let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
                         let accum = &input[0].1;
@@ -1467,7 +1467,7 @@ where
                         let (ref accums, total) = input[0].1;
 
                         let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
+                        let datum_iter = key.into_datum_iter();
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
@@ -1526,7 +1526,7 @@ where
                     // If `mfp_after` can error, then evaluate it here.
                     let Some(mfp) = &mfp_after2 else { return };
                     let temp_storage = RowArena::new();
-                    let datum_iter = key.into_datum_iter(None);
+                    let datum_iter = key.into_datum_iter();
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
                     for (aggr, accum) in full_aggrs2.iter().zip(accums) {
