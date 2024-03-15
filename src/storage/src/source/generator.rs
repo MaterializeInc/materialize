@@ -92,6 +92,13 @@ impl SourceRender for LoadGeneratorSourceConnection {
         let button = builder.build(move |caps| async move {
             let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
 
+            // Do not run the load generator until we have all of our source
+            // exports. Waiting here is fine because we know that their creation
+            // and scheduling of this dataflow is imminent.
+            if self.load_generator.views().len() != config.source_exports.len() - 1 {
+                std::future::pending().await
+            }
+
             if !config.responsible_for(()) {
                 // Emit 0, to mark this worker as having started up correctly.
                 stats_output
