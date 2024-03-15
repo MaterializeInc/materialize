@@ -36,6 +36,7 @@ use tracing::{debug, warn};
 use IsLateral::*;
 use IsOptional::*;
 
+use crate::ast::display::AstDisplay;
 use crate::ast::*;
 use crate::ident;
 
@@ -125,12 +126,24 @@ pub fn parse_statements_with_limit(
 /// Parses a SQL string containing zero or more SQL statements.
 #[mz_ore::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
-    debug!("parsing statements: {sql}");
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
         error: error.into(),
         statement: None,
     })?;
-    Parser::new(sql, tokens).parse_statements()
+    let res = Parser::new(sql, tokens).parse_statements();
+    // Don't trace sensitive raw sql, so we can only trace after parsing, and then can only output
+    // redacted statements.
+    debug!("{:?}", {
+        match &res {
+            Ok(stmts) => stmts
+                .iter()
+                .map(|stmt| stmt.ast.to_ast_string_redacted())
+                .join("; "),
+            // Errors can leak sensitive SQL.
+            Err(_) => "parse error".to_string(),
+        }
+    });
+    res
 }
 
 /// Parses a SQL string containing one SQL expression.

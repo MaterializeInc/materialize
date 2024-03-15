@@ -333,7 +333,6 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn message_command(&mut self, cmd: Command) {
-        event!(Level::TRACE, cmd = format!("{:?}", cmd));
         self.handle_command(cmd).await;
     }
 

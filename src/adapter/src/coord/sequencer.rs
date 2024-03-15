@@ -74,7 +74,6 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
         async move {
-            event!(Level::TRACE, plan = format!("{:?}", plan));
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 

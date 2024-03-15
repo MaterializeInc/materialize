@@ -195,10 +195,10 @@ pub struct TracingCliArgs {
     )]
     pub sentry_tag: Vec<KeyValueArg<String, String>>,
     /// Test-only feature to enable tracing assertions.
-    #[cfg(feature = "fluent-assertions")]
+    #[cfg(feature = "capture")]
     #[derivative(Debug = "ignore")]
     #[clap(skip)]
-    pub fluent_assertions: Option<tracing_fluent_assertions::AssertionRegistry>,
+    pub capture: Option<tracing_capture::SharedStorage>,
 }
 
 impl Default for TracingCliArgs {
@@ -270,8 +270,8 @@ impl TracingCliArgs {
             build_sha: build_info.sha,
             build_time: build_info.time,
             registry,
-            #[cfg(feature = "fluent-assertions")]
-            fluent_assertions: self.fluent_assertions.clone(),
+            #[cfg(feature = "capture")]
+            capture: self.capture.clone(),
         })
         .await
     }
@@ -361,8 +361,8 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_dsn,
                 sentry_environment,
                 sentry_tag,
-                #[cfg(feature = "fluent-assertions")]
-                    fluent_assertions: _,
+                #[cfg(feature = "capture")]
+                    capture: _,
             } = &self.tracing_args;
             args.push(format!("--startup-log-filter={startup_log_filter}"));
             args.push(format!("--log-format={log_format}"));

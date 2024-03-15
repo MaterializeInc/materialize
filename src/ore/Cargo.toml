@@ -55,7 +55,7 @@ tokio = { version = "1.32.0", features = [
   "time",
 ], optional = true }
 tokio-openssl = { version = "0.6.3", optional = true }
-tracing-fluent-assertions = { version = "0.3.0", optional = true }
+tracing-capture = { version = "0.1.0", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
 # to use `tracing`, we cannot remove this feature until we guarantee no dependencies log using the `log` crate, for
@@ -102,11 +102,7 @@ tokio-test = "0.4.2"
 tracing-subscriber = "0.3.16"
 
 [features]
-default = [
-  "tokio-console",
-  "workspace-hack",
-  "mz-ore-proc/workspace-hack",
-]
+default = ["tokio-console", "workspace-hack", "mz-ore-proc/workspace-hack"]
 async = [
   "async-trait",
   "futures",
@@ -146,7 +142,7 @@ stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber", "derivative"]
 metrics = ["prometheus"]
 id_gen = ["hibitset", "rand", "uuid"]
-fluent-assertions = ["tracing-fluent-assertions"]
+capture = ["tracing-capture"]
 
 [[test]]
 name = "future"

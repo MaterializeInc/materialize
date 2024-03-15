@@ -113,7 +113,7 @@ tower = { version = "0.4.13", features = ["buffer", "limit", "load-shed"] }
 tower-http = { version = "0.4.2", features = ["cors"] }
 tracing = "0.1.37"
 tracing-core = "0.1.30"
-tracing-fluent-assertions = { version = "0.3.0", optional = true }
+tracing-capture = { version = "0.1.0", optional = true }
 tracing-opentelemetry = { version = "0.22.0" }
 tracing-subscriber = "0.3.16"
 tungstenite = { version = "0.20.0" }
@@ -175,8 +175,8 @@ test = [
   "postgres-openssl",
   "mz-tracing",
   "mz-frontegg-mock",
-  "tracing-fluent-assertions",
-  "mz-orchestrator-tracing/fluent-assertions",
+  "tracing-capture",
+  "mz-orchestrator-tracing/capture",
 ]
 tokio-console = [
   "mz-ore/tokio-console",

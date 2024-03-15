@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_adapter::session::TransactionCode;
 use mz_pgwire_common::ErrorResponse;
@@ -15,7 +16,8 @@ use mz_repr::{ColumnName, RelationDesc};
 /// Internal representation of a backend [message]
 ///
 /// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
-#[derive(Debug)]
+#[derive(Debug, EnumKind)]
+#[enum_kind(BackendMessageKind)]
 pub enum BackendMessage {
     AuthenticationOk,
     AuthenticationCleartextPassword,

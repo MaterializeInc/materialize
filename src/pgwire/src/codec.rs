@@ -33,7 +33,7 @@ use tokio::time::{self, Duration};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::trace;
 
-use crate::message::BackendMessage;
+use crate::message::{BackendMessage, BackendMessageKind};
 
 /// A connection that manages the encoding and decoding of pgwire frames.
 pub struct FramedConn<A> {
@@ -76,7 +76,7 @@ where
     pub async fn recv(&mut self) -> Result<Option<FrontendMessage>, io::Error> {
         let message = self.inner.try_next().await?;
         match &message {
-            Some(message) => trace!("cid={} recv={:?}", self.conn_id, message),
+            Some(message) => trace!("cid={} recv_name={}", self.conn_id, message.name()),
             None => trace!("cid={} recv=<eof>", self.conn_id),
         }
         Ok(message)
@@ -95,7 +95,11 @@ where
         M: Into<BackendMessage>,
     {
         let message = message.into();
-        trace!("cid={} send={:?}", self.conn_id, message);
+        trace!(
+            "cid={} send={:?}",
+            self.conn_id,
+            BackendMessageKind::from(&message)
+        );
         self.inner.enqueue(message).await
     }
 

@@ -49,8 +49,8 @@ use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::{warn, Event, Level, Span, Subscriber};
-#[cfg(feature = "fluent-assertions")]
-use tracing_fluent_assertions::{AssertionRegistry, AssertionsLayer};
+#[cfg(feature = "capture")]
+use tracing_capture::{CaptureLayer, SharedStorage};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::format::{format, Writer};
@@ -84,9 +84,9 @@ pub struct TracingConfig<F> {
     #[cfg(feature = "tokio-console")]
     pub tokio_console: Option<TokioConsoleConfig>,
     /// Optional configuration for capturing spans during tests.
-    #[cfg(feature = "fluent-assertions")]
+    #[cfg(feature = "capture")]
     #[derivative(Debug = "ignore")]
-    pub fluent_assertions: Option<AssertionRegistry>,
+    pub capture: Option<SharedStorage>,
     /// Optional Sentry configuration.
     pub sentry: Option<SentryConfig<F>>,
     /// The version of this build of the service.
@@ -557,15 +557,13 @@ where
             (None, None, reloader)
         };
 
-    #[cfg(feature = "fluent-assertions")]
-    let fluent_assertions = config
-        .fluent_assertions
-        .map(|registry| AssertionsLayer::new(&registry));
+    #[cfg(feature = "capture")]
+    let capture = config.capture.map(|storage| CaptureLayer::new(&storage));
 
     let stack = tracing_subscriber::registry();
     let stack = stack.with(stderr_log_layer);
-    #[cfg(feature = "fluent-assertions")]
-    let stack = stack.with(fluent_assertions);
+    #[cfg(feature = "capture")]
+    let stack = stack.with(capture);
     let stack = stack.with(otel_layer);
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
