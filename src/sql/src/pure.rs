@@ -1152,8 +1152,6 @@ async fn purify_create_source(
             let (_load_generator, available_subsources) =
                 load_generator_ast_to_generator(generator, options)?;
 
-            let mut targeted_subsources = vec![];
-
             let mut validated_requested_subsources = vec![];
             match referenced_subsources {
                 Some(ReferencedSubsources::All) => {
@@ -1161,10 +1159,15 @@ async fn purify_create_source(
                         Some(available_subsources) => available_subsources,
                         None => Err(LoadGeneratorSourcePurificationError::ForAllTables)?,
                     };
-                    for (name, (_, desc)) in available_subsources {
+                    for (name, (output_index, desc)) in available_subsources {
                         let upstream_name = UnresolvedItemName::from(name.clone());
                         let subsource_name = subsource_name_gen(source_name, &name.item)?;
-                        validated_requested_subsources.push((upstream_name, subsource_name, desc));
+                        validated_requested_subsources.push((
+                            upstream_name,
+                            subsource_name,
+                            desc,
+                            *output_index,
+                        ));
                     }
                 }
                 Some(ReferencedSubsources::SubsetSchemas(..)) => {
@@ -1181,14 +1184,10 @@ async fn purify_create_source(
             };
 
             // Now that we have an explicit list of validated requested subsources we can create them
-            for (upstream_name, subsource_name, desc) in validated_requested_subsources.into_iter()
+            for (upstream_name, subsource_name, desc, output_idx) in
+                validated_requested_subsources.into_iter()
             {
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(desc)?;
-
-                targeted_subsources.push(CreateSourceSubsource {
-                    reference: upstream_name.clone(),
-                    subsource: None,
-                });
 
                 // Create the subsourcev2 statement
                 let subsource = CreateSubsourceStatement {
@@ -1201,18 +1200,23 @@ async fn purify_create_source(
                     // worried about introducing junk data.
                     constraints: table_constraints,
                     if_not_exists: false,
-                    with_options: vec![CreateSubsourceOption {
-                        name: CreateSubsourceOptionName::ExternalReference,
-                        value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
-                    }],
+                    with_options: vec![
+                        CreateSubsourceOption {
+                            name: CreateSubsourceOptionName::ExternalReference,
+                            value: Some(WithOptionValue::UnresolvedItemName(upstream_name)),
+                        },
+                        CreateSubsourceOption {
+                            name: CreateSubsourceOptionName::OutputIndex,
+                            value: Some(WithOptionValue::Value(Value::Number(
+                                output_idx.to_string(),
+                            ))),
+                        },
+                    ],
                 };
                 subsources.push(subsource);
             }
 
-            if available_subsources.is_some() {
-                *referenced_subsources =
-                    Some(ReferencedSubsources::SubsetTables(targeted_subsources));
-            }
+            *referenced_subsources = None;
         }
     }
 
