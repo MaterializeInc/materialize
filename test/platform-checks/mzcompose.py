@@ -200,9 +200,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     checks.sort(key=lambda ch: ch.__name__)
     checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
-    print(
-        f"Checks in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
-    )
+    if buildkite.get_parallelism_index() != 0 or buildkite.get_parallelism_count() != 1:
+        print(
+            f"Checks in shard with index {buildkite.get_parallelism_index()}: {[c.__name__ for c in checks]}"
+        )
 
     executor = MzcomposeExecutor(composition=c)
     for scenario_class in scenarios:
