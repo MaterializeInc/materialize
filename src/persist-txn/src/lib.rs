@@ -204,6 +204,7 @@
 use std::fmt::Debug;
 use std::fmt::Write;
 
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
@@ -214,7 +215,7 @@ use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::stats::PartStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
-use mz_persist_types::codec_impls::VecU8Schema;
+use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
@@ -271,30 +272,42 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
 }
 
 /// The in-mem representation of an update in the txns shard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TxnsEntry {
     /// A data shard register operation.
-    ///
-    /// The `[u8; 8]` is a Codec64 encoded timestamp.
-    Register(ShardId, [u8; 8]),
+    Register {
+        /// The id of the data shard.
+        data_id: ShardId,
+        /// A Codec64 encoded timestamp.
+        ts: [u8; 8],
+        /// The key schema of the data shard, serialized.
+        key_schema: Bytes,
+        /// The val schema of the data shard, serialized.
+        val_schema: Bytes,
+    },
     /// A batch written to a data shard in a txn.
-    ///
-    /// The `[u8; 8]` is a Codec64 encoded timestamp.
-    Append(ShardId, [u8; 8], Vec<u8>),
+    Append {
+        /// The id of the data shard.
+        data_id: ShardId,
+        /// A Codec64 encoded timestamp.
+        ts: [u8; 8],
+        /// The transmittable serialization of the batch.
+        batch: Vec<u8>,
+    },
 }
 
 impl TxnsEntry {
     fn data_id(&self) -> &ShardId {
         match self {
-            TxnsEntry::Register(data_id, _) => data_id,
-            TxnsEntry::Append(data_id, _, _) => data_id,
+            TxnsEntry::Register { data_id, .. } => data_id,
+            TxnsEntry::Append { data_id, .. } => data_id,
         }
     }
 
     fn ts<T: Codec64>(&self) -> T {
         match self {
-            TxnsEntry::Register(_, ts) => T::decode(*ts),
-            TxnsEntry::Append(_, ts, _) => T::decode(*ts),
+            TxnsEntry::Register { ts, .. } => T::decode(*ts),
+            TxnsEntry::Append { ts, .. } => T::decode(*ts),
         }
     }
 }
@@ -316,6 +329,9 @@ pub trait TxnsCodec: Debug {
     /// Decodes a [TxnsEntry] from the format persisted in the txns shard.
     ///
     /// Implementations should panic if the values are invalid.
+    ///
+    /// If the previous format of TxnsEntry encoding is encountered (i.e. the
+    /// one without schemas), this must return empty bytes for the schemas.
     fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry;
 
     /// Returns if a part might include the given data shard based on pushdown
@@ -329,36 +345,27 @@ pub trait TxnsCodec: Debug {
 
 /// A reasonable default implementation of [TxnsCodec].
 ///
-/// This uses the "native" Codecs for `ShardId` and `Vec<u8>`, with the latter
-/// empty for [TxnsEntry::Register] and non-empty for [TxnsEntry::Append].
+/// This uses the "native" Codecs for `ShardId` and `String`, with the former a
+/// redundant copy of the data shard's id (for pushdown) and the latter the
+/// serde_json encoding of the full `TxnsEntry`.
 #[derive(Debug)]
 pub struct TxnsCodecDefault;
 
 impl TxnsCodec for TxnsCodecDefault {
     type Key = ShardId;
-    type Val = Vec<u8>;
+    type Val = String;
     fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema) {
-        (ShardIdSchema, VecU8Schema)
+        (ShardIdSchema, StringSchema)
     }
     fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
-        match e {
-            TxnsEntry::Register(data_id, ts) => (data_id, ts.to_vec()),
-            TxnsEntry::Append(data_id, ts, batch) => {
-                // Put the ts at the end to let decode truncate it off.
-                (data_id, batch.into_iter().chain(ts).collect())
-            }
-        }
+        let key = e.data_id();
+        let val = serde_json::to_string(&e).expect("valid json");
+        (*key, val)
     }
-    fn decode(key: Self::Key, mut val: Self::Val) -> TxnsEntry {
-        let mut ts = [0u8; 8];
-        let ts_idx = val.len().checked_sub(8).expect("ts encoded at end of val");
-        ts.copy_from_slice(&val[ts_idx..]);
-        val.truncate(ts_idx);
-        if val.is_empty() {
-            TxnsEntry::Register(key, ts)
-        } else {
-            TxnsEntry::Append(key, ts, val)
-        }
+    fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry {
+        let ret: TxnsEntry = serde_json::from_str(&val).expect("valid TxnsEntry");
+        assert_eq!(ret.data_id(), &key);
+        ret
     }
     fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
         let stats = stats
@@ -368,6 +375,51 @@ impl TxnsCodec for TxnsCodecDefault {
             .ok()??;
         let data_id_str = data_id.to_string();
         Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
+    }
+}
+
+/// [mz_persist_types::columnar::Schema] of a data shard used with persist-txn.
+///
+/// TODO: The dep of mz_repr on mz_persist_txn to implement this is a bummer.
+/// Move this and TxnsCodec to somewhere like mz_persist_types.
+pub trait TxnsDataSchema: Debug + PartialEq {
+    /// Encode this schema for permanent storage.
+    ///
+    /// This must perfectly round-trip Self through [TxnsDataSchema::decode]. If
+    /// the encode function for this schema ever changes, decode must be able to
+    /// handle bytes output by all previous versions of encode.
+    fn encode(&self) -> Bytes;
+    /// Decode a schema previous encoded with this schema's
+    /// [TxnsDataSchema::encode].
+    ///
+    /// This must perfectly round-trip Self through [TxnsDataSchema::decode]. If
+    /// the encode function for this schema ever changes, decode must be able to
+    /// handle bytes output by all previous versions of encode.
+    ///
+    /// TODO: While migrating, an empty buf should be decoded to any placeholder
+    /// schema (in practice we use RelationDesc::empty again).
+    fn decode(buf: Bytes) -> Self;
+}
+
+impl TxnsDataSchema for UnitSchema {
+    fn encode(&self) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode(buf: Bytes) -> Self {
+        assert!(buf.is_empty());
+        UnitSchema
+    }
+}
+
+impl TxnsDataSchema for StringSchema {
+    fn encode(&self) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode(buf: Bytes) -> Self {
+        assert!(buf.is_empty());
+        StringSchema
     }
 }
 

@@ -74,8 +74,6 @@ impl Transactor {
             client.clone(),
             Arc::new(TxnMetrics::new(&MetricsRegistry::new())),
             txns_id,
-            Arc::new(StringSchema),
-            Arc::new(UnitSchema),
         )
         .await;
         oracle.apply_write(init_ts.into()).await;

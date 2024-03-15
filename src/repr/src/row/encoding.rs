@@ -16,6 +16,7 @@ use chrono::Timelike;
 use dec::Decimal;
 use enum_dispatch::enum_dispatch;
 use mz_ore::cast::CastFrom;
+use mz_persist_txn::TxnsDataSchema;
 use mz_persist_types::columnar::{
     ColumnCfg, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
@@ -39,7 +40,9 @@ use crate::row::{
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
 use crate::stats::{jsonb_stats_nulls, proto_datum_min_max_nulls};
-use crate::{ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
+use crate::{
+    ColumnType, Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, ScalarType, Timestamp,
+};
 
 impl Codec for Row {
     type Storage = ProtoRow;
@@ -777,6 +780,23 @@ impl Schema<Row> for RelationDesc {
     fn encoder<'a>(&self, part: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
         let ((), encoder) = self.encoder(part)?;
         Ok(encoder)
+    }
+}
+
+impl TxnsDataSchema for RelationDesc {
+    fn encode(&self) -> Bytes {
+        Bytes::from(self.into_proto().encode_to_vec())
+    }
+
+    fn decode(buf: Bytes) -> Self {
+        // TxnsDataSchema documents that, while migrating, an empty buf should
+        // be decoded to any placeholder schema. In practice we use the same
+        // `RelationDesc::empty()` we used before.
+        if buf.is_empty() {
+            return RelationDesc::empty();
+        }
+        let proto = ProtoRelationDesc::decode(buf).expect("valid RelationDesc");
+        RelationDesc::from_proto(proto).expect("valid RelationDesc")
     }
 }
 
