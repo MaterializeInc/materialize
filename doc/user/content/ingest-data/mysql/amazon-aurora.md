@@ -129,7 +129,7 @@ configuration of resources for an SSH tunnel. For more details, see the
         - Set **Type** to **MySQL**.
         - Set **Source** to the IP address in CIDR notation.
 
-1. In the security group of your RDS instance, [add an inbound rule](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html)
+1. In the security group of your RDS instance, [add an inbound rule](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.RDSSecurityGroups.html)
    to allow traffic from the SSH bastion host.
 
     - Set **Type** to **All TCP**.
