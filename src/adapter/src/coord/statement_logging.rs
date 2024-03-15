@@ -18,6 +18,8 @@ use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_sql::ast::display::AstDisplay;
+use mz_sql::ast::{AstInfo, Statement};
 use mz_sql::plan::Params;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{statement_kind_label_value, StatementKind};
@@ -64,7 +66,44 @@ pub enum PreparedStatementLoggingInfo {
         accounted: bool,
         /// The top-level kind of the statement (e.g., `Select`), or `None` for an empty statement
         kind: Option<StatementKind>,
+
+        /// Private type that forces use of the [`PreparedStatementLoggingInfo::still_to_log`]
+        /// constructor.
+        _sealed: sealed::Private,
     },
+}
+
+impl PreparedStatementLoggingInfo {
+    /// Constructor for the [`PreparedStatementLoggingInfo::StillToLog`] variant that ensures SQL
+    /// statements are properly redacted.
+    pub fn still_to_log<A: AstInfo>(
+        raw_sql: String,
+        stmt: Option<&Statement<A>>,
+        prepared_at: EpochMillis,
+        name: String,
+        session_id: Uuid,
+        accounted: bool,
+    ) -> Self {
+        let kind = stmt.map(StatementKind::from);
+        let sql = match kind {
+            // We __always__ want to redact SQL statements that might contain secret values.
+            Some(StatementKind::CreateSecret | StatementKind::AlterSecret) => {
+                stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default()
+            }
+            _ => raw_sql,
+        };
+
+        PreparedStatementLoggingInfo::StillToLog {
+            sql,
+            redacted_sql: stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default(),
+            prepared_at,
+            name,
+            session_id,
+            accounted,
+            kind,
+            _sealed: sealed::Private,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
@@ -273,6 +312,7 @@ impl Coordinator {
                 session_id,
                 accounted,
                 kind,
+                _sealed: _,
             } => {
                 assert!(
                     *accounted,
@@ -748,4 +788,11 @@ impl Coordinator {
                 .push(row);
         }
     }
+}
+
+mod sealed {
+    /// A struct that is purposefully private so folks are forced to use the constructor of an
+    /// enum.
+    #[derive(Debug, Copy, Clone)]
+    pub struct Private;
 }

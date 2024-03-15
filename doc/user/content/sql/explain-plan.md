@@ -71,12 +71,12 @@ Modifier | Description
 ------|-----
 **arity** | Annotate each subplan with its number of produced columns. This is useful due to the use of offset-based column names.
 **cardinality** | Annotate each subplan with a symbolic estimate of its cardinality.
-**join_impls** | Render details about the implementation strategy of optimized MIR `Join` nodes.
+**join implementations** | Render details about the implementation strategy of optimized MIR `Join` nodes.
 **keys** | Annotate each subplan with its unique keys.
-**node_ids** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID.
+**node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID.
 **types** | Annotate each subplan with its inferred type.
-**humanized_exprs** | Render `EXPLAIN AS TEXT` output with human-readable column references in operator expressions. **Warning**: SQL-level aliasing is not considered when inferring column names, so the plan output might become ambiguous if you use this modifier.
-**filter_pushdown** | **Private preview** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+**humanized expressions** | Render `EXPLAIN AS TEXT` output with human-readable column references in operator expressions. **Warning**: SQL-level aliasing is not considered when inferring column names, so the plan output might become ambiguous if you use this modifier.
+**filter pushdown** | **Private preview** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ## Details
 

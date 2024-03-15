@@ -45,6 +45,7 @@ use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
+use crate::render::StartSignal;
 use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
@@ -57,6 +58,7 @@ where
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
+        start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>
@@ -82,6 +84,7 @@ where
             desired_collection,
             as_of,
             compute_state,
+            start_signal,
         )
     }
 }
@@ -92,6 +95,7 @@ pub(crate) fn persist_sink<G>(
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
+    start_signal: StartSignal,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -111,6 +115,7 @@ where
         Antichain::new(), // we want all updates
         None,             // no MFP
         compute_state.dataflow_max_inflight_bytes(),
+        start_signal,
     );
     let persist_collection = ok_stream
         .as_collection()

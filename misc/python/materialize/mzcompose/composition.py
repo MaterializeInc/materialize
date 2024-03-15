@@ -816,7 +816,7 @@ class Composition:
         detach: bool = True,
         wait: bool = True,
         persistent: bool = False,
-        max_tries: int = 3,  # increased since quay.io returns 502 sometimes
+        max_tries: int = 5,  # increased since quay.io returns 502 sometimes
     ) -> None:
         """Build, (re)create, and start the named services.
 

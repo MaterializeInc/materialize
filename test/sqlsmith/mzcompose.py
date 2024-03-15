@@ -97,11 +97,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
               FOR ALL TABLES;
 
             CREATE SOURCE auction
-              FROM LOAD GENERATOR AUCTION (SCALE FACTOR 0.01)
+              FROM LOAD GENERATOR AUCTION
               FOR ALL TABLES;
 
             CREATE SOURCE counter
-              FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.0001);
+              FROM LOAD GENERATOR COUNTER;
 
             CREATE TABLE t (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
             INSERT INTO t VALUES (1, 2, 3, 4, 5, 6, '7'), (3, 4, 5, 6, 7, 8, '9'), (5, 6, 7, 8, 9, 10, '11'), (7, 8, 9, 10, 11, 12, '13'), (9, 10, 11, 12, 13, 14, '15'), (11, 12, 13, 14, 15, 16, '17'), (13, 14, 15, 16, 17, 18, '19'), (15, 16, 17, 18, 19, 20, '21');

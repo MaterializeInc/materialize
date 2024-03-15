@@ -56,6 +56,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # Others (ordered by name)
     "cluster_always_use_disk": "true",
     "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
+    "compute_hydration_concurrency": 4,
     "default_arrangement_exert_proportionality": "16",
     "default_idle_arrangement_merge_effort": "0",
     "disk_cluster_replicas_default": "true",
@@ -79,6 +80,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_statement_lifecycle_logging": "true",
     "enable_table_keys": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_variadic_left_join_lowering": "true",
     "enable_worker_core_affinity": "true",
     "persist_batch_delete_enabled": "true",
     "persist_fast_path_limit": "1000",

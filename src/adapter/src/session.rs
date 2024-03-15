@@ -27,7 +27,7 @@ use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
-use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
+use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
@@ -38,8 +38,7 @@ pub use mz_sql::session::vars::{
     SERVER_MINOR_VERSION, SERVER_PATCH_VERSION,
 };
 use mz_sql::session::vars::{IsolationLevel, VarInput};
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{StatementKind, TransactionIsolationLevel};
+use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use rand::Rng;
@@ -207,24 +206,22 @@ impl<T: TimestampManipulation> Session<T> {
     // binding a statement directly to a portal without creating an
     // intermediate prepared statement. Thus, for those cases, a
     // mechanism for generating the logging metadata directly is needed.
-    pub(crate) fn mint_logging(
+    pub(crate) fn mint_logging<A: AstInfo>(
         &self,
-        sql: String,
-        redacted_sql: String,
+        raw_sql: String,
+        stmt: Option<&Statement<A>>,
         now: EpochMillis,
-        kind: Option<StatementKind>,
     ) -> Arc<QCell<PreparedStatementLoggingInfo>> {
         Arc::new(QCell::new(
             &self.qcell_owner,
-            PreparedStatementLoggingInfo::StillToLog {
-                sql,
-                redacted_sql,
-                session_id: self.uuid,
-                prepared_at: now,
-                name: "".to_string(),
-                accounted: false,
-                kind,
-            },
+            PreparedStatementLoggingInfo::still_to_log(
+                raw_sql,
+                stmt,
+                now,
+                "".to_string(),
+                self.uuid,
+                false,
+            ),
         ))
     }
 
@@ -578,32 +575,24 @@ impl<T: TimestampManipulation> Session<T> {
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
-        sql: String,
+        raw_sql: String,
         desc: StatementDesc,
         catalog_revision: u64,
         now: EpochMillis,
     ) {
-        let redacted_sql = stmt
-            .as_ref()
-            .map(|stmt| stmt.to_ast_string_redacted())
-            .unwrap_or(String::default());
-        let kind = stmt.as_ref().map(StatementKind::from);
+        let logging = PreparedStatementLoggingInfo::still_to_log(
+            raw_sql,
+            stmt.as_ref(),
+            now,
+            name.clone(),
+            self.uuid,
+            false,
+        );
         let statement = PreparedStatement {
             stmt,
             desc,
             catalog_revision,
-            logging: Arc::new(QCell::new(
-                &self.qcell_owner,
-                PreparedStatementLoggingInfo::StillToLog {
-                    sql,
-                    redacted_sql,
-                    name: name.clone(),
-                    prepared_at: now,
-                    session_id: self.uuid,
-                    accounted: false,
-                    kind,
-                },
-            )),
+            logging: Arc::new(QCell::new(&self.qcell_owner, logging)),
         };
         self.prepared_statements.insert(name, statement);
     }

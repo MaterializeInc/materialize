@@ -1,31 +1,29 @@
 ---
-title: "Ingest data from AlloyDB"
-description: "How to stream data from AlloyDB to Materialize"
+title: "Ingest data from Google Cloud SQL"
+description: "How to stream data from Google Cloud SQL for PostgreSQL to Materialize"
+aliases:
+  - /ingest-data/postgres-google-cloud-sql/
 menu:
   main:
     parent: "postgresql"
-    name: "AlloyDB"
-    weight: 1
+    name: "Google Cloud SQL"
+    identifier: "pg-google-cloudsql"
 ---
 
-This page shows you how to stream data from [AlloyDB for PostgreSQL](https://cloud.google.com/alloydb)
-to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
+This page shows you how to stream data from [Google Cloud SQL for PostgreSQL](https://cloud.google.com/sql/postgresql)
+to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
 ## Before you begin
 
 {{% postgres-direct/before-you-begin %}}
-
-If you don't already have an AlloyDB instance, creating one involves several
-steps, including configuring your cluster and setting up network connections.
-For detailed instructions, refer to the [AlloyDB documentation](https://cloud.google.com/alloydb/docs).
 
 ## Step 1. Enable logical replication
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
 protocol to track changes in your database and propagate them to Materialize.
 
-For guidance on enabling logical replication in AlloyDB, see the
-[AlloyDB documentation](https://cloud.google.com/datastream/docs/configure-your-source-postgresql-database#configure_alloydb_for_replication).
+For guidance on enabling logical replication in Cloud SQL, see the [Cloud SQL
+documentation](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance).
 
 ## Step 2. Create a publication
 
@@ -33,20 +31,17 @@ For guidance on enabling logical replication in AlloyDB, see the
 
 ## Step 3. Configure network security
 
-To establish authorized and secure connections to an AlloyDB instance, an
-authentication proxy is necessary. Google Cloud Platform provides [a guide](https://cloud.google.com/alloydb/docs/auth-proxy/connect)
-to assist you in setting up this proxy and generating a connection string that
-can be utilized with Materialize. Further down, we will provide you with a
-tailored approach specific to integrating Materialize.
+There are various ways to configure your database's network to allow Materialize
+to connect:
 
-Next, choose the best network configuration for your setup to connect
-Materialize with AlloyDB:
+- **Allow Materialize IPs:** If your database is publicly accessible, you can
+    configure your database's firewall to allow connections from a set of
+    static Materialize IP addresses.
 
-- **Allow Materialize IPs:** If your AlloyDB instance is publicly accessible,
-    configure your firewall to allow connections from Materialize IP
-    addresses.
-- **Use an SSH tunnel:** For private networks, use an SSH tunnel to connect
-    Materialize to AlloyDB.
+- **Use an SSH tunnel:** If your database is running in a private network, you
+    can use an SSH tunnel to connect Materialize to the database.
+
+Select the option that works best for you.
 
 {{< tabs >}}
 
@@ -60,8 +55,8 @@ Materialize with AlloyDB:
     SELECT * FROM mz_egress_ips;
     ```
 
-1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
-   proxy instance from each IP address from the previous step.
+1. Update your Google Cloud SQL firewall rules to allow traffic from each IP
+   address from the previous step.
 
 {{< /tab >}}
 
@@ -72,8 +67,7 @@ instance to serve as an SSH bastion host, configure the bastion host to allow
 traffic only from Materialize, and then configure your database's private
 network to allow traffic from the bastion host.
 
-1. [Launch a GCE instance](https://cloud.google.com/compute/docs/instances/create-start-instance) to
-    serve as your SSH bastion host.
+1. [Launch a GCE instance](https://cloud.google.com/compute/docs/instances/create-start-instance) to serve as your SSH bastion host.
 
     - Make sure the instance is publicly accessible and in the same VPC as your
       database.
@@ -94,16 +88,16 @@ network to allow traffic from the bastion host.
        ```
 
     1. Update your SSH bastion host's firewall rules to allow traffic from each
-       IP address from the previous step.
+    IP address from the previous step.
 
-1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
-   proxy instance from the SSH bastion host.
+1. Update your Google Cloud SQL firewall rules to allow traffic from the SSH
+bastion host.
 
 {{< /tab >}}
 
 {{< /tabs >}}
 
-## Step 5. (Optional) Create a cluster
+## Step 4. (Optional) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your PostgreSQL
@@ -114,10 +108,12 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% postgres-direct/create-a-cluster %}}
 
-## Step 6. Start ingesting data
+## Step 5. Start ingesting data
 
-With the network configured and an ingestion pipeline in place, connect
-Materialize to your AlloyDB instance and begin the data ingestion process.
+Now that you've configured your database network and created an ingestion
+cluster, you can connect Materialize to your PostgreSQL database and start
+ingesting data. The exact steps depend on your networking configuration, so
+start by selecting the relevant option.
 
 {{< tabs >}}
 
@@ -131,11 +127,11 @@ Materialize to your AlloyDB instance and begin the data ingestion process.
 
 {{< /tabs >}}
 
-## Step 6. Monitor the ingestion status
+## Step 6. Check the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-## Step 7. Optimize the cluster performance
+## Step 7. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 

@@ -51,12 +51,30 @@ def mz_image_tag_exists(image_tag: str) -> bool:
     # when the image doesn't exist, see https://www.docker.com/increase-rate-limits/,
     # so use the API instead.
 
-    response = requests.get(
-        f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"
-    )
-    print(
-        f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"
-    )
+    try:
+        response = requests.get(
+            f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"
+        )
+    except requests.exceptions.ConnectionError:
+        command = [
+            "docker",
+            "manifest",
+            "inspect",
+            image_name,
+        ]
+        try:
+            subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
+            return True
+        except subprocess.CalledProcessError as e:
+            if "no such manifest:" in e.output:
+                print(f"Failed to fetch image manifest '{image_name}' (does not exist)")
+                EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
+            else:
+                print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
+                # do not cache the result of unknown error messages
+            return False
+
     result = response.json()
     if result.get("images"):
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True

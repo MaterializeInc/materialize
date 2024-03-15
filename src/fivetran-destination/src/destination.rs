@@ -7,8 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+
 use futures::Future;
 use mz_ore::retry::{Retry, RetryResult};
+use postgres_protocol::escape;
 use tonic::{Request, Response, Status};
 
 use crate::error::{Context, OpError};
@@ -19,6 +22,7 @@ use crate::fivetran_sdk::{
     DescribeTableResponse, TestRequest, TestResponse, TruncateRequest, TruncateResponse,
     WriteBatchRequest, WriteBatchResponse,
 };
+use crate::utils;
 
 mod config;
 mod ddl;
@@ -205,5 +209,50 @@ fn to_grpc<T>(response: Result<T, OpError>) -> Result<Response<T>, Status> {
     match response {
         Ok(t) => Ok(Response::new(t)),
         Err(e) => Err(Status::unknown(e.to_string())),
+    }
+}
+
+/// Metadata about a column that is relevant to operations peformed by the destination.
+#[derive(Debug)]
+struct ColumnMetadata {
+    /// Name of the column in the destination table, with necessary characters escaped.
+    escaped_name: String,
+    /// Type of the column in the destination table.
+    ty: Cow<'static, str>,
+    /// Is this column a primary key.
+    is_primary: bool,
+}
+
+impl ColumnMetadata {
+    /// Returns a [`String`] that is suitable for use when creating a table.
+    fn to_column_def(&self) -> String {
+        let mut def = format!("{} {}", self.escaped_name, self.ty);
+
+        if self.is_primary {
+            def.push_str(" NOT NULL");
+        }
+
+        def
+    }
+}
+
+impl TryFrom<&crate::fivetran_sdk::Column> for ColumnMetadata {
+    type Error = OpError;
+
+    fn try_from(value: &crate::fivetran_sdk::Column) -> Result<Self, Self::Error> {
+        let escaped_name = escape::escape_identifier(&value.name);
+        let mut ty: Cow<'static, str> = utils::to_materialize_type(value.r#type())?.into();
+        if let Some(d) = &value.decimal {
+            ty.to_mut()
+                .push_str(&format!("({}, {})", d.precision, d.scale));
+        }
+        let is_primary =
+            value.primary_key || value.name.to_lowercase() == FIVETRAN_SYSTEM_COLUMN_ID;
+
+        Ok(ColumnMetadata {
+            escaped_name,
+            ty,
+            is_primary,
+        })
     }
 }

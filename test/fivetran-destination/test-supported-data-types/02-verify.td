@@ -21,7 +21,7 @@ c8                 true      "timestamp without time zone"
 c9                 true      "timestamp with time zone"
 c10                true      numeric
 c11                true      bytea
-c12                true      text
+c12                false     text
 c13                true      jsonb
 _fivetran_deleted  true      boolean
 _fivetran_synced   true      "timestamp with time zone"

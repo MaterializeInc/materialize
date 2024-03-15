@@ -1,0 +1,29 @@
+Once GTID-based binlog replication is enabled, we recommend creating a dedicated
+user for Materialize with sufficient privileges to manage replication.
+
+1. As a _superuser_, use `mysql` (or your preferred SQL client) to connect to
+   your database.
+
+1. Create a dedicated user for Materialize, if you don't already have one:
+
+   ```sql
+   CREATE USER 'materialize'@'%' IDENTIFIED BY '<password>';
+
+   ALTER USER 'materialize'@'%' REQUIRE SSL;
+   ```
+
+1. Grant the user permission to manage replication:
+
+   ```sql
+   GRANT SELECT, RELOAD, SHOW DATABASES, REPLICATION SLAVE, REPLICATION CLIENT, LOCK TABLES ON *.* TO 'materialize'@'%';
+   ```
+
+   Once connected to your database, Materialize will take an initial snapshot of
+   the tables in your MySQL server. `SELECT` privileges are required for this
+   initial snapshot.
+
+1. Apply the changes:
+
+   ```sql
+   FLUSH PRIVILEGES;
+   ```

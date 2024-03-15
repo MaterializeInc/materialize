@@ -99,6 +99,13 @@ pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
     "Clear byte size per size class for every invocation",
 );
 
+/// The number of dataflows that may hydrate concurrently.
+pub const HYDRATION_CONCURRENCY: Config<usize> = Config::new(
+    "compute_hydration_concurrency",
+    usize::MAX,
+    "Controls how many compute dataflows may hydrate concurrently.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -113,4 +120,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
+        .add(&HYDRATION_CONCURRENCY)
 }

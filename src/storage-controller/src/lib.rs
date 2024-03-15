@@ -651,7 +651,9 @@ where
             // it in create_collections, so just do that now.
             let advance_to = mz_persist_types::StepForward::step_forward(&register_ts);
             self.persist_table_worker
-                .register(register_ts, table_registers);
+                .register(register_ts, table_registers)
+                .await
+                .expect("table worker unexpectedly shut down");
             for (id, mut collection_state) in collection_states {
                 if let PersistTxns::EnabledLazy { .. } = &self.txns {
                     if collection_state.write_frontier.less_than(&advance_to) {

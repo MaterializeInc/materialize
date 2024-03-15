@@ -554,6 +554,7 @@ impl DataSubscribe {
                     Arc::new(UnitSchema),
                     |_, _| true,
                     false.then_some(|| unreachable!()),
+                    async {},
                 );
                 (data_stream.leave(), token)
             });

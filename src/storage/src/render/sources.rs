@@ -309,6 +309,7 @@ where
                                 None,
                                 flow_control,
                                 false.then_some(|| unreachable!()),
+                                async {},
                             );
                             (
                                 stream.as_collection(),

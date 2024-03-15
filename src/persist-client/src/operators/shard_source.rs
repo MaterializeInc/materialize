@@ -73,6 +73,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     should_fetch_part: F,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
+    start_signal: impl Future<Output = ()> + 'static,
 ) -> (
     Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
@@ -134,6 +135,7 @@ where
         Arc::clone(&val_schema),
         should_fetch_part,
         listen_sleep,
+        start_signal,
     );
     tokens.push(descs_token);
 
@@ -179,6 +181,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     mut should_fetch_part: F,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
+    start_signal: impl Future<Output = ()> + 'static,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, PressOnDropButton)
 where
     K: Debug + Codec,
@@ -250,6 +253,9 @@ where
             );
             return;
         }
+
+        // Wait for the start signal before doing any work.
+        let () = start_signal.await;
 
         // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
         // up a background tokio task to heartbeat it. It is possible that we might get a
@@ -565,6 +571,7 @@ mod tests {
                         ),
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
+                        async {},
                     );
                     (stream.leave(), tokens)
                 });
@@ -632,6 +639,7 @@ mod tests {
                         ),
                         |_fetch, _frontier| true,
                         false.then_some(|| unreachable!()),
+                        async {},
                     );
                     (stream.leave(), tokens)
                 });

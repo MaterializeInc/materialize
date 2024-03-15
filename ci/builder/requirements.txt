@@ -6,9 +6,9 @@
 
 black==22.12.0
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.26.89
-boto3==1.26.64
+boto3==1.34.63
 click==8.1.3
-cryptography==39.0.1
+cryptography==42.0.5
 colored==1.4.4
 docker==6.0.1
 ec2instanceconnectcli==1.0.2
@@ -18,7 +18,7 @@ ipympl==0.9.3
 ipywidgets==8.1.1
 junit-xml==1.9
 junitparser==3.1.2
-jupyterlab==4.0.11
+jupyterlab==4.1.4
 jupyter-black==0.3.4
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1

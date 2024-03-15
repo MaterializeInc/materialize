@@ -1,0 +1,29 @@
+After the snapshotting phase, Materialize starts ingesting change events from
+the MySQL replication stream. For this work, Materialize generally
+performs well with an `xsmall` replica, so you can resize the cluster
+accordingly.
+
+1. Still in a SQL client connected to Materialize, use the [`ALTER CLUSTER`](/sql/alter-cluster/)
+   command to downsize the cluster to `xsmall`:
+
+    ```sql
+    ALTER CLUSTER ingest_mysql SET (SIZE 'xsmall');
+    ```
+
+    Behind the scenes, this command adds a new `xsmall` replica and removes the
+    `small` replica.
+
+1. Use the [`SHOW CLUSTER REPLICAS`](/sql/show-cluster-replicas/) command to
+   check the status of the new replica:
+
+    ```sql
+    SHOW CLUSTER REPLICAS WHERE cluster = 'ingest_mysql';
+    ```
+    <p></p>
+
+    ```nofmt
+         cluster     | replica |  size  | ready
+    -----------------+---------+--------+-------
+     ingest_mysql    | r1      | xsmall | t
+    (1 row)
+    ```

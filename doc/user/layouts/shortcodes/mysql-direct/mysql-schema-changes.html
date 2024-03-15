@@ -1,0 +1,22 @@
+Materialize supports schema changes in the upstream MySQL database as
+follows:
+
+#### Compatible schema changes
+
+- Adding columns to tables. Materialize will **not ingest** these columns unless
+  you drop and recreate the source.
+
+- Dropping columns that were added after the source was created. These columns
+  are never ingested, so you can drop them without issue.
+
+- Adding or removing `NOT NULL` constraints to tables that were nullable when
+  the source was created.
+
+#### Incompatible schema changes
+
+All other schema changes to tables in MySQL will set the corresponding subsource
+into an error state, which prevents you from reading from the source.
+
+To handle incompatible [schema changes](#schema-changes), use [`DROP SOURCE`](/sql/drop-source/)
+to drop and recreate the source. Support for dropping and recreating individual
+subsources is planned for a future release.

@@ -30,7 +30,7 @@ use timely::progress::Antichain;
 use crate::compute_state::SinkToken;
 use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
-use crate::render::RenderTimestamp;
+use crate::render::{RenderTimestamp, StartSignal};
 
 impl<'g, G, T> Context<Child<'g, G, T>>
 where
@@ -45,6 +45,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
+        start_signal: StartSignal,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -133,6 +134,7 @@ where
                     sink,
                     sink_id,
                     self.as_of_frontier.clone(),
+                    start_signal,
                     ok_collection.enter_region(inner),
                     err_collection.enter_region(inner),
                 );
@@ -158,6 +160,7 @@ where
         sink: &ComputeSinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         as_of: Antichain<mz_repr::Timestamp>,
+        start_signal: StartSignal,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
     ) -> Option<Rc<dyn Any>>

@@ -15,7 +15,7 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
@@ -115,28 +115,12 @@ def workflow_master_changes(c: Composition) -> None:
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=[
-                "--gtid_mode=ON",
-                "--enforce_gtid_consistency=ON",
-                "--skip-replica-start",
-                "--server-id=2",
-                # "--log-bin=mysql-bin",
-                # "--binlog-format=row",
-                # "--binlog-row-image=full",
-            ],
+            additional_args=create_mysql_server_args(server_id="2", is_master=False),
         ),
         MySql(
             name="mysql-replica-2",
             version=MySql.DEFAULT_VERSION,
-            additional_args=[
-                "--gtid_mode=ON",
-                "--enforce_gtid_consistency=ON",
-                "--skip-replica-start",
-                "--server-id=3",
-                # "--log-bin=mysql-bin",
-                # "--binlog-format=row",
-                # "--binlog-row-image=full",
-            ],
+            additional_args=create_mysql_server_args(server_id="3", is_master=False),
         ),
     ):
         initialize(c, create_source=False)
@@ -211,12 +195,7 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=[
-                "--gtid_mode=ON",
-                "--enforce_gtid_consistency=ON",
-                "--skip-replica-start",
-                "--server-id=2",
-            ],
+            additional_args=create_mysql_server_args(server_id="2", is_master=False),
         ),
     ):
         initialize(c)
@@ -277,12 +256,7 @@ def workflow_switch_to_lagging_replica(c: Composition) -> None:
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=[
-                "--gtid_mode=ON",
-                "--enforce_gtid_consistency=ON",
-                "--skip-replica-start",
-                "--server-id=2",
-            ],
+            additional_args=create_mysql_server_args(server_id="2", is_master=False),
         ),
     ):
         initialize(c)
