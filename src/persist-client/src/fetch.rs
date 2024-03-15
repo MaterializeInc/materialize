@@ -508,6 +508,11 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             self.stats.as_ref(),
         )
     }
+
+    /// Decodes and returns the pushdown stats for this part, if known.
+    pub fn stats(&self) -> Option<PartStats> {
+        self.stats.as_ref().map(|x| x.decode())
+    }
 }
 
 /// A [Blob] object that has been fetched, but not yet fully decoded.
