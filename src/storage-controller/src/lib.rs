@@ -1742,6 +1742,17 @@ where
         // IDs of sources (and subsources) whose statistics should be cleared.
         let mut source_statistics_to_drop = vec![];
 
+        // compaction commands for tables to drop.
+        let mut table_drop_compaction_commands = vec![];
+
+        // compaction commands that aren't a table drop.
+        let mut not_table_drop_compaction_commands = vec![];
+
+        enum CompactionResult {
+            Drop,
+            NotDrop,
+        }
+
         // TODO(aljoscha): We could consolidate these before sending to
         // instances, but this seems fine for now.
         for compaction_command in self.pending_compaction_commands.drain(..) {
@@ -1749,81 +1760,98 @@ where
                 id,
                 read_frontier,
                 cluster_id,
-                downgrade_notif,
-            } = compaction_command;
-
-            // TODO(petrosagg): make this a strict check
-            // TODO(aljoscha): What's up with this TODO?
-            // Note that while collections are dropped, the `client` may already
-            // be cleared out, before we do this post-processing!
-            let client = cluster_id.and_then(|cluster_id| self.clients.get_mut(&cluster_id));
+                downgrade_notif: _,
+            } = &compaction_command;
 
             if cluster_id.is_some() && read_frontier.is_empty() {
-                if self.collections.get(&id).is_some() {
-                    pending_source_drops.push(id);
-                } else if self.exports.get(&id).is_some() {
-                    pending_sink_drops.push(id);
+                if self.collections.get(id).is_some() {
+                    pending_source_drops.push(*id);
+                } else if self.exports.get(id).is_some() {
+                    pending_sink_drops.push(*id);
                 } else {
                     panic!("Reference to absent collection {id}");
                 }
             }
 
             // Check if a collection is managed by the storage-controller itself.
-            let collection = self.collections.get(&id);
+            let collection = self.collections.get(id);
             if let Some(CollectionState { description, .. }) = collection {
                 // Normally `clusterd` will emit this StorageResponse when it knows we can drop an
                 // ID, but some collections are managed by the storage controller itself, so we
                 // must emit this event here.
-                let drop_notif = match description.data_source {
+                match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) if read_frontier.is_empty() => {
-                        pending_collection_drops.push(id);
-                        // TODO(jkosh44) Batch all table drops into single call to `drop_handles`.
-                        Some(self.persist_table_worker.drop_handles(vec![id]))
+                        pending_collection_drops.push(*id);
+                        table_drop_compaction_commands.push(compaction_command);
                     }
                     DataSource::Webhook | DataSource::Introspection(_)
                         if read_frontier.is_empty() =>
                     {
-                        pending_collection_drops.push(id);
-                        // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                        // could probably use some love and maybe get merged together?
-                        let unregister_notif = self.collection_manager.unregister_collection(id);
-                        let monotonic_worker = self.persist_monotonic_worker.clone();
-                        let drop_fut = async move {
-                            // Wait for the collection manager to stop writing.
-                            unregister_notif.await;
-                            // Wait for the montonic worker to drop the handle.
-                            monotonic_worker.drop_handle(id).await;
-                        };
-                        Some(drop_fut.boxed())
+                        pending_collection_drops.push(*id);
+                        not_table_drop_compaction_commands
+                            .push((compaction_command, CompactionResult::Drop));
                     }
                     // These sources are manged by `clusterd`.
                     DataSource::Webhook
                     | DataSource::Introspection(_)
                     | DataSource::Other(_)
                     | DataSource::Progress
-                    | DataSource::Ingestion(_) => None,
-                };
+                    | DataSource::Ingestion(_) => {
+                        not_table_drop_compaction_commands
+                            .push((compaction_command, CompactionResult::NotDrop));
+                    }
+                }
+            } else {
+                not_table_drop_compaction_commands
+                    .push((compaction_command, CompactionResult::NotDrop));
+            }
+        }
+
+        for (
+            PendingCompactionCommand {
+                id,
+                read_frontier,
+                cluster_id,
+                downgrade_notif,
+            },
+            compaction_result,
+        ) in not_table_drop_compaction_commands
+        {
+            // TODO(petrosagg): make this a strict check
+            // TODO(aljoscha): What's up with this TODO?
+            // Note that while collections are dropped, the `client` may already
+            // be cleared out, before we do this post-processing!
+            let client = cluster_id.and_then(|cluster_id| self.clients.get_mut(&cluster_id));
+
+            if let CompactionResult::Drop = compaction_result {
+                let unregister_notif = self.collection_manager.unregister_collection(id);
+                let monotonic_worker = self.persist_monotonic_worker.clone();
+                let drop_notif = async move {
+                    // Wait for the collection manager to stop writing.
+                    unregister_notif.await;
+                    // Wait for the montonic worker to drop the handle.
+                    monotonic_worker.drop_handle(id).await;
+                }
+                .boxed();
 
                 // Wait for all of the resources to get cleaned up, but emitting our event.
-                if let Some(drop_notif) = drop_notif {
-                    let internal_response_sender = self.internal_response_sender.clone();
-                    mz_ore::task::spawn(|| format!("storage-cleanup-{id}"), async move {
-                        // Wait for the relevant component to drop its resources and handles, this
-                        // guarantees we won't see any more writes.
-                        drop_notif.await;
-                        // Wait to make sure the since of our collection has been downgraded, this
-                        // guarantees we won't have any more readers.
-                        //
-                        // If we fail to downgrade the since the process will halt, but as a back
-                        // stop we only notify the storage-controller if it succeeds.
-                        if downgrade_notif.await.is_ok() {
-                            // Notify that this ID has been dropped, which will start finalization of
-                            // the shard.
-                            let _ = internal_response_sender
-                                .send(StorageResponse::DroppedIds([id].into()));
-                        }
-                    });
-                }
+                let internal_response_sender = self.internal_response_sender.clone();
+                mz_ore::task::spawn(|| format!("storage-cleanup-{id}"), async move {
+                    // Wait for the relevant component to drop its resources and handles, this
+                    // guarantees we won't see any more writes.
+                    drop_notif.await;
+                    // Wait to make sure the since of our collection has been downgraded, this
+                    // guarantees we won't have any more readers.
+                    //
+                    // If we fail to downgrade the since the process will halt, but as a back
+                    // stop we only notify the storage-controller if it succeeds.
+                    if downgrade_notif.await.is_ok() {
+                        // Notify that this ID has been dropped, which will start finalization of
+                        // the shard.
+                        let _ =
+                            internal_response_sender.send(StorageResponse::DroppedIds([id].into()));
+                    }
+                });
             }
 
             // Sources can have subsources, which don't have associated clusters, which
@@ -1841,6 +1869,67 @@ where
                     id,
                     read_frontier.clone(),
                 )]));
+            }
+        }
+
+        // Process table drops in a batch.
+        if !table_drop_compaction_commands.is_empty() {
+            let mut ids = Vec::new();
+            let mut downgrade_notifs = Vec::new();
+            let mut compaction_commands: BTreeMap<_, Vec<_>> = BTreeMap::new();
+            for PendingCompactionCommand {
+                id,
+                read_frontier,
+                cluster_id,
+                downgrade_notif,
+            } in table_drop_compaction_commands
+            {
+                // Sources can have subsources, which don't have associated clusters, which
+                // is why this operates differently than sinks.
+                if read_frontier.is_empty() {
+                    if self.collections.get(&id).is_some() {
+                        source_statistics_to_drop.push(id);
+                    }
+                }
+
+                ids.push(id);
+                downgrade_notifs.push((downgrade_notif, id));
+                compaction_commands
+                    .entry(cluster_id)
+                    .or_default()
+                    .push((id, read_frontier));
+            }
+
+            let drop_notif = self.persist_table_worker.drop_handles(ids);
+            let internal_response_sender = self.internal_response_sender.clone();
+            mz_ore::task::spawn(|| format!("storage-cleanup-tables"), async move {
+                // Wait for the relevant component to drop its resources and handles, this
+                // guarantees we won't see any more writes.
+                drop_notif.await;
+                let mut dropped_ids = BTreeSet::new();
+                for (downgrade_notif, id) in downgrade_notifs {
+                    // Wait to make sure the since of our collection has been downgraded, this
+                    // guarantees we won't have any more readers.
+                    //
+                    // If we fail to downgrade the since the process will halt, but as a back
+                    // stop we only notify the storage-controller if it succeeds.
+                    if downgrade_notif.await.is_ok() {
+                        dropped_ids.insert(id);
+                    }
+                }
+                // Notify that IDs have been dropped, which will start finalization of
+                // the shards.
+                let _ = internal_response_sender.send(StorageResponse::DroppedIds(dropped_ids));
+            });
+
+            for (cluster_id, compactions) in compaction_commands {
+                let client = cluster_id.and_then(|cluster_id| self.clients.get_mut(&cluster_id));
+
+                // Note that while collections are dropped, the `client` may already
+                // be cleared out, before we do this post-processing!
+                if let Some(client) = client {
+                    client.send(StorageCommand::AllowCompaction(compactions));
+                }
             }
         }
 
