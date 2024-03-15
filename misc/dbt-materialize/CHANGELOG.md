@@ -1,5 +1,11 @@
 # dbt-materialize Changelog
 
+## 1.7.5 - 2024-03-15
+
+* `deploy_init(ignore_existing_objects)` now automatically copies the default
+   privileges and existing grants of existing clusters and schemas to their
+   deployment counterparts.
+
 ## 1.7.4 - 2024-02-27
 
 * Add macros to automate blue/green deployments, which help minimize downtime
