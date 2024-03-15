@@ -424,7 +424,17 @@ impl ReduceBuilder {
             }
         }
         let input = if inputs.len() == 1 {
-            inputs.pop().unwrap()
+            let mut predicates = Vec::new();
+            for class in component.constraints {
+                for expr in class[1..].iter() {
+                    predicates.push(
+                        class[0]
+                            .clone()
+                            .call_binary(expr.clone(), mz_expr::BinaryFunc::Eq),
+                    );
+                }
+            }
+            inputs.pop().unwrap().filter(predicates)
         } else {
             MirRelationExpr::join_scalars(inputs, component.constraints)
         };
