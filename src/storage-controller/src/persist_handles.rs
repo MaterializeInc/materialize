@@ -303,7 +303,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
         match self {
             PersistTableWriteCmd::Register(_, _, _) => "PersistTableWriteCmd::Register",
             PersistTableWriteCmd::Update(_, _) => "PersistTableWriteCmd::Update",
-            PersistTableWriteCmd::DropHandle { .. } => "PersistTableWriteCmd::DropHandle",
+            PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
             PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
             PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
         }
