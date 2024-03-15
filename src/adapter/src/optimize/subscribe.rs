@@ -11,6 +11,7 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::connection::ConnectionId;
@@ -63,6 +64,8 @@ pub struct Optimizer {
     config: OptimizerConfig,
     /// Optimizer metrics.
     metrics: OptimizerMetrics,
+    /// The time spent performing optimization so far.
+    duration: Duration,
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
@@ -103,6 +106,7 @@ impl Optimizer {
             debug_name,
             config,
             metrics,
+            duration: Default::default(),
         }
     }
 
@@ -177,6 +181,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
     type To = GlobalMirPlan<Unresolved>;
 
     fn optimize(&mut self, plan: SubscribeFrom) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
         let mut df_builder = {
             let catalog = self.catalog.state();
             let compute = self.compute_instance.clone();
@@ -269,6 +275,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
             trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
         }
 
+        self.duration += time.elapsed();
+
         // Return the (sealed) plan at the end of this optimization step.
         Ok(GlobalMirPlan {
             df_desc,
@@ -315,6 +323,8 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
     type To = GlobalLirPlan;
 
     fn optimize(&mut self, plan: GlobalMirPlan<Resolved>) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
@@ -330,6 +340,10 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
         let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
+
+        self.duration += time.elapsed();
+        self.metrics
+            .observe_e2e_optimization_time("subscribe", self.duration);
 
         // Return the plan at the end of this `optimize` step.
         Ok(GlobalLirPlan { df_desc, df_meta })

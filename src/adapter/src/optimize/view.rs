@@ -9,6 +9,8 @@
 
 //! Optimizer implementation for `CREATE VIEW` statements.
 
+use std::time::Instant;
+
 use mz_expr::OptimizedMirRelationExpr;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -44,6 +46,8 @@ impl Optimize<HirRelationExpr> for Optimizer {
     type To = OptimizedMirRelationExpr;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
         // Trace the pipeline input under `optimize/raw`.
         trace_plan!(at: "raw", &expr);
 
@@ -55,6 +59,10 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let mut transform_ctx =
             TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
         let expr = optimize_mir_local(expr, &mut transform_ctx)?;
+
+        if let Some(metrics) = &self.metrics {
+            metrics.observe_e2e_optimization_time("view", time.elapsed());
+        }
 
         // Return the resulting OptimizedMirRelationExpr.
         Ok(expr)
