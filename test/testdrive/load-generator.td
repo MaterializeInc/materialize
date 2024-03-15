@@ -10,11 +10,6 @@
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
-! CREATE SOURCE counter
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER (SCALE FACTOR 1)
-exact:COUNTER load generators do not support SCALE FACTOR values
-
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
