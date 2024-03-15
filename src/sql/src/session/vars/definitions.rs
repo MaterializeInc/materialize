@@ -1131,16 +1131,6 @@ pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: VarDefinition = VarDefinition::n
     true,
 );
 
-/// Whether or not to delay sources producing values in some scenarios
-/// (namely, upsert) till after rehydration is finished.
-pub static STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: VarDefinition = VarDefinition::new(
-    "storage_dataflow_delay_sources_past_rehydration",
-    value!(bool; false),
-    "Whether or not to delay sources producing values in some scenarios \
-        (namely, upsert) till after rehydration is finished",
-    true,
-);
-
 /// Configuration ratio to shrink unusef buffers in upsert by.
 /// For eg: is 2 is set, then the buffers will be reduced by 2 i.e. halved.
 /// Default is 0, which means shrinking is disabled.

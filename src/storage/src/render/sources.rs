@@ -22,6 +22,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
@@ -351,10 +352,8 @@ where
                     // If configured, delay raw sources until we rehydrate the upsert
                     // source. Otherwise, drop the token, unblocking the sources at the
                     // end rendering.
-                    if storage_state
-                        .storage_configuration
-                        .parameters
-                        .delay_sources_past_rehydration
+                    if dyncfgs::DELAY_SOURCES_PAST_REHYDRATION
+                        .get(storage_state.storage_configuration.config_set())
                     {
                         crate::render::upsert::rehydration_finished(
                             scope.clone(),

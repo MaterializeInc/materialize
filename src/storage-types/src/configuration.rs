@@ -9,6 +9,10 @@
 
 //! Configuration parameter types.
 
+use std::sync::Arc;
+
+use mz_dyncfg::ConfigSet;
+
 use crate::{connections::ConnectionContext, parameters::StorageParameters};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
@@ -33,18 +37,35 @@ pub struct StorageConfiguration {
     /// TODO(guswynn): `ConnectionContext` also contains some shared global state that should
     /// eventually be moved up to this struct.
     pub connection_context: ConnectionContext,
+
+    /// A clone-able `mz_dyncfg::ConfigSet` used to access dyncfg values.
+    config_set: Arc<ConfigSet>,
 }
 
 impl StorageConfiguration {
     /// Instantiate a new `StorageConfiguration` with default parameters and the given context.
-    pub fn new(connection_context: ConnectionContext) -> StorageConfiguration {
+    pub fn new(
+        connection_context: ConnectionContext,
+        config_set: ConfigSet,
+    ) -> StorageConfiguration {
         StorageConfiguration {
             parameters: Default::default(),
             connection_context,
+            config_set: Arc::new(config_set),
         }
     }
 
-    pub fn update(&mut self, parameters: StorageParameters) {
-        self.parameters.update(parameters)
+    /// Get a reference to the shared `ConfigSet`.
+    pub fn config_set(&self) -> &ConfigSet {
+        &self.config_set
+    }
+
+    pub fn update(&mut self, mut parameters: StorageParameters) {
+        // We serialize the dyncfg updates in StorageParameters, but store the config set
+        // top-level. Eventually, all of `StorageParameters` goes away.
+        if let Some(updates) = parameters.dyncfg_updates.take() {
+            updates.apply(&self.config_set);
+        }
+        self.parameters.update(parameters);
     }
 }

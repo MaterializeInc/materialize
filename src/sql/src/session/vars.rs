@@ -1120,7 +1120,6 @@ impl SystemVars {
             &STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY,
             &STORAGE_STATISTICS_INTERVAL,
             &STORAGE_STATISTICS_COLLECTION_INTERVAL,
-            &STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION,
             &STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO,
             &STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS,
             &PERSIST_FAST_PATH_LIMIT,
@@ -1822,11 +1821,6 @@ impl SystemVars {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
     }
 
-    /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
-    pub fn storage_dataflow_delay_sources_past_rehydration(&self) -> bool {
-        *self.expect_value(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
-    }
-
     /// Returns the `storage_shrink_upsert_unused_buffers_by_ratio` configuration parameter.
     pub fn storage_shrink_upsert_unused_buffers_by_ratio(&self) -> usize {
         *self.expect_value(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
@@ -2151,7 +2145,6 @@ impl SystemVars {
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
-            || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
             || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
             || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
             || name == STORAGE_STATISTICS_INTERVAL.name()
@@ -2162,7 +2155,7 @@ impl SystemVars {
             || is_tracing_var(name)
     }
 
-    /// Returns whether the named variable is a persist configuration parameter.
+    /// Returns whether the named variable is a dyncfg configuration parameter.
     fn is_dyncfg_var(&self, name: &str) -> bool {
         self.dyncfgs.entries().any(|e| name == e.name())
     }

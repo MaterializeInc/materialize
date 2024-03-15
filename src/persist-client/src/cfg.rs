@@ -16,12 +16,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
+use mz_dyncfg::{Config, ConfigSet, ConfigType};
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
 use mz_postgres_client::PostgresClientKnobs;
-use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -306,7 +305,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
 impl PersistConfig {
     pub(crate) const DEFAULT_FALLBACK_ROLLUP_THRESHOLD_MULTIPLIER: usize = 3;
 
-    // TODO: Get rid of this in favor of using PersistParameters at the
+    // TODO: Get rid of this in favor of using dyncfgs at the
     // relevant callsites.
     pub fn set_state_versions_recent_live_diffs_limit(&self, val: usize) {
         self.dynamic
@@ -396,12 +395,12 @@ impl PostgresClientKnobs for PersistConfig {
 /// update of these to take effect.
 ///
 /// These are hooked up to LaunchDarkly. Specifically, LaunchDarkly configs are
-/// serialized into a [PersistParameters]. In environmentd, these are applied
-/// directly via [PersistParameters::apply] to the [PersistConfig] in
+/// serialized into a [mz_dyncfg::ConfigUpdates]. In environmentd, these are applied
+/// directly via [mz_dyncfg::ConfigUpdates::apply] to the [PersistConfig] in
 /// [crate::cache::PersistClientCache]. There is one `PersistClientCache` per
 /// process, and every `PersistConfig` shares the same `Arc<DynamicConfig>`, so
 /// this affects all [DynamicConfig] usage in the process. The
-/// `PersistParameters` is also sent via the compute and storage command
+/// `ConfigUpdates` is also sent via the compute and storage command
 /// streams, which then apply it to all computed/storaged/clusterd processes as
 /// well.
 #[derive(Debug)]
@@ -510,7 +509,7 @@ impl DynamicConfig {
             .load(Self::LOAD_ORDERING)
     }
 
-    // TODO: Get rid of these in favor of using PersistParameters at the
+    // TODO: Get rid of these in favor of using dyncfgs at the
     // relevant callsites.
     #[cfg(test)]
     pub fn set_batch_builder_max_outstanding_parts(&self, val: usize) {
@@ -543,66 +542,6 @@ impl BlobKnobs for PersistConfig {
 
     fn is_cc_active(&self) -> bool {
         self.is_cc_active
-    }
-}
-
-/// Updates to values in [PersistConfig].
-///
-/// These reflect updates made to LaunchDarkly. They're passed from environmentd
-/// through storage and compute commands and applied to PersistConfig to change
-/// its values.
-///
-/// Parameters can be set (`Some`) or unset (`None`). Unset parameters should be
-/// interpreted to mean "use the previous value".
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
-pub struct PersistParameters {
-    /// Updates to various dynamic config values.
-    pub config_updates: ConfigUpdates,
-}
-
-impl PersistParameters {
-    /// Update the parameter values with the set ones from `other`.
-    pub fn update(&mut self, other: PersistParameters) {
-        // Deconstruct self and other so we get a compile failure if new fields
-        // are added.
-        let Self {
-            config_updates: self_config_updates,
-        } = self;
-        let Self {
-            config_updates: other_config_updates,
-        } = other;
-        self_config_updates.extend(other_config_updates);
-    }
-
-    /// Return whether all parameters are unset.
-    pub fn all_unset(&self) -> bool {
-        // TODO: Where is this called? We could save a tiny bit of boilerplate
-        // by comparing self to Self::default().
-        //
-        // Deconstruct self so we get a compile failure if new fields are added.
-        let Self { config_updates } = self;
-        config_updates.updates.is_empty()
-    }
-
-    /// Applies the parameter values to persist's in-memory config object.
-    ///
-    /// Note that these overrides are not all applied atomically: i.e. it's
-    /// possible for persist to race with this and see some but not all of the
-    /// parameters applied.
-    pub fn apply(&self, cfg: &PersistConfig) {
-        // Deconstruct self so we get a compile failure if new fields are added.
-        let Self { config_updates } = self;
-        config_updates.apply(&cfg.configs);
-    }
-}
-
-impl RustType<ConfigUpdates> for PersistParameters {
-    fn into_proto(&self) -> ConfigUpdates {
-        self.config_updates.clone()
-    }
-
-    fn from_proto(config_updates: ConfigUpdates) -> Result<Self, TryFromProtoError> {
-        Ok(Self { config_updates })
     }
 }
 
