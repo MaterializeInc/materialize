@@ -31,6 +31,12 @@ def get_ancestor_overrides_for_performance_regressions(
     # Commits must be ordered descending by their date.
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "ParallelDataflows":
+        # PR#26020 (Stage flatmap execution to consolidate as it goes) significantly increased wallclock
+        min_ancestor_mz_version_per_commit[
+            "da35946d636607a11fa27d5a8ea6e9939bf9525e"
+        ] = MzVersion.parse_mz("v0.93.0")
+
     if "OptbenchTPCH" in scenario_class_name:
         # PR#24155 (equivalence propagation) significantly increased wallclock for OptbenchTPCH
         min_ancestor_mz_version_per_commit[
