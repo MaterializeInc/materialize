@@ -1986,20 +1986,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_default_kafka_ssh_tunnel,
-        desc: "the top-level SSH TUNNEL feature for kafka connections",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_default_kafka_aws_private_link,
-        desc: "the top-level Aws Privatelink feature for kafka connections",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_time_at_time_zone,
         desc: "use of AT TIME ZONE or timezone() with time type",
         default: false,
