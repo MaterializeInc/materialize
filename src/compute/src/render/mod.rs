@@ -102,14 +102,20 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
+use std::task::Poll;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
+use futures::channel::oneshot;
+use futures::FutureExt;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::ENABLE_OPERATOR_HYDRATION_STATUS_LOGGING;
 use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
@@ -165,6 +171,7 @@ pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<FlatPlan, CollectionMetadata>,
+    start_signal: StartSignal,
 ) {
     // Mutually recursive view definitions require special handling.
     let recursive = dataflow
@@ -220,6 +227,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dataflow.until.clone(),
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes(),
+                        start_signal.clone(),
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.
@@ -307,7 +315,14 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(compute_state, &tokens, dependencies, sink_id, &sink);
+                    context.export_sink(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        sink_id,
+                        &sink,
+                        start_signal.clone(),
+                    );
                 }
             });
         } else {
@@ -352,7 +367,14 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(compute_state, &tokens, dependencies, sink_id, &sink);
+                    context.export_sink(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        sink_id,
+                        &sink,
+                        start_signal.clone(),
+                    );
                 }
             });
         }
@@ -1117,6 +1139,40 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
             *item = item.saturating_sub(1);
         }
         Product::new(self.outer.saturating_sub(1), PointStamp::new(vec))
+    }
+}
+
+/// A signal that can be awaited by operators to suspend them prior to startup.
+///
+/// Used to enforce a given configured hydration concurrency by only allowing that number of
+/// dataflows to perform hydration at the same time.
+///
+/// Note that currently only `persist_source` operators support suspension. Data can still enter a
+/// suspended dataflow through arrangement imports and ideally we would be able to suspend those as
+/// well.
+#[derive(Clone)]
+pub(super) struct StartSignal(
+    // The inner type is `Infallible` because no data is ever expected on this channel. Instead the
+    // signal is activated by dropping the corresponding `Sender`.
+    futures::future::Shared<oneshot::Receiver<Infallible>>,
+);
+
+impl StartSignal {
+    /// Create a new `StartSignal` and a corresponding token that activates the signal when
+    /// dropped.
+    pub fn new() -> (Self, Box<dyn Any>) {
+        let (tx, rx) = oneshot::channel::<Infallible>();
+        let token = Box::new(tx);
+        let signal = Self(rx.shared());
+        (signal, token)
+    }
+}
+
+impl Future for StartSignal {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx).map(|_| ())
     }
 }
 
