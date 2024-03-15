@@ -191,6 +191,11 @@ fn handle_apply(
             let transform = NormalizeLets::new(false);
             apply_transform(transform, catalog, input)
         }
+        "reduction_pushdown" => {
+            use mz_transform::reduction_pushdown::ReductionPushdown;
+            let transform = ReductionPushdown;
+            apply_transform(transform, catalog, input)
+        }
         "redundant_join" => {
             use mz_transform::redundant_join::RedundantJoin;
             let transform = RedundantJoin::default();
