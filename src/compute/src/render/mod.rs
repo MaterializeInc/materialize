@@ -603,11 +603,6 @@ where
         name: &str,
     ) -> SpecializedArrangement<G> {
         match oks {
-            SpecializedArrangement::RowUnit(inner) => {
-                let name = format!("{} [val: empty]", name);
-                let oks = self.rearrange_iterative(inner, &name);
-                SpecializedArrangement::RowUnit(oks)
-            }
             SpecializedArrangement::RowRow(inner) => {
                 let oks = self.rearrange_iterative(inner, name);
                 SpecializedArrangement::RowRow(oks)
@@ -1009,13 +1004,7 @@ where
                     Local(A::RowRow(a), _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
-                    Local(A::RowUnit(a), _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
-                    }
                     Trace(_, AI::RowRow(a), _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
-                    }
-                    Trace(_, AI::RowUnit(a), _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
                 }

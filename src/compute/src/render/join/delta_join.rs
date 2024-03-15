@@ -38,7 +38,7 @@ use crate::render::context::{
     SpecializedArrangementImport,
 };
 use crate::render::RenderTimestamp;
-use crate::typedefs::{RowAgent, RowEnter, RowRowAgent, RowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<G> Context<G>
 where
@@ -326,16 +326,6 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        SpecializedArrangement::RowUnit(inner) => build_halfjoin::<_, RowAgent<_, _>, _>(
-            updates,
-            inner,
-            None,
-            prev_key,
-            prev_thinning,
-            comparison,
-            closure,
-            shutdown_token,
-        ),
         SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
             updates,
             inner,
@@ -369,16 +359,6 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin::<_, RowEnter<_, _, _>, _>(
-            updates,
-            inner,
-            None,
-            prev_key,
-            prev_thinning,
-            comparison,
-            closure,
-            shutdown_token,
-        ),
         SpecializedArrangementImport::RowRow(inner) => {
             build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                 updates,
@@ -555,9 +535,6 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
 {
     match trace {
-        SpecializedArrangement::RowUnit(inner) => {
-            build_update_stream::<_, RowAgent<_, _>>(inner, as_of, source_relation, initial_closure)
-        }
         SpecializedArrangement::RowRow(inner) => build_update_stream::<_, RowRowAgent<_, _>>(
             inner,
             as_of,
@@ -580,14 +557,6 @@ where
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
 {
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => {
-            build_update_stream::<_, RowEnter<_, _, _>>(
-                inner,
-                as_of,
-                source_relation,
-                initial_closure,
-            )
-        }
         SpecializedArrangementImport::RowRow(inner) => {
             build_update_stream::<_, RowRowEnter<_, _, _>>(
                 inner,

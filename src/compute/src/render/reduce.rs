@@ -264,11 +264,6 @@ where
                         key_arity,
                         None,
                     ) {
-                        SpecializedArrangement::RowUnit(_) => {
-                            unreachable!(
-                                "Unexpected RowUnit arrangement in reduce collation rendering"
-                            )
-                        }
                         SpecializedArrangement::RowRow(arranged) => arranged,
                     };
                     to_collate.push((r#type, arrangement));
@@ -501,14 +496,14 @@ where
     {
         let collection = collection.map(|(k, v)| {
             assert!(v.is_empty());
-            (k, ())
+            (k, Row::default())
         });
-        let (arrangement, errs) = self.build_distinct::<RowSpine<_, _>, RowErrSpine<_, _>, _>(
+        let (arrangement, errs) = self.build_distinct::<RowRowSpine<_, _>, RowErrSpine<_, _>, _>(
             collection,
             " [val: empty]",
             mfp_after,
         );
-        (SpecializedArrangement::RowUnit(arrangement), errs)
+        (SpecializedArrangement::RowRow(arrangement), errs)
     }
 
     /// Build the dataflow to compute the set of distinct keys.
