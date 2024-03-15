@@ -30,6 +30,7 @@ use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec64;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
@@ -425,15 +426,16 @@ where
                 for fetched_blob in buffer.drain(..) {
                     pending_work.push_back(PendingWork {
                         capability: capability.clone(),
-                        part: PendingPart::Blob(fetched_blob),
+                        part: PendingPart::Unparsed(fetched_blob),
                     })
                 }
             });
 
-            // Get the yield fuel once per schedule to amortize the cost of
-            // loading the atomic.
+            // Get dyncfg values once per schedule to amortize the cost of
+            // loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
             let yield_fn = |_, work| work >= yield_fuel;
+            let optimize_ignored_data_decode = cfg.optimize_ignored_data_decode();
 
             let mut work = 0;
             let start_time = Instant::now();
@@ -442,6 +444,7 @@ where
                 let done = pending_work.front_mut().unwrap().do_work(
                     &mut work,
                     &name,
+                    optimize_ignored_data_decode,
                     start_time,
                     yield_fn,
                     &until,
@@ -472,21 +475,32 @@ struct PendingWork {
 }
 
 enum PendingPart {
-    Blob(FetchedBlob<SourceData, (), Timestamp, Diff>),
-    Part(FetchedPart<SourceData, (), Timestamp, Diff>),
+    Unparsed(FetchedBlob<SourceData, (), Timestamp, Diff>),
+    Parsed {
+        part: FetchedPart<SourceData, (), Timestamp, Diff>,
+        error_free: bool,
+    },
 }
 
 impl PendingPart {
     /// Returns the contained `FetchedPart`, first parsing it from a
     /// `FetchedBlob` if necessary.
-    fn part_mut(&mut self) -> &mut FetchedPart<SourceData, (), Timestamp, Diff> {
+    ///
+    /// Also returns a bool, which is true if the part is known (from pushdown
+    /// stats) to be free of `SourceData(Err(_))`s. It will be false if the part
+    /// is known to contain errors or if it's unknown.
+    fn part_mut(&mut self) -> (&mut FetchedPart<SourceData, (), Timestamp, Diff>, bool) {
         match self {
-            PendingPart::Blob(x) => {
-                *self = PendingPart::Part(x.parse());
+            PendingPart::Unparsed(x) => {
+                let error_free = error_free(x.stats()).unwrap_or(false);
+                *self = PendingPart::Parsed {
+                    part: x.parse(),
+                    error_free,
+                };
                 // Won't recurse any further.
                 self.part_mut()
             }
-            PendingPart::Part(x) => x,
+            PendingPart::Parsed { part, error_free } => (part, *error_free),
         }
     }
 }
@@ -498,6 +512,7 @@ impl PendingWork {
         &mut self,
         work: &mut usize,
         name: &str,
+        optimize_ignored_data_decode: bool,
         start_time: Instant,
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
@@ -531,12 +546,12 @@ impl PendingWork {
         YFn: Fn(Instant, usize) -> bool,
     {
         let mut session = output.session_with_builder(&self.capability);
-        let fetched_part = self.part.part_mut();
+        let (fetched_part, part_is_error_free) = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         let mut row_buf = None;
         let row_override = map_filter_project
             .as_ref()
-            .map(|p| p.ignores_input())
+            .map(|p| optimize_ignored_data_decode && part_is_error_free && p.ignores_input())
             .unwrap_or(false)
             .then(|| (SourceData(Ok(Row::default())), ()));
         while let Some(((key, val), time, diff)) =
@@ -633,6 +648,26 @@ impl PendingWork {
         }
         true
     }
+}
+
+/// Returns whether the part is provably free of `SourceData(Err(_))`s.
+///
+/// Will return false if the part is known to contain errors or None if it's
+/// unknown.
+fn error_free(part_stats: Option<PartStats>) -> Option<bool> {
+    let part_stats = part_stats?;
+    // Counter-intuitive: We can easily calculate the number of errors that
+    // were None from the column stats, but not how many were Some. So, what
+    // we do is count the number of Nones, which is the number of Oks, and
+    // then subtract that from the total.
+    let num_results = part_stats.key.len;
+    // The number of OKs is the number of rows whose error is None.
+    let num_oks = part_stats
+        .key
+        .col::<Option<Vec<u8>>>("err")
+        .expect("err column should be a Option<Vec<u8>>")
+        .map(|x| x.none)?;
+    Some(num_results == num_oks)
 }
 
 /// A trait representing a type that can be used in `backpressure`.

@@ -543,6 +543,14 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             stats,
         )
     }
+
+    /// Decodes and returns the pushdown stats for this part, if known.
+    pub fn stats(&self) -> Option<PartStats> {
+        match &self.buf {
+            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Inline { .. } => None,
+        }
+    }
 }
 
 /// A [Blob] object that has been fetched, but not yet fully decoded.
