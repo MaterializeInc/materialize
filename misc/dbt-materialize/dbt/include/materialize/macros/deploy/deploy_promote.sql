@@ -94,13 +94,13 @@ BEGIN;
 {% for schema in schemas %}
     {% set deploy_schema = schema ~ "_dbt_deploy" %}
     {{ log("Swapping schemas " ~ schema ~ " and " ~ deploy_schema, info=True) }}
-    ALTER SCHEMA {{ schema }} SWAP WITH {{ deploy_schema }};
+    ALTER SCHEMA {{ adapter.quote(schema) }} SWAP WITH {{ adapter.quote(deploy_schema) }};
 {% endfor %}
 
 {% for cluster in clusters %}
     {% set deploy_cluster = cluster ~ "_dbt_deploy" %}
     {{ log("Swapping clusters " ~ cluster ~ " and " ~ deploy_cluster, info=True) }}
-    ALTER CLUSTER {{ cluster }} SWAP WITH {{ deploy_cluster }};
+    ALTER CLUSTER {{ adapter.quote(cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
 {% endfor %}
 
 COMMIT;
@@ -122,7 +122,7 @@ COMMIT;
         SELECT count(*) > 0
         FROM sources_and_sinks
         JOIN mz_clusters ON sources_and_sinks.cluster_id = mz_clusters.id
-        WHERE mz_clusters.name = lower(trim('{{ cluster }}'))
+        WHERE mz_clusters.name = {{ dbt.string_literal(cluster) }}
     {% endset %}
 
     {% set count = run_query(query) %}
@@ -147,7 +147,7 @@ COMMIT;
         FROM sources_and_sinks
         JOIN mz_schemas ON sources_and_sinks.schema_id = mz_schemas.id
         JOIN mz_databases ON mz_schemas.database_id = mz_databases.id
-        WHERE mz_schemas.name = lower(trim('{{ schema }}'))
+        WHERE mz_schemas.name = {{ dbt.string_literal(schema) }}
             AND mz_databases.name = current_database()
     {% endset %}
 

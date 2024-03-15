@@ -54,7 +54,7 @@
             FROM mz_objects
             JOIN mz_schemas ON mz_objects.schema_id = mz_schemas.id
             JOIN mz_databases ON mz_databases.id = mz_schemas.database_id
-            WHERE mz_schemas.name = lower(trim('{{ deploy_schema }}'))
+            WHERE mz_schemas.name = {{ dbt.string_literal(deploy_schema) }}
                 AND mz_objects.id LIKE 'u%'
                 AND mz_databases.name = current_database()
         {% endset %}
@@ -89,6 +89,8 @@
         {% endset %}
         {{ run_query(create_schema) }}
         {{ set_schema_ci_tag() }}
+        {{ internal_copy_schema_default_privs(schema, deploy_schema) }}
+        {{ internal_copy_schema_grants(schema, deploy_schema) }}
     {% endif %}
 {% endfor %}
 
@@ -101,28 +103,28 @@
                 SELECT mz_indexes.id
                 FROM mz_indexes
                 JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
+                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
 
                 UNION ALL
 
                 SELECT mz_materialized_views.id
                 FROM mz_materialized_views
                 JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
+                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
 
                 UNION ALL
 
                 SELECT mz_sources.id
                 FROM mz_sources
                 JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
+                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
 
                 UNION ALL
 
                 SELECT mz_sinks.id
                 FROM mz_sinks
                 JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-                WHERE mz_clusters.name = lower(trim('{{ deploy_cluster }}'))
+                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
             )
 
             SELECT count(*)
@@ -159,7 +161,7 @@
         {% set cluster_configuration %}
             SELECT managed, size, replication_factor
             FROM mz_clusters
-            WHERE name = lower(trim('{{ cluster }}'))
+            WHERE name = {{ dbt.string_literal(cluster) }}
         {% endset %}
 
         {% set cluster_config_results = run_query(cluster_configuration) %}
@@ -177,13 +179,139 @@
 
             {% set create_cluster %}
                 CREATE CLUSTER {{ deploy_cluster }} (
-                    SIZE = '{{ size }}',
+                    SIZE = {{ dbt.string_literal(size) }},
                     REPLICATION FACTOR = {{ replication_factor }}
                 );
             {% endset %}
             {{ run_query(create_cluster) }}
             {{ set_cluster_ci_tag() }}
+            {{ internal_copy_cluster_grants(schema, deploy_schema) }}
         {% endif %}
     {% endif %}
 {% endfor %}
+{% endmacro %}
+
+{% macro internal_copy_schema_default_privs(from, to) %}
+
+{% set find_default_privs %}
+SELECT
+  'ALTER DEFAULT PRIVILEGES ' ||
+  CASE
+    WHEN object_owner = 'PUBLIC' THEN 'FOR ALL ROLES '
+    ELSE 'FOR ROLE ' || object_owner
+  END ||
+  'IN SCHEMA {{ to }} '         ||
+  'GRANT '  || privilege_type   || ' ' ||
+  'ON '     || object_type      || 's ' ||
+  'TO '     || grantee
+FROM mz_internal.mz_show_default_privileges
+WHERE database = current_database() AND schema = {{ dbt.string_literal(from) }}
+    AND object_owner <> 'none' AND grantee <> 'none'
+{% endset %}
+
+{% set alter_defaults = run_query(find_default_privs) %}
+{% if execute %}
+    {% for alter in alter_defaults.rows %}
+        {{ run_query(alter) }}
+    {% endfor %}
+{% endif %}
+{% endmacro %}
+
+{% macro internal_copy_schema_grants(from, to) %}
+{% set find_revokes %}
+WITH schema_privilege AS (
+    SELECT mz_internal.mz_aclexplode(s.privileges).*
+    FROM mz_schemas s
+    JOIN mz_databases d ON s.database_id = d.id
+    WHERE d.name = current_database()
+        AND s.name = {{ dbt.string_literal(to) }}
+)
+
+SELECT 'REVOKE '    || s.privilege_type || ' ' ||
+       'ON SCHEMA ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
+       'FROM '      || quote_ident(grantee.name)
+FROM schema_privilege AS s
+JOIN mz_roles AS grantee ON s.grantee = grantee.id
+WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
+{% endset %}
+
+{% set revokes = run_query(find_revokes) %}
+{% if execute %}
+    {% for revoke in revokes.rows %}
+        {{ run_query(revoke[0]) }}
+    {% endfor %}
+{% endif %}
+
+{% set find_grants %}
+WITH schema_privilege AS (
+    SELECT mz_internal.mz_aclexplode(s.privileges).*
+    FROM mz_schemas s
+    JOIN mz_databases d ON s.database_id = d.id
+    WHERE d.name = current_database()
+        AND s.name = {{ dbt.string_literal(from) }}
+)
+
+SELECT 'GRANT '     || s.privilege_type || ' ' ||
+       'ON SCHEMA ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
+       'TO '        || quote_ident(grantee.name)
+FROM schema_privilege AS s
+JOIN mz_roles AS grantee ON s.grantee = grantee.id
+WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support', current_role)
+{% endset %}
+
+{% set grants = run_query(find_grants) %}
+{% if execute %}
+    {% for grant in grants.rows %}
+        {{ run_query(grant[0]) }}
+    {% endfor %}
+{% endif %}
+
+{% endmacro %}
+
+{% macro internal_copy_cluster_grants(from, to) %}
+{% set find_revokes %}
+WITH cluster_privilege AS (
+    SELECT mz_internal.mz_aclexplode(privileges).*
+    FROM mz_clusters
+    WHERE name = {{ dbt.string_literal(from) }}
+)
+
+SELECT 'REVOKE '     || c.privilege_type || ' ' ||
+       'ON CLUSTER ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
+       'FROM '       || quote_ident(grantee.name)
+FROM cluster_privilege AS c
+JOIN mz_roles AS grantee ON c.grantee = grantee.id
+WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+    AND grantee.name <> current_role
+{% endset %}
+
+{% set revokes = run_query(find_revokes) %}
+{% if execute %}
+    {% for revoke in revokes.rows %}
+        {{ run_query(revoke[0]) }}
+    {% endfor %}
+{% endif %}
+
+{% set find_grants %}
+WITH cluster_privilege AS (
+    SELECT mz_internal.mz_aclexplode(privileges).*
+    FROM mz_clusters
+    WHERE name = {{ dbt.string_literal(from) }}
+)
+
+SELECT 'GRANT '      || c.privilege_type || ' ' ||
+       'ON CLUSTER ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
+       'TO '         || quote_ident(grantee.name)
+FROM cluster_privilege AS c
+JOIN mz_roles AS grantee ON c.grantee = grantee.id
+WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+{% endset %}
+
+{% set grants = run_query(find_grants) %}
+{% if execute %}
+    {% for grant in grants.rows %}
+        {{ run_query(grant[0]) }}
+    {% endfor %}
+{% endif %}
+
 {% endmacro %}

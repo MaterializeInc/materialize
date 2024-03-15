@@ -29,7 +29,7 @@
     FROM mz_schemas
     JOIN mz_databases ON mz_schemas.database_id = mz_databases.id
     WHERE mz_databases.name = current_database()
-    AND mz_schemas.name = lower(trim('{{ schema }}'))
+    AND mz_schemas.name = {{ dbt.string_literal(schema) }}
 {%- endset -%}
 
 {% set results = run_query(query) %}
@@ -56,7 +56,7 @@
 
 {% set query %}
     SELECT * FROM mz_clusters
-    WHERE name = lower(trim('{{ cluster }}'))
+    WHERE name = {{ dbt.string_literal(cluster) }}
 {%- endset -%}
 
 {% set results = run_query(query) %}

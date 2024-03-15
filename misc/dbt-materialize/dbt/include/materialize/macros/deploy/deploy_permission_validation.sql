@@ -89,7 +89,7 @@ WITH clusters_under_deployment AS (
     WHERE name IN (
     {% if clusters|length > 0 %}
         {% for cluster in clusters %}
-            lower(trim('{{ cluster }}')){% if not loop.last %},{% endif %}
+            {{ dbt.string_literal(cluster) }}{% if not loop.last %},{% endif %}
         {% endfor %}
     {% else %}
         NULL
@@ -139,7 +139,7 @@ WITH schemas_under_deployment AS (
     WHERE mz_databases.name = current_database() AND mz_schemas.name IN (
     {% if schemas|length > 0 %}
         {% for schema in schemas %}
-            lower(trim('{{ schema }}')){% if not loop.last %},{% endif %}
+            {{ dbt.string_literal(schema) }}{% if not loop.last %},{% endif %}
         {% endfor %}
     {% else %}
         NULL
