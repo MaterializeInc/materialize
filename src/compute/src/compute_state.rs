@@ -317,6 +317,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(params),
             CreateDataflow(dataflow) => self.handle_create_dataflow(dataflow),
+            Schedule(id) => { /* TODO */ }
             AllowCompaction { id, frontier } => self.handle_allow_compaction(id, frontier),
             Peek(peek) => {
                 peek.otel_ctx.attach_as_parent();

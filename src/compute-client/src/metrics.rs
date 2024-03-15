@@ -397,21 +397,23 @@ pub(crate) struct ReplicaCollectionMetrics {
 /// Metrics keyed by `ComputeCommand` type.
 #[derive(Debug)]
 pub struct CommandMetrics<M> {
-    /// TODO(#25239): Add documentation.
+    /// Metrics for `CreateTimely`.
     pub create_timely: M,
-    /// TODO(#25239): Add documentation.
+    /// Metrics for `CreateInstance`.
     pub create_instance: M,
-    /// TODO(#25239): Add documentation.
+    /// Metrics for `CreateDataflow`.
     pub create_dataflow: M,
-    /// TODO(#25239): Add documentation.
+    /// Metrics for `Schedule`.
+    pub schedule: M,
+    /// Metrics for `AllowCompaction`.
     pub allow_compaction: M,
-    /// TODO(#25239): Add documentation.
+    /// Metrics for `Peek`.
     pub peek: M,
-    /// TODO(#25239): Add documentation.
+    /// Metrics for `CancelPeek`.
     pub cancel_peek: M,
-    /// TODO(#25239): Add documentation.
+    /// Metrics for `InitializationComplete`.
     pub initialization_complete: M,
-    /// TODO(#25239): Add documentation.
+    /// Metrics for `UpdateConfiguration`.
     pub update_configuration: M,
 }
 
@@ -425,6 +427,7 @@ impl<M> CommandMetrics<M> {
             create_timely: build_metric("create_timely"),
             create_instance: build_metric("create_instance"),
             create_dataflow: build_metric("create_dataflow"),
+            schedule: build_metric("schedule"),
             allow_compaction: build_metric("allow_compaction"),
             peek: build_metric("peek"),
             cancel_peek: build_metric("cancel_peek"),
@@ -442,6 +445,7 @@ impl<M> CommandMetrics<M> {
         f(&self.initialization_complete);
         f(&self.update_configuration);
         f(&self.create_dataflow);
+        f(&self.schedule);
         f(&self.allow_compaction);
         f(&self.peek);
         f(&self.cancel_peek);
@@ -457,6 +461,7 @@ impl<M> CommandMetrics<M> {
             InitializationComplete => &self.initialization_complete,
             UpdateConfiguration(_) => &self.update_configuration,
             CreateDataflow(_) => &self.create_dataflow,
+            Schedule(_) => &self.schedule,
             AllowCompaction { .. } => &self.allow_compaction,
             Peek(_) => &self.peek,
             CancelPeek { .. } => &self.cancel_peek,
@@ -470,6 +475,7 @@ impl<M> CommandMetrics<M> {
             CreateTimely(_) => &self.create_timely,
             CreateInstance(_) => &self.create_instance,
             CreateDataflow(_) => &self.create_dataflow,
+            Schedule(_) => &self.schedule,
             AllowCompaction(_) => &self.allow_compaction,
             Peek(_) => &self.peek,
             CancelPeek(_) => &self.cancel_peek,

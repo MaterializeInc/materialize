@@ -10,7 +10,7 @@
 //! A reducible history of compute commands.
 
 use std::borrow::Borrow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
@@ -84,7 +84,8 @@ where
         // These will determine for each collection whether the command that creates it is required,
         // and if required what `as_of` frontier should be used for its updated command.
         let mut final_frontiers = BTreeMap::new();
-        let mut live_dataflows = Vec::new();
+        let mut created_dataflows = Vec::new();
+        let mut scheduled_collections = Vec::new();
         let mut live_peeks = BTreeMap::new();
 
         let mut create_inst_command = None;
@@ -116,7 +117,10 @@ where
                     final_configuration.update(params);
                 }
                 ComputeCommand::CreateDataflow(dataflow) => {
-                    live_dataflows.push(dataflow);
+                    created_dataflows.push(dataflow);
+                }
+                ComputeCommand::Schedule(id) => {
+                    scheduled_collections.push(id);
                 }
                 ComputeCommand::AllowCompaction { id, frontier } => {
                     final_frontiers.insert(id, frontier.clone());
@@ -145,7 +149,7 @@ where
 
         // Update dataflow `as_of` frontiers, constrained by live peeks and allowed compaction.
         // One possible frontier is the empty frontier, indicating that the dataflow can be removed.
-        for dataflow in live_dataflows.iter_mut() {
+        for dataflow in created_dataflows.iter_mut() {
             let mut as_of = Antichain::new();
             for id in dataflow.export_ids() {
                 // If compaction has been allowed use that; otherwise use the initial `as_of`.
@@ -173,7 +177,12 @@ where
         }
 
         // Discard dataflows whose outputs have all been allowed to compact away.
-        live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
+        created_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
+        let retained_collections: BTreeSet<_> = created_dataflows
+            .iter()
+            .flat_map(|d| d.export_ids())
+            .collect();
+        scheduled_collections.retain(|id| retained_collections.contains(id));
 
         // Reconstitute the commands as a compact history.
 
@@ -201,11 +210,17 @@ where
                 .push(ComputeCommand::UpdateConfiguration(final_configuration));
         }
 
-        let count = u64::cast_from(live_dataflows.len());
+        let count = u64::cast_from(created_dataflows.len());
         command_counts.create_dataflow.borrow().set(count);
         dataflow_count.borrow().set(count);
-        for dataflow in live_dataflows {
+        for dataflow in created_dataflows {
             self.commands.push(ComputeCommand::CreateDataflow(dataflow));
+        }
+
+        let count = u64::cast_from(scheduled_collections.len());
+        command_counts.schedule.borrow().set(count);
+        for id in scheduled_collections {
+            self.commands.push(ComputeCommand::Schedule(id));
         }
 
         let count = u64::cast_from(live_peeks.len());
@@ -216,7 +231,7 @@ where
 
         command_counts.cancel_peek.borrow().set(0);
 
-        // Allow compaction only after emmitting peek commands.
+        // Allow compaction only after emitting peek commands.
         let count = u64::cast_from(final_frontiers.len());
         command_counts.allow_compaction.borrow().set(count);
         for (id, frontier) in final_frontiers {
