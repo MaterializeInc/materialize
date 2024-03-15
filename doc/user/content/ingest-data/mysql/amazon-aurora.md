@@ -30,7 +30,7 @@ the following additional configuration changes:
 
 Configuration parameter          | Value  | Details
 ---------------------------------|--------| -------------------------------
-log_bin                          | `ON`   |
+`log_bin`                        | `ON`   |
 `binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
 `binlog_row_image`               | `FULL` |
 `gtid_mode`                      | `ON`   | In the AWS console, this parameter appears as `gtid-mode`.
