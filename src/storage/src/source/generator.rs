@@ -44,30 +44,41 @@ enum GeneratorKind {
     Simple {
         generator: Box<dyn Generator>,
         tick_micros: Option<u64>,
+        // Load generators cannot be rendered until all of their exports are
+        // present.
+        //
+        // TODO: can this limitation be removed?
+        required_exports: usize,
     },
     KeyValue(KeyValueLoadGenerator),
 }
 
 impl GeneratorKind {
     fn new(g: &LoadGenerator, tick_micros: Option<u64>) -> Self {
+        let required_exports = g.views().len() + 1;
+
         match g {
             LoadGenerator::Auction => GeneratorKind::Simple {
                 generator: Box::new(Auction {}),
                 tick_micros,
+                required_exports,
             },
             LoadGenerator::Counter { max_cardinality } => GeneratorKind::Simple {
                 generator: Box::new(Counter {
                     max_cardinality: max_cardinality.clone(),
                 }),
                 tick_micros,
+                required_exports,
             },
             LoadGenerator::Datums => GeneratorKind::Simple {
                 generator: Box::new(Datums {}),
                 tick_micros,
+                required_exports,
             },
             LoadGenerator::Marketing => GeneratorKind::Simple {
                 generator: Box::new(Marketing {}),
                 tick_micros,
+                required_exports,
             },
             LoadGenerator::Tpch {
                 count_supplier,
@@ -87,8 +98,17 @@ impl GeneratorKind {
                     tick: Duration::from_micros(tick_micros.unwrap_or(0)),
                 }),
                 tick_micros,
+                required_exports,
             },
-            LoadGenerator::KeyValue(kv) => GeneratorKind::KeyValue(kv.clone()),
+            LoadGenerator::KeyValue(kv) => {
+                mz_ore::soft_assert_eq_or_log!(
+                    required_exports,
+                    1,
+                    "KeyValue generators should not have any additional views"
+                );
+
+                GeneratorKind::KeyValue(kv.clone())
+            }
         }
     }
 
@@ -109,7 +129,15 @@ impl GeneratorKind {
             GeneratorKind::Simple {
                 tick_micros,
                 generator,
-            } => render_simple_generator(generator, tick_micros, scope, config, committed_uppers),
+                required_exports,
+            } => render_simple_generator(
+                generator,
+                tick_micros,
+                scope,
+                config,
+                committed_uppers,
+                required_exports,
+            ),
             GeneratorKind::KeyValue(kv) => {
                 key_value::render(kv, scope, config, committed_uppers, start_signal)
             }
@@ -146,6 +174,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    required_exports: usize,
 ) -> (
     Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
     Option<Stream<G, Infallible>>,
@@ -159,6 +188,15 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let (mut stats_output, stats_stream) = builder.new_output();
 
     let button = builder.build(move |caps| async move {
+        // Do not run the load generator until we have all of our source
+        // exports. Waiting here is fine because we know that their creation
+        // and scheduling of this dataflow is imminent.
+        //
+        // TODO: can this limitation be removed?
+        if required_exports != config.source_exports.len() {
+            std::future::pending().await
+        }
+
         let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
 
         if !config.responsible_for(()) {
