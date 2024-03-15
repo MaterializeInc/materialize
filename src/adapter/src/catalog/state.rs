@@ -579,11 +579,15 @@ impl CatalogState {
     }
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
-        &self.entry_by_id[id]
+        self.entry_by_id
+            .get(id)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
     pub fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
-        self.entry_by_id.get_mut(id).expect("catalog out of sync")
+        self.entry_by_id
+            .get_mut(id)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
