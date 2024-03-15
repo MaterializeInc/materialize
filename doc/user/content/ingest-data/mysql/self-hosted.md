@@ -28,9 +28,8 @@ Configuration parameter          | Value  | Details
 `log_bin`                        | `ON`   |
 `binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
 `binlog_row_image`               | `FULL` |
-`gtid_mode`                      | `ON`   | In the AWS console, this parameter appears as `gtid-mode`.
+`gtid_mode`                      | `ON`   |
 `enforce_gtid_consistency`       | `ON`   |
-`binlog retention hours`         | 168    |
 `replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
 
 For guidance on enabling GTID-based binlog replication, see the
