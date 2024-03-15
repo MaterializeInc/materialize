@@ -862,7 +862,7 @@ mod tests {
         sub.step_past(2).await;
 
         // Unregister it.
-        txns.forget(3, d0).await.unwrap();
+        txns.forget(3, [d0]).await.unwrap();
         sub.step_past(3).await;
 
         // TODO: Hard mode, see if we can get the rest of this test to work even
@@ -922,7 +922,7 @@ mod tests {
         );
 
         // Forget the shard at 20.
-        txns.forget(20, d0).await.unwrap();
+        txns.forget(20, [d0]).await.unwrap();
         sub.step_past(20).await;
         assert!(
             sub.progress() > 20,

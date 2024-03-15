@@ -598,7 +598,7 @@ mod tests {
         assert!(commit.await.is_err());
 
         let d0 = txns.expect_register(2).await;
-        txns.forget(3, d0).await.unwrap();
+        txns.forget(3, [d0]).await.unwrap();
 
         // This panics because the commit ts is after the forget ts.
         let commit = mz_ore::task::spawn(|| "", {
