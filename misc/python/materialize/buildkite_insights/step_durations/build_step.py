@@ -21,6 +21,7 @@ class BuildItemOutcomeBase:
     created_at: datetime
     duration_in_min: float | None
     passed: bool
+    completed: bool
     retry_count: int
 
     def formatted_date(self) -> str:
@@ -108,6 +109,7 @@ def _extract_build_step_data_from_build(
             duration_in_min = None
 
         job_passed = job["state"] == "passed"
+        job_completed = job["state"] in ["passed", "broken", "failed"]
         exit_status = job.get("exit_status")
         retry_count = job.get("retries_count") or 0
 
@@ -123,6 +125,7 @@ def _extract_build_step_data_from_build(
             created_at=created_at,
             duration_in_min=duration_in_min,
             passed=job_passed,
+            completed=job_completed,
             exit_status=exit_status,
             retry_count=retry_count,
             web_url_to_job=f"{build_data['web_url']}#{job['id']}",
@@ -187,7 +190,8 @@ def _step_outcomes_to_job_outcome(
         if s.duration_in_min is not None
     ]
     sum_duration_in_min = sum(durations) if len(durations) > 0 else None
-    all_passed = len([False for s in outcomes_of_same_step if not s.passed]) == 0
+    all_passed = len([1 for s in outcomes_of_same_step if not s.passed]) == 0
+    all_completed = len([1 for s in outcomes_of_same_step if not s.completed]) == 0
     max_retry_count = max([s.retry_count for s in outcomes_of_same_step])
     count_shards = len(outcomes_of_same_step)
     web_url_without_job_id = any_execution.web_url_to_build()
@@ -199,6 +203,7 @@ def _step_outcomes_to_job_outcome(
         created_at=min_created_at,
         duration_in_min=sum_duration_in_min,
         passed=all_passed,
+        completed=all_completed,
         retry_count=max_retry_count,
         web_url_to_build=web_url_without_job_id,
         count_items=count_shards,

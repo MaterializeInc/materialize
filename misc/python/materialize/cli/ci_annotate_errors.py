@@ -465,26 +465,30 @@ def get_failures_on_main() -> str | None:
     step_key = os.getenv("BUILDKITE_STEP_KEY")
     step_name = os.getenv("BUILDKITE_LABEL") or step_key
     parallel_job = os.getenv("BUILDKITE_PARALLEL_JOB")
+    current_build_number = os.getenv("BUILDKITE_BUILD_NUMBER")
     if parallel_job is not None:
         parallel_job = int(parallel_job)
     assert pipeline_slug is not None
     assert step_key is not None
     assert step_name is not None
+    assert current_build_number is not None
 
     # This is only supposed to be invoked when the build step failed.
     builds_data = builds_api.get_builds(
         pipeline_slug=pipeline_slug,
         max_fetches=1,
         branch="main",
-        build_states=["finished"],
-        items_per_page=5,
+        # also include builds that are still running (the relevant build step may already have completed)
+        build_states=["running", "passed", "failing", "failed"],
+        # assume and account that at most one build is still running
+        items_per_page=5 + 1,
     )
 
     if not builds_data:
         print(f"Got no finished builds of pipeline {pipeline_slug}")
         return None
     else:
-        print(f"Fetched {len(builds_data)} finished builds of pipeline {pipeline_slug}")
+        print(f"Fetched {len(builds_data)} builds of pipeline {pipeline_slug}")
 
     build_step_matcher = BuildStepMatcher(step_key, parallel_job)
     last_build_step_outcomes = extract_build_step_outcomes(
@@ -492,9 +496,20 @@ def get_failures_on_main() -> str | None:
         selected_build_steps=[build_step_matcher],
     )
 
+    # remove build steps that are still running and the current build
+    last_build_step_outcomes = [
+        outcome
+        for outcome in last_build_step_outcomes
+        if outcome.completed and outcome.build_number != current_build_number
+    ]
+
+    if len(last_build_step_outcomes) > 8:
+        # the number of build steps might be higher than the number of requested builds due to retries
+        last_build_step_outcomes = last_build_step_outcomes[:8]
+
     if not last_build_step_outcomes:
         print(
-            f"The {len(builds_data)} last fetched builds do not contain a build step matching {build_step_matcher}"
+            f"The {len(builds_data)} last fetched builds do not contain a completed build step matching {build_step_matcher}"
         )
         return None
 
