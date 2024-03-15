@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tracing::{info, warn, Instrument};
@@ -769,14 +768,27 @@ impl Catalog {
                     MZ_STATEMENT_LIFECYCLE_HISTORY.name,
                     MZ_STATEMENT_EXECUTION_HISTORY.name,
                 ];
-                let to_migrate: Vec<_> = txn
-                    .get_system_items()
-                    .filter(|mapping| {
-                        mapping.description.schema_name == MZ_INTERNAL_SCHEMA && candidates.contains(&mapping.description.object_name.as_str())
-                    })
-                    .map(|mapping| mapping.unique_identifier.id)
+
+                let mz_internal_schema = ItemQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(state.get_mz_internal_schema_id().clone()),
+                };
+                let to_migrate: Vec<_> = state
+                    .entry_by_id
+                    .iter()
+                    // Filter to items in the internal schema.
+                    .filter(|(_id, entry)| entry.name().qualifiers == mz_internal_schema)
+                    // Filter to our candidates items.
+                    .filter(|(_id, entry)| candidates.contains(&entry.name().item.as_str()))
+                    // Get just the GlobalId of these items.
+                    .map(|(id, _entry)| id)
                     .collect();
+
+                if to_migrate.len() != candidates.len() {
+                    tracing::error!("found the wrong number of items for one time migration!");
+                }
                 tracing::info!(?to_migrate, "running one time migration");
+
                 migrated_builtins.extend(to_migrate);
 
                 txn.set_config(ACTIVITY_LOG_ONE_TIME_MIGRATION.to_string(), Some(1))?;
