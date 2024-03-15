@@ -40,6 +40,7 @@ Distinct project=[#1]
 Project (#0)
   CrossJoin
     Distinct project=[#1]
-      Get x
+      Filter ((#1 + #1) = #0)
+        Get x
     Distinct project=[]
       Get y

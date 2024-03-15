@@ -37,5 +37,3 @@ WHERE
   a1.f2 + a2.f2 > (SELECT DISTINCT 0 c2 FROM t2 AS a1) AND a2.f2 IS NULL
   OR NULLIF (a2.f2, a2.f1) = a1.f2 + a1.f2;
 ----
-2
-2
