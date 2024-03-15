@@ -390,9 +390,9 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                // TODO: refactor this so that we expect source exports to
-                // always be empty-ish when creating a source.
-                let mut read_policies = BTreeMap::new();
+                let mut ingestion_read_policies = BTreeMap::new();
+                let mut read_policy_groups: BTreeMap<Option<CompactionWindow>, Vec<GlobalId>> =
+                    BTreeMap::new();
 
                 for (source_id, mut source) in sources {
                     let source_status_collection_id =
@@ -400,24 +400,17 @@ impl Coordinator {
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
-                    let (data_source, status_collection_id, set_read_policies) = match source
-                        .data_source
-                    {
+                    let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
                                 ingestion.into_inline_connection(coord.catalog().state());
 
-                            read_policies
+                            ingestion_read_policies
                                 .insert(source_id, source.custom_logical_compaction_window.clone());
-
-                            // The parent source dictates all of the subsource's read policies.
-                            let set_read_policies =
-                                ingestion.source_exports.keys().cloned().collect();
 
                             (
                                 DataSource::Ingestion(ingestion),
                                 source_status_collection_id,
-                                set_read_policies,
                             )
                         }
                         DataSourceDesc::SourceExport { id, output_index } => {
@@ -425,7 +418,7 @@ impl Coordinator {
                             // subsource does not have its own value specified.
                             if source.custom_logical_compaction_window.is_none() {
                                 // Defined as part of the initial set of subsources.
-                                let c = match read_policies.get(&id) {
+                                let c = match ingestion_read_policies.get(&id) {
                                     Some(c) => c,
                                     None => {
                                         // Added to an existing source.
@@ -444,7 +437,6 @@ impl Coordinator {
                             (
                                 DataSource::SourceExport { id, output_index },
                                 source_status_collection_id,
-                                vec![source_id],
                             )
                         }
                         // Subsources use source statuses.
@@ -452,9 +444,8 @@ impl Coordinator {
                             DataSource::Other(DataSourceOther::Source),
                             source_status_collection_id,
                             // Subsources will inherit their parent source's read_policy.
-                            vec![],
                         ),
-                        DataSourceDesc::Progress => (DataSource::Progress, None, vec![source_id]),
+                        DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
                                 coord.catalog().state().try_get_webhook_url(&source_id)
@@ -462,7 +453,7 @@ impl Coordinator {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
 
-                            (DataSource::Webhook, None, vec![source_id])
+                            (DataSource::Webhook, None)
                         }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
@@ -476,7 +467,7 @@ impl Coordinator {
                             None,
                             vec![(
                                 source_id,
-                                CollectionDescription {
+                                CollectionDescription::<Timestamp> {
                                     desc: source.desc.clone(),
                                     data_source,
                                     since: None,
@@ -487,12 +478,17 @@ impl Coordinator {
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
+                    let policy_group_ids = read_policy_groups
+                        .entry(source.custom_logical_compaction_window)
+                        .or_default();
+                    policy_group_ids.push(source_id);
+                }
+
+                for (policy, group) in read_policy_groups {
                     coord
                         .initialize_storage_read_policies(
-                            set_read_policies,
-                            source
-                                .custom_logical_compaction_window
-                                .unwrap_or(CompactionWindow::Default),
+                            group,
+                            policy.unwrap_or(CompactionWindow::Default),
                         )
                         .await;
                 }
