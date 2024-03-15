@@ -1147,6 +1147,8 @@ pub enum CatalogError {
     RoleAlreadyExists(String),
     /// Unknown cluster.
     UnknownCluster(String),
+    /// Unexpected builtin cluster.
+    UnexpectedBuiltinCluster(String),
     /// Cluster already exists.
     ClusterAlreadyExists(String),
     /// Unknown cluster replica.
@@ -1214,6 +1216,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
+            Self::UnexpectedBuiltinCluster(name) => write!(f, "Unexpected builtin cluster '{}'", name),
             Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
             Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)

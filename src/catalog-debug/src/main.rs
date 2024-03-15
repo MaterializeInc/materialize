@@ -441,7 +441,7 @@ async fn upgrade_check(
 
     // If this upgrade has new builtin replicas, then we need to assign some size to it. It doesn't
     // really matter what size since it's not persisted, so we pick a random valid one.
-    let builtin_cluster_replica_size = cluster_replica_sizes
+    let builtin_clusters_replica_size = cluster_replica_sizes
         .0
         .first_key_value()
         .expect("we must have at least a single valid replica size")
@@ -457,7 +457,8 @@ async fn upgrade_check(
             now,
             skip_migrations: false,
             cluster_replica_sizes,
-            builtin_cluster_replica_size,
+            builtin_system_cluster_replica_size: builtin_clusters_replica_size.clone(),
+            builtin_introspection_cluster_replica_size: builtin_clusters_replica_size,
             system_parameter_defaults: Default::default(),
             remote_system_parameters: None,
             availability_zones: vec![],
