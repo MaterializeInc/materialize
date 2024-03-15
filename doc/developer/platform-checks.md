@@ -60,6 +60,40 @@ of those.
 ./mzcompose run default --scenario=NoRestartNoUpgrade --check=...
 ```
 
+# Adapting a Check to removed/added/changed syntax
+
+When functionality is removed, added or changed, we should still keep testing the old syntax in older versions, which is especially relevant during an upgrade test.
+As an example consider this testdrive fragment:
+
+```
+> CREATE SOURCE shared_cluster_storage_first_source
+  IN CLUSTER shared_cluster_storage_first
+  FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
+```
+
+We want to remove support for passing the `SCALE FACTOR` since it does not have an effect anyway.
+Naively we might want to change the testdrive fragment like this, simply removing the SCALE FACTOR:
+
+```
+> CREATE SOURCE shared_cluster_storage_first_source
+  IN CLUSTER shared_cluster_storage_first
+  FROM LOAD GENERATOR COUNTER
+```
+
+This makes the test case green, but has the unfortunate side effect that we don't test the migration of a load generator with scale factor property during an upgrade.
+Instead we should use the new syntax for newer versions of Materialize, and keep using the old syntax for older versions (see [Testdrive documentation](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/testdrive.md#run-an-actionquery-conditionally-on-version)):
+
+```
+>[version<9200] CREATE SOURCE shared_cluster_storage_first_source
+  IN CLUSTER shared_cluster_storage_first
+  FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
+>[version>=9200] CREATE SOURCE shared_cluster_storage_first_source
+  IN CLUSTER shared_cluster_storage_first
+  FROM LOAD GENERATOR COUNTER
+```
+
+In this case the cutoff is version v0.92.0-dev, which is the current version of Materialize in development.
+
 # Writing a Check
 
 A check is a class deriving from `Check` that implements the following methods:
