@@ -1,6 +1,7 @@
 <div class="public-preview">
     <strong class="gutter">PREVIEW</strong>
-    {{ with .Inner}}{{.|$.Page.RenderString}}{{else}}This feature{{ end }}
-    is in <strong>public preview</strong>. It may have performance or stability
-    issues.
+    {{ with .Inner}}{{.|$.Page.RenderString}}{{else}}This feature{{ end }} is in
+    <strong><a href="https://materialize.com/preview-terms/">public preview</a></strong>.
+    It is under active development and may have stability or performance issues.
+    It isn't subject to our backwards compatibility guarantees.
 </div>
