@@ -20,6 +20,22 @@
 /doc/developer/reference/compute    @MaterializeInc/compute
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @morsapaes
+/misc/python/materialize/benches    @MaterializeInc/testing
+/misc/python/materialize/buildkite_insights @MaterializeInc/testing
+/misc/python/materialize/checks     @MaterializeInc/testing
+/misc/python/materialize/ci_util    @MaterializeInc/testing
+/misc/python/materialize/cli/ci_annotate_errors.py @MaterializeInc/testing
+/misc/python/materialize/cli/ci_closed_issues_detect.py @MaterializeInc/testing
+/misc/python/materialize/cli/ci_coverage_pr_report.py @MaterializeInc/testing
+/misc/python/materialize/cli/ci_upload_heap_profiles.py @MaterializeInc/testing
+/misc/python/materialize/cloudtest  @MaterializeInc/cloud @MaterializeInc/testing
+/misc/python/materialize/data_ingest @MaterializeInc/testing
+/misc/python/materialize/parallel_workload @MaterializeInc/testing
+/misc/python/materialize/postgres_consistency @MaterializeInc/testing
+/misc/python/materialize/scalability @MaterializeInc/testing
+/misc/python/materialize/sqlsmith.py @MaterializeInc/testing
+/misc/python/materialize/version_consistency @MaterializeInc/testing
+/misc/python/materialize/zippy      @MaterializeInc/testing
 /src/adapter                        @MaterializeInc/adapter
 /src/adapter-types                  @MaterializeInc/adapter
 /src/adapter/src/explain            @MaterializeInc/compute
@@ -114,5 +130,3 @@
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
 /test
-/misc/python/materialize/cli/ci_closed_issues_detect.py @MaterializeInc/testing
-/misc/python/materialize/cloudtest  @MaterializeInc/cloud @MaterializeInc/testing
