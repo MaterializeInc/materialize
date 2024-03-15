@@ -22,7 +22,7 @@ use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan}
 use mz_compute_types::plan::join::JoinClosure;
 use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::IntoRowByTypes;
-use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
@@ -387,34 +387,19 @@ where
                     let (oks, errs2) = match (local, oks) {
                         (A::RowUnit(prev_keyed), A::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowAgent<_, _>, RowAgent<_, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                Some(vec![]),
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (A::RowUnit(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowAgent<_, _>, RowRowAgent<_, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                None,
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (A::RowRow(prev_keyed), A::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowAgent<_, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                None,
-                                Some(vec![]),
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (A::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, None, None, None, closure,
+                                prev_keyed, next_input, closure,
                             ),
                     };
 
@@ -426,34 +411,19 @@ where
                     let (oks, errs2) = match (local, oks) {
                         (A::RowUnit(prev_keyed), I::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowAgent<_, _>, RowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                Some(vec![]),
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (A::RowUnit(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowAgent<_, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                None,
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (A::RowRow(prev_keyed), I::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowEnter<_, _, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                None,
-                                Some(vec![]),
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (A::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, None, None, None, closure,
+                                prev_keyed, next_input, closure,
                             ),
                     };
 
@@ -467,34 +437,19 @@ where
                     let (oks, errs2) = match (trace, oks) {
                         (I::RowUnit(prev_keyed), A::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowEnter<_, _, _>, RowAgent<_, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                Some(vec![]),
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (I::RowUnit(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowEnter<_, _, _>, RowRowAgent<_, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                None,
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (I::RowRow(prev_keyed), A::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowAgent<_, _>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                None,
-                                Some(vec![]),
-                                closure,
+                                prev_keyed, next_input, closure,
                             ),
                         (I::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, None, None, None, closure,
+                                prev_keyed, next_input, closure,
                             ),
                     };
 
@@ -508,32 +463,23 @@ where
                             .differential_join_inner::<_, RowEnter<_, _, _>, RowEnter<_, _, _>>(
                                 prev_keyed,
                                 next_input,
-                                None,
-                                Some(vec![]),
-                                Some(vec![]),
                                 closure,
                             ),
                         (I::RowUnit(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowEnter<_, _, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed,
                                 next_input,
-                                None,
-                                Some(vec![]),
-                                None,
                                 closure,
                             ),
                         (I::RowRow(prev_keyed), I::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowEnter<_, _, _>>(
                                 prev_keyed,
                                 next_input,
-                                None,
-                                None,
-                                Some(vec![]),
                                 closure,
                             ),
                         (I::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, None, None, None, closure,
+                                prev_keyed, next_input, closure,
                             ),
                     };
 
@@ -555,9 +501,6 @@ where
         &self,
         prev_keyed: Arranged<S, Tr1>,
         next_input: Arranged<S, Tr2>,
-        key_types: Option<Vec<ColumnType>>,
-        prev_types: Option<Vec<ColumnType>>,
-        next_types: Option<Vec<ColumnType>>,
         closure: JoinClosure,
     ) -> (
         Collection<S, Row, Diff>,
@@ -588,9 +531,9 @@ where
                         let mut row_builder = binding.borrow_mut();
                         let temp_storage = RowArena::new();
 
-                        let key = key.into_datum_iter(key_types.as_deref());
-                        let old = old.into_datum_iter(prev_types.as_deref());
-                        let new = new.into_datum_iter(next_types.as_deref());
+                        let key = key.into_datum_iter();
+                        let old = old.into_datum_iter();
+                        let new = new.into_datum_iter();
 
                         let mut datums_local = datums.borrow();
                         datums_local.extend(key);
@@ -623,9 +566,9 @@ where
                     let mut row_builder = binding.borrow_mut();
                     let temp_storage = RowArena::new();
 
-                    let key = key.into_datum_iter(key_types.as_deref());
-                    let old = old.into_datum_iter(prev_types.as_deref());
-                    let new = new.into_datum_iter(next_types.as_deref());
+                    let key = key.into_datum_iter();
+                    let old = old.into_datum_iter();
+                    let new = new.into_datum_iter();
 
                     let mut datums_local = datums.borrow();
                     datums_local.extend(key);

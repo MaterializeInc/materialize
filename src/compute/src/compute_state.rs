@@ -1124,7 +1124,6 @@ impl IndexPeek {
                     peek,
                     oks_handle,
                     None,
-                    Some(&[]),
                     max_result_size,
                 )
             }
@@ -1134,7 +1133,6 @@ impl IndexPeek {
                 Self::collect_ok_finished_data::<RowRowSpine<_, _>>(
                     peek,
                     oks_handle,
-                    None,
                     None,
                     max_result_size,
                 )
@@ -1147,7 +1145,6 @@ impl IndexPeek {
         peek: &mut Peek<Timestamp>,
         oks_handle: &mut TraceAgent<Tr>,
         key_types: Option<&[ColumnType]>,
-        val_types: Option<&[ColumnType]>,
         max_result_size: u64,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
@@ -1231,9 +1228,9 @@ impl IndexPeek {
                 let arena = RowArena::new();
 
                 let key_item = cursor.key(&storage);
-                let key = key_item.into_datum_iter(key_types);
+                let key = key_item.into_datum_iter();
                 let row_item = cursor.val(&storage);
-                let row = row_item.into_datum_iter(val_types);
+                let row = row_item.into_datum_iter();
 
                 let mut borrow = datum_vec.borrow();
                 borrow.extend(key);

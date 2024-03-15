@@ -330,7 +330,6 @@ where
             updates,
             inner,
             None,
-            Some(vec![]),
             prev_key,
             prev_thinning,
             comparison,
@@ -340,7 +339,6 @@ where
         SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
             updates,
             inner,
-            None,
             None,
             prev_key,
             prev_thinning,
@@ -375,7 +373,6 @@ where
             updates,
             inner,
             None,
-            Some(vec![]),
             prev_key,
             prev_thinning,
             comparison,
@@ -386,7 +383,6 @@ where
             build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                 updates,
                 inner,
-                None,
                 None,
                 prev_key,
                 prev_thinning,
@@ -412,7 +408,6 @@ fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
     trace_key_types: Option<Vec<ColumnType>>,
-    trace_val_types: Option<Vec<ColumnType>>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
@@ -478,9 +473,9 @@ where
                 let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
 
-                let key = key.into_datum_iter(trace_key_types.as_deref());
-                let stream_row = stream_row.into_datum_iter(None);
-                let lookup_row = lookup_row.into_datum_iter(trace_val_types.as_deref());
+                let key = key.into_datum_iter();
+                let stream_row = stream_row.into_datum_iter();
+                let lookup_row = lookup_row.into_datum_iter();
 
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key);
@@ -527,9 +522,9 @@ where
                 let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
 
-                let key = key.into_datum_iter(trace_key_types.as_deref());
-                let stream_row = stream_row.into_datum_iter(None);
-                let lookup_row = lookup_row.into_datum_iter(trace_val_types.as_deref());
+                let key = key.into_datum_iter();
+                let stream_row = stream_row.into_datum_iter();
+                let lookup_row = lookup_row.into_datum_iter();
 
                 let mut datums_local = datums.borrow();
                 datums_local.extend(key);
@@ -560,18 +555,11 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
 {
     match trace {
-        SpecializedArrangement::RowUnit(inner) => build_update_stream::<_, RowAgent<_, _>>(
-            inner,
-            None,
-            Some(vec![]),
-            as_of,
-            source_relation,
-            initial_closure,
-        ),
+        SpecializedArrangement::RowUnit(inner) => {
+            build_update_stream::<_, RowAgent<_, _>>(inner, as_of, source_relation, initial_closure)
+        }
         SpecializedArrangement::RowRow(inner) => build_update_stream::<_, RowRowAgent<_, _>>(
             inner,
-            None,
-            None,
             as_of,
             source_relation,
             initial_closure,
@@ -595,8 +583,6 @@ where
         SpecializedArrangementImport::RowUnit(inner) => {
             build_update_stream::<_, RowEnter<_, _, _>>(
                 inner,
-                None,
-                Some(vec![]),
                 as_of,
                 source_relation,
                 initial_closure,
@@ -605,8 +591,6 @@ where
         SpecializedArrangementImport::RowRow(inner) => {
             build_update_stream::<_, RowRowEnter<_, _, _>>(
                 inner,
-                None,
-                None,
                 as_of,
                 source_relation,
                 initial_closure,
@@ -622,8 +606,6 @@ where
 /// updates happening at the same time on different relations.
 fn build_update_stream<G, Tr>(
     trace: Arranged<G, Tr>,
-    trace_key_types: Option<Vec<ColumnType>>,
-    trace_val_types: Option<Vec<ColumnType>>,
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
@@ -665,10 +647,8 @@ where
                                         {
                                             let temp_storage = RowArena::new();
 
-                                            let key =
-                                                key.into_datum_iter(trace_key_types.as_deref());
-                                            let val =
-                                                val.into_datum_iter(trace_val_types.as_deref());
+                                            let key = key.into_datum_iter();
+                                            let val = val.into_datum_iter();
 
                                             let mut datums_local = datums.borrow();
                                             datums_local.extend(key);
