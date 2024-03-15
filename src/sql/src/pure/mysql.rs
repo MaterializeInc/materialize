@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_mysql_util::{MySqlTableDesc, QualifiedTableRef};
+use mz_mysql_util::{validate_source_privileges, MySqlError, MySqlTableDesc, QualifiedTableRef};
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -40,6 +40,22 @@ pub(super) fn mysql_upstream_name(
         Ident::new(&table.schema_name)?,
         Ident::new(&table.name)?,
     ]))
+}
+
+/// Reverses the `mysql_upstream_name` function.
+fn upstream_name_to_table(
+    name: &UnresolvedItemName,
+) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
+    if name.0.len() != 3 {
+        Err(MySqlSourcePurificationError::InvalidTableReference(name.to_string()).into())?
+    }
+    if name.0.get(0).map(|s| s.as_str()) != Some(MYSQL_DATABASE_FAKE_NAME) {
+        Err(MySqlSourcePurificationError::InvalidTableReference(name.to_string()).into())?
+    }
+    Ok(QualifiedTableRef {
+        schema_name: name.0[1].as_str(),
+        table_name: name.0[2].as_str(),
+    })
 }
 
 pub(super) fn derive_catalog_from_tables<'a>(
@@ -214,4 +230,34 @@ pub(super) fn normalize_column_refs<'a>(
     seq.sort();
     seq.dedup();
     Ok(seq)
+}
+
+pub(super) async fn validate_requested_subsources_privileges(
+    requested_subsources: &[RequestedSubsource<'_, MySqlTableDesc>],
+    conn: &mut mz_mysql_util::MySqlConn,
+) -> Result<(), PlanError> {
+    // Ensure that we have correct privileges on all tables; we have to do this before we
+    // start snapshotting because if we discover we cannot `SELECT` from a table while
+    // snapshotting, we break the entire source.
+    let tables_to_check_permissions = requested_subsources
+        .iter()
+        .map(|RequestedSubsource { upstream_name, .. }| upstream_name_to_table(upstream_name))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    validate_source_privileges(&mut *conn, &tables_to_check_permissions)
+        .await
+        .map_err(|err| match err {
+            MySqlError::MissingPrivileges(missing_privileges) => {
+                MySqlSourcePurificationError::UserLacksPrivileges(
+                    missing_privileges
+                        .into_iter()
+                        .map(|mp| (mp.privilege, mp.qualified_table_name))
+                        .collect(),
+                )
+                .into()
+            }
+            _ => PlanError::MySqlConnectionErr { cause: err.into() },
+        })?;
+
+    Ok(())
 }

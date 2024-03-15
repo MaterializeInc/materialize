@@ -30,12 +30,6 @@ CREATE TABLE other.s (a int);
 CREATE TABLE public.t (a int);
 # do not grant any privileges to priv
 
-# needed for creating a source
-GRANT SELECT ON performance_schema.replication_connection_configuration TO priv
-
-# needed to keep the source up to date
-GRANT REPLICATION SLAVE ON *.* TO priv
-
 #
 # no CONNECT error
 #
@@ -61,9 +55,7 @@ GRANT ALL ON public.* TO priv;
   FROM MYSQL CONNECTION mysql_conn
   FOR SCHEMAS (public, other);
 contains:No tables found in referenced schemas
-
-# TODO: #25412 (more error details when lacking permissions)
-# detail:user priv lacks USAGE privileges for schemas other
+detail:missing schemas: other
 
 #
 # SELECT errors
@@ -78,21 +70,84 @@ GRANT ALL ON other TO priv;
   FROM MYSQL CONNECTION mysql_conn
   FOR SCHEMAS (public, other);
 contains:No tables found in referenced schemas
+detail:missing schemas: other
 
 $ mysql-execute name=mysql
 CREATE TABLE other.u (a int);
 CREATE TABLE other.access_not_granted (a int);
 CREATE TABLE other.`select` (a INT);
 CREATE TABLE other.`"select"` (a INT);
-# privileges on at least one table in schema 'other' are now present
+# non-complete privileges on at least one table in schema 'other' are now present
 GRANT SELECT ON other.u TO priv;
+GRANT INDEX ON other.s TO priv;
+
+# A new error since the tables are now visible but we are missing some privileges
+! CREATE SOURCE mz_source
+  FROM MYSQL CONNECTION mysql_conn
+  FOR SCHEMAS (other);
+contains:User lacks required MySQL privileges
+detail:Missing MySQL privileges: 'LOCK TABLES' on 'other.s', 'SELECT' on 'other.s', 'LOCK TABLES' on 'other.u', 'REPLICATION SLAVE' on '*.*'
+
+
+# fix table privileges, use wildcard for LOCK TABLES
+$ mysql-execute name=mysql
+GRANT SELECT ON other.s TO priv;
+GRANT LOCK TABLES ON other.* TO priv;
+
+! CREATE SOURCE mz_source
+  FROM MYSQL CONNECTION mysql_conn
+  FOR SCHEMAS (other);
+contains:User lacks required MySQL privileges
+detail:Missing MySQL privileges: 'REPLICATION SLAVE' on '*.*'
 
 $ mysql-execute name=mysql
+GRANT REPLICATION SLAVE ON *.* TO priv;
 
-# This succeeds because at least one table in the schema is accessible.
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR SCHEMAS (other);
 
-! SELECT * FROM access_not_granted;
-contains:unknown catalog item 'access_not_granted'
+# confirm the source works
+$ mysql-execute name=mysql
+USE other;
+INSERT INTO u VALUES (2), (3), (4);
+
+> SELECT * FROM u;
+2
+3
+4
+
+# Verify privileges provided via default roles
+
+$ mysql-execute name=mysql
+CREATE ROLE 'r1';
+GRANT 'r1' TO 'priv';
+SET DEFAULT ROLE 'r1' TO 'priv';
+USE other;
+CREATE TABLE other.z (a int);
+INSERT INTO other.z VALUES (1);
+GRANT INDEX ON other.z TO 'priv';
+
+! CREATE SOURCE mz_source_other
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (other.z);
+contains:User lacks required MySQL privileges
+detail:Missing MySQL privileges: 'SELECT' on 'other.z'
+
+# grant the privilege to the role not the user directly
+$ mysql-execute name=mysql
+GRANT SELECT ON other.z TO 'r1';
+
+> CREATE SOURCE mz_source_other
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (other.z);
+
+> SELECT * FROM z;
+1
+
+# cleanup the 'other' database to avoid issues in other testdrive files
+> DROP SOURCE mz_source;
+> DROP SOURCE mz_source_other;
+
+$ mysql-execute name=mysql
+DROP DATABASE other;

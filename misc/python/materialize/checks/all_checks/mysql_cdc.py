@@ -43,7 +43,6 @@ class MySqlCdcBase:
                 USE public;
 
                 CREATE USER mysql1{self.suffix} IDENTIFIED BY 'mysql';
-                GRANT SELECT ON performance_schema.replication_connection_configuration TO mysql1{self.suffix};
                 GRANT REPLICATION SLAVE ON *.* TO mysql1{self.suffix};
                 GRANT ALL ON public.* TO mysql1{self.suffix};
 
@@ -261,7 +260,6 @@ class MySqlCdcMzNow(Check):
                 USE public;
 
                 CREATE USER mysql2 IDENTIFIED BY 'mysql';
-                GRANT SELECT ON performance_schema.replication_connection_configuration TO mysql2;
                 GRANT REPLICATION SLAVE ON *.* TO mysql2;
                 GRANT ALL ON public.* TO mysql2;
 

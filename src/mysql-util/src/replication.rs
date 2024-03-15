@@ -51,17 +51,28 @@ pub async fn ensure_gtid_consistency(conn: &mut Conn) -> Result<(), MySqlError> 
     Ok(())
 }
 
-/// When connected to a MySQL Replica we ensure that the replica preserves
-/// all transactions in the order they were committed on the primary which implies
-/// consecutive monotonically increasing transaction ids.
+/// In case this is a MySQL replica, we ensure that the replication settings are such that
+/// the replica would commit all transactions in the order they were committed on the primary.
+/// We don't really know that this is a replica, but if the settings indicate multi-threaded
+/// replication and the preserve-commit-order setting is not on, then it _could_ be a replica
+/// with correctness issues.
+/// We used to check `performance_schema.replication_connection_configuration` to determine if
+/// this was in-fact a replica but that requires non-standard privileges.
+/// Before MySQL 8.0.27, single-threaded was default and preserve-commit-order was not, and after
+/// 8.0.27 multi-threaded is default and preserve-commit-order is default on. So both of those
+/// default scenarios are fine. Unfortunately on some versions of MySQL on RDS, the default
+/// parameters use multi-threading without the preserve-commit-order setting on.
 pub async fn ensure_replication_commit_order(conn: &mut Conn) -> Result<(), MySqlError> {
-    // Determine if this is a replica by checking if there are any rows in the replica connection table
-    let res: u8 = conn
-        .query_first("SELECT COUNT(*) FROM performance_schema.replication_connection_configuration")
-        .await?
-        .unwrap();
-    if res > 0 {
-        // This system variable was renamed between MySQL 5.7 and 8.0
+    // This system variables were renamed between MySQL 5.7 and 8.0
+    let is_multi_threaded = match query_sys_var(conn, "replica_parallel_workers").await {
+        Ok(val) => val != "0" || val != "1",
+        Err(_) => match query_sys_var(conn, "slave_parallel_workers").await {
+            Ok(val) => val != "0" || val != "1",
+            Err(err) => return Err(err),
+        },
+    };
+
+    if is_multi_threaded {
         match verify_sys_setting(conn, "replica_preserve_commit_order", "1").await {
             Ok(_) => Ok(()),
             Err(_) => verify_sys_setting(conn, "slave_preserve_commit_order", "1").await,

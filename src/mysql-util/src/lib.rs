@@ -30,6 +30,9 @@ pub use replication::{
 pub mod schemas;
 pub use schemas::{schema_info, QualifiedTableRef, SchemaRequest};
 
+pub mod privileges;
+pub use privileges::validate_source_privileges;
+
 pub mod decoding;
 pub use decoding::pack_mysql_row;
 
@@ -58,8 +61,26 @@ impl std::fmt::Display for UnsupportedDataType {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MissingPrivilege {
+    pub privilege: String,
+    pub qualified_table_name: String,
+}
+
+impl std::fmt::Display for MissingPrivilege {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Missing privilege '{}' for '{}'",
+            self.privilege, self.qualified_table_name
+        )
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
+    #[error("error validating privileges: {0:?}")]
+    MissingPrivileges(Vec<MissingPrivilege>),
     #[error("error creating mysql connection with config: {0}")]
     InvalidClientConfig(String),
     #[error("error setting up ssh: {0}")]

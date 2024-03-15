@@ -4745,6 +4745,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "fancy-regex",
  "indexmap 1.9.1",
  "itertools",
  "mysql_async",

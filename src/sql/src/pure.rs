@@ -983,6 +983,9 @@ async fn purify_create_source(
                 mysql::map_column_refs(&ignore_columns, MySqlConfigOptionName::IgnoreColumns)?;
 
             // Retrieve schemas for all requested tables
+            // NOTE: mysql will only expose the schemas of tables we have at least one privilege on
+            // and we can't tell if a table exists without a privilege, so in some cases we may
+            // return an EmptyDatabase error in the case of privilege issues.
             let tables = mz_mysql_util::schema_info(
                 &mut *conn,
                 &table_schema_request,
@@ -1098,7 +1101,11 @@ async fn purify_create_source(
 
             validate_subsource_names(&validated_requested_subsources)?;
 
-            // TODO(roshan): Implement privileges check for MySQL
+            mysql::validate_requested_subsources_privileges(
+                &validated_requested_subsources,
+                &mut conn,
+            )
+            .await?;
 
             let (targeted_subsources, new_subsources) = mysql::generate_targeted_subsources(
                 &scx,
