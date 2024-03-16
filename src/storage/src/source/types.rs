@@ -119,11 +119,9 @@ pub struct SourceOutput<FromTime> {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub struct DecodeResult<FromTime> {
     /// The decoded key
-    pub key: Option<Result<Row, DecodeError>>,
-    /// The decoded value, as well as the the
-    /// differential `diff` value for this value, if the value
-    /// is present and not and error.
-    pub value: Option<Result<Row, DecodeError>>,
+    pub key: Result<Row, DecodeError>,
+    /// The decoded value
+    pub value: Result<Row, DecodeError>,
     /// Additional metadata requested by the user
     pub metadata: Row,
     /// The original timestamp of this message

@@ -37,8 +37,7 @@ impl DecodeMetricDefs {
         let format_label = match decoder {
             DataDecoderInner::Avro(_) => "avro",
             DataDecoderInner::Csv(_) => "csv",
-            DataDecoderInner::DelimitedBytes { format, .. }
-            | DataDecoderInner::PreDelimited(format) => match format {
+            DataDecoderInner::PreDelimited(format) => match format {
                 PreDelimitedFormat::Bytes => "raw",
                 PreDelimitedFormat::Json => "json",
                 PreDelimitedFormat::Text => "text",

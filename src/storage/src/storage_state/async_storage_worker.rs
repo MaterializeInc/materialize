@@ -93,7 +93,7 @@ where
     let envelope = &ingestion_description.desc.envelope;
     if !matches!(
         envelope,
-        SourceEnvelope::None(_) | SourceEnvelope::Upsert(_)
+        None | Some(SourceEnvelope::None(_) | SourceEnvelope::Upsert(_))
     ) {
         let mut source_resume_uppers = BTreeMap::new();
         for (id, upper) in resume_uppers {

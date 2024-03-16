@@ -9,11 +9,11 @@
 
 //! Types and traits related to the *decoding* of data for sources.
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use mz_interchange::{avro, protobuf};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::any_regex;
-use mz_repr::{ColumnType, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -35,15 +35,6 @@ include!(concat!(
 pub struct SourceDataEncoding<C: ConnectionAccess = InlinedConnection> {
     pub key: Option<DataEncoding<C>>,
     pub value: DataEncoding<C>,
-}
-
-impl<C: ConnectionAccess> SourceDataEncoding<C> {
-    pub fn desc(&self) -> Result<(Option<RelationDesc>, RelationDesc), anyhow::Error> {
-        Ok(match &self.key {
-            None => (None, self.value.desc()?),
-            Some(key) => (Some(key.desc()?), self.value.desc()?),
-        })
-    }
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDataEncoding, R>
@@ -157,61 +148,89 @@ impl<C: ConnectionAccess> DataEncoding<C> {
         }
     }
 
-    /// Computes the [`RelationDesc`] for the relation specified by this
-    /// data encoding.
-    fn desc(&self) -> Result<RelationDesc, anyhow::Error> {
+    /// The default column name that will be given to the output column of this encoding.
+    pub fn default_column_name(&self) -> &'static str {
+        match self {
+            Self::Bytes => "data",
+            Self::Json => "data",
+            Self::Avro(_) => "data",
+            Self::Protobuf(_) => "data",
+            Self::Regex { .. } => "data",
+            Self::Csv(_) => "data",
+            Self::Text => "text",
+        }
+    }
+
+    /// Computes the output [`ColumnType`] of this data encoding when operating on `input`.
+    pub fn output_type(&self, input: &ScalarType) -> Result<ScalarType, anyhow::Error> {
+        if !matches!(input, ScalarType::Bytes) {
+            bail!("format decoding can only be applied on byte columns")
+        }
+
         // Add columns for the data, based on the encoding format.
         Ok(match self {
-            Self::Bytes => {
-                RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
-            }
-            Self::Json => {
-                RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
-            }
+            Self::Bytes => ScalarType::Bytes,
+            Self::Json => ScalarType::Jsonb,
             Self::Avro(AvroEncoding { schema, .. }) => {
                 let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
-                avro::schema_to_relationdesc(parsed_schema).context("validating avro schema")?
+                avro::schema_to_scalartype(parsed_schema).context("validating avro schema")?
             }
             Self::Protobuf(ProtobufEncoding {
                 descriptors,
                 message_name,
                 confluent_wire_format: _,
-            }) => protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.to_owned())?
-                .columns()
-                .iter()
-                .fold(RelationDesc::empty(), |desc, (name, ty)| {
-                    desc.with_column(name, ty.clone())
-                }),
-            Self::Regex(RegexEncoding { regex }) => regex
-                .capture_names()
-                .enumerate()
-                // The first capture is the entire matched string. This will
-                // often not be useful, so skip it. If people want it they can
-                // just surround their entire regex in an explicit capture
-                // group.
-                .skip(1)
-                .fold(RelationDesc::empty(), |desc, (i, name)| {
-                    let name = match name {
-                        None => format!("column{}", i),
-                        Some(name) => name.to_owned(),
-                    };
-                    let ty = ScalarType::String.nullable(true);
-                    desc.with_column(name, ty)
-                }),
-            Self::Csv(CsvEncoding { columns, .. }) => match columns {
-                ColumnSpec::Count(n) => (1..=*n).fold(RelationDesc::empty(), |desc, i| {
-                    desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
-                }),
-                ColumnSpec::Header { names } => names
-                    .iter()
-                    .map(|s| &**s)
-                    .fold(RelationDesc::empty(), |desc, name| {
-                        desc.with_column(name, ScalarType::String.nullable(false))
-                    }),
-            },
-            Self::Text => {
-                RelationDesc::empty().with_column("text", ScalarType::String.nullable(false))
+            }) => {
+                let descs =
+                    protobuf::DecodedDescriptors::from_bytes(descriptors, message_name.to_owned())?;
+
+                ScalarType::Record {
+                    fields: descs.columns().to_vec(),
+                    custom_id: None,
+                }
             }
+            Self::Regex(RegexEncoding { regex }) => {
+                // The first capture is the entire matched string. This will often not be useful,
+                // so skip it. If people want it they can just surround their entire regex in an
+                // explicit capture group.
+                let mut fields = vec![];
+                for (i, name) in regex.capture_names().enumerate().skip(1) {
+                    let name = match name {
+                        None => ColumnName::from(format!("column{}", i)),
+                        Some(name) => ColumnName::from(name),
+                    };
+                    fields.push((name, ScalarType::String.nullable(true)));
+                }
+                ScalarType::Record {
+                    fields,
+                    custom_id: None,
+                }
+            }
+            Self::Csv(CsvEncoding { columns, .. }) => {
+                let fields = match columns {
+                    ColumnSpec::Count(n) => (1..=*n)
+                        .map(|i| {
+                            (
+                                ColumnName::from(format!("column{}", i)),
+                                ScalarType::String.nullable(false),
+                            )
+                        })
+                        .collect(),
+                    ColumnSpec::Header { names } => names
+                        .iter()
+                        .map(|name| {
+                            (
+                                ColumnName::from(&**name),
+                                ScalarType::String.nullable(false),
+                            )
+                        })
+                        .collect(),
+                };
+                ScalarType::Record {
+                    fields,
+                    custom_id: None,
+                }
+            }
+            Self::Text => ScalarType::String,
         })
     }
 

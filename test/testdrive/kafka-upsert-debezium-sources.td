@@ -109,7 +109,7 @@ contains:ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   KEY FORMAT JSON VALUE FORMAT JSON
   ENVELOPE DEBEZIUM
-contains:ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO
+contains:ENVELOPE DEBEZIUM requires that KEY FORMAT decodes into a valid Debezium schema.
 
 > CREATE SOURCE doin_upsert
   IN CLUSTER ${arg.single-replica-cluster}

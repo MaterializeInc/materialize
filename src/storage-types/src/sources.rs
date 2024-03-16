@@ -630,7 +630,7 @@ impl RustType<ProtoCompression> for Compression {
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
     pub encoding: Option<encoding::SourceDataEncoding<C>>,
-    pub envelope: SourceEnvelope,
+    pub envelope: Option<SourceEnvelope>,
     pub timestamp_interval: Duration,
 }
 
@@ -647,7 +647,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            encoding: encoding.map(|e| e.into_inline_connection(r)),
+            encoding: encoding.map(|e| e.into_inline_connection(&r)),
             envelope,
             timestamp_interval,
         }
@@ -659,7 +659,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
             encoding: self.encoding.into_proto(),
-            envelope: Some(self.envelope.into_proto()),
+            envelope: self.envelope.into_proto(),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
@@ -670,9 +670,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
             encoding: proto.encoding.into_rust()?,
-            envelope: proto
-                .envelope
-                .into_rust_if_some("ProtoSourceDesc::envelope")?,
+            envelope: proto.envelope.into_rust()?,
             timestamp_interval: proto
                 .timestamp_interval
                 .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
@@ -706,20 +704,17 @@ impl<C: ConnectionAccess> SourceDesc<C> {
             } => g.load_generator.is_monotonic(),
             // Other sources the `None` envelope are append-only.
             SourceDesc {
-                envelope: SourceEnvelope::None(_),
+                envelope: Some(SourceEnvelope::None(_)),
                 ..
             } => true,
             // Other combinations may produce retractions.
             SourceDesc {
-                envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
+                envelope: Some(SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2),
                 connection: GenericSourceConnection::Kafka(_),
                 ..
             } => false,
+            _ => false,
         }
-    }
-
-    pub fn envelope(&self) -> &SourceEnvelope {
-        &self.envelope
     }
 }
 

@@ -562,9 +562,9 @@ impl Source {
             // `SourceEnvelope` itself, but that one feels more like an internal
             // thing and adapter should own how we represent envelopes as a
             // string? It would not be hard to convince me otherwise, though.
-            DataSourceDesc::Ingestion(ingestion) => match ingestion.desc.envelope() {
-                SourceEnvelope::None(_) => Some("none"),
-                SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
+            DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.envelope {
+                None | Some(SourceEnvelope::None(_)) => Some("none"),
+                Some(SourceEnvelope::Upsert(upsert_envelope)) => match upsert_envelope.style {
                     mz_storage_types::sources::envelope::UpsertStyle::Default(_) => Some("upsert"),
                     mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
                         // NOTE(aljoscha): Should we somehow mark that this is
@@ -573,7 +573,7 @@ impl Source {
                         Some("debezium")
                     }
                 },
-                SourceEnvelope::CdcV2 => {
+                Some(SourceEnvelope::CdcV2) => {
                     // TODO(aljoscha): Should we even report this? It's
                     // currently not exposed.
                     Some("materialize")

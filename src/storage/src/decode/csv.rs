@@ -51,12 +51,6 @@ impl CsvDecoderState {
         }
     }
 
-    pub fn reset_for_new_object(&mut self) {
-        if self.header_names.is_some() {
-            self.next_row_is_header = true;
-        }
-    }
-
     pub fn decode(&mut self, chunk: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         loop {
             let (result, n_input, n_output, n_ends) = self.csv_reader.read_record(
@@ -97,10 +91,11 @@ impl CsvDecoderState {
                             match std::str::from_utf8(&self.output[0..self.output_cursor]) {
                                 Ok(output) => {
                                     self.events_success += 1;
-                                    let mut row_packer = self.row_buf.packer();
-                                    row_packer.extend((0..self.n_cols).map(|i| {
-                                        Datum::String(&output[self.ends[i]..self.ends[i + 1]])
-                                    }));
+                                    self.row_buf.packer().push_list_with(|packer| {
+                                        packer.extend((0..self.n_cols).map(|i| {
+                                            Datum::String(&output[self.ends[i]..self.ends[i + 1]])
+                                        }));
+                                    });
                                     self.output_cursor = 0;
                                     self.ends_cursor = 1;
                                     Ok(Some(self.row_buf.clone()))

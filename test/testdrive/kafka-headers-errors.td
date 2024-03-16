@@ -14,7 +14,87 @@ ALTER SYSTEM SET enable_envelope_materialize = true
 # Note these are nonsense schemas, as this error happens before schema verification of any form
 $ set keyschema={}
 
-$ set schema={}
+$ set schema=[
+  {
+    "type": "array",
+    "items": {
+      "type": "record",
+      "name": "update",
+      "namespace": "com.materialize.cdc",
+      "fields": [
+        {
+          "name": "data",
+          "type": {
+            "type": "record",
+            "name": "data",
+            "fields": [
+              {
+                "name": "id",
+                "type": "long"
+              },
+              {
+                "name": "price",
+                "type": [
+                  "null",
+                  "int"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "time",
+          "type": "long"
+        },
+        {
+          "name": "diff",
+          "type": "long"
+        }
+      ]
+    }
+  },
+  {
+    "type": "record",
+    "name": "progress",
+    "namespace": "com.materialize.cdc",
+    "fields": [
+      {
+        "name": "lower",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "upper",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "counts",
+        "type": {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "counts",
+            "fields": [
+              {
+                "name": "time",
+                "type": "long"
+              },
+              {
+                "name": "count",
+                "type": "long"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+  ]
 
 $ kafka-create-topic topic=headers_src
 
@@ -25,8 +105,7 @@ $ kafka-create-topic topic=headers_src
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_src-${testdrive.seed}')
-  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE MATERIALIZE
 contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
@@ -35,8 +114,7 @@ contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_src-${testdrive.seed}')
-  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE MATERIALIZE
 contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)

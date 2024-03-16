@@ -60,9 +60,13 @@ mod tests {
         // This is the blob that will make both ints in the value zero.
         let mut good_bytes: &[u8] = &[0, 0];
         // The decode should succeed with the correct value.
+        let mut expected_row = Row::default();
+        expected_row
+            .packer()
+            .push_list([Datum::Int32(0), Datum::Int32(0)]);
         assert_eq!(
             decoder.decode(&mut good_bytes).await.unwrap().unwrap(),
-            Row::pack([Datum::Int32(0), Datum::Int32(0)])
+            expected_row,
         );
     }
 }
@@ -250,7 +254,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
         a: &mut A,
     ) -> Result<Self::Out, AvroError> {
         let mut str_buf = std::mem::take(self.buf);
-        let mut pack_record = |rp: &mut RowPacker| -> Result<(), AvroError> {
+        let pack_record = |rp: &mut RowPacker| -> Result<(), AvroError> {
             let mut expected = 0;
             let mut stash = vec![];
             // The idea here is that if the deserializer gives us fields in the order we're expecting,
@@ -288,11 +292,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
             }
             Ok(())
         };
-        if self.is_top {
-            pack_record(self.packer)?;
-        } else {
-            self.packer.push_list_with(pack_record)?;
-        }
+        self.packer.push_list_with(pack_record)?;
         *self.buf = str_buf;
         Ok(())
     }
@@ -305,15 +305,11 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
         deserializer: D,
         reader: &'b mut R,
     ) -> Result<Self::Out, AvroError> {
-        if null_variant == Some(idx) {
-            for _ in 0..n_variants - 1 {
-                self.packer.push(Datum::Null)
-            }
-        } else {
-            let mut deserializer = Some(deserializer);
+        let mut deserializer = Some(deserializer);
+        let mut pack_union = move |packer: &mut RowPacker| -> Result<(), AvroError> {
             for i in 0..n_variants {
                 let dec = AvroFlatDecoder {
-                    packer: self.packer,
+                    packer,
                     buf: self.buf,
                     is_top: false,
                 };
@@ -321,11 +317,19 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
                     if i == idx {
                         deserializer.take().unwrap().deserialize(reader, dec)?;
                     } else {
-                        self.packer.push(Datum::Null)
+                        packer.push(Datum::Null)
                     }
                 }
             }
+            Ok(())
+        };
+        // A top level union is always wrapped in a record
+        if self.is_top {
+            self.packer.push_list_with(pack_union)?;
+        } else {
+            pack_union(self.packer)?;
         }
+
         Ok(())
     }
 

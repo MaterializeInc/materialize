@@ -50,7 +50,7 @@ use mz_ore::future::OreFutureExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
-use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, ColumnType, ScalarType};
 use tracing::warn;
 
 use crate::avro::is_null;
@@ -60,36 +60,17 @@ pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
     Ok(Schema::parse(&schema)?)
 }
 
-/// Converts an Apache Avro schema into a list of column names and types.
-// TODO(petrosagg): find a way to make this a TryFrom impl somewhere
-pub fn schema_to_relationdesc(schema: Schema) -> Result<RelationDesc, anyhow::Error> {
-    // TODO(petrosagg): call directly into validate_schema_2 and do the Record flattening once
-    // we're in RelationDesc land
-    Ok(RelationDesc::from_names_and_types(validate_schema_1(
-        schema.top_node(),
-    )?))
-}
-
-/// Convert an Avro schema to a series of columns and names, flattening the top-level record,
-/// if the top node is indeed a record.
-fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
-    let mut columns = vec![];
-    let mut seen_avro_nodes = Default::default();
-    match schema.inner {
-        SchemaPiece::Record { fields, .. } => {
-            for f in fields {
-                columns.extend(get_named_columns(
-                    &mut seen_avro_nodes,
-                    schema.step(&f.schema),
-                    Some(&f.name),
-                )?);
-            }
-        }
-        _ => {
-            columns.extend(get_named_columns(&mut seen_avro_nodes, schema, None)?);
-        }
-    }
-    Ok(columns)
+/// Converts an Apache Avro schema into the corresponding ScalarType.
+pub fn schema_to_scalartype(schema: Schema) -> Result<ScalarType, anyhow::Error> {
+    let ref mut seen_avro_nodes = Default::default();
+    let top_node = schema.top_node();
+    Ok(match top_node.inner {
+        SchemaPiece::Union(_) => ScalarType::Record {
+            fields: get_union_columns(seen_avro_nodes, top_node, None)?,
+            custom_id: None,
+        },
+        _ => validate_schema_2(seen_avro_nodes, top_node)?,
+    })
 }
 
 /// Get the series of (one or more) SQL columns corresponding to an Avro union.

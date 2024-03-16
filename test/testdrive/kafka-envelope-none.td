@@ -57,10 +57,11 @@ hello  world
 <null> foo
 
 
-# send a key without a value, should error
+# send a key without a value, should ignore the message
 
 $ kafka-ingest topic=missing_keys_or_values key-format=bytes format=bytes omit-value=true
 bar
 
-! SELECT * FROM missing_keys_or_values
-contains: Envelope error: Flat: Value not present for message
+> SELECT * FROM missing_keys_or_values
+hello  world
+<null> foo

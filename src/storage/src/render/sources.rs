@@ -18,20 +18,17 @@ use std::sync::Arc;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::{
-    DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
-};
+use mz_storage_types::errors::{DataflowError, UpsertError, UpsertNullKeyError, UpsertValueError};
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle};
 use mz_storage_types::sources::*;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
-use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
@@ -198,12 +195,11 @@ where
         connection: _,
         timestamp_interval: _,
     } = description.desc;
-
     let (decoded_stream, decode_health) = match encoding {
         None => (
             ok_source.map(|r| DecodeResult {
-                key: None,
-                value: Some(Ok(r.value)),
+                key: Ok(Row::default()),
+                value: Ok(r.value),
                 metadata: Row::default(),
                 from_time: r.from_time,
             }),
@@ -221,7 +217,7 @@ where
 
     // render envelopes
     let (envelope_ok, envelope_err, envelope_health) = match &envelope {
-        SourceEnvelope::Upsert(upsert_envelope) => {
+        Some(SourceEnvelope::Upsert(upsert_envelope)) => {
             let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 
             let persist_clients = Arc::clone(&storage_state.persist_clients);
@@ -398,37 +394,42 @@ where
                 health_update,
             )
         }
-        SourceEnvelope::None(none_envelope) => {
-            let results = append_metadata_to_value(decoded_stream);
-
-            let flattened_stream = flatten_results_prepend_keys(none_envelope, results);
+        Some(SourceEnvelope::None(none_envelope)) => {
+            let flattened_stream = render_none_envelope(none_envelope.clone(), decoded_stream);
 
             let (stream, errors) = flattened_stream.inner.ok_err(split_ok_err);
 
             let errors = errors.as_collection();
             (stream.as_collection(), Some(errors), empty(scope))
         }
-        SourceEnvelope::CdcV2 => {
+        Some(SourceEnvelope::CdcV2) => {
             let (oks, token) = render_decode_cdcv2(&decoded_stream);
             needed_tokens.push(token);
             (oks, None, empty(scope))
         }
+        None => {
+            let (stream, errors) = decoded_stream
+                .map(|result| result.value.map_err(DataflowError::from))
+                .inner
+                .ok_err(split_ok_err);
+            (
+                stream.as_collection(),
+                Some(errors.as_collection()),
+                empty(scope),
+            )
+        }
     };
 
-    let (stream, errors, health) = (
-        envelope_ok,
-        envelope_err,
-        decode_health.concat(&envelope_health),
-    );
+    let health = decode_health.concat(&envelope_health);
 
-    if let Some(errors) = errors {
+    if let Some(errors) = envelope_err {
         error_collections.push(errors);
     }
 
     // Perform various additional transformations on the collection.
 
     // Force a shuffling of data in case sources are not uniformly distributed.
-    let collection = stream.inner.exchange(|x| x.hashed()).as_collection();
+    let collection = envelope_ok.inner.exchange(|x| x.hashed()).as_collection();
 
     // Flatten the error collections.
     let err_collection = match error_collections.len() {
@@ -477,167 +478,195 @@ fn split_ok_err<O, E, T, D>(x: (Result<O, E>, T, D)) -> Result<(O, T, D), (E, T,
     }
 }
 
-/// After handling metadata insertion, we split streams into key/value parts for convenience
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
-struct KV {
-    key: Option<Result<Row, DecodeError>>,
-    val: Option<Result<Row, DecodeError>>,
-}
-
-fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
-    results: Collection<G, DecodeResult<FromTime>, Diff>,
-) -> Collection<G, KV, Diff> {
-    results.map(move |res| {
-        let val = res.value.map(|val_result| {
-            val_result.map(|mut val| {
-                if !res.metadata.is_empty() {
-                    RowPacker::for_existing_row(&mut val).extend(&res.metadata);
-                }
-                val
-            })
-        });
-
-        KV { val, key: res.key }
-    })
-}
-
 /// Convert from streams of [`DecodeResult`] to UpsertCommands, inserting the Key according to [`KeyEnvelope`]
 fn upsert_commands<G: Scope, FromTime: Timestamp>(
     input: Collection<G, DecodeResult<FromTime>, Diff>,
-    upsert_envelope: UpsertEnvelope,
+    envelope: UpsertEnvelope,
 ) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, FromTime), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
         let from_time = result.from_time;
 
-        let key = match result.key {
-            Some(Ok(key)) => Ok(key),
-            None => Err(UpsertError::NullKey(UpsertNullKeyError)),
-            Some(Err(err)) => Err(UpsertError::KeyDecode(err)),
+        let key_row = match result.key {
+            Ok(key) => match key.unpack_first() {
+                Datum::Null => Err(UpsertError::NullKey(UpsertNullKeyError)),
+                _ => Ok(key),
+            },
+            Err(err) => Err(UpsertError::KeyDecode(err)),
         };
 
         // If we have a well-formed key we can continue, otherwise we're upserting an error
-        let key = match key {
-            Ok(key) => key,
+        let key_row = match key_row {
+            Ok(row) => row,
             err @ Err(_) => match result.value {
-                Some(_) => return (UpsertKey::from_key(err.as_ref()), Some(err), from_time),
-                None => return (UpsertKey::from_key(err.as_ref()), None, from_time),
-            },
-        };
-
-        // We can now apply the key envelope
-        let key_row = match upsert_envelope.style {
-            UpsertStyle::Debezium { .. } | UpsertStyle::Default(KeyEnvelope::Flattened) => key,
-            UpsertStyle::Default(KeyEnvelope::Named(_)) => {
-                if key.iter().nth(1).is_none() {
-                    key
-                } else {
-                    row_buf.packer().push_list(key.iter());
-                    row_buf.clone()
-                }
-            }
-            UpsertStyle::Default(KeyEnvelope::None) => unreachable!(),
-        };
-
-        let key = UpsertKey::from_key(Ok(&key_row));
-
-        let metadata = result.metadata;
-        let value = match result.value {
-            Some(Ok(ref row)) => match upsert_envelope.style {
-                UpsertStyle::Debezium { after_idx } => match row.iter().nth(after_idx).unwrap() {
-                    Datum::List(after) => {
-                        row_buf.packer().extend(after.iter().chain(metadata.iter()));
-                        Some(Ok(row_buf.clone()))
-                    }
-                    Datum::Null => None,
-                    d => panic!("type error: expected record, found {:?}", d),
+                Ok(ref row) => match row.unpack_first() {
+                    Datum::Null => return (UpsertKey::from_key(err.as_ref()), None, from_time),
+                    _ => return (UpsertKey::from_key(err.as_ref()), Some(err), from_time),
                 },
-                UpsertStyle::Default(_) => {
-                    let mut packer = row_buf.packer();
-                    packer.extend(key_row.iter().chain(row.iter()).chain(metadata.iter()));
-                    Some(Ok(row_buf.clone()))
-                }
+                Err(_) => return (UpsertKey::from_key(err.as_ref()), Some(err), from_time),
             },
-            Some(Err(inner)) => Some(Err(UpsertError::Value(UpsertValueError {
-                for_key: key_row,
-                inner,
-                is_legacy_dont_touch_it: false,
-            }))),
-            None => None,
         };
 
+        let (key, value) = match &envelope.style {
+            UpsertStyle::Default(key_envelope) => {
+                let (key, key_datums) = match key_envelope {
+                    KeyEnvelope::Flattened { .. } | KeyEnvelope::Named { flatten: true, .. } => {
+                        let key =
+                            UpsertKey::from_iter(Ok(key_row.unpack_first().unwrap_list().iter()));
+                        (key, key_row.unpack_first().unwrap_list().iter())
+                    }
+                    KeyEnvelope::Named { flatten: false, .. } => {
+                        let key = UpsertKey::from_key(Ok(&key_row));
+                        (key, key_row.iter())
+                    }
+                };
+
+                let value = match result.value {
+                    Ok(row) => match row.unpack_first() {
+                        Datum::Null => None,
+                        d => {
+                            let value_datums = if envelope.flatten_value {
+                                d.unwrap_list().iter()
+                            } else {
+                                row.iter()
+                            };
+                            row_buf.packer().extend(
+                                key_datums.chain(value_datums).chain(result.metadata.iter()),
+                            );
+                            Some(Ok(row_buf.clone()))
+                        }
+                    },
+                    Err(inner) => Some(Err(UpsertError::Value(UpsertValueError {
+                        for_key: Row::pack(key_datums),
+                        inner,
+                        is_legacy_dont_touch_it: false,
+                    }))),
+                };
+                (key, value)
+            }
+            UpsertStyle::Debezium { after_idx } => {
+                let key = UpsertKey::from_iter(Ok(key_row.unpack_first().unwrap_list().iter()));
+                let key_datums = key_row.unpack_first().unwrap_list().iter();
+
+                let value = match result.value {
+                    Ok(row) => match row.unpack_first() {
+                        Datum::Null => None,
+                        d => {
+                            let mut value_datums = if envelope.flatten_value {
+                                d.unwrap_list().iter()
+                            } else {
+                                row.iter()
+                            };
+                            match value_datums.nth(*after_idx).unwrap() {
+                                Datum::Null => None,
+                                d => {
+                                    let after = d.unwrap_list().iter();
+                                    row_buf.packer().extend(after.chain(result.metadata.iter()));
+                                    Some(Ok(row_buf.clone()))
+                                }
+                            }
+                        }
+                    },
+                    Err(inner) => Some(Err(UpsertError::Value(UpsertValueError {
+                        for_key: Row::pack(key_datums),
+                        inner,
+                        is_legacy_dont_touch_it: false,
+                    }))),
+                };
+                (key, value)
+            }
+        };
         (key, value, from_time)
     })
 }
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
-fn flatten_results_prepend_keys<G>(
-    none_envelope: &NoneEnvelope,
-    results: Collection<G, KV, Diff>,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
-where
-    G: Scope,
-{
-    let NoneEnvelope {
-        key_envelope,
-        key_arity,
-    } = none_envelope;
+fn render_none_envelope<G: Scope, FromTime: Timestamp>(
+    envelope: NoneEnvelope,
+    input: Collection<G, DecodeResult<FromTime>, Diff>,
+) -> Collection<G, Result<Row, DataflowError>, Diff> {
+    let mut row_buf = Row::default();
 
-    let null_key_columns = Row::pack_slice(&vec![Datum::Null; *key_arity]);
+    match envelope.key_envelope {
+        Some(KeyEnvelope::Flattened { key_arity }) => {
+            let null_key_columns = Row::pack_slice(&vec![Datum::Null; key_arity]);
+            input.flat_map(move |result| {
+                let value = match result.value {
+                    Ok(row) => row,
+                    Err(err) => return Some(Err(err.into())),
+                };
+                let key = match result.key {
+                    Ok(row) => row,
+                    Err(err) => return Some(Err(err.into())),
+                };
 
-    match key_envelope {
-        KeyEnvelope::None => {
-            results.flat_map(|KV { val, .. }| val.map(|result| result.map_err(Into::into)))
-        }
-        KeyEnvelope::Flattened => results
-            .flat_map(raise_key_value_errors)
-            .map(move |maybe_kv| {
-                maybe_kv.map(|(key, value)| {
-                    let mut key = key.unwrap_or_else(|| null_key_columns.clone());
-                    RowPacker::for_existing_row(&mut key).extend_by_row(&value);
-                    key
-                })
-            }),
-        KeyEnvelope::Named(_) => {
-            results
-                .flat_map(raise_key_value_errors)
-                .map(move |maybe_kv| {
-                    maybe_kv.map(|(key, value)| {
-                        let mut key = key.unwrap_or_else(|| null_key_columns.clone());
-                        // Named semantics rename a key that is a single column, and encode a
-                        // multi-column field as a struct with that name
-                        let row = if key.iter().nth(1).is_none() {
-                            RowPacker::for_existing_row(&mut key).extend_by_row(&value);
-                            key
+                match value.unpack_first() {
+                    Datum::Null => None,
+                    d => {
+                        let value = if envelope.flatten_value {
+                            d.unwrap_list().iter()
                         } else {
-                            let mut new_row = Row::default();
-                            let mut packer = new_row.packer();
-                            packer.push_list(key.iter());
-                            packer.extend_by_row(&value);
-                            new_row
+                            value.iter()
                         };
-                        row
-                    })
-                })
+                        let key = match key.unpack_first() {
+                            Datum::Null => null_key_columns.iter(),
+                            d => d.unwrap_list().iter(),
+                        };
+                        row_buf
+                            .packer()
+                            .extend(key.chain(value).chain(result.metadata.iter()));
+                        Some(Ok(row_buf.clone()))
+                    }
+                }
+            })
         }
-    }
-}
-
-/// Handle possibly missing key or value portions of messages
-fn raise_key_value_errors(
-    KV { key, val }: KV,
-) -> Option<Result<(Option<Row>, Row), DataflowError>> {
-    match (key, val) {
-        (Some(Ok(key)), Some(Ok(value))) => Some(Ok((Some(key), value))),
-        (None, Some(Ok(value))) => Some(Ok((None, value))),
-        // always prioritize the value error if either or both have an error
-        (_, Some(Err(e))) => Some(Err(e.into())),
-        (Some(Err(e)), _) => Some(Err(e.into())),
-        (None, None) => None,
-        // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
-        _ => Some(Err(DataflowError::from(EnvelopeError::Flat(
-            "Value not present for message".to_string(),
-        )))),
+        Some(KeyEnvelope::Named {
+            flatten: flatten_key,
+            name: _,
+        }) => input.flat_map(move |result| {
+            let value = match result.value {
+                Ok(row) => row,
+                Err(err) => return Some(Err(err.into())),
+            };
+            let key = match result.key {
+                Ok(row) => row,
+                Err(err) => return Some(Err(err.into())),
+            };
+            match value.unpack_first() {
+                Datum::Null => None,
+                d => {
+                    let key = match key.unpack_first() {
+                        Datum::Null => key.iter(),
+                        d if flatten_key => d.unwrap_list().iter(),
+                        _ => key.iter(),
+                    };
+                    let value = if envelope.flatten_value {
+                        d.unwrap_list().iter()
+                    } else {
+                        value.iter()
+                    };
+                    row_buf
+                        .packer()
+                        .extend(key.chain(value).chain(result.metadata.iter()));
+                    Some(Ok(row_buf.clone()))
+                }
+            }
+        }),
+        None => input.flat_map(move |result| match result.value {
+            Ok(value) => match value.unpack_first() {
+                Datum::Null => None,
+                d => {
+                    let value = if envelope.flatten_value {
+                        d.unwrap_list().iter()
+                    } else {
+                        value.iter()
+                    };
+                    row_buf.packer().extend(value.chain(result.metadata.iter()));
+                    Some(Ok(row_buf.clone()))
+                }
+            },
+            Err(err) => Some(Err(err.into())),
+        }),
     }
 }
 

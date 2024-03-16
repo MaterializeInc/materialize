@@ -105,8 +105,9 @@ impl Decoder {
             bytes = adjusted_bytes;
         }
         let message = DynamicMessage::decode(self.descriptors.message_descriptor.clone(), bytes)?;
-        let mut packer = self.row.packer();
-        pack_message(&mut packer, &message)?;
+        self.row
+            .packer()
+            .push_list_with(|packer| pack_message(packer, &message))?;
         Ok(Some(self.row.clone()))
     }
 }

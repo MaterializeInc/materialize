@@ -17,6 +17,7 @@ use std::fmt::Write;
 use std::iter;
 use std::time::Duration;
 
+use anyhow::{anyhow, bail};
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{
@@ -80,7 +81,7 @@ use mz_storage_types::sources::encoding::{
     RegexEncoding, SourceDataEncoding,
 };
 use mz_storage_types::sources::envelope::{
-    KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
+    KeyEnvelope, NoneEnvelope, SourceEnvelope, UpsertEnvelope, UpsertStyle,
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
@@ -608,8 +609,12 @@ pub fn plan_create_source(
         referenced_subsources,
         progress_subsource,
     } = &stmt;
-
-    let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
+    let envelope = match envelope.clone() {
+        Some(envelope) => Some(envelope),
+        // When a format is specified then `ENVELOPE NONE` is implied
+        None if format.is_some() => Some(ast::SourceEnvelope::None),
+        None => None,
+    };
 
     let allowed_with_options = vec![
         CreateSourceOptionName::TimestampInterval,
@@ -675,26 +680,18 @@ pub fn plan_create_source(
                 }
             }
 
-            if !start_offsets.is_empty() && envelope.requires_all_input() {
-                sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
+            if !start_offsets.is_empty() {
+                if let Some(envelope) = envelope.as_ref() {
+                    if envelope.requires_all_input() {
+                        sql_bail!("START OFFSET is not supported with ENVELOPE {envelope}");
+                    }
+                }
             }
 
             if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
                 // This is a librdkafka-enforced restriction that, if violated,
                 // would result in a runtime error for the source.
                 sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
-            }
-
-            if !include_metadata.is_empty()
-                && !matches!(
-                    envelope,
-                    ast::SourceEnvelope::Upsert
-                        | ast::SourceEnvelope::None
-                        | ast::SourceEnvelope::Debezium
-                )
-            {
-                // TODO(guswynn): should this be `bail_unsupported!`?
-                sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
             }
 
             let metadata_columns = include_metadata
@@ -1071,6 +1068,10 @@ pub fn plan_create_source(
             (connection, available_subsources)
         }
     };
+    let key_desc = external_connection.key_desc();
+    let value_desc = external_connection.value_desc();
+    tracing::info!("Source key_desc: {key_desc:?}");
+    tracing::info!("Source value_desc: {value_desc:?}");
 
     let (available_subsources, requested_subsources) = match (
         available_subsources,
@@ -1155,119 +1156,42 @@ pub fn plan_create_source(
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
-    let encoding = match format {
-        Some(format) => Some(get_encoding(scx, format, &envelope)?),
-        None => None,
+    let (encoding, key_desc, value_desc) = match format {
+        Some(format) => {
+            let (encoding, key_desc, value_desc) =
+                plan_source_encoding(scx, format, key_desc, value_desc)?;
+            tracing::info!("Requested encoding: {encoding:?}");
+            (Some(encoding), key_desc, value_desc)
+        }
+        None => (None, key_desc, value_desc),
     };
 
-    let (key_desc, value_desc) = match &encoding {
-        Some(encoding) => {
-            // If we are applying an encoding we need to ensure that the incoming value_desc is a
-            // single column of type bytes.
-            match external_connection.value_desc().typ().columns() {
-                [typ] => match typ.scalar_type {
-                    ScalarType::Bytes => {}
-                    _ => sql_bail!(
-                        "The schema produced by the source is incompatible with format decoding"
-                    ),
-                },
-                _ => sql_bail!(
-                    "The schema produced by the source is incompatible with format decoding"
-                ),
-            }
-
-            let (key_desc, value_desc) = encoding.desc()?;
-
-            // TODO(petrosagg): This piece of code seems to be making a statement about the
-            // nullability of the NONE envelope when the source is Kafka. As written, the code
-            // misses opportunities to mark columns as not nullable and is over conservative. For
-            // example in the case of `FORMAT BYTES ENVELOPE NONE` the output is indeed
-            // non-nullable but we will mark it as nullable anyway. This kind of crude reasoning
-            // should be replaced with precise type-level reasoning.
-            let key_desc = key_desc.map(|desc| {
-                let is_kafka = matches!(connection, CreateSourceConnection::Kafka { .. });
-                let is_envelope_none = matches!(envelope, ast::SourceEnvelope::None);
-                if is_kafka && is_envelope_none {
-                    RelationDesc::from_names_and_types(
-                        desc.into_iter()
-                            .map(|(name, typ)| (name, typ.nullable(true))),
-                    )
-                } else {
-                    desc
-                }
-            });
-            (key_desc, value_desc)
-        }
-        None => (None, external_connection.value_desc()),
-    };
-
-    let mut key_envelope = get_key_envelope(include_metadata, encoding.as_ref())?;
-
-    match (&envelope, &key_envelope) {
-        (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
-        (ast::SourceEnvelope::Debezium, _) => sql_bail!(
-            "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
-        ),
-        _ => {}
-    };
-
-    // Not all source envelopes are compatible with all source connections.
-    // Whoever constructs the source ingestion pipeline is responsible for
-    // choosing compatible envelopes and connections.
-    //
-    // TODO(guswynn): ambiguously assert which connections and envelopes are
-    // compatible in typechecking
-    //
-    // TODO: remove bails as more support for upsert is added.
-    let envelope = match &envelope {
-        // TODO: fixup key envelope
-        ast::SourceEnvelope::None => UnplannedSourceEnvelope::None(key_envelope),
-        ast::SourceEnvelope::Debezium => {
-            //TODO check that key envelope is not set
-            let after_idx = match typecheck_debezium(&value_desc) {
-                Ok((_before_idx, after_idx)) => Ok(after_idx),
-                Err(type_err) => match encoding.as_ref().map(|e| &e.value) {
-                    Some(DataEncoding::Avro(_)) => Err(type_err),
-                    _ => Err(sql_err!(
-                        "ENVELOPE DEBEZIUM requires that VALUE FORMAT is set to AVRO"
-                    )),
-                },
-            }?;
-
-            UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::Debezium { after_idx },
-            }
-        }
-        ast::SourceEnvelope::Upsert => {
-            let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
-                None => {
-                    bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
-                }
-                Some(key_encoding) => key_encoding,
-            };
-            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
-            // specified.
-            if key_envelope == KeyEnvelope::None {
-                key_envelope = get_unnamed_key_envelope(key_encoding)?;
-            }
-            UnplannedSourceEnvelope::Upsert {
-                style: UpsertStyle::Default(key_envelope),
-            }
-        }
-        ast::SourceEnvelope::CdcV2 => {
-            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
-            //TODO check that key envelope is not set
-            match format {
-                Some(CreateSourceFormat::Bare(Format::Avro(_))) => {}
-                _ => bail_unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
-            }
-            UnplannedSourceEnvelope::CdcV2
-        }
-    };
+    tracing::info!("Decoded key_desc: {key_desc:?}");
+    tracing::info!("Decoded value_desc: {value_desc:?}");
 
     let metadata_columns = external_connection.metadata_columns();
     let metadata_desc = included_column_desc(metadata_columns.clone());
-    let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
+
+    let (envelope, mut desc) = match envelope.clone() {
+        Some(envelope) => {
+            let (envelope, desc) = plan_source_envelope(
+                scx,
+                envelope,
+                key_desc,
+                value_desc,
+                metadata_desc,
+                include_metadata,
+            )?;
+            tracing::info!("Envelope desc: {desc:?}");
+            (Some(envelope), desc)
+        }
+        None => {
+            if metadata_desc.arity() > 0 {
+                sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
+            }
+            (None, value_desc)
+        }
+    };
 
     if ignore_keys.unwrap_or(false) {
         desc = desc.without_keys();
@@ -1386,7 +1310,7 @@ pub fn plan_create_source(
     // timeline for the source.
     let timeline = match timeline {
         None => match envelope {
-            SourceEnvelope::CdcV2 => {
+            Some(SourceEnvelope::CdcV2) => {
                 Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
             }
             _ => Timeline::EpochMilliseconds,
@@ -1425,6 +1349,272 @@ pub fn plan_create_source(
         timeline,
         in_cluster: Some(in_cluster),
     }))
+}
+
+fn plan_source_envelope(
+    scx: &StatementContext,
+    envelope: ast::SourceEnvelope,
+    key_desc: RelationDesc,
+    value_desc: RelationDesc,
+    metadata_desc: RelationDesc,
+    included_items: &[SourceIncludeMetadata],
+) -> Result<(SourceEnvelope, RelationDesc), PlanError> {
+    Ok(match &envelope {
+        ast::SourceEnvelope::None => {
+            let Ok((name, typ)) = value_desc.iter().exactly_one() else {
+                sql_bail!("ENVELOPE NONE requires that value is a single column");
+            };
+
+            // The key schema after INCLUDE KEY processing
+            let (key_envelope, key_desc) = plan_key_envelope(included_items, key_desc)?;
+
+            // The NONE envelope preserves keys even if they were originally NULL. This means that
+            // after flattening a NULL key there is the possibility that all columns will be NULL.
+            // Therefore we must mark all columns as nullable.
+            let key_desc = RelationDesc::from_names_and_types(
+                key_desc
+                    .into_iter()
+                    .map(|(name, typ)| (name, typ.nullable(true))),
+            );
+
+            let (value_desc, flatten_value) = match &typ.scalar_type {
+                ScalarType::Record { fields, .. } => {
+                    let desc = RelationDesc::from_names_and_types(fields.iter().cloned());
+                    (desc, true)
+                }
+                typ => {
+                    let desc = RelationDesc::from_names_and_types([(
+                        name.clone(),
+                        typ.clone().nullable(false),
+                    )]);
+                    (desc, false)
+                }
+            };
+            let desc = key_desc.concat(value_desc).concat(metadata_desc);
+
+            let envelope = SourceEnvelope::None(NoneEnvelope {
+                key_envelope,
+                flatten_value,
+            });
+            (envelope, desc)
+        }
+        ast::SourceEnvelope::Debezium => {
+            // `ENVELOPE DEBEZIUM` does not support `INCLUDE KEY`.
+            // TODO(petrosagg): there is no reason for this. add support for including the key
+            if let (Some(_), _) = plan_key_envelope(included_items, key_desc.clone())? {
+                sql_bail!("Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM");
+            }
+
+            let Ok((_key_name, key_typ)) = key_desc.iter().exactly_one() else {
+                sql_bail!("ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified");
+            };
+
+            // The key schema after flattenning, which happens always for the debezium upsert style.
+            let key_desc = match &key_typ.scalar_type {
+                ScalarType::Record { fields, .. } => {
+                    RelationDesc::from_names_and_types(fields.iter().cloned())
+                }
+                _ => {
+                    sql_bail!("ENVELOPE DEBEZIUM requires that KEY FORMAT decodes into a valid Debezium schema.");
+                }
+            };
+
+            // The value schema after potential flattenning, which happens if the value schema is a
+            // single column containing a record.
+            let Ok((_value_name, value_typ)) = value_desc.iter().exactly_one() else {
+                sql_bail!("ENVELOPE [DEBEZIUM] UPSERT requires that VALUE FORMAT be specified");
+            };
+
+            let value_desc = match &value_typ.scalar_type {
+                ScalarType::Record { fields, .. } => {
+                    RelationDesc::from_names_and_types(fields.iter().cloned())
+                }
+                _ => {
+                    sql_bail!("TODO: Error message");
+                }
+            };
+
+            // Within the potentially flattened value we need to find the column named "after"
+            let after_idx = match typecheck_debezium(dbg!(&value_desc)) {
+                Ok((_before_idx, after_idx)) => after_idx,
+                Err(err) => sql_bail!(
+                    "ENVELOPE DEBEZIUM requires that VALUE FORMAT decodes into a valid \
+                    Debezium schema with before and after values for each record: {err}"
+                ),
+            };
+
+            // And then flatten that to obtain the true schema of the rows
+            let value_desc = match &value_desc.typ().columns()[after_idx].scalar_type {
+                ScalarType::Record { fields, .. } => {
+                    RelationDesc::from_names_and_types(fields.iter().cloned())
+                }
+                typ => sql_bail!(
+                    "\"after\" column was expected to be of type record but was actually a {typ:?}"
+                ),
+            };
+
+            let key_indices = match_key_indices(&key_desc, &value_desc)?;
+            let desc = value_desc
+                .concat(metadata_desc)
+                .with_key(key_indices.clone());
+
+            let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                style: UpsertStyle::Debezium { after_idx },
+                key_indices,
+                flatten_value: true,
+            });
+            (envelope, desc)
+        }
+        ast::SourceEnvelope::Upsert => {
+            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly specified.
+            let (key_envelope, key_desc) = match plan_key_envelope(included_items, key_desc.clone())? {
+                (Some(key_envelope), key_desc) => (key_envelope, key_desc),
+                (None, _) => get_unnamed_key_envelope(key_desc)?,
+            };
+            let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
+
+            // The value schema after potential flattenning, which happens if the value schema is a
+            // single column containing a record.
+            let (value_desc, flatten_value) = match value_desc.typ().columns() {
+                [col] => match &col.scalar_type {
+                    ScalarType::Record { fields, .. } => {
+                        let value_desc = RelationDesc::from_names_and_types(fields.iter().cloned());
+                        (value_desc, true)
+                    }
+                    _ => (value_desc, false),
+                },
+                _ => (value_desc, false),
+            };
+
+            let desc = key_desc
+                .concat(value_desc)
+                .concat(metadata_desc)
+                .with_key(key_indices.clone());
+            let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                style: UpsertStyle::Default(key_envelope),
+                key_indices,
+                flatten_value,
+            });
+            (envelope, desc)
+        }
+        ast::SourceEnvelope::CdcV2 => {
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
+
+            if metadata_desc.arity() > 0 {
+                sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
+            }
+
+            // `ENVELOPE MATERIALIZE` does not support `INCLUDE KEY`.
+            if let (Some(_), _) = plan_key_envelope(included_items, key_desc)? {
+                sql_bail!("Cannot use INCLUDE KEY with ENVELOPE MATERIALIZE.");
+            }
+
+            let Ok(typ) = value_desc.iter_types().exactly_one() else {
+                sql_bail!("ENVELOPE MATERIALIZE requires that value is a single column");
+            };
+
+            // We expect a record with two fields, one for updates and one for progress. We expect
+            // the first one to contain the updates.
+            let desc = match &typ.scalar_type {
+                ScalarType::Record { fields, .. } => {
+                    // First typecheck the updates field which we expect to be the first one
+                    let update_list_typ = match fields.get(0).map(|(_, typ)| &typ.scalar_type) {
+                        Some(ScalarType::List { element_type, .. }) => element_type,
+                        Some(typ) => sql_bail!(
+                            "expected \"updates\" column to be of type list but found type {typ:?}"
+                        ),
+                        None => sql_bail!("could not find \"updates\" column"),
+                    };
+
+                    // The list of updates is made up of records with data, time, and diff fields.
+                    // We're interested in the schema of the data as that is the final schema of
+                    // this envelope.
+                    let data_typ = match &**update_list_typ {
+                        ScalarType::Record { fields, .. } => match fields.get(0) {
+                            Some((_, typ)) => typ,
+                            None => sql_bail!("expected record, found {typ:?}"),
+                        },
+                        typ => sql_bail!("expected record, found {typ:?}"),
+                    };
+
+                    match &data_typ.scalar_type {
+                        ScalarType::Record { fields, .. } => {
+                            RelationDesc::from_names_and_types(fields.iter().cloned())
+                        }
+                        typ => sql_bail!("expected record, found {typ:?}"),
+                    }
+                }
+                _ => sql_bail!("ENVELOPE MATERIALIZE requires that value is a record"),
+            };
+
+            (SourceEnvelope::CdcV2, desc)
+        }
+    })
+}
+
+fn plan_key_envelope(
+    included_items: &[SourceIncludeMetadata],
+    key_desc: RelationDesc,
+) -> Result<(Option<KeyEnvelope>, RelationDesc), PlanError> {
+    let include_key_item = included_items
+        .iter()
+        .find(|i| matches!(i, SourceIncludeMetadata::Key { .. }));
+    Ok(match include_key_item {
+        Some(SourceIncludeMetadata::Key { alias }) => match alias {
+            Some(name) => match key_desc.typ().columns() {
+                [col] => {
+                    let (col, flatten) = match &col.scalar_type {
+                        // If the key is a record of a single column we also flatten it.
+                        ScalarType::Record { fields, .. } if fields.len() == 1 => {
+                            (fields[0].1.clone(), true)
+                        }
+                        _ => (col.clone(), false),
+                    };
+                    let envelope = KeyEnvelope::Named {
+                        name: name.as_str().to_owned(),
+                        flatten,
+                    };
+                    let desc = RelationDesc::from_names_and_types([(name.to_string(), col)]);
+                    (Some(envelope), desc)
+                }
+                _ => sql_bail!("Cannot use named INCLUDE KEY with multi-column key."),
+            },
+            None => {
+                let (key_envelope, desc) = get_unnamed_key_envelope(key_desc)?;
+                (Some(key_envelope), desc)
+            }
+        },
+        Some(_) => unreachable!(),
+        None => (None, RelationDesc::empty()),
+    })
+}
+
+/// Computes the indices of the value's relation description that appear in the key.
+///
+/// Returns an error if it detects a common column between the two relations that has the same
+/// name but a different type, if a key column is missing from the value, and if the key relation
+/// has a column with no name.
+fn match_key_indices(
+    key_desc: &RelationDesc,
+    value_desc: &RelationDesc,
+) -> anyhow::Result<Vec<usize>> {
+    let mut indices = Vec::new();
+    for (name, key_type) in key_desc.iter() {
+        let (index, value_type) = value_desc
+            .get_by_name(name)
+            .ok_or_else(|| anyhow!("Value schema missing primary key column: {}", name))?;
+
+        if key_type == value_type {
+            indices.push(index);
+        } else {
+            bail!(
+                "key and value column types do not match: key {:?} vs. value {:?}",
+                key_type,
+                value_type
+            );
+        }
+    }
+    Ok(indices)
 }
 
 generate_extracted_config!(
@@ -1699,33 +1889,57 @@ fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize
     Ok((before_idx, after_idx))
 }
 
-fn get_encoding(
+fn plan_source_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
-    envelope: &ast::SourceEnvelope,
-) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
+    key_desc: RelationDesc,
+    value_desc: RelationDesc,
+) -> Result<
+    (
+        SourceDataEncoding<ReferencedConnection>,
+        RelationDesc,
+        RelationDesc,
+    ),
+    PlanError,
+> {
     let encoding = match format {
-        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
+        CreateSourceFormat::Bare(format) => get_encoding(scx, format)?,
         CreateSourceFormat::KeyValue { key, value } => {
             let key = {
-                let encoding = get_encoding_inner(scx, key)?;
+                let encoding = get_encoding(scx, key)?;
+                // TODO(petrosagg): It might seem like we're assigning the value schema to the key
+                // schema here, which would be incorrect, but we're in fact doing the correct
+                // thing. `get_encoding_inner` was passed the key schema as its parameter and so
+                // what reports here as "value schema" is just the singular schema it got passed a
+                // parameter. This isn't great, refactor into a clearer structure.
                 Some(encoding.key.unwrap_or(encoding.value))
             };
-            let value = get_encoding_inner(scx, value)?.value;
+            let value = get_encoding(scx, value)?.value;
             SourceDataEncoding { key, value }
         }
     };
-
-    let requires_keyvalue = matches!(
-        envelope,
-        ast::SourceEnvelope::Debezium | ast::SourceEnvelope::Upsert
-    );
-    let is_keyvalue = encoding.key.is_some();
-    if requires_keyvalue && !is_keyvalue {
-        sql_bail!("ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified");
+    let key_desc = match &encoding.key {
+        Some(key) => {
+            let Ok((name, typ)) = key_desc.iter().exactly_one() else {
+                sql_bail!("KEY FORMAT can only be applied on single column keys");
+            };
+            let output_type = key.output_type(&typ.scalar_type)?.nullable(typ.nullable);
+            RelationDesc::from_names_and_types([(name.clone(), output_type)])
+        }
+        None => RelationDesc::empty(),
     };
-
-    Ok(encoding)
+    let value_desc = {
+        let [typ] = value_desc.typ().columns() else {
+            sql_bail!("VALUE FORMAT can only be applied on single column values");
+        };
+        let name = encoding.value.default_column_name();
+        let output_type = encoding
+            .value
+            .output_type(&typ.scalar_type)?
+            .nullable(typ.nullable);
+        RelationDesc::from_names_and_types([(name, output_type)])
+    };
+    Ok((encoding, key_desc, value_desc))
 }
 
 /// Determine the cluster ID to use for this item.
@@ -1767,12 +1981,15 @@ pub struct Schema {
     pub confluent_wire_format: bool,
 }
 
-fn get_encoding_inner(
+fn get_encoding(
     scx: &StatementContext,
     format: &Format<Aug>,
 ) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
-    let value = match format {
-        Format::Bytes => DataEncoding::Bytes,
+    Ok(match dbg!(format) {
+        Format::Bytes => SourceDataEncoding {
+            key: None,
+            value: DataEncoding::Bytes,
+        },
         Format::Avro(schema) => {
             let Schema {
                 key_schema,
@@ -1834,26 +2051,19 @@ fn get_encoding_inner(
                 }
             };
 
-            if let Some(key_schema) = key_schema {
-                return Ok(SourceDataEncoding {
-                    key: Some(DataEncoding::Avro(AvroEncoding {
-                        schema: key_schema,
-                        csr_connection: csr_connection.clone(),
-                        confluent_wire_format,
-                    })),
-                    value: DataEncoding::Avro(AvroEncoding {
-                        schema: value_schema,
-                        csr_connection,
-                        confluent_wire_format,
-                    }),
-                });
-            } else {
+            let key = key_schema.map(|key_schema| {
                 DataEncoding::Avro(AvroEncoding {
-                    schema: value_schema,
-                    csr_connection,
+                    schema: key_schema,
+                    csr_connection: csr_connection.clone(),
                     confluent_wire_format,
                 })
-            }
+            });
+            let value = DataEncoding::Avro(AvroEncoding {
+                schema: value_schema,
+                csr_connection,
+                confluent_wire_format,
+            });
+            SourceDataEncoding { key, value }
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
@@ -1891,17 +2101,15 @@ fn get_encoding_inner(
                         message_name: value.message_name.clone(),
                         confluent_wire_format: true,
                     });
-                    if let Some(key) = key {
-                        return Ok(SourceDataEncoding {
-                            key: Some(DataEncoding::Protobuf(ProtobufEncoding {
-                                descriptors: strconv::parse_bytes(&key.schema)?,
-                                message_name: key.message_name.clone(),
-                                confluent_wire_format: true,
-                            })),
-                            value,
-                        });
-                    }
-                    value
+                    let key = match key {
+                        Some(key) => Some(DataEncoding::Protobuf(ProtobufEncoding {
+                            descriptors: strconv::parse_bytes(&key.schema)?,
+                            message_name: key.message_name.clone(),
+                            confluent_wire_format: true,
+                        })),
+                        None => None,
+                    };
+                    SourceDataEncoding { key, value }
                 } else {
                     unreachable!("CSR seed resolution should already have been called: Proto")
                 }
@@ -1912,17 +2120,21 @@ fn get_encoding_inner(
             } => {
                 let descriptors = strconv::parse_bytes(schema)?;
 
-                DataEncoding::Protobuf(ProtobufEncoding {
+                let value = DataEncoding::Protobuf(ProtobufEncoding {
                     descriptors,
                     message_name: message_name.to_owned(),
                     confluent_wire_format: false,
-                })
+                });
+                SourceDataEncoding { key: None, value }
             }
         },
-        Format::Regex(regex) => DataEncoding::Regex(RegexEncoding {
-            regex: mz_repr::adt::regex::Regex::new(regex.clone(), false)
-                .map_err(|e| sql_err!("parsing regex: {e}"))?,
-        }),
+        Format::Regex(regex) => SourceDataEncoding {
+            key: None,
+            value: DataEncoding::Regex(RegexEncoding {
+                regex: mz_repr::adt::regex::Regex::new(regex.clone(), false)
+                    .map_err(|e| sql_err!("parsing regex: {e}"))?,
+            }),
+        },
         Format::Csv { columns, delimiter } => {
             let columns = match columns {
                 CsvColumns::Header { names } => {
@@ -1935,66 +2147,53 @@ fn get_encoding_inner(
                 }
                 CsvColumns::Count(n) => ColumnSpec::Count(usize::cast_from(*n)),
             };
-            DataEncoding::Csv(CsvEncoding {
-                columns,
-                delimiter: u8::try_from(*delimiter)
-                    .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
-            })
-        }
-        Format::Json { array: false } => DataEncoding::Json,
-        Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sources"),
-        Format::Text => DataEncoding::Text,
-    };
-    Ok(SourceDataEncoding { key: None, value })
-}
-
-/// Extract the key envelope, if it is requested
-fn get_key_envelope(
-    included_items: &[SourceIncludeMetadata],
-    encoding: Option<&SourceDataEncoding<ReferencedConnection>>,
-) -> Result<KeyEnvelope, PlanError> {
-    let key_definition = included_items
-        .iter()
-        .find(|i| matches!(i, SourceIncludeMetadata::Key { .. }));
-    if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
-        match (alias, encoding.and_then(|e| e.key.as_ref())) {
-            (Some(name), Some(_)) => Ok(KeyEnvelope::Named(name.as_str().to_string())),
-            (None, Some(key)) => get_unnamed_key_envelope(key),
-            (_, None) => {
-                // `kd.alias` == `None` means `INCLUDE KEY`
-                // `kd.alias` == `Some(_) means INCLUDE KEY AS ___`
-                // These both make sense with the same error message
-                sql_bail!(
-                    "INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, \
-                        got bare FORMAT"
-                );
+            SourceDataEncoding {
+                key: None,
+                value: DataEncoding::Csv(CsvEncoding {
+                    columns,
+                    delimiter: u8::try_from(*delimiter)
+                        .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
+                }),
             }
         }
-    } else {
-        Ok(KeyEnvelope::None)
-    }
+        Format::Json { array: false } => SourceDataEncoding {
+            key: None,
+            value: DataEncoding::Json,
+        },
+        Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sources"),
+        Format::Text => SourceDataEncoding {
+            key: None,
+            value: DataEncoding::Text,
+        },
+    })
 }
 
-/// Gets the key envelope for a given key encoding when no name for the key has
-/// been requested by the user.
+/// Gets the key envelope when only `INCLUDE KEY` has been specified (i.e without the "AS <alias>" suffix).
 fn get_unnamed_key_envelope(
-    key: &DataEncoding<ReferencedConnection>,
-) -> Result<KeyEnvelope, PlanError> {
-    // If the key is requested but comes from an unnamed type then it gets the name "key"
-    //
-    // Otherwise it gets the names of the columns in the type
-    let is_composite = match key {
-        DataEncoding::Bytes | DataEncoding::Json | DataEncoding::Text => false,
-        DataEncoding::Avro(_)
-        | DataEncoding::Csv(_)
-        | DataEncoding::Protobuf(_)
-        | DataEncoding::Regex { .. } => true,
-    };
-
-    if is_composite {
-        Ok(KeyEnvelope::Flattened)
-    } else {
-        Ok(KeyEnvelope::Named("key".to_string()))
+    key_desc: RelationDesc,
+) -> Result<(KeyEnvelope, RelationDesc), PlanError> {
+    // If the key is a single column of type record then the record is flattened. Otherwise the key
+    // is included as-is with its original column names.
+    match key_desc.typ().columns() {
+        [col] => match &col.scalar_type {
+            ScalarType::Record { fields, .. } => {
+                let envelope = KeyEnvelope::Flattened {
+                    key_arity: fields.len(),
+                };
+                let desc = RelationDesc::from_names_and_types(fields.iter().cloned());
+                Ok((envelope, desc))
+            }
+            // XXX handle record of singular column
+            _ => {
+                let envelope = KeyEnvelope::Named {
+                    name: "key".to_owned(),
+                    flatten: false,
+                };
+                let desc = RelationDesc::from_names_and_types([("key".to_owned(), col.clone())]);
+                Ok((envelope, desc))
+            }
+        },
+        _ => sql_bail!("cannot use INCLUDE KEY on schema {key_desc:?}"),
     }
 }
 

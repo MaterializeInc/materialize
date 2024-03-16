@@ -34,11 +34,11 @@ impl AvroDecoderState {
     pub async fn decode(
         &mut self,
         bytes: &mut &[u8],
-    ) -> Result<Result<Option<Row>, DecodeErrorKind>, anyhow::Error> {
+    ) -> Result<Result<Row, DecodeErrorKind>, anyhow::Error> {
         let result = match self.decoder.decode(bytes).await? {
             Ok(row) => {
                 self.events_success += 1;
-                Ok(Some(row))
+                Ok(row)
             }
             Err(err) => Err(DecodeErrorKind::Text(format!(
                 "avro deserialization error: {}",

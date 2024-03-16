@@ -67,19 +67,24 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
     input.inner.sink(pact, "CDCv2Unpack", move |input| {
         while let Some((_, data)) = input.next() {
             data.swap(&mut vector);
-            // The inputs are rows containing two columns that encode an enum, i.e only one of them
-            // is ever set while the other is unset. This is the convention we follow in our Avro
-            // decoder. When the first field of the record is set then we have a data message.
-            // Otherwise we have a progress message.
+            // The inputs are rows containing a single column of type record. That record contains
+            // two columns that encode an enum, i.e only one of them is ever set and the other one
+            // is unset. This is the convention we follow in our Avro decoder. When the first field
+            // of the record is set then we have a data message. Otherwise we have a progress
+            // message.
             for (row, _time, _diff) in vector.drain(..) {
                 let mut record = match &row.value {
-                    Some(Ok(row)) => row.iter(),
-                    Some(Err(err)) => {
+                    Ok(row) => match row.unpack_first() {
+                        Datum::Null => continue,
+                        Datum::List(record) => record.iter(),
+                        _ => unreachable!("invalid datum"),
+                    },
+                    Err(err) => {
                         error!("Ignoring errored record: {err}");
                         continue;
                     }
-                    None => continue,
                 };
+
                 let message = match (record.next().unwrap(), record.next().unwrap()) {
                     (Datum::List(datum_updates), Datum::Null) => {
                         let mut updates = vec![];
@@ -173,9 +178,9 @@ pub(crate) enum PreDelimitedFormat {
 }
 
 impl PreDelimitedFormat {
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<Row, DecodeErrorKind> {
         match self {
-            PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
+            PreDelimitedFormat::Bytes => Ok(Row::pack(Some(Datum::Bytes(bytes)))),
             PreDelimitedFormat::Json => {
                 let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes).map_err(|e| {
                     DecodeErrorKind::Bytes(format!(
@@ -188,29 +193,31 @@ impl PreDelimitedFormat {
                         }
                     ))
                 })?;
-                Ok(Some(j.into_row()))
+                Ok(j.into_row())
             }
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
                     .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
-                Ok(Some(Row::pack(Some(Datum::String(s)))))
+                Ok(Row::pack(Some(Datum::String(s))))
             }
             PreDelimitedFormat::Regex(regex, row_buf) => {
                 let s = std::str::from_utf8(bytes)
                     .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
                 let captures = match regex.captures(s) {
                     Some(captures) => captures,
-                    None => return Ok(None),
+                    None => return Ok(Row::pack([Datum::Null])),
                 };
-                row_buf.packer().extend(
-                    captures
-                        .iter()
-                        .skip(1)
-                        .map(|c| Datum::from(c.map(|c| c.as_str()))),
-                );
-                Ok(Some(row_buf.clone()))
+                row_buf.packer().push_list_with(|packer| {
+                    packer.extend(
+                        captures
+                            .iter()
+                            .skip(1)
+                            .map(|c| Datum::from(c.map(|c| c.as_str()))),
+                    )
+                });
+                Ok(row_buf.clone())
             }
-            PreDelimitedFormat::Protobuf(pb) => pb.get_value(bytes).transpose(),
+            PreDelimitedFormat::Protobuf(pb) => pb.get_value(bytes),
         }
     }
 }
@@ -218,10 +225,6 @@ impl PreDelimitedFormat {
 #[derive(Debug)]
 pub(crate) enum DataDecoderInner {
     Avro(AvroDecoderState),
-    DelimitedBytes {
-        delimiter: u8,
-        format: PreDelimitedFormat,
-    },
     Csv(CsvDecoderState),
 
     PreDelimited(PreDelimitedFormat),
@@ -234,57 +237,29 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
-    pub async fn next(
+    pub async fn decode(
         &mut self,
         bytes: &mut &[u8],
-    ) -> Result<Result<Option<Row>, DecodeErrorKind>, CsrConnectError> {
+    ) -> Result<Result<Row, DecodeErrorKind>, CsrConnectError> {
         let result = match &mut self.inner {
-            DataDecoderInner::DelimitedBytes { delimiter, format } => {
-                match bytes.iter().position(|&byte| byte == *delimiter) {
-                    Some(chunk_idx) => {
-                        let data = &bytes[0..chunk_idx];
-                        *bytes = &bytes[chunk_idx + 1..];
-                        format.decode(data)
-                    }
-                    None => Ok(None),
+            DataDecoderInner::Avro(avro) => avro.decode(bytes).await?,
+            DataDecoderInner::Csv(csv) => {
+                let value = csv.decode(bytes);
+                let mut eof_bytes: &[u8] = &[];
+                let eof_value = csv.decode(&mut eof_bytes);
+                match (value, eof_value) {
+                    (Ok(Some(row)), Ok(None)) | (Ok(None), Ok(Some(row))) => Ok(row),
+                    (Ok(None), Ok(None)) => Ok(Row::pack([Datum::Null])),
+                    (Ok(Some(_)), Ok(Some(_))) => todo!("ambiguous value"),
+                    (Err(err), _) => Err(err),
+                    (_, Err(err)) => Err(err),
                 }
             }
-            DataDecoderInner::Avro(avro) => avro.decode(bytes).await?,
-            DataDecoderInner::Csv(csv) => csv.decode(bytes),
             DataDecoderInner::PreDelimited(format) => {
                 let result = format.decode(*bytes);
                 *bytes = &[];
                 result
             }
-        };
-        Ok(result)
-    }
-
-    /// Get the next record if it exists, assuming an EOF has occurred.
-    ///
-    /// This is distinct from `next` because, for example, a CSV record should be returned even if it
-    /// does not end in a newline.
-    pub fn eof(
-        &mut self,
-        bytes: &mut &[u8],
-    ) -> Result<Result<Option<Row>, DecodeErrorKind>, CsrConnectError> {
-        let result = match &mut self.inner {
-            DataDecoderInner::Csv(csv) => {
-                let result = csv.decode(bytes);
-                csv.reset_for_new_object();
-                result
-            }
-            DataDecoderInner::DelimitedBytes { format, .. } => {
-                let data = std::mem::take(bytes);
-                // If we hit EOF with no bytes left in the buffer it means the file had a trailing
-                // \n character that can be ignored. Otherwise, we decode the final bytes as normal
-                if data.is_empty() {
-                    Ok(None)
-                } else {
-                    format.decode(data)
-                }
-            }
-            _ => Ok(None),
         };
         Ok(result)
     }
@@ -301,10 +276,6 @@ impl DataDecoder {
 async fn get_decoder(
     encoding: DataEncoding,
     debug_name: &str,
-    // Information about optional transformations that can be eagerly done.
-    // If the decoding elects to perform them, it should replace this with
-    // `None`.
-    is_connection_delimited: bool,
     metrics: DecodeMetricDefs,
     storage_configuration: &StorageConfiguration,
 ) -> Result<DataDecoder, CsrConnectError> {
@@ -359,14 +330,7 @@ async fn get_decoder(
                 DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };
-            let inner = if is_connection_delimited {
-                DataDecoderInner::PreDelimited(after_delimiting)
-            } else {
-                DataDecoderInner::DelimitedBytes {
-                    delimiter: b'\n',
-                    format: after_delimiting,
-                }
-            };
+            let inner = DataDecoderInner::PreDelimited(after_delimiting);
             DataDecoder { inner, metrics }
         }
         DataEncoding::Csv(enc) => {
@@ -383,17 +347,14 @@ async fn get_decoder(
 async fn decode_delimited(
     decoder: &mut DataDecoder,
     buf: &[u8],
-) -> Result<Result<Option<Row>, DecodeError>, CsrConnectError> {
+) -> Result<Result<Row, DecodeError>, CsrConnectError> {
     let mut remaining_buf = buf;
-    let value = decoder.next(&mut remaining_buf).await?;
+    let value = decoder.decode(&mut remaining_buf).await?;
 
     let result = match value {
         Ok(value) => {
             if remaining_buf.is_empty() {
-                match value {
-                    Some(value) => Ok(Some(value)),
-                    None => decoder.eof(&mut remaining_buf)?,
-                }
+                Ok(value)
             } else {
                 Err(DecodeErrorKind::Text(format!(
                     "Unexpected bytes remaining for decoded value: {remaining_buf:?}"
@@ -456,7 +417,6 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
                     get_decoder(
                         encoding,
                         &debug_name,
-                        true,
                         metrics.clone(),
                         &storage_configuration,
                     )
@@ -465,14 +425,8 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
                 None => None,
             };
 
-            let mut value_decoder = get_decoder(
-                value_encoding,
-                &debug_name,
-                true,
-                metrics,
-                &storage_configuration,
-            )
-            .await?;
+            let mut value_decoder =
+                get_decoder(value_encoding, &debug_name, metrics, &storage_configuration).await?;
 
             let mut output_container = Vec::new();
 
@@ -481,41 +435,37 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
                     AsyncEvent::Data(cap, data) => {
                         let mut n_errors = 0;
                         let mut n_successes = 0;
-                        for (output, ts, diff) in data.iter() {
-                            let key_buf = match output.key.unpack_first() {
-                                Datum::Bytes(buf) => Some(buf),
-                                Datum::Null => None,
-                                d => unreachable!("invalid datum: {d}"),
-                            };
-
-                            let key = match key_decoder.as_mut().zip(key_buf) {
-                                Some((decoder, buf)) => {
-                                    decode_delimited(decoder, buf).await?.transpose()
-                                }
-                                None => None,
+                        for (output, ts, diff) in data {
+                            let key = match key_decoder.as_mut() {
+                                Some(decoder) => match output.key.unpack_first() {
+                                    Datum::Bytes(buf) => decode_delimited(decoder, buf).await?,
+                                    Datum::Null => Ok(Row::pack([Datum::Null])),
+                                    d => unreachable!("invalid datum: {d}"),
+                                },
+                                None => Ok(Row::default()),
                             };
 
                             let value = match output.value.unpack_first() {
                                 Datum::Bytes(buf) => {
-                                    decode_delimited(&mut value_decoder, buf).await?.transpose()
+                                    decode_delimited(&mut value_decoder, buf).await?
                                 }
-                                Datum::Null => None,
+                                Datum::Null => Ok(output.value),
                                 d => unreachable!("invalid datum: {d}"),
                             };
 
-                            if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                            if matches!(&key, Err(_)) || matches!(&value, Err(_)) {
                                 n_errors += 1;
-                            } else if matches!(&value, Some(Ok(_))) {
+                            } else if matches!(&value, Ok(_)) {
                                 n_successes += 1;
                             }
 
                             let result = DecodeResult {
                                 key,
                                 value,
-                                metadata: output.metadata.clone(),
-                                from_time: output.from_time.clone(),
+                                metadata: output.metadata,
+                                from_time: output.from_time,
                             };
-                            output_container.push((result, ts.clone(), *diff));
+                            output_container.push((result, ts, diff));
                         }
 
                         // Matching historical practice, we only log metrics on the value decoder.
