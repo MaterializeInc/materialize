@@ -18,7 +18,7 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -193,6 +193,46 @@ pub enum Response<T> {
     FrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
 }
 
+#[async_trait]
+pub trait StorageTxn {
+    /// Retrieve all of the visible storage metadata.
+    ///
+    /// The value of this map should be treated as opaque.
+    fn get_storage_metadata(&self) -> BTreeMap<GlobalId, String>;
+
+    /// Add new storage metadata.
+    ///
+    /// Subsequent calls to `get_storage_metadata` must include this data.
+    fn insert_storage_metadata(
+        &mut self,
+        s: BTreeMap<GlobalId, String>,
+    ) -> Result<(), StorageError>;
+
+    /// Remove the metadata associated with the identified collections.
+    ///
+    /// Returns values of the removed metadata.
+    fn delete_storage_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, String)>;
+
+    /// Retrieve all of the shards that are no longer in use by an active
+    /// collection but are yet to be finalized.
+    fn get_unfinalized_shards(&self) -> BTreeSet<String>;
+
+    /// Insert the specified values as unfinalized shards.
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<String>) -> Result<(), StorageError>;
+
+    /// Mark the specified shards as finalized, deleting them from the
+    /// unfinalized shard collection.
+    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<String>);
+
+    /// Get the persist txn shard for this environment if it exists.
+    fn get_persist_txn_shard(&self) -> Option<String>;
+
+    /// Store the specified shard as the environment's persist txn shard.
+    ///
+    /// The implementor should error if the shard is already specified.
+    fn write_persist_txn_shard(&mut self, shard: String) -> Result<(), StorageError>;
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     type Timestamp;
@@ -257,16 +297,6 @@ pub trait StorageController: Debug {
     fn collections(
         &self,
     ) -> Box<dyn Iterator<Item = (&GlobalId, &CollectionState<Self::Timestamp>)> + '_>;
-
-    /// Migrate any storage controller state from previous versions to this
-    /// version's expectations.
-    ///
-    /// This function must "see" the GlobalId of every collection you plan to
-    /// create, but can be called with all of the catalog's collections at once.
-    async fn migrate_collections(
-        &mut self,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
 
     /// Create the sources described in the individual RunIngestionCommand commands.
     ///
@@ -478,11 +508,6 @@ pub trait StorageController: Debug {
     /// be awaited to completion.
     async fn process(&mut self) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
 
-    /// Signal to the controller that the adapter has populated all of its
-    /// initial state and the controller can reconcile (i.e. drop) any unclaimed
-    /// resources.
-    async fn reconcile_state(&mut self);
-
     /// Exposes the internal state of the data shard for debugging and QA.
     ///
     /// We'll be thoughtful about making unnecessary changes, but the **output
@@ -548,6 +573,45 @@ pub trait StorageController: Debug {
     /// good and there is no possibility of the old code running concurrently
     /// with the new code.
     async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
+
+    /// On boot, seed our set of collections with this data.
+    ///
+    /// Most likely, this data comes from a persisted source outside of the
+    /// storage controller.
+    async fn initialize_state(
+        &mut self,
+        txn: &mut dyn StorageTxn,
+        init_ids: BTreeSet<GlobalId>,
+        drop_ids: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError>;
+
+    /// Provisionally synchronize the storage controller state with the
+    /// implementor of [`StorageTxn`].
+    ///
+    /// We require an explicit list of IDs to add and drop because no
+    /// implementor of `StorageTxn` can express to us these items' values using
+    /// its own APIs.
+    ///
+    /// The storage controller expects the caller to either:
+    /// - Call `create_collections` for each `GlobalId` in `ids_to_add` and
+    ///   `drop_sources_unvalidated` for each in `ids_to_drop`.
+    /// - Call `clear_provisional_state`. This is the case if the operation
+    ///   preparing the collections fails.
+    async fn provisionally_synchronize_state(
+        &mut self,
+        txn: &mut dyn StorageTxn,
+        ids_to_add: BTreeSet<GlobalId>,
+        ids_to_drop: BTreeSet<GlobalId>,
+    ) -> Result<(), StorageError>;
+
+    /// Clears any state generated from
+    /// [`StorageController::provisionally_synchronize_state`].
+    fn clear_provisional_state(&mut self);
+
+    /// Opportunistically clean up any state that is no longer ambiguous if the
+    /// last call to [`StorageController::provisionally_synchronize_state`]
+    /// committed.
+    fn mark_state_synchronized(&mut self, txn: &dyn StorageTxn);
 }
 
 /// State maintained about individual collections.

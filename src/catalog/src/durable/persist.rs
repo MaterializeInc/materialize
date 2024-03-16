@@ -1053,6 +1053,15 @@ impl PersistCatalogState {
                 StateUpdateKind::Timestamp(key, value) => {
                     apply(&mut self.snapshot.timestamps, key, value, diff);
                 }
+                StateUpdateKind::StorageMetadata(key, value) => {
+                    apply(&mut self.snapshot.storage_metadata, key, value, diff);
+                }
+                StateUpdateKind::UnfinalizedShard(key, ()) => {
+                    apply(&mut self.snapshot.unfinalized_shards, key, (), diff);
+                }
+                StateUpdateKind::PersistTxnShard((), value) => {
+                    apply(&mut self.snapshot.persist_txn_shard, (), value, diff);
+                }
             }
         }
 
@@ -1577,6 +1586,24 @@ impl Trace {
                 }
                 StateUpdateKind::Timestamp(k, v) => {
                     trace.timestamps.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::StorageMetadata(k, v) => {
+                    trace
+                        .storage_metadata
+                        .values
+                        .push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::UnfinalizedShard(k, ()) => {
+                    trace
+                        .unfinalized_shards
+                        .values
+                        .push(((k, ()), ts.to_string(), diff))
+                }
+                StateUpdateKind::PersistTxnShard((), v) => {
+                    trace
+                        .persist_txn_shard
+                        .values
+                        .push((((), v), ts.to_string(), diff))
                 }
             }
         }

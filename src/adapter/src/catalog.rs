@@ -83,8 +83,10 @@ use mz_sql::session::vars::{
 };
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::QualifiedReplica;
+use mz_storage_client::controller::StorageController;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
@@ -158,6 +160,72 @@ pub struct CatalogPlans {
 }
 
 impl Catalog {
+    /// Initializess the `storage_controller` to understand all shards that
+    /// `self` expects to exist.
+    ///
+    /// Note that this must be done before creating/rendering collections
+    /// because the storage controller might not be aware of new system
+    /// collections created between versions.
+    async fn initialize_storage_controller_state(
+        &mut self,
+        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
+    ) -> Result<(), mz_catalog::durable::CatalogError> {
+        let collections = self
+            .entries()
+            .filter(|entry| entry.item().is_storage_collection())
+            .map(|entry| entry.id())
+            .collect();
+
+        let mut storage = self.storage().await;
+        let mut txn = storage.transaction().await?;
+
+        storage_controller
+            .initialize_state(
+                &mut txn,
+                collections,
+                builtin_migration_metadata.previous_storage_collection_ids,
+            )
+            .await
+            .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+
+        txn.commit().await
+    }
+
+    /// [`mz_controller::Controller`] depends on durable catalog state to boot,
+    /// so make it available and initialize the controller.
+    pub async fn initialize_controller(
+        &mut self,
+        config: mz_controller::ControllerConfig,
+        envd_epoch: core::num::NonZeroI64,
+        builtin_migration_metadata: BuiltinMigrationMetadata,
+        // Whether to use the new persist-txn tables implementation or the
+        // legacy one.
+        persist_txn_tables: PersistTxnTablesImpl,
+    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
+    {
+        let mut controller = {
+            let mut storage = self.storage().await;
+            let mut tx = storage.transaction().await?;
+            mz_controller::prepare_initialization(&mut tx)
+                .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+            tx.commit().await?;
+
+            let read_only_tx = storage.transaction().await?;
+
+            mz_controller::Controller::new(config, envd_epoch, persist_txn_tables, &read_only_tx)
+                .await
+        };
+
+        self.initialize_storage_controller_state(
+            &mut *controller.storage,
+            builtin_migration_metadata,
+        )
+        .await?;
+
+        Ok(controller)
+    }
+
     /// Set the optimized plan for the item identified by `id`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
@@ -1043,6 +1111,9 @@ impl Catalog {
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
         &mut self,
+        // n.b. this is an option to prevent us from needing to build out a
+        // dummy impl of `StorageController` for tests.
+        mut storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
@@ -1079,7 +1150,8 @@ impl Catalog {
         // Prepare a candidate catalog state.
         let mut state = self.state.clone();
 
-        Self::transact_inner(
+        match Self::transact_inner(
+            &mut storage_controller,
             oracle_write_ts,
             session,
             ops,
@@ -1088,7 +1160,17 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-        )?;
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(e) => {
+                if let Some(c) = storage_controller.as_mut() {
+                    c.clear_provisional_state()
+                };
+                Err(e)?
+            }
+        };
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
@@ -1097,6 +1179,13 @@ impl Catalog {
         tx.commit()
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
+
+        if let Some(c) = storage_controller.as_mut() {
+            // Open a new tx so we can understand what impact the commit had on the
+            // storage controller's state.
+            let tx = storage.transaction().await?;
+            c.mark_state_synchronized(&tx);
+        }
 
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
@@ -1128,7 +1217,8 @@ impl Catalog {
     ///   final element.
     /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
-    fn transact_inner(
+    async fn transact_inner(
+        storage_controller: &mut Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
@@ -1148,6 +1238,9 @@ impl Catalog {
             Some(_) => vec![],
             None => return Ok(()),
         };
+
+        let mut storage_collections_to_prepare = BTreeSet::new();
+        let mut storage_collections_to_drop = BTreeSet::new();
 
         for op in ops {
             match op {
@@ -1567,6 +1660,10 @@ impl Catalog {
                 } => {
                     state.check_unstable_dependencies(&item)?;
 
+                    if item.is_storage_collection() {
+                        storage_collections_to_prepare.insert(id);
+                    }
+
                     if let Some(id @ ClusterId::System(_)) = item.cluster_id() {
                         let cluster_name = state.clusters_by_id[&id].name.clone();
                         return Err(AdapterError::Catalog(Error::new(
@@ -1960,6 +2057,10 @@ impl Catalog {
                             }
                             if !entry.item().is_temporary() {
                                 tx.remove_item(id)?;
+                            }
+
+                            if entry.item.is_storage_collection() {
+                                storage_collections_to_drop.insert(id);
                             }
 
                             builtin_table_updates.extend(state.pack_item_update(id, -1));
@@ -2875,6 +2976,15 @@ impl Catalog {
         }
 
         if dry_run_ops.is_empty() {
+            if let Some(c) = storage_controller {
+                c.provisionally_synchronize_state(
+                    tx,
+                    storage_collections_to_prepare,
+                    storage_collections_to_drop,
+                )
+                .await?;
+            }
+
             Ok(())
         } else {
             Err(AdapterError::TransactionDryRun {
@@ -4258,6 +4368,7 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
+                    None,
                     mz_repr::Timestamp::MIN,
                     None,
                     vec![Op::CreateDatabase {
@@ -4493,6 +4604,7 @@ mod tests {
                 .expect("unable to parse view");
             catalog
                 .transact(
+                    None,
                     SYSTEM_TIME().into(),
                     None,
                     vec![Op::CreateItem {

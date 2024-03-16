@@ -75,9 +75,7 @@ use crate::AdapterError;
 #[derive(Debug)]
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on STORAGE nodes
-    pub previous_sink_ids: Vec<GlobalId>,
-    pub previous_materialized_view_ids: Vec<GlobalId>,
-    pub previous_source_ids: Vec<GlobalId>,
+    pub previous_storage_collection_ids: BTreeSet<GlobalId>,
     // Used to update in memory catalog state
     pub all_drop_ops: Vec<GlobalId>,
     pub all_create_ops: Vec<(
@@ -99,9 +97,7 @@ pub struct BuiltinMigrationMetadata {
 impl BuiltinMigrationMetadata {
     fn new() -> BuiltinMigrationMetadata {
         BuiltinMigrationMetadata {
-            previous_sink_ids: Vec::new(),
-            previous_materialized_view_ids: Vec::new(),
-            previous_source_ids: Vec::new(),
+            previous_storage_collection_ids: BTreeSet::new(),
             all_drop_ops: Vec::new(),
             all_create_ops: Vec::new(),
             introspection_source_index_updates: BTreeMap::new(),
@@ -1272,15 +1268,14 @@ impl Catalog {
 
             ancestor_ids.insert(id, new_id);
 
+            if entry.item().is_storage_collection() {
+                migration_metadata
+                    .previous_storage_collection_ids
+                    .insert(id);
+            }
+
             // Push drop commands.
             match entry.item() {
-                CatalogItem::Table(_) | CatalogItem::Source(_) => {
-                    migration_metadata.previous_source_ids.push(id)
-                }
-                CatalogItem::Sink(_) => migration_metadata.previous_sink_ids.push(id),
-                CatalogItem::MaterializedView(_) => {
-                    migration_metadata.previous_materialized_view_ids.push(id)
-                }
                 CatalogItem::Log(log) => {
                     migrated_log_ids.insert(id, log.variant.clone());
                 }
@@ -1302,6 +1297,16 @@ impl Catalog {
                                 ));
                         }
                     }
+                }
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::MaterializedView(_) => {
+                    // Storage objects don't have any external objects to drop.
+                }
+                CatalogItem::Sink(_) => {
+                    // Sinks don't have any external objects to drop--however,
+                    // this would change if we add a collections for sinks
+                    // #17672.
                 }
                 CatalogItem::View(_) => {
                     // Views don't have any external objects to drop.
@@ -1342,9 +1347,6 @@ impl Catalog {
         }
 
         // Reverse drop commands.
-        migration_metadata.previous_sink_ids.reverse();
-        migration_metadata.previous_materialized_view_ids.reverse();
-        migration_metadata.previous_source_ids.reverse();
         migration_metadata.all_drop_ops.reverse();
         migration_metadata.user_drop_ops.reverse();
 
@@ -1851,7 +1853,7 @@ mod builtin_migration_tests {
                 }),
                 SimplifiedItem::MaterializedView { referenced_names } => {
                     let table_list = referenced_names.iter().join(",");
-                    let resolved_ids = convert_name_vec_to_id_vec(referenced_names, id_mapping);
+                    let resolved_ids = convert_names_to_ids(referenced_names, id_mapping);
                     CatalogItem::MaterializedView(MaterializedView {
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW mv AS SELECT * FROM {table_list}"
@@ -1873,7 +1875,7 @@ mod builtin_migration_tests {
                         desc: RelationDesc::empty()
                             .with_column("a", ScalarType::Int32.nullable(true))
                             .with_key(vec![0]),
-                        resolved_ids: ResolvedIds(BTreeSet::from_iter(resolved_ids)),
+                        resolved_ids: ResolvedIds(resolved_ids),
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
@@ -1903,9 +1905,7 @@ mod builtin_migration_tests {
         test_name: &'static str,
         initial_state: Vec<SimplifiedCatalogEntry>,
         migrated_names: Vec<String>,
-        expected_previous_sink_names: Vec<String>,
-        expected_previous_materialized_view_names: Vec<String>,
-        expected_previous_source_names: Vec<String>,
+        expected_previous_storage_collection_names: Vec<String>,
         expected_all_drop_ops: Vec<String>,
         expected_user_drop_ops: Vec<String>,
         expected_all_create_ops: Vec<String>,
@@ -1941,6 +1941,7 @@ mod builtin_migration_tests {
             .clone();
         catalog
             .transact(
+                None,
                 mz_repr::Timestamp::MIN,
                 None,
                 vec![Op::CreateItem {
@@ -1961,21 +1962,18 @@ mod builtin_migration_tests {
         id
     }
 
-    fn convert_name_vec_to_id_vec(
+    fn convert_names_to_ids(
         name_vec: Vec<String>,
         id_lookup: &BTreeMap<String, GlobalId>,
-    ) -> Vec<GlobalId> {
+    ) -> BTreeSet<GlobalId> {
         name_vec.into_iter().map(|name| id_lookup[&name]).collect()
     }
 
-    fn convert_id_vec_to_name_vec(
-        id_vec: Vec<GlobalId>,
+    fn convert_ids_to_names<I: IntoIterator<Item = GlobalId>>(
+        ids: I,
         name_lookup: &BTreeMap<GlobalId, String>,
-    ) -> Vec<String> {
-        id_vec
-            .into_iter()
-            .map(|id| name_lookup[&id].clone())
-            .collect()
+    ) -> BTreeSet<String> {
+        ids.into_iter().map(|id| name_lookup[&id].clone()).collect()
     }
 
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
@@ -2021,35 +2019,26 @@ mod builtin_migration_tests {
             };
 
             assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
-                test_case.expected_previous_sink_names,
-                "{} test failed with wrong previous sink ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(
-                    migration_metadata.previous_materialized_view_ids,
-                    &name_mapping,
+                convert_ids_to_names(
+                    migration_metadata.previous_storage_collection_ids,
+                    &name_mapping
                 ),
-                test_case.expected_previous_materialized_view_names,
-                "{} test failed with wrong previous materialized view ids",
+                test_case
+                    .expected_previous_storage_collection_names
+                    .into_iter()
+                    .collect(),
+                "{} test failed with wrong previous collection_names",
                 test_case.test_name
             );
             assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
-                test_case.expected_previous_source_names,
-                "{} test failed with wrong previous source ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
-                test_case.expected_all_drop_ops,
+                convert_ids_to_names(migration_metadata.all_drop_ops, &name_mapping),
+                test_case.expected_all_drop_ops.into_iter().collect(),
                 "{} test failed with wrong all drop ops",
                 test_case.test_name
             );
             assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
-                test_case.expected_user_drop_ops,
+                convert_ids_to_names(migration_metadata.user_drop_ops, &name_mapping),
+                test_case.expected_user_drop_ops.into_iter().collect(),
                 "{} test failed with wrong user drop ops",
                 test_case.test_name
             );
@@ -2058,8 +2047,8 @@ mod builtin_migration_tests {
                     .all_create_ops
                     .into_iter()
                     .map(|(_, _, name, _, _, _)| name.item)
-                    .collect::<Vec<_>>(),
-                test_case.expected_all_create_ops,
+                    .collect::<BTreeSet<_>>(),
+                test_case.expected_all_create_ops.into_iter().collect(),
                 "{} test failed with wrong all create ops",
                 test_case.test_name
             );
@@ -2068,8 +2057,8 @@ mod builtin_migration_tests {
                     .user_create_ops
                     .into_iter()
                     .map(|(_, _, _, name)| name)
-                    .collect::<Vec<_>>(),
-                test_case.expected_user_create_ops,
+                    .collect::<BTreeSet<_>>(),
+                test_case.expected_user_create_ops.into_iter().collect(),
                 "{} test failed with wrong user create ops",
                 test_case.test_name
             );
@@ -2082,7 +2071,7 @@ mod builtin_migration_tests {
                 test_case
                     .expected_migrated_system_object_mappings
                     .into_iter()
-                    .collect::<BTreeSet<_>>(),
+                    .collect(),
                 "{} test failed with wrong migrated system object mappings",
                 test_case.test_name
             );
@@ -2102,9 +2091,7 @@ mod builtin_migration_tests {
                 item: SimplifiedItem::Table,
             }],
             migrated_names: vec![],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec![],
-            expected_previous_source_names: vec![],
+            expected_previous_storage_collection_names: vec![],
             expected_all_drop_ops: vec![],
             expected_user_drop_ops: vec![],
             expected_all_create_ops: vec![],
@@ -2125,9 +2112,7 @@ mod builtin_migration_tests {
                 item: SimplifiedItem::Table,
             }],
             migrated_names: vec!["s1".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec![],
-            expected_previous_source_names: vec!["s1".to_string()],
+            expected_previous_storage_collection_names: vec!["s1".to_string()],
             expected_all_drop_ops: vec!["s1".to_string()],
             expected_user_drop_ops: vec![],
             expected_all_create_ops: vec!["s1".to_string()],
@@ -2157,9 +2142,7 @@ mod builtin_migration_tests {
                 },
             ],
             migrated_names: vec!["s1".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec!["u1".to_string()],
-            expected_previous_source_names: vec!["s1".to_string()],
+            expected_previous_storage_collection_names: vec!["u1".to_string(), "s1".to_string()],
             expected_all_drop_ops: vec!["u1".to_string(), "s1".to_string()],
             expected_user_drop_ops: vec!["u1".to_string()],
             expected_all_create_ops: vec!["s1".to_string(), "u1".to_string()],
@@ -2196,9 +2179,11 @@ mod builtin_migration_tests {
                 },
             ],
             migrated_names: vec!["s1".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec!["u1".to_string(), "u2".to_string()],
-            expected_previous_source_names: vec!["s1".to_string()],
+            expected_previous_storage_collection_names: vec![
+                "u1".to_string(),
+                "u2".to_string(),
+                "s1".to_string(),
+            ],
             expected_all_drop_ops: vec!["u1".to_string(), "u2".to_string(), "s1".to_string()],
             expected_user_drop_ops: vec!["u1".to_string(), "u2".to_string()],
             expected_all_create_ops: vec!["s1".to_string(), "u2".to_string(), "u1".to_string()],
@@ -2240,9 +2225,12 @@ mod builtin_migration_tests {
                 },
             ],
             migrated_names: vec!["s1".to_string(), "s2".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec!["u2".to_string(), "u1".to_string()],
-            expected_previous_source_names: vec!["s1".to_string(), "s2".to_string()],
+            expected_previous_storage_collection_names: vec![
+                "u2".to_string(),
+                "u1".to_string(),
+                "s1".to_string(),
+                "s2".to_string(),
+            ],
             expected_all_drop_ops: vec![
                 "u2".to_string(),
                 "s1".to_string(),
@@ -2401,8 +2389,7 @@ mod builtin_migration_tests {
                 "s339".to_string(),
                 "s340".to_string(),
             ],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec![
+            expected_previous_storage_collection_names: vec![
                 "s349".to_string(),
                 "s421".to_string(),
                 "s355".to_string(),
@@ -2418,8 +2405,6 @@ mod builtin_migration_tests {
                 "s318".to_string(),
                 "s323".to_string(),
                 "s295".to_string(),
-            ],
-            expected_previous_source_names: vec![
                 "s273".to_string(),
                 "s317".to_string(),
                 "s322".to_string(),
@@ -2510,9 +2495,7 @@ mod builtin_migration_tests {
                 },
             ],
             migrated_names: vec!["s1".to_string()],
-            expected_previous_sink_names: vec![],
-            expected_previous_materialized_view_names: vec![],
-            expected_previous_source_names: vec!["s1".to_string()],
+            expected_previous_storage_collection_names: vec!["s1".to_string()],
             expected_all_drop_ops: vec!["s2".to_string(), "s1".to_string()],
             expected_user_drop_ops: vec![],
             expected_all_create_ops: vec!["s1".to_string(), "s2".to_string()],

@@ -19,7 +19,7 @@
 
 syntax = "proto3";
 
-package objects;
+package objects_v49;
 
 message ConfigKey {
   string key = 1;

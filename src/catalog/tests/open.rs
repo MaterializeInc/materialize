@@ -64,6 +64,9 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             system_configurations,
             default_privileges,
             system_privileges,
+            storage_metadata,
+            unfinalized_shards,
+            persist_txn_shard,
         } = self.0;
         let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs.clone();
         configs.remove(&Self::user_version_key());
@@ -84,6 +87,9 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             .field("system_configurations", system_configurations)
             .field("default_privileges", default_privileges)
             .field("system_privileges", system_privileges)
+            .field("storage_metadata", storage_metadata)
+            .field("unfinalized_shards", unfinalized_shards)
+            .field("persist_txn_shard", persist_txn_shard)
             .finish()
     }
 }

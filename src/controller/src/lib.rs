@@ -54,7 +54,7 @@ use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
-use mz_storage_client::controller::StorageController;
+use mz_storage_client::controller::{StorageController, StorageTxn};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -66,6 +66,10 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 pub mod clusters;
+
+// Export this on behalf of the storage controller to provide a unified
+// interface, allowing other crates to depend on this crate alone.
+pub use mz_storage_controller::prepare_initialization;
 
 /// Configures a controller.
 #[derive(Debug, Clone)]
@@ -464,6 +468,12 @@ where
     T: Into<mz_repr::Timestamp>,
 {
     /// Creates a new controller.
+    ///
+    /// For correctness, this function expects to have access to the mutations
+    /// to the `storage_txn` that occurred in [`prepare_initialization`].
+    ///
+    /// # Panics
+    /// If this function is called before [`prepare_initialization`].
     #[instrument(name = "controller::new")]
     pub async fn new(
         config: ControllerConfig,
@@ -471,18 +481,18 @@ where
         // Whether to use the new persist-txn tables implementation or the
         // legacy one.
         persist_txn_tables: PersistTxnTablesImpl,
+        storage_txn: &dyn StorageTxn,
     ) -> Self {
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
-            config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
             config.now,
-            config.stash_metrics,
             envd_epoch,
             config.metrics_registry.clone(),
             persist_txn_tables,
             config.connection_context,
+            storage_txn,
         )
         .await;
 

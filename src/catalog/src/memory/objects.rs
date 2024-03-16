@@ -754,6 +754,23 @@ impl CatalogItem {
         }
     }
 
+    /// Whether this item represents a storage collection.
+    pub fn is_storage_collection(&self) -> bool {
+        match self {
+            CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::MaterializedView(_) => {
+                true
+            }
+            CatalogItem::Log(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => false,
+        }
+    }
+
     pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         self.desc_opt().ok_or(SqlCatalogError::InvalidDependency {
             name: name.to_string(),

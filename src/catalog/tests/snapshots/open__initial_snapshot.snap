@@ -1293,4 +1293,7 @@ Snapshot {
             ),
         },
     },
+    storage_metadata: {},
+    unfinalized_shards: {},
+    persist_txn_shard: {},
 }

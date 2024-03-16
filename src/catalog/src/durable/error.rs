@@ -12,6 +12,7 @@ use std::fmt::Debug;
 use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash_types::{InternalStashError, StashError};
+use mz_storage_types::controller::StorageError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -75,6 +76,9 @@ pub enum DurableCatalogError {
     /// Once the Stash implementation is removed we can remove this variant.
     #[error(transparent)]
     MiscStash(StashError),
+    /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
+    #[error(transparent)]
+    Storage(StorageError),
 }
 
 impl DurableCatalogError {
@@ -128,6 +132,12 @@ impl From<StashError> for DurableCatalogError {
             | InternalStashError::Decoding(_)
             | InternalStashError::Other(_) => DurableCatalogError::MiscStash(e),
         }
+    }
+}
+
+impl From<StorageError> for DurableCatalogError {
+    fn from(e: StorageError) -> Self {
+        DurableCatalogError::Storage(e)
     }
 }
 
