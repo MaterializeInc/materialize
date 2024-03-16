@@ -44,7 +44,7 @@ use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{CollectionBundle, Context, SpecializedArrangement};
+use crate::render::context::{CollectionBundle, Context, MzArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::{ArrangementFlavor, Pairer};
@@ -198,7 +198,7 @@ where
         errors: &mut Vec<Collection<S, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> SpecializedArrangement<S>
+    ) -> MzArrangement<S>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -208,7 +208,20 @@ where
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
             ReducePlan::Distinct => {
-                let (arranged_output, errs) = self.dispatch_build_distinct(collection, mfp_after);
+                let (arranged_output, errs) = {
+                    let collection = collection.map(|(k, v)| {
+                        assert!(v.is_empty());
+                        (k, Row::default())
+                    });
+                    let (arrangement, errs) = self
+                        .build_distinct::<RowRowSpine<_, _>, RowErrSpine<_, _>, _>(
+                            collection,
+                            " [val: empty]",
+                            mfp_after,
+                        );
+                    (MzArrangement::new(arrangement), errs)
+                };
+
                 errors.push(errs);
                 arranged_output
             }
@@ -216,29 +229,29 @@ where
                 let (arranged_output, errs) =
                     self.build_accumulable(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(arranged_output)
+                MzArrangement::new(arranged_output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
                 let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::new(output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
                 let (output, errs) = self.build_bucketed(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::new(output)
             }
             ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
                 let (output, errs) = self
                     .build_basic_aggregate(collection, index, &aggr, true, key_arity, mfp_after);
                 errors.push(errs.expect("validation should have occurred as it was requested"));
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::new(output)
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
                 let (output, errs) =
                     self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
                 errors.push(errs);
-                SpecializedArrangement::RowRow(output)
+                MzArrangement::new(output)
             }
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
@@ -257,15 +270,10 @@ where
                     let r#type = ReductionType::try_from(&plan)
                         .expect("only representable reduction types were used above");
 
-                    let arrangement = match self.render_reduce_plan_inner(
-                        plan,
-                        collection.clone(),
-                        errors,
-                        key_arity,
-                        None,
-                    ) {
-                        SpecializedArrangement::RowRow(arranged) => arranged,
-                    };
+                    let arrangement = self
+                        .render_reduce_plan_inner(plan, collection.clone(), errors, key_arity, None)
+                        .inner
+                        .clone();
                     to_collate.push((r#type, arrangement));
                 }
 
@@ -277,7 +285,7 @@ where
                     mfp_after,
                 );
                 errors.push(errs);
-                SpecializedArrangement::RowRow(oks)
+                MzArrangement::new(oks)
             }
         };
         arrangement
@@ -481,29 +489,6 @@ where
                 },
             );
         (oks, errs.as_collection(|_, v| v.into_owned()))
-    }
-
-    fn dispatch_build_distinct<S>(
-        &self,
-        collection: Collection<S, (Row, Row), Diff>,
-        mfp_after: Option<SafeMfpPlan>,
-    ) -> (
-        SpecializedArrangement<S>,
-        Collection<S, DataflowError, Diff>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
-        let collection = collection.map(|(k, v)| {
-            assert!(v.is_empty());
-            (k, Row::default())
-        });
-        let (arrangement, errs) = self.build_distinct::<RowRowSpine<_, _>, RowErrSpine<_, _>, _>(
-            collection,
-            " [val: empty]",
-            mfp_after,
-        );
-        (SpecializedArrangement::RowRow(arrangement), errs)
     }
 
     /// Build the dataflow to compute the set of distinct keys.

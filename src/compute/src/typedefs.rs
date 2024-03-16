@@ -94,6 +94,8 @@ pub type RowValEnter<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V, 
 pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
 pub type RowRowArrangement<S> = Arranged<S, RowRowAgent<<S as ScopeParent>::Timestamp, Diff>>;
 pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
+pub type RowRowArrangementImport<S, T> =
+    Arranged<S, RowRowEnter<T, Diff, <S as ScopeParent>::Timestamp>>;
 // Row specialized spines and agents.
 pub type RowAgent<T, R> = TraceAgent<RowSpine<T, R>>;
 pub type RowArrangement<S> = Arranged<S, RowAgent<<S as ScopeParent>::Timestamp, Diff>>;

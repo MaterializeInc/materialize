@@ -146,7 +146,7 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{
-    ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement, SpecializedArrangementImport,
+    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
@@ -403,22 +403,28 @@ where
             );
 
             let token = traces.to_drop().clone();
-            // Import the specialized trace handle as a specialized arrangement import.
+            // Import the trace handle as an arrangement import.
             // Note that we incorporate optional logging setup as part of this process,
-            // since a specialized arrangement import require us to enter a scope, but
+            // since an arrangement import require us to enter a scope, but
             // we can only enter after logging is set up. We attach logging here instead
             // of implementing it in the server.rs worker loop since we want to catch the
             // wall-clock time of the frontier advancement for each dataflow as early as
             // possible.
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_logged(
-                &self.scope,
-                &format!("Index({}, {:?})", idx.on_id, idx.key),
-                self.as_of_frontier.clone(),
-                self.until.clone(),
-                compute_state.compute_logger.clone(),
-                idx_id,
-                export_ids,
-            );
+            let (ok_arranged, ok_button) = {
+                let (oks, oks_button) = traces.oks_mut().import_frontier_core(
+                    &self.scope.parent,
+                    &format!("Index({}, {:?})", idx.on_id, idx.key),
+                    self.as_of_frontier.clone(),
+                    self.until.clone(),
+                );
+                let oks = if let Some(logger) = compute_state.compute_logger.clone() {
+                    oks.log_import_frontiers(logger, idx_id, export_ids)
+                } else {
+                    oks
+                };
+                (MzArrangementImport::new(oks.enter(&self.scope)), oks_button)
+            };
+
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
@@ -556,7 +562,9 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                let oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
+                let oks = MzArrangement::new(
+                    self.rearrange_iterative(oks.inner, "Arrange export iterative"),
+                );
                 let oks_trace = oks.trace_handle();
 
                 let errs = errs
@@ -593,21 +601,6 @@ where
                 );
             }
         };
-    }
-
-    /// Dispatches the rearranging of an arrangement coming from an iterative scope
-    /// according to specialized key-value arrangement types.
-    fn dispatch_rearrange_iterative(
-        &self,
-        oks: SpecializedArrangement<Child<'g, G, T>>,
-        name: &str,
-    ) -> SpecializedArrangement<G> {
-        match oks {
-            SpecializedArrangement::RowRow(inner) => {
-                let oks = self.rearrange_iterative(inner, name);
-                SpecializedArrangement::RowRow(oks)
-            }
-        }
     }
 
     /// Rearranges an arrangement coming from an iterative scope into an arrangement
@@ -997,15 +990,13 @@ where
         match bundle.arranged.values_mut().next() {
             Some(arrangement) => {
                 use ArrangementFlavor::*;
-                use SpecializedArrangement as A;
-                use SpecializedArrangementImport as AI;
 
                 match arrangement {
-                    Local(A::RowRow(a), _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                    Local(a, _) => {
+                        a.inner.stream = self.log_operator_hydration_inner(&a.inner.stream, lir_id);
                     }
-                    Trace(_, AI::RowRow(a), _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                    Trace(_, a, _) => {
+                        a.inner.stream = self.log_operator_hydration_inner(&a.inner.stream, lir_id);
                     }
                 }
             }

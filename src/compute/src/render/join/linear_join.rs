@@ -32,8 +32,7 @@ use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
-    SpecializedArrangementImport,
+    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::RowRowSpine;
@@ -194,9 +193,9 @@ where
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(SpecializedArrangement<G>),
+    Local(MzArrangement<G>),
     /// An imported arrangement.
-    Trace(SpecializedArrangementImport<G, T>),
+    Trace(MzArrangementImport<G, T>),
 }
 
 impl<G, T> Context<G, T>
@@ -367,7 +366,7 @@ where
             // By knowing how types propagate through joins we could specialize intermediate
             // arrangements as well, either in values or eventually in keys.
             let arranged = keyed.mz_arrange::<RowRowSpine<_, _>>("JoinStage");
-            joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
+            joined = JoinedFlavor::Local(MzArrangement::new(arranged));
         }
 
         // Demultiplex the four different cross products of arrangement types we might have.
@@ -375,65 +374,62 @@ where
             .arrangement(&lookup_key[..])
             .expect("Arrangement absent despite explicit construction");
 
-        use SpecializedArrangement as A;
-        use SpecializedArrangementImport as I;
-
         match joined {
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::Collection variant avoided at top of method");
             }
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) = match (local, oks) {
-                        (A::RowRow(prev_keyed), A::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                    };
+                    let (oks, errs2) = self
+                        .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
+                            local.inner,
+                            oks.inner,
+                            closure,
+                        );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
                     oks
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = match (local, oks) {
-                        (A::RowRow(prev_keyed), I::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                    };
+                    let (oks, errs2) = self
+                        .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
+                            local.inner,
+                            oks.inner,
+                            closure,
+                        );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
                     oks
                 }
             },
-            JoinedFlavor::Trace(trace) => match arrangement {
-                ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) = match (trace, oks) {
-                        (I::RowRow(prev_keyed), A::RowRow(next_input)) => self
+            JoinedFlavor::Trace(trace) => {
+                match arrangement {
+                    ArrangementFlavor::Local(oks, errs1) => {
+                        let (oks, errs2) = self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                    };
+                                trace.inner,
+                                oks.inner,
+                                closure,
+                            );
 
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
-                }
-                ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = match (trace, oks) {
-                        (I::RowRow(prev_keyed), I::RowRow(next_input)) => self
+                        errors.push(errs1.as_collection(|k, _v| k.clone()));
+                        errors.extend(errs2);
+                        oks
+                    }
+                    ArrangementFlavor::Trace(_gid, oks, errs1) => {
+                        let (oks, errs2) = self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                    };
+                                trace.inner, oks.inner, closure,
+                            );
 
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
+                        errors.push(errs1.as_collection(|k, _v| k.clone()));
+                        errors.extend(errs2);
+                        oks
+                    }
                 }
-            },
+            }
         }
     }
 

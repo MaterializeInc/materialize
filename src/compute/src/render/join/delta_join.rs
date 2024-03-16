@@ -15,7 +15,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
@@ -23,20 +22,16 @@ use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, Del
 use mz_compute_types::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
-use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Map, OkErr};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 
-use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
-    SpecializedArrangementImport,
-};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
 use crate::render::RenderTimestamp;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
@@ -149,23 +144,25 @@ where
                     let update_stream = match val {
                         Ok(local) => {
                             let arranged = local.enter_region(region);
-                            let (update_stream, err_stream) = dispatch_build_update_stream_local(
-                                arranged,
-                                as_of,
-                                source_relation,
-                                initial_closure,
-                            );
+                            let (update_stream, err_stream) =
+                                build_update_stream::<_, RowRowAgent<_, _>>(
+                                    arranged.inner,
+                                    as_of,
+                                    source_relation,
+                                    initial_closure,
+                                );
                             region_errs.push(err_stream);
                             update_stream
                         }
                         Err(trace) => {
                             let arranged = trace.enter_region(region);
-                            let (update_stream, err_stream) = dispatch_build_update_stream_trace(
-                                arranged,
-                                as_of,
-                                source_relation,
-                                initial_closure,
-                            );
+                            let (update_stream, err_stream) =
+                                build_update_stream::<_, RowRowEnter<_, _, _>>(
+                                    arranged.inner,
+                                    as_of,
+                                    source_relation,
+                                    initial_closure,
+                                );
                             region_errs.push(err_stream);
                             update_stream
                         }
@@ -202,9 +199,9 @@ where
                             match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
                                 Ok(local) => {
                                     if source_relation < lookup_relation {
-                                        dispatch_build_halfjoin_local(
+                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
                                             update_stream,
-                                            local.enter_region(region),
+                                            local.enter_region(region).inner,
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
@@ -212,9 +209,9 @@ where
                                             self.shutdown_token.clone(),
                                         )
                                     } else {
-                                        dispatch_build_halfjoin_local(
+                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
                                             update_stream,
-                                            local.enter_region(region),
+                                            local.enter_region(region).inner,
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
@@ -225,9 +222,9 @@ where
                                 }
                                 Err(trace) => {
                                     if source_relation < lookup_relation {
-                                        dispatch_build_halfjoin_trace(
+                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                                             update_stream,
-                                            trace.enter_region(region),
+                                            trace.enter_region(region).inner,
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
@@ -235,9 +232,9 @@ where
                                             self.shutdown_token.clone(),
                                         )
                                     } else {
-                                        dispatch_build_halfjoin_trace(
+                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                                             update_stream,
-                                            trace.enter_region(region),
+                                            trace.enter_region(region).inner,
                                             stream_key,
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
@@ -307,73 +304,6 @@ where
     }
 }
 
-/// Dispatches half-join construction according to arrangement type specialization.
-fn dispatch_build_halfjoin_local<G, CF>(
-    updates: Collection<G, (Row, G::Timestamp), Diff>,
-    trace: SpecializedArrangement<G>,
-    prev_key: Vec<MirScalarExpr>,
-    prev_thinning: Vec<usize>,
-    comparison: CF,
-    closure: JoinClosure,
-    shutdown_token: ShutdownToken,
-) -> (
-    Collection<G, (Row, G::Timestamp), Diff>,
-    Collection<G, DataflowError, Diff>,
-)
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
-{
-    match trace {
-        SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
-            updates,
-            inner,
-            None,
-            prev_key,
-            prev_thinning,
-            comparison,
-            closure,
-            shutdown_token,
-        ),
-    }
-}
-
-/// Dispatches half-join construction according to trace type specialization.
-fn dispatch_build_halfjoin_trace<G, T, CF>(
-    updates: Collection<G, (Row, G::Timestamp), Diff>,
-    trace: SpecializedArrangementImport<G, T>,
-    prev_key: Vec<MirScalarExpr>,
-    prev_thinning: Vec<usize>,
-    comparison: CF,
-    closure: JoinClosure,
-    shutdown_token: ShutdownToken,
-) -> (
-    Collection<G, (Row, G::Timestamp), Diff>,
-    Collection<G, DataflowError, Diff>,
-)
-where
-    G: Scope,
-    T: Timestamp + Lattice + Columnation,
-    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
-    CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
-{
-    match trace {
-        SpecializedArrangementImport::RowRow(inner) => {
-            build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
-                updates,
-                inner,
-                None,
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
-    }
-}
-
 /// Constructs a `half_join` from supplied arguments.
 ///
 /// This method exists to factor common logic from four code paths that are generic over the type of trace.
@@ -387,7 +317,6 @@ where
 fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
-    trace_key_types: Option<Vec<ColumnType>>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
@@ -405,7 +334,6 @@ where
     for<'a> Tr::Val<'a>: IntoRowByTypes,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    let updates_key_types = trace_key_types.clone();
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
@@ -417,7 +345,7 @@ where
                 prev_key
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage)),
-                updates_key_types.as_deref(),
+                None,
             )?;
             let binding = SharedRow::get();
             let mut row_builder = binding.borrow_mut();
@@ -520,51 +448,6 @@ where
         );
 
         (oks, errs)
-    }
-}
-
-/// Dispatches building of a delta path update stream by to arrangement type specialization.
-fn dispatch_build_update_stream_local<G>(
-    trace: SpecializedArrangement<G>,
-    as_of: Antichain<mz_repr::Timestamp>,
-    source_relation: usize,
-    initial_closure: JoinClosure,
-) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
-    match trace {
-        SpecializedArrangement::RowRow(inner) => build_update_stream::<_, RowRowAgent<_, _>>(
-            inner,
-            as_of,
-            source_relation,
-            initial_closure,
-        ),
-    }
-}
-
-/// Dispatches building of a delta path update stream by to trace type specialization.
-fn dispatch_build_update_stream_trace<G, T>(
-    trace: SpecializedArrangementImport<G, T>,
-    as_of: Antichain<mz_repr::Timestamp>,
-    source_relation: usize,
-    initial_closure: JoinClosure,
-) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
-where
-    G: Scope,
-    T: Timestamp + Lattice + Columnation,
-    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
-{
-    match trace {
-        SpecializedArrangementImport::RowRow(inner) => {
-            build_update_stream::<_, RowRowEnter<_, _, _>>(
-                inner,
-                as_of,
-                source_relation,
-                initial_closure,
-            )
-        }
     }
 }
 

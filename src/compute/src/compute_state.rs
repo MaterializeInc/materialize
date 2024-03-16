@@ -57,7 +57,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info, span, warn, Level};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
+use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
@@ -1105,29 +1105,11 @@ impl IndexPeek {
             cursor.step_key(&storage);
         }
 
-        self.dispatch_collect_ok_finished_data(max_result_size)
-    }
-
-    /// Dispatches peek finishing of data in the ok stream according to
-    /// arrangement key-value types.
-    fn dispatch_collect_ok_finished_data(
-        &mut self,
-        max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
         let peek = &mut self.peek;
         let oks = self.trace_bundle.oks_mut();
-        match oks {
-            SpecializedTraceHandle::RowRow(oks_handle) => {
-                // Explicit types required due to Rust type inference limitations.
-                use crate::typedefs::RowRowSpine;
-                Self::collect_ok_finished_data::<RowRowSpine<_, _>>(
-                    peek,
-                    oks_handle,
-                    None,
-                    max_result_size,
-                )
-            }
-        }
+        // Explicit types required due to Rust type inference limitations.
+        use crate::typedefs::RowRowSpine;
+        Self::collect_ok_finished_data::<RowRowSpine<_, _>>(peek, oks, None, max_result_size)
     }
 
     /// Collects data for a known-complete peek from the ok stream.

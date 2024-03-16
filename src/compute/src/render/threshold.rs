@@ -25,10 +25,7 @@ use timely::progress::Timestamp;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, SpecializedArrangement,
-    SpecializedArrangementImport,
-};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, MzArrangement};
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<G, T1, T2, L>(
@@ -63,46 +60,6 @@ where
     })
 }
 
-/// Dispatches according to existing type-specialization to an appropriate threshold computation
-/// resulting in another type-specialized arrangement.
-fn dispatch_threshold_arrangement_local<G, L>(
-    oks: &SpecializedArrangement<G>,
-    name: &str,
-    logic: L,
-) -> SpecializedArrangement<G>
-where
-    G: Scope,
-    G::Timestamp: Lattice + Columnation,
-    L: Fn(&Diff) -> bool + 'static,
-{
-    match oks {
-        SpecializedArrangement::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
-            SpecializedArrangement::RowRow(oks)
-        }
-    }
-}
-
-/// Dispatches threshold computation for a trace, similarly to `dispatch_threshold_arrangement_local`.
-fn dispatch_threshold_arrangement_trace<G, T, L>(
-    oks: &SpecializedArrangementImport<G, T>,
-    name: &str,
-    logic: L,
-) -> SpecializedArrangement<G>
-where
-    G: Scope,
-    T: Timestamp + Lattice + Columnation,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    L: Fn(&Diff) -> bool + 'static,
-{
-    match oks {
-        SpecializedArrangementImport::RowRow(inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
-            SpecializedArrangement::RowRow(oks)
-        }
-    }
-}
-
 /// Build a dataflow to threshold the input data.
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
@@ -121,13 +78,19 @@ where
         .expect("Arrangement ensured to exist");
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
-            let oks =
-                dispatch_threshold_arrangement_local(&oks, "Threshold local", |count| *count > 0);
+            let oks = MzArrangement::new(threshold_arrangement(
+                &oks.inner,
+                "Threshold local",
+                |count| *count > 0,
+            ));
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
-            let oks =
-                dispatch_threshold_arrangement_trace(&oks, "Threshold trace", |count| *count > 0);
+            let oks = MzArrangement::new(threshold_arrangement(
+                &oks.inner,
+                "Threshold trace",
+                |count| *count > 0,
+            ));
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
             let errs = errs.mz_arrange("Arrange threshold basic err");
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))

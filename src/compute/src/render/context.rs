@@ -37,12 +37,12 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use tracing::error;
 
-use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::compute_state::{ComputeState, HydrationEvent};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::typedefs::{ErrAgent, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine};
+use crate::typedefs::{RowRowArrangement, RowRowArrangementImport};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -245,45 +245,34 @@ impl HydrationLogger {
     }
 }
 
-/// A representation of arrangements that are statically type-specialized.
-/// Each variant of this `enum` covers a different supported specialization of
-/// key and value types for arrangement flavors.
-///
-/// The specialization here is performed on the representation length, as opposed
-/// to its constituent types. For fixed-length specializations, it thus becomes
-/// necessary to keep track of the schema used, since datums are not used and thus
-/// the representation is not tagged. A catch-all `RowRow` specialization without
-/// schema information allows for covering the current approach of self-describing
-/// variable-length keys and variable-length values.
+/// A wrapper around a `(Row, Row)` arrangement, with supporting methods.
 #[derive(Clone)]
-pub enum SpecializedArrangement<S: Scope>
+pub struct MzArrangement<S: Scope>
 where
     <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
-    RowRow(Arranged<S, RowRowAgent<<S as ScopeParent>::Timestamp, Diff>>),
+    pub(crate) inner: RowRowArrangement<S>,
 }
 
-impl<S: Scope> SpecializedArrangement<S>
+impl<S: Scope> MzArrangement<S>
 where
     <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
+    pub fn new(inner: RowRowArrangement<S>) -> Self {
+        Self { inner }
+    }
+
     /// The scope of the underlying arrangement's stream.
     pub fn scope(&self) -> S {
-        match self {
-            SpecializedArrangement::RowRow(inner) => inner.stream.scope(),
-        }
+        self.inner.stream.scope()
     }
 
     /// Brings the underlying arrangement into a region.
     pub fn enter_region<'a>(
         &self,
         region: &Child<'a, S, S::Timestamp>,
-    ) -> SpecializedArrangement<Child<'a, S, S::Timestamp>> {
-        match self {
-            SpecializedArrangement::RowRow(inner) => {
-                SpecializedArrangement::RowRow(inner.enter_region(region))
-            }
-        }
+    ) -> MzArrangement<Child<'a, S, S::Timestamp>> {
+        MzArrangement::new(self.inner.enter_region(region))
     }
 
     /// Extracts the underlying arrangement as a stream of updates.
@@ -292,14 +281,12 @@ where
         L: for<'a, 'b> FnMut(&'a DatumVecBorrow<'b>) -> Row + 'static,
     {
         let mut datums = DatumVec::new();
-        match self {
-            SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
-                let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter());
-                datums_borrow.extend(v.into_datum_iter());
-                logic(&datums_borrow)
-            }),
-        }
+        self.inner.as_collection(move |k, v| {
+            let mut datums_borrow = datums.borrow();
+            datums_borrow.extend(k.into_datum_iter());
+            datums_borrow.extend(v.into_datum_iter());
+            logic(&datums_borrow)
+        })
     }
 
     /// Applies logic to elements of the underlying arrangement and returns the results.
@@ -318,85 +305,76 @@ where
     {
         use differential_dataflow::operators::arrange::TraceAgent;
         let mut datums = DatumVec::new();
-        match self {
-            SpecializedArrangement::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowRowSpine<_, _>>, _, _>(
-                    inner,
-                    key,
-                    move |k, v, t, d| {
-                        let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter());
-                        datums_borrow.extend(v.into_datum_iter());
-                        logic(&mut datums_borrow, t, d)
-                    },
-                    refuel,
-                )
-            }
-        }
+        CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowRowSpine<_, _>>, _, _>(
+            &self.inner,
+            key,
+            move |k, v, t, d| {
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(k.into_datum_iter());
+                datums_borrow.extend(v.into_datum_iter());
+                logic(&mut datums_borrow, t, d)
+            },
+            refuel,
+        )
     }
 }
 
-impl<'a, S: Scope> SpecializedArrangement<Child<'a, S, S::Timestamp>>
+impl<'a, S: Scope> MzArrangement<Child<'a, S, S::Timestamp>>
 where
     <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
     /// Extracts the underlying arrangement flavor from a region.
-    pub fn leave_region(&self) -> SpecializedArrangement<S> {
-        match self {
-            SpecializedArrangement::RowRow(inner) => {
-                SpecializedArrangement::RowRow(inner.leave_region())
-            }
-        }
+    pub fn leave_region(&self) -> MzArrangement<S> {
+        MzArrangement::new(self.inner.leave_region())
     }
 }
 
-impl<S: Scope> SpecializedArrangement<S>
+impl<S: Scope> MzArrangement<S>
 where
     S: ScopeParent<Timestamp = mz_repr::Timestamp>,
 {
     /// Obtains a `SpecializedTraceHandle` for the underlying arrangement.
-    pub fn trace_handle(&self) -> SpecializedTraceHandle {
-        match self {
-            SpecializedArrangement::RowRow(inner) => {
-                SpecializedTraceHandle::RowRow(inner.trace.clone())
-            }
-        }
+    pub fn trace_handle(&self) -> RowRowAgent<mz_repr::Timestamp, Diff> {
+        self.inner.trace.clone()
     }
 }
 
-/// Defines a statically type-specialized representation of arrangement imports,
-/// similarly to `SpecializedArrangement`.
+/// A wrapper around a `(Row, Row)` arrangement imported from outside a dataflow.
 #[derive(Clone)]
-pub enum SpecializedArrangementImport<S: Scope, T = mz_repr::Timestamp>
+pub struct MzArrangementImport<S: Scope, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice + Columnation,
     <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
 {
-    RowRow(Arranged<S, RowRowEnter<T, Diff, <S as ScopeParent>::Timestamp>>),
+    pub(crate) inner: RowRowArrangementImport<S, T>,
 }
 
-impl<S: Scope, T> SpecializedArrangementImport<S, T>
+impl<S: Scope, T> MzArrangementImport<S, T>
+where
+    T: Timestamp + Lattice + Columnation,
+    <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
+{
+    pub fn new(inner: RowRowArrangementImport<S, T>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<S: Scope, T> MzArrangementImport<S, T>
 where
     T: Timestamp + Lattice + Columnation,
     <S as ScopeParent>::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// The scope of the underlying trace's stream.
     pub fn scope(&self) -> S {
-        match self {
-            SpecializedArrangementImport::RowRow(inner) => inner.stream.scope(),
-        }
+        self.inner.stream.scope()
     }
 
     /// Brings the underlying trace into a region.
     pub fn enter_region<'a>(
         &self,
         region: &Child<'a, S, S::Timestamp>,
-    ) -> SpecializedArrangementImport<Child<'a, S, S::Timestamp>, T> {
-        match self {
-            SpecializedArrangementImport::RowRow(inner) => {
-                SpecializedArrangementImport::RowRow(inner.enter_region(region))
-            }
-        }
+    ) -> MzArrangementImport<Child<'a, S, S::Timestamp>, T> {
+        MzArrangementImport::new(self.inner.enter_region(region))
     }
 
     /// Extracts the underlying trace as a stream of updates.
@@ -405,14 +383,12 @@ where
         L: for<'a, 'b> FnMut(&'a DatumVecBorrow<'b>) -> Row + 'static,
     {
         let mut datums = DatumVec::new();
-        match self {
-            SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
-                let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.into_datum_iter());
-                datums_borrow.extend(v.into_datum_iter());
-                logic(&datums_borrow)
-            }),
-        }
+        self.inner.as_collection(move |k, v| {
+            let mut datums_borrow = datums.borrow();
+            datums_borrow.extend(k.into_datum_iter());
+            datums_borrow.extend(v.into_datum_iter());
+            logic(&datums_borrow)
+        })
     }
 
     /// Applies logic to elements of the underlying arrangement and returns the results.
@@ -428,36 +404,28 @@ where
         L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
         let mut datums = DatumVec::new();
-        match self {
-            SpecializedArrangementImport::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<RowRowEnter<T, Diff, S::Timestamp>, _, _>(
-                    inner,
-                    key,
-                    move |k, v, t, d| {
-                        let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.into_datum_iter());
-                        datums_borrow.extend(v.into_datum_iter());
-                        logic(&mut datums_borrow, t, d)
-                    },
-                    refuel,
-                )
-            }
-        }
+        CollectionBundle::<S, T>::flat_map_core::<RowRowEnter<T, Diff, S::Timestamp>, _, _>(
+            &self.inner,
+            key,
+            move |k, v, t, d| {
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(k.into_datum_iter());
+                datums_borrow.extend(v.into_datum_iter());
+                logic(&mut datums_borrow, t, d)
+            },
+            refuel,
+        )
     }
 }
 
-impl<'a, S: Scope, T> SpecializedArrangementImport<Child<'a, S, S::Timestamp>, T>
+impl<'a, S: Scope, T> MzArrangementImport<Child<'a, S, S::Timestamp>, T>
 where
     T: Timestamp + Lattice + Columnation,
     <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
 {
     /// Extracts the underlying arrangement flavor from a region.
-    pub fn leave_region(&self) -> SpecializedArrangementImport<S, T> {
-        match self {
-            SpecializedArrangementImport::RowRow(inner) => {
-                SpecializedArrangementImport::RowRow(inner.leave_region())
-            }
-        }
+    pub fn leave_region(&self) -> MzArrangementImport<S, T> {
+        MzArrangementImport::new(self.inner.leave_region())
     }
 }
 
@@ -470,7 +438,7 @@ where
 {
     /// A dataflow-local arrangement.
     Local(
-        SpecializedArrangement<S>,
+        MzArrangement<S>,
         Arranged<S, ErrAgent<<S as ScopeParent>::Timestamp, Diff>>,
     ),
     /// An imported trace from outside the dataflow.
@@ -479,7 +447,7 @@ where
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        SpecializedArrangementImport<S, T>,
+        MzArrangementImport<S, T>,
         Arranged<S, ErrEnter<T, <S as ScopeParent>::Timestamp>>,
     ),
 }
@@ -1013,7 +981,7 @@ where
         key: &Vec<MirScalarExpr>,
         thinning: &Vec<usize>,
         key_val_types: Option<(Vec<ColumnType>, Vec<ColumnType>)>,
-    ) -> (SpecializedArrangement<S>, Collection<S, DataflowError, i64>) {
+    ) -> (MzArrangement<S>, Collection<S, DataflowError, i64>) {
         if let Some((_key_types, _val_types)) = key_val_types {
         } else {
             // We expect to always have type information for arrangements, do getting here is
@@ -1027,7 +995,7 @@ where
             specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
         );
         let oks = oks.mz_arrange::<RowRowSpine<_, _>>(name);
-        (SpecializedArrangement::RowRow(oks), errs)
+        (MzArrangement::new(oks), errs)
     }
 }
 
