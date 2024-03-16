@@ -34,7 +34,6 @@ from materialize.parallel_workload.database import (
     MAX_INDEXES,
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
-    MAX_MYSQL_SOURCES,
     MAX_POSTGRES_SOURCES,
     MAX_ROLES,
     MAX_ROWS,
@@ -49,7 +48,6 @@ from materialize.parallel_workload.database import (
     Index,
     KafkaSink,
     KafkaSource,
-    MySqlSource,
     PostgresSource,
     Role,
     Schema,
@@ -1387,72 +1385,6 @@ class DropKafkaSourceAction(Action):
         return True
 
 
-class CreateMySqlSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        result = super().errors_to_ignore(exe)
-        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
-            result.extend(
-                ["cannot create source in cluster with more than one replica"]
-            )
-        return result
-
-    def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when #22770 is fixed
-        if exe.db.scenario == Scenario.BackupRestore:
-            return False
-
-        with exe.db.lock:
-            if len(exe.db.mysql_sources) >= MAX_MYSQL_SOURCES:
-                return False
-            source_id = exe.db.mysql_source_id
-            exe.db.mysql_source_id += 1
-            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-            schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(potential_clusters)
-        with schema.lock, cluster.lock:
-            if schema not in exe.db.schemas:
-                return False
-            if cluster not in exe.db.clusters or len(cluster.replicas) != 1:
-                return False
-
-            try:
-                source = MySqlSource(
-                    source_id,
-                    cluster,
-                    schema,
-                    exe.db.ports,
-                    self.rng,
-                )
-                source.create(exe)
-                exe.db.mysql_sources.append(source)
-            except:
-                if exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn):
-                    raise
-        return True
-
-
-class DropMySqlSourceAction(Action):
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "still depended upon by",
-        ] + super().errors_to_ignore(exe)
-
-    def run(self, exe: Executor) -> bool:
-        with exe.db.lock:
-            if not exe.db.mysql_sources:
-                return False
-            source = self.rng.choice(exe.db.mysql_sources)
-        with source.lock:
-            # Was dropped while we were acquiring lock
-            if source not in exe.db.mysql_sources:
-                return False
-
-            query = f"DROP SOURCE {source.executor.source}"
-            exe.execute(query)
-            exe.db.mysql_sources.remove(source)
-        return True
-
-
 class CreatePostgresSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
@@ -1742,8 +1674,6 @@ ddl_action_list = ActionList(
         (DropKafkaSinkAction, 1),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 1),
-        (CreateMySqlSourceAction, 4),
-        (DropMySqlSourceAction, 1),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 1),
         (GrantPrivilegesAction, 4),

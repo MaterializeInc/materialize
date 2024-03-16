@@ -18,7 +18,6 @@ from pg8000.native import identifier, literal
 from materialize.data_ingest.data_type import (
     DATA_TYPES,
     DATA_TYPES_FOR_AVRO,
-    DATA_TYPES_FOR_KEY,
     Bytea,
     DataType,
     Jsonb,
@@ -26,12 +25,11 @@ from materialize.data_ingest.data_type import (
     TextTextMap,
 )
 from materialize.data_ingest.definition import Insert
-from materialize.data_ingest.executor import KafkaExecutor, MySqlExecutor, PgExecutor
+from materialize.data_ingest.executor import KafkaExecutor, PgExecutor
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
 from materialize.data_ingest.workload import WORKLOADS
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.mysql import MySql
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
@@ -49,7 +47,6 @@ MAX_INDEXES = 100
 MAX_ROLES = 100
 MAX_WEBHOOK_SOURCES = 20
 MAX_KAFKA_SOURCES = 20
-MAX_MYSQL_SOURCES = 20
 MAX_POSTGRES_SOURCES = 20
 MAX_KAFKA_SINKS = 20
 
@@ -61,7 +58,6 @@ MAX_INITIAL_VIEWS = 10
 MAX_INITIAL_ROLES = 3
 MAX_INITIAL_WEBHOOK_SOURCES = 3
 MAX_INITIAL_KAFKA_SOURCES = 3
-MAX_INITIAL_MYSQL_SOURCES = 3
 MAX_INITIAL_POSTGRES_SOURCES = 3
 MAX_INITIAL_KAFKA_SINKS = 3
 
@@ -591,74 +587,6 @@ class KafkaSink(DBObject):
         exe.execute(query)
 
 
-class MySqlColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
-
-
-class MySqlSource(DBObject):
-    source_id: int
-    cluster: "Cluster"
-    executor: MySqlExecutor
-    generator: Iterator[Transaction]
-    lock: threading.Lock
-    columns: list[MySqlColumn]
-    schema: Schema
-    num_rows: int
-
-    def __init__(
-        self,
-        source_id: int,
-        cluster: "Cluster",
-        schema: Schema,
-        ports: dict[str, int],
-        rng: random.Random,
-    ):
-        super().__init__()
-        self.source_id = source_id
-        self.cluster = cluster
-        self.schema = schema
-        self.num_rows = 0
-        fields = []
-        for i in range(rng.randint(1, 10)):
-            fields.append(
-                # naughtify: MySql column identifiers are escaped differently for MySql sources: key3_ЁЂЃЄЅІЇЈЉЊЋЌЍЎЏА gets "", but pg8000.native.identifier() doesn't
-                Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True)
-            )
-        for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
-        self.columns = [
-            MySqlColumn(field.name, field.data_type, False, self) for field in fields
-        ]
-        self.executor = MySqlExecutor(
-            self.source_id,
-            ports,
-            fields,
-            schema.db.name(),
-            schema.name(),
-            cluster.name(),
-        )
-        self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
-        self.lock = threading.Lock()
-
-    def name(self) -> str:
-        return self.executor.table
-
-    def __str__(self) -> str:
-        return f"{self.schema}.{self.name()}"
-
-    def create(self, exe: Executor) -> None:
-        self.executor.create(logging_exe=exe)
-
-
 class PostgresColumn(Column):
     def __init__(
         self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
@@ -859,8 +787,6 @@ class Database:
     webhook_source_id: int
     kafka_sources: list[KafkaSource]
     kafka_source_id: int
-    mysql_sources: list[MySqlSource]
-    mysql_source_id: int
     postgres_sources: list[PostgresSource]
     postgres_source_id: int
     kafka_sinks: list[KafkaSink]
@@ -934,7 +860,6 @@ class Database:
         ]
         self.webhook_source_id = len(self.webhook_sources)
         self.kafka_sources = []
-        self.mysql_sources = []
         self.postgres_sources = []
         self.kafka_sinks = []
         if not self.fast_startup:
@@ -948,20 +873,6 @@ class Database:
                 )
                 for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
             ]
-            # TODO: Reenable when #22770 is fixed
-            if self.scenario == Scenario.BackupRestore:
-                self.mysql_sources = []
-            else:
-                self.mysql_sources = [
-                    MySqlSource(
-                        i,
-                        rng.choice(self.clusters),
-                        rng.choice(self.schemas),
-                        ports,
-                        rng,
-                    )
-                    for i in range(rng.randint(0, MAX_INITIAL_MYSQL_SOURCES))
-                ]
             # TODO: Reenable when #22770 is fixed
             if self.scenario == Scenario.BackupRestore:
                 self.postgres_sources = []
@@ -987,7 +898,6 @@ class Database:
                 for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SINKS))
             ]
         self.kafka_source_id = len(self.kafka_sources)
-        self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
@@ -995,23 +905,18 @@ class Database:
 
     def db_objects(
         self,
-    ) -> list[
-        WebhookSource | MySqlSource | PostgresSource | KafkaSource | View | Table
-    ]:
+    ) -> list[WebhookSource | PostgresSource | KafkaSource | View | Table]:
         return (
             self.tables
             + self.views
             + self.kafka_sources
-            + self.mysql_sources
             + self.postgres_sources
             + self.webhook_sources
         )
 
     def db_objects_without_views(
         self,
-    ) -> list[
-        WebhookSource | MySqlSource | PostgresSource | KafkaSource | View | Table
-    ]:
+    ) -> list[WebhookSource | PostgresSource | KafkaSource | View | Table]:
         return [
             obj for obj in self.db_objects() if type(obj) != View or obj.materialized
         ]
@@ -1046,11 +951,6 @@ class Database:
         exe.execute("CREATE SECRET pgpass AS 'postgres'")
         exe.execute(
             "CREATE CONNECTION postgres_conn FOR POSTGRES HOST 'postgres', DATABASE postgres, USER postgres, PASSWORD SECRET pgpass"
-        )
-
-        exe.execute(f"CREATE SECRET mypass AS '{MySql.DEFAULT_ROOT_PASSWORD}'")
-        exe.execute(
-            "CREATE CONNECTION mysql_conn FOR MYSQL HOST 'mysql', USER root, PASSWORD SECRET mypass"
         )
 
         for relation in self:
