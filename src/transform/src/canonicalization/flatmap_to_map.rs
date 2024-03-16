@@ -44,11 +44,11 @@ impl FlatMapToMap {
                 if *width >= exprs.len() {
                     *relation = input.take_dangerous().map(std::mem::take(exprs));
                 }
-            } else if let TableFunc::UnnestArray { el_typ } = func {
+            } else if let TableFunc::UnnestArray { .. } = func {
                 let func = func.clone();
                 let exprs = exprs.clone();
                 use mz_expr::MirScalarExpr;
-                use mz_repr::{ColumnType, RowArena};
+                use mz_repr::RowArena;
                 if let MirScalarExpr::Literal(Ok(row), ..) = &exprs[0] {
                     let temp_storage = RowArena::default();
                     if let Ok(mut iter) = func.eval(&[row.iter().next().unwrap()], &temp_storage) {
