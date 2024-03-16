@@ -36,6 +36,7 @@ use crate::operators::{
     STORAGE_SOURCE_DECODE_FUEL,
 };
 use crate::read::READER_LEASE_DURATION;
+use crate::rpc::PUBSUB_CLIENT_ENABLED;
 
 /// The tunable knobs for persist.
 ///
@@ -210,8 +211,9 @@ impl PersistConfig {
     }
 
     pub(crate) fn set_config<T: ConfigType>(&self, cfg: &Config<T>, val: T) {
-        let shared = cfg.shared(self);
-        T::set(&shared, val)
+        let mut updates = ConfigUpdates::default();
+        updates.add(cfg, val);
+        updates.apply(self)
     }
 
     /// The minimum number of updates that justify writing out a batch in `persist_sink`'s
@@ -231,6 +233,11 @@ impl PersistConfig {
     /// operator before yielding.
     pub fn storage_source_decode_fuel(&self) -> usize {
         STORAGE_SOURCE_DECODE_FUEL.get(self)
+    }
+
+    /// Overrides the value for "persist_pubsub_client_enabled".
+    pub fn set_pubsub_client_enabled(&self, val: bool) {
+        self.set_config(&PUBSUB_CLIENT_ENABLED, val);
     }
 
     /// Overrides the value for "persist_reader_lease_duration".

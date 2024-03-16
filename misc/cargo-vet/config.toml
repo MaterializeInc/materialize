@@ -1114,10 +1114,6 @@ criteria = "safe-to-deploy"
 version = "1.0.4"
 criteria = "safe-to-deploy"
 
-[[exemptions.proc-macro2]]
-version = "1.0.69"
-criteria = "safe-to-deploy"
-
 [[exemptions.prometheus]]
 version = "0.13.3"
 criteria = "safe-to-deploy"

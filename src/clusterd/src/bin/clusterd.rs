@@ -260,6 +260,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut persist_cfg =
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), mz_dyncfgs::all_dyncfgs());
     persist_cfg.is_cc_active = args.is_cluster_size_v2;
+
+    // Disable PubSub by default in `clusterd`. If PubSub starts enabled in
+    // `clusterd`, it's impossible for `environmentd` to later disable it.
+    // Starting disabled also ensures that `environmentd` can sync PubSub
+    // connection parameters (e.g., connection and request timeouts) before the
+    // connection is established (#23869).
+    persist_cfg.set_pubsub_client_enabled(false);
+
     let persist_clients = Arc::new(PersistClientCache::new(
         persist_cfg,
         &metrics_registry,

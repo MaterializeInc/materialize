@@ -17,7 +17,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
@@ -214,10 +214,12 @@ impl GrpcPubSubClient {
         loop {
             metrics.pubsub_client.grpc_connection.connected.set(0);
 
-            if !PUBSUB_CLIENT_ENABLED.get(&config.persist_cfg) {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
+            config.persist_cfg.wait_for(|| PUBSUB_CLIENT_ENABLED.get(&config.persist_cfg)).await;
+
+            // N.B.: the guarantees of `ConfigSet::wait_for` mean that we'll now
+            // observe updates to any other PubSub configuration settings, like
+            // the connection timeout, that were in the same `ConfigUpdates`
+            // batch that enabled PubSub.
 
             // add a bit of backoff when reconnecting after some network/server failure
             if is_first_connection_attempt {

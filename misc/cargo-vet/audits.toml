@@ -135,10 +135,20 @@ who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "4.2.0"
 
+[[audits.proc-macro2]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.78"
+
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.11.1"
+
+[[audits.quote]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.35"
 
 [[audits.radium]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -175,10 +185,20 @@ who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "1.0.17"
 
+[[audits.ref-cast]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.22"
+
 [[audits.ref-cast-impl]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "1.0.17"
+
+[[audits.ref-cast-impl]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.22"
 
 [[audits.ring]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -199,6 +219,11 @@ version = "0.6.5"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.5.2 -> 0.9.8"
+
+[[audits.syn]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "2.0.52"
 
 [[audits.sync_wrapper]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
