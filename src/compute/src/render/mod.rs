@@ -146,7 +146,7 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{
-    ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement, SpecializedArrangementImport,
+    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
@@ -599,18 +599,13 @@ where
     /// according to specialized key-value arrangement types.
     fn dispatch_rearrange_iterative(
         &self,
-        oks: SpecializedArrangement<Child<'g, G, T>>,
+        oks: MzArrangement<Child<'g, G, T>>,
         name: &str,
-    ) -> SpecializedArrangement<G> {
+    ) -> MzArrangement<G> {
         match oks {
-            SpecializedArrangement::RowUnit(inner) => {
-                let name = format!("{} [val: empty]", name);
-                let oks = self.rearrange_iterative(inner, &name);
-                SpecializedArrangement::RowUnit(oks)
-            }
-            SpecializedArrangement::RowRow(inner) => {
+            MzArrangement::RowRow(inner) => {
                 let oks = self.rearrange_iterative(inner, name);
-                SpecializedArrangement::RowRow(oks)
+                MzArrangement::RowRow(oks)
             }
         }
     }
@@ -1002,20 +997,14 @@ where
         match bundle.arranged.values_mut().next() {
             Some(arrangement) => {
                 use ArrangementFlavor::*;
-                use SpecializedArrangement as A;
-                use SpecializedArrangementImport as AI;
+                use MzArrangement as A;
+                use MzArrangementImport as AI;
 
                 match arrangement {
                     Local(A::RowRow(a), _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
-                    Local(A::RowUnit(a), _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
-                    }
                     Trace(_, AI::RowRow(a), _) => {
-                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
-                    }
-                    Trace(_, AI::RowUnit(a), _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
                 }

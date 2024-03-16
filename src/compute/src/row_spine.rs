@@ -117,7 +117,7 @@ mod container {
                 self.batches.capacity() * std::mem::size_of::<DatumBatch>(),
             );
             for batch in self.batches.iter() {
-                batch.offsets.heap_size(|len, cap| callback(len, cap));
+                batch.offsets.heap_size(&mut callback);
                 callback(batch.storage.len(), batch.storage.capacity());
             }
         }

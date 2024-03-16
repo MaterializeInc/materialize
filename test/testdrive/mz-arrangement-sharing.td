@@ -26,8 +26,8 @@ $ set-arg-default default-replica-size=1
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange bundle err"
-"Arranged DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
+"Arranged DistinctBy"
+"DistinctBy"
 DistinctByErrorCheck
 
 > DROP TABLE u CASCADE
@@ -48,13 +48,13 @@ DistinctByErrorCheck
   );
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0), Column(1)]]"
 "ArrangeBy[[Column(0)]]"
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
+"ArrangeBy[[Column(0)]]"
+"Arranged DistinctBy"
+"Arranged DistinctBy"
+"DistinctBy"
+"DistinctBy"
 DistinctByErrorCheck
 DistinctByErrorCheck
 
@@ -75,7 +75,7 @@ DistinctByErrorCheck
   SELECT * FROM t WHERE a IS NOT NULL
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
+"ArrangeBy[[Column(0), Column(1)]]"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
 "Arranged TopK input"
 "Arranged TopK input"
@@ -104,7 +104,7 @@ DistinctByErrorCheck
 > CREATE DEFAULT INDEX ON m3
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]] [val: empty]"
+"ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]"
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]-errors"
 
 > DROP TABLE t3 CASCADE
@@ -311,7 +311,7 @@ ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(2)]]
-"Arranged DistinctBy [val: empty]"
+"Arranged DistinctBy"
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
@@ -335,7 +335,7 @@ ArrangeBy[[Column(2)]]
 "Arranged MinsMaxesHierarchical input"
 "Distinct recursive err"
 "Distinct recursive err"
-"DistinctBy [val: empty]"
+"DistinctBy"
 DistinctByErrorCheck
 ReduceAccumulable
 ReduceCollation
@@ -403,7 +403,7 @@ ReduceAccumulable
 > CREATE DEFAULT INDEX ON v1;
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"Arrange export iterative [val: empty]"
+"Arrange export iterative"
 "Arrange export iterative err"
 "Arrange recursive err"
 "Distinct recursive err"
@@ -415,7 +415,7 @@ ReduceAccumulable
 > CREATE DEFAULT INDEX ON t1
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]]"
 ArrangeBy[[Column(0)]]-errors
 
 > DROP TABLE t1 CASCADE
@@ -437,8 +437,8 @@ ReduceAccumulable
 > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM inserts EXCEPT ALL SELECT * FROM deletes
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"ArrangeBy[[Column(0)]] [val: empty]"
-"Threshold local [val: empty]"
+"ArrangeBy[[Column(0)]]"
+"Threshold local"
 
 > DROP TABLE inserts CASCADE
 > DROP TABLE deletes CASCADE
@@ -466,15 +466,15 @@ AccumulableErrorCheck
 AccumulableErrorCheck
 "ArrangeAccumulable [val: empty]"
 "ArrangeAccumulable [val: empty]"
-"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
+"ArrangeBy[[Column(0), Column(1)]]"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
+"ArrangeBy[[Column(0)]]"
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
@@ -541,15 +541,15 @@ ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
-"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]]"
 ArrangeBy[[]]
 ArrangeBy[[]]
 ArrangeBy[[]]
 ArrangeBy[[]]
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
+"Arranged DistinctBy"
+"Arranged DistinctBy"
+"DistinctBy"
+"DistinctBy"
 DistinctByErrorCheck
 DistinctByErrorCheck
 
@@ -567,7 +567,7 @@ DistinctByErrorCheck
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
 "ArrangeAccumulable [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]]"
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[]]
 ReduceAccumulable
@@ -620,7 +620,7 @@ AccumulableErrorCheck
 "ArrangeBy[[CallUnary { func: CastInt32ToInt64(CastInt32ToInt64), expr: Column(0) }]]"
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
-"ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]]"
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 "Arranged Accumulable Distinct [val: empty]"
@@ -694,7 +694,7 @@ ReduceMinsMaxes
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0) }]]"
 "ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0) }]]-errors"
-"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
+"ArrangeBy[[Column(0), Column(1)]]"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
 
 > DROP TABLE t CASCADE
@@ -711,9 +711,8 @@ ReduceMinsMaxes
 "Arrange ReduceMinsMaxes"                     1
 "ArrangeAccumulable [val: empty]"             3
 "ArrangeBy[[Column(0), Column(2)]]"           1
-"ArrangeBy[[Column(0)]] [val: empty]"         4
 "ArrangeBy[[Column(0)]]-errors"              21
-"ArrangeBy[[Column(0)]]"                     42
+"ArrangeBy[[Column(0)]]"                     46
 "ArrangeBy[[Column(1), Column(3)]]"           2
 "ArrangeBy[[Column(1)]]-errors"               4
 "ArrangeBy[[Column(1)]]"                     11
@@ -728,12 +727,12 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(18)]]-errors"              1
 "ArrangeBy[[If { cond: CallUnary { func: IsNull(IsNull), expr: Column(2) }, then: Literal(Ok(Row{[Null]}), ColumnType { scalar_type: String, nullable: true }), els: Column(1) }]]" 1
 "ArrangeBy[[]]"                               1
-"Arranged DistinctBy [val: empty]"            8
+"Arranged DistinctBy"                         8
 "Arranged MinsMaxesHierarchical input"        7
 "Arranged ReduceInaccumulable"                1
 "Arranged TopK input"                        16
 "Distinct recursive err"                      1
-"DistinctBy [val: empty]"                     8
+"DistinctBy"                                  8
 "DistinctByErrorCheck"                        8
 "ReduceAccumulable"                           3
 "ReduceCollation Errors"                      1
@@ -743,7 +742,7 @@ ReduceMinsMaxes
 "ReduceInaccumulable Error Check"             1
 "ReduceInaccumulable"                         1
 "ReduceMinsMaxes"                             1
-"Threshold local [val: empty]"                4
+"Threshold local"                             4
 
 > SET CLUSTER TO arrangement_sharing
 

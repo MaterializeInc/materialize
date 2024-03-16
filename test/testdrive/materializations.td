@@ -458,8 +458,8 @@ AccumulableErrorCheck
 "ArrangeAccumulable [val: empty]"
 "ArrangeAccumulable [val: empty]"
 "ArrangeAccumulable [val: empty]"
-"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
-"ArrangeBy[[Column(0), Column(1)]] [val: empty]"
+"ArrangeBy[[Column(0), Column(1)]]"
+"ArrangeBy[[Column(0), Column(1)]]"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
 ArrangeBy[[Column(0)]]
