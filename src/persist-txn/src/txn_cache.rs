@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
@@ -383,6 +384,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 
     pub(crate) fn push_entries(&mut self, mut entries: Vec<(TxnsEntry, T, i64)>, progress: T) {
+        let len_before = entries.len();
+        consolidate_updates(&mut entries);
+        if entries.len() != len_before {
+            tracing::info!(
+                "WIP consolidated from {} to {} entries",
+                len_before,
+                entries.len()
+            );
+        }
         // Persist emits the times sorted by little endian encoding,
         // which is not what we want. If we ever expose an interface for
         // registering and committing to a data shard at the same
@@ -448,6 +458,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
                 .get_mut(&data_id)
                 .and_then(|x| x.registered.back_mut())
                 .expect("data shard should be registered before forget");
+            // WIP
+            // if active_reg.forget_ts.replace(ts).is_some() {
+            //     mz_ore::halt!("WIP seems like we got fenced out");
+            // }
             assert_eq!(active_reg.forget_ts.replace(ts), None);
         } else {
             unreachable!("only +1/-1 diffs are used");
@@ -743,6 +757,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             buf: Vec::new(),
             state,
         }
+    }
+
+    pub(crate) async fn expire(self) {
+        self.txns_subscribe.expire().await
     }
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
