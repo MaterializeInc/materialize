@@ -263,7 +263,11 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
-        rustflags = rustc_flags.coverage if rd.coverage else ["--cfg=tokio_unstable"]
+        rustflags = (
+            rustc_flags.coverage
+            if rd.coverage
+            else ["--cfg=tokio_unstable", "--remap-path-prefix", f"{os.getcwd()}/="]
+        )
 
         cargo_build = [
             *rd.cargo("build", channel=None, rustflags=rustflags),
