@@ -9,6 +9,7 @@
 
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
 import "postgres-util/src/desc.proto";
 import "repr/src/global_id.proto";
 import "storage-types/src/connections.proto";
@@ -17,8 +18,16 @@ import "expr/src/scalar.proto";
 package mz_storage_types.sources.postgres;
 
 message ProtoPostgresSourceConnection {
+    message ProtoCastType {
+        oneof kind {
+            google.protobuf.Empty natural = 1;
+            google.protobuf.Empty text = 2;
+        }
+    }
+
     message ProtoPostgresTableCast {
         repeated mz_expr.scalar.ProtoMirScalarExpr column_casts = 1;
+        repeated ProtoCastType column_cast_types = 2;
     }
 
     mz_repr.global_id.ProtoGlobalId connection_id = 6;

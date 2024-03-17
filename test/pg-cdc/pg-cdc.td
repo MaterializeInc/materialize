@@ -757,6 +757,22 @@ enum_table              subsource <null> <null>
 var0
 var1
 
+# Test that TEXT COLUMN types can change
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+BEGIN;
+ALTER TYPE an_enum RENAME TO an_enum_old;
+CREATE TYPE an_enum AS ENUM ('var0', 'var1', 'var2');
+ALTER TABLE enum_table ALTER COLUMN a TYPE an_enum USING a::text::an_enum;
+DROP TYPE an_enum_old;
+COMMIT;
+
+INSERT INTO enum_table VALUES ('var2');
+
+> SELECT * FROM enum_table
+var0
+var1
+var2
+
 > SELECT "колона" FROM another_enum_table
 var2
 var3
