@@ -30,7 +30,9 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
-use mz_sql_parser::ast::{Expr, Ident, QualifiedReplica, UnresolvedItemName};
+use mz_sql_parser::ast::{
+    ClusterScheduleOptionValue, Expr, Ident, QualifiedReplica, UnresolvedItemName,
+};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
 use mz_storage_types::sources::SourceDesc;
@@ -533,6 +535,9 @@ pub trait CatalogCluster<'a> {
 
     /// Returns the size of the cluster, if the cluster is a managed cluster.
     fn managed_size(&self) -> Option<&str>;
+
+    /// Returns the schedule of the cluster, if the cluster is a managed cluster.
+    fn schedule(&self) -> Option<&ClusterScheduleOptionValue>;
 }
 
 /// A cluster replica in a [`SessionCatalog`]

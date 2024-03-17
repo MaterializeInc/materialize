@@ -113,7 +113,9 @@ impl Coordinator {
     }
 
     /// Returns a [`TimestampOracle`] used for reads and writes from/to a local input.
-    fn get_local_timestamp_oracle(&self) -> Arc<dyn TimestampOracle<Timestamp> + Send + Sync> {
+    pub(crate) fn get_local_timestamp_oracle(
+        &self,
+    ) -> Arc<dyn TimestampOracle<Timestamp> + Send + Sync> {
         self.get_timestamp_oracle(&Timeline::EpochMilliseconds)
     }
 

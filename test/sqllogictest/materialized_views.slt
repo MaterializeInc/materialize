@@ -657,7 +657,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = false
 COMPLETE 0
 
 # Should be disabled
-query error db error: ERROR: REFRESH EVERY materialized views is not supported
+query error db error: ERROR: REFRESH EVERY and REFRESH AT materialized views is not supported
 CREATE MATERIALIZED VIEW mv_bad WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
 
 simple conn=mz_system,user=mz_system
@@ -1102,6 +1102,20 @@ EXPLAIN REPLAN MATERIALIZED VIEW mv8;
 # Automated cluster scheduling for REFRESH
 # ----------------------------------------
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_schedule_refresh = false
+----
+COMPLETE 0
+
+# Should be disabled
+query error db error: ERROR: `SCHEDULE = ON REFRESH` cluster option is not supported
+CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH);
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cluster_schedule_refresh = true
+----
+COMPLETE 0
+
 statement error db error: ERROR: Expected one of MANUAL or ON, found identifier "aaaaaaaa"
 CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = AAAAAAAA);
 
@@ -1111,23 +1125,70 @@ CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = 42);
 statement error db error: ERROR: Expected one of MANUAL or ON, found REFRESH
 CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = REFRESH);
 
+statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1);
+
 statement ok
 CREATE CLUSTER c_schedule_1 (SIZE = '1', SCHEDULE = MANUAL);
 
 statement ok
 CREATE CLUSTER c_schedule_2 (SIZE = '1', SCHEDULE MANUAL);
 
-statement error db error: ERROR: cluster schedules other than MANUAL are not supported
+statement ok
 CREATE CLUSTER c_schedule_3 (SIZE = '1', SCHEDULE = ON REFRESH);
 
-statement ok
-ALTER cluster c_schedule_1 RESET (SCHEDULE);
+statement error db error: ERROR: REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL
+ALTER CLUSTER c_schedule_3 SET (REPLICATION FACTOR = 1);
 
 statement ok
-ALTER cluster c_schedule_1 SET (SCHEDULE = MANUAL);
+ALTER CLUSTER c_schedule_1 RESET (SCHEDULE);
 
-statement error db error: ERROR: cluster schedules other than MANUAL are not supported
-ALTER cluster c_schedule_1 SET (SCHEDULE = ON REFRESH);
+statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+ALTER CLUSTER c_schedule_1 SET (REPLICATION FACTOR = 1, SCHEDULE = ON REFRESH);
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = MANUAL);
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(3+2);
+
+# Should turn off.
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_1';
+----
+0
+
+statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
+ALTER CLUSTER c_schedule_1 SET (MANAGED = false, SCHEDULE = ON REFRESH);
+
+# The SCHEDULE shouldn't simply "fall off" when switching to unmanaged,
+statement error db error: ERROR: when switching a cluster to unmanaged, if the managed cluster's SCHEDULE is anything other than MANUAL, you have to explicitly set the SCHEDULE to MANUAL
+ALTER CLUSTER c_schedule_1 SET (MANAGED = false);
+
+# ... but can be explicitly set to MANUAL in the same command.
+statement ok
+ALTER CLUSTER c_schedule_1 SET (MANAGED = false, SCHEDULE = MANUAL);
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = '1');
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH);
+
+# Setting some other cluster option in ALTER CLUSTER shouldn't change the SCHEDULE.
+# (The sleep is needed so that if the following ALTER erroneously sets the SCHEDULE to MANUAL, then we should be in a
+# turned off state at that moment to trigger errors in later tests.)
+statement ok
+SELECT mz_unsafe.mz_sleep(3);
+
+statement ok
+ALTER CLUSTER c_schedule_1 SET (INTROSPECTION DEBUGGING = TRUE);
+
+statement ok
+ALTER CLUSTER c_schedule_1 RESET (INTROSPECTION DEBUGGING);
 
 statement ok
 CREATE CLUSTER unmanaged1 (SCHEDULE = MANUAL, REPLICAS (r1 (SIZE '1')))
@@ -1138,5 +1199,105 @@ ALTER cluster unmanaged1 SET (SCHEDULE = MANUAL);
 statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
 ALTER cluster unmanaged1 SET (SCHEDULE = ON REFRESH);
 
+statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
+ALTER cluster unmanaged1 SET (managed = true, SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1, SIZE = '1');
+
 statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
 CREATE CLUSTER unmanaged2 (SCHEDULE = ON REFRESH, REPLICAS (r1 (SIZE '1')))
+
+statement ok
+CREATE CLUSTER c_schedule_5 (SIZE = '1');
+
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found left parenthesis
+ALTER CLUSTER c_schedule_5 (MANAGED = false, SCHEDULE = REFRESH);
+
+statement ok
+CREATE MATERIALIZED VIEW mv9
+IN CLUSTER c_schedule_1
+WITH (REFRESH = EVERY '8 sec')
+AS SELECT sum(x*y*z) + count(*) FROM t2;
+
+query I
+SELECT * FROM mv9;
+----
+1371335
+
+statement ok
+INSERT INTO t2 VALUES (1, 0, 1);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(8+1);
+
+query I
+SELECT * FROM mv9;
+----
+1371336
+
+statement ok
+CREATE MATERIALIZED VIEW mv10
+IN CLUSTER c_schedule_1
+WITH (REFRESH AT CREATION)
+AS SELECT count(*) FROM t2;
+
+query I
+SELECT * FROM mv10
+----
+10
+
+# The other refresh cluster should be off, because there is no refresh MV on it yet.
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_3';
+----
+0
+
+# A `REFRESH AT CREATION` MV alone on a cluster should make the cluster turn on.
+statement ok
+CREATE MATERIALIZED VIEW mv11
+IN CLUSTER c_schedule_3
+WITH (REFRESH AT CREATION)
+AS SELECT count(*) FROM t2;
+
+query I
+SELECT * FROM mv11
+----
+10
+
+## Very short refresh interval.
+
+statement ok
+CREATE CLUSTER c_schedule_4 (SIZE = '1', SCHEDULE = ON REFRESH);
+
+statement ok
+CREATE MATERIALIZED VIEW mv12
+IN CLUSTER c_schedule_4
+WITH (REFRESH EVERY '1 millisecond')
+AS SELECT count(*) FROM t2;
+
+query I
+SELECT * FROM mv12
+----
+10
+
+statement ok
+INSERT INTO t2 VALUES (1, 1, 10);
+
+query I
+SELECT * FROM mv12
+----
+11
+
+# This should set the schedule back to manual.
+statement ok
+ALTER CLUSTER c_schedule_4 RESET (SCHEDULE);
+
+statement ok
+ALTER CLUSTER c_schedule_4 SET (REPLICATION FACTOR = 0);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(3);
+
+# Should stay off, because it was reset to manual.
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_3';
+----
+0
