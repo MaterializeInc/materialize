@@ -421,7 +421,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut snapshot_staged = 0;
             for (&oid, (_, expected_desc, _)) in reader_snapshot_table_info.iter() {
-                let desc = match verify_schema(oid, expected_desc, &upstream_info) {
+                let desc = match verify_schema(oid, expected_desc, &upstream_info, &BTreeSet::new())
+                {
                     Ok(()) => expected_desc,
                     Err(err) => {
                         raw_handle

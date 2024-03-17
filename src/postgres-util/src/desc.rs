@@ -62,7 +62,11 @@ impl PostgresTableDesc {
     ///   Compatibility is defined as returning `true` for
     ///   `PostgresColumnDesc::is_compatible`.
     /// - `self`'s keys are all present in `other`
-    pub fn determine_compatibility(&self, other: &PostgresTableDesc) -> Result<(), anyhow::Error> {
+    pub fn determine_compatibility(
+        &self,
+        other: &PostgresTableDesc,
+        allow_type_to_change_by_col_num: &BTreeSet<u16>,
+    ) -> Result<(), anyhow::Error> {
         if self == other {
             return Ok(());
         }
@@ -78,7 +82,7 @@ impl PostgresTableDesc {
         // Table columns cannot change position, so only need to ensure that
         // `self.columns` is a prefix of `other_cols`.
         if self.columns.len() <= other_cols.len()
-            && self.columns.iter().zip(other_cols.iter()).all(|(s, o)| s.is_compatible(o))
+            && self.columns.iter().zip(other_cols.iter()).all(|(s, o)| s.is_compatible(o, allow_type_to_change_by_col_num))
             && &self.name == other_name
             && &self.oid == other_oid
             && &self.namespace == other_namespace
@@ -153,11 +157,17 @@ impl PostgresColumnDesc {
     /// Note that this function somewhat unnecessarily errors if the names
     /// differ; this is negotiable but we want users to understand the fixedness
     /// of names in our schemas.
-    fn is_compatible(&self, other: &PostgresColumnDesc) -> bool {
+    fn is_compatible(
+        &self,
+        other: &PostgresColumnDesc,
+        allow_type_to_change_by_col_num: &BTreeSet<u16>,
+    ) -> bool {
+        let allow_type_change = allow_type_to_change_by_col_num.contains(&self.col_num);
+
         self.name == other.name
             && self.col_num == other.col_num
-            && self.type_oid == other.type_oid
-            && self.type_mod == other.type_mod
+            && (self.type_oid == other.type_oid || allow_type_change)
+            && (self.type_mod == other.type_mod || allow_type_change)
             // Columns are compatible if:
             // - self is nullable; introducing a not null constraint doesn't
             //   change this column's behavior.

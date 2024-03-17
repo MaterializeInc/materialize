@@ -69,7 +69,7 @@
 //! [1]: https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION
 //! [2]: https://www.postgresql.org/message-id/CAFPTHDZS9O9WG02EfayBd6oONzK%2BqfUxS6AbVLJ7W%2BKECza2gg%40mail.gmail.com
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
@@ -678,7 +678,9 @@ fn extract_transaction<'a>(
                         .await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
-                        if let Err(err) = verify_schema(rel_id, expected_desc, &upstream_info) {
+                        if let Err(err) =
+                            verify_schema(rel_id, expected_desc, &upstream_info, &BTreeSet::new())
+                        {
                             errored_tables.insert(rel_id);
                             yield (rel_id, Err(err), 1);
                         }

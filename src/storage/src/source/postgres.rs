@@ -79,7 +79,7 @@
 //!             v                  v
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
@@ -384,10 +384,11 @@ fn verify_schema(
     oid: u32,
     expected_desc: &PostgresTableDesc,
     upstream_info: &BTreeMap<u32, PostgresTableDesc>,
+    allow_type_to_change_by_col_num: &BTreeSet<u16>,
 ) -> Result<(), DefiniteError> {
     let current_desc = upstream_info.get(&oid).ok_or(DefiniteError::TableDropped)?;
 
-    match expected_desc.determine_compatibility(current_desc) {
+    match expected_desc.determine_compatibility(current_desc, allow_type_to_change_by_col_num) {
         Ok(()) => Ok(()),
         Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
     }
