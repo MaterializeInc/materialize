@@ -28,7 +28,7 @@ use mz_compute_client::protocol::response::{
     SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::HYDRATION_CONCURRENCY;
+use mz_compute_types::dyncfgs::{ENABLE_CONTROLLER_DATAFLOW_SCHEDULING, HYDRATION_CONCURRENCY};
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
@@ -428,6 +428,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // `hydration_concurrency`.
         let (start_signal, suspension_token) = StartSignal::new();
         if dataflow.is_transient() {
+            drop(suspension_token);
+        } else if !ENABLE_CONTROLLER_DATAFLOW_SCHEDULING.get(&self.compute_state.worker_config) {
             drop(suspension_token);
         } else {
             let token = Rc::new(suspension_token);
