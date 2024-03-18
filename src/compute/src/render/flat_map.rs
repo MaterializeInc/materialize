@@ -13,10 +13,10 @@ use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::operator::StreamExt;
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::InputCapability;
+use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
 use crate::render::context::{CollectionBundle, Context};
@@ -43,20 +43,20 @@ where
         let stream = ok_collection.inner;
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, _| {
             Box::new(move |input, ok_output, err_output| {
+                let mut ok_session = ConsolidateBuffer::new(ok_output, 0);
+                let mut err_session = ConsolidateBuffer::new(err_output, 1);
+
+                let mut datums = DatumVec::new();
+                let mut datums_mfp = DatumVec::new();
+
+                // Buffer for extensions to `input_row`.
+                let mut table_func_output = Vec::new();
+
                 input.for_each(|cap, data| {
                     data.swap(&mut storage);
 
-                    let mut ok_session = ConsolidateBuffer::new(ok_output, 0);
-                    let mut err_session = ConsolidateBuffer::new(err_output, 1);
-
-                    let mut datums = DatumVec::new();
-                    let mut datums_mfp = DatumVec::new();
-
-                    for (input_row, mut time, diff) in storage.drain(..) {
+                    'input: for (input_row, time, diff) in storage.drain(..) {
                         let temp_storage = RowArena::new();
-
-                        // Buffer for extensions to `input_row`.
-                        let mut table_func_output = Vec::new();
 
                         // Unpack datums for expression evaluation.
                         let datums_local = datums.borrow_with(&input_row);
@@ -68,17 +68,16 @@ where
                             Ok(args) => args,
                             Err(e) => {
                                 err_session.give(&cap, (e.into(), time, diff));
-                                continue;
+                                continue 'input;
                             }
                         };
                         let mut extensions = match func.eval(&args, &temp_storage) {
-                            Ok(exts) => exts,
+                            Ok(exts) => exts.fuse(),
                             Err(e) => {
                                 err_session.give(&cap, (e.into(), time, diff));
-                                continue;
+                                continue 'input;
                             }
-                        }
-                        .fuse();
+                        };
 
                         // Draw additional columns out of the table func evaluation.
                         while let Some((extension, output_diff)) = extensions.next() {
