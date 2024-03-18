@@ -22,6 +22,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::columnar::{PartDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::AntichainRef;
@@ -289,9 +290,9 @@ where
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
-        read_metrics.part_goodbytes.inc_by(u64::cast_from(
-            part.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
-        ));
+        read_metrics
+            .part_goodbytes
+            .inc_by(u64::cast_from(part.updates.goodbytes()));
         EncodedPart::new(key, registered_desc, part)
     })
 }

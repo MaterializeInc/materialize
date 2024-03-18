@@ -14,6 +14,10 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::{cmp, fmt};
 
+use arrow2::array::{Array, BinaryArray, PrimitiveArray};
+use arrow2::chunk::Chunk;
+use arrow2::datatypes::{DataType, Field};
+use arrow2::io::parquet::write::Encoding;
 use arrow2::types::Index;
 use mz_ore::lgbytes::MetricsRegion;
 
@@ -144,6 +148,60 @@ impl ColumnarRecords {
     /// Iterate through the records in Self.
     pub fn iter<'a>(&'a self) -> ColumnarRecordsIter<'a> {
         self.borrow().iter()
+    }
+
+    /// Transforms the [`ColumnarRecords`] into [`arrow2`] vectors.
+    pub(crate) fn to_arrow(&self) -> (Vec<Field>, Vec<Vec<Encoding>>, Chunk<Box<dyn Array>>) {
+        let (mut fields, mut encodings, mut arrays) =
+            (Vec::new(), Vec::new(), Vec::<Box<dyn Array>>::new());
+
+        let key_array = BinaryArray::new(
+            DataType::Binary,
+            (*self.key_offsets)
+                .as_ref()
+                .to_vec()
+                .try_into()
+                .expect("valid offsets"),
+            (*self.key_data).as_ref().to_vec().into(),
+            None,
+        );
+        fields.push(Field::new("k", key_array.data_type().clone(), false));
+        encodings.push(vec![Encoding::Plain]);
+        arrays.push(Box::new(key_array));
+
+        let val_array = BinaryArray::new(
+            DataType::Binary,
+            (*self.val_offsets)
+                .as_ref()
+                .to_vec()
+                .try_into()
+                .expect("valid offsets"),
+            (*self.val_data).as_ref().to_vec().into(),
+            None,
+        );
+        fields.push(Field::new("v", val_array.data_type().clone(), false));
+        encodings.push(vec![Encoding::Plain]);
+        arrays.push(Box::new(val_array));
+
+        let time_array = PrimitiveArray::new(
+            DataType::Int64,
+            (*self.timestamps).as_ref().to_vec().into(),
+            None,
+        );
+        fields.push(Field::new("t", time_array.data_type().clone(), false));
+        encodings.push(vec![Encoding::Plain]);
+        arrays.push(Box::new(time_array));
+
+        let diff_array = PrimitiveArray::new(
+            DataType::Int64,
+            (*self.diffs).as_ref().to_vec().into(),
+            None,
+        );
+        fields.push(Field::new("d", diff_array.data_type().clone(), false));
+        encodings.push(vec![Encoding::Plain]);
+        arrays.push(Box::new(diff_array));
+
+        (fields, encodings, Chunk::new(arrays))
     }
 }
 

@@ -15,11 +15,13 @@
 
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use mz_persist_types::part::Part;
 use mz_persist_types::Codec64;
 use prost::Message;
 use timely::progress::{Antichain, Timestamp};
@@ -33,6 +35,58 @@ use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parqu
 use crate::indexed::columnar::ColumnarRecords;
 use crate::location::Blob;
 use crate::metrics::ColumnarMetrics;
+
+/// Column format of a batch.
+#[derive(Debug, Copy, Clone)]
+pub enum BatchColumnarFormat {
+    /// Rows are encoded to `ProtoRow` and then a batch is written down as a Parquet with a schema
+    /// of `(k, v, t, d)`, where `k` are the serialized bytes.
+    Row,
+    /// Rows are encoded to a columnar struct, and then a batch is written down as Parquet with a
+    /// schema of `(k_c, v_c, t, d)`, where `k_c` is the nested columnar data.
+    Columnar,
+    /// Rows are encoded to `ProtoRow` and a columnar struct. The batch is written down as Parquet
+    /// with a schema of `(k, k_c, v, v_c, t, d)`, where `k` are the serialized bytes and `k_c` is
+    /// nested columnar data.
+    Both,
+}
+
+impl BatchColumnarFormat {
+    /// Returns a default value for [`BatchColumnarFormat`].
+    pub const fn default() -> Self {
+        BatchColumnarFormat::Row
+    }
+
+    /// Returns a [`BatchColumnarFormat`] for a given `&str`, falling back to a default value if
+    /// provided `&str` is invalid.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "row" => BatchColumnarFormat::Row,
+            "columnar" => BatchColumnarFormat::Columnar,
+            "both" => BatchColumnarFormat::Both,
+            x => {
+                let default = BatchColumnarFormat::default();
+                tracing::error!("Invalid batch columnar type: {x}, falling back to {default}");
+                default
+            }
+        }
+    }
+
+    /// Returns a string representation for the [`BatchColumnarFormat`].
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            BatchColumnarFormat::Row => "row",
+            BatchColumnarFormat::Columnar => "columnar",
+            BatchColumnarFormat::Both => "both",
+        }
+    }
+}
+
+impl fmt::Display for BatchColumnarFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// The metadata necessary to reconstruct a list of [BlobTraceBatchPart]s.
 ///
@@ -94,7 +148,7 @@ pub struct BlobTraceBatchPart<T> {
     /// Index of this part in the list of parts that form the batch.
     pub index: u64,
     /// The updates themselves.
-    pub updates: Vec<ColumnarRecords>,
+    pub updates: BlobTraceUpdates,
 }
 
 impl TraceBatchMeta {
@@ -230,6 +284,77 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
     /// Decodes a BlobTraceBatchPart from the Parquet format.
     pub fn decode(buf: &SegmentedBytes, metrics: &ColumnarMetrics) -> Result<Self, Error> {
         decode_trace_parquet(&mut buf.clone().reader(), metrics)
+    }
+}
+
+/// The set of updates that are part of a [`BlobTraceBatchPart`].
+///
+/// Based on
+#[derive(Clone, Debug)]
+pub enum BlobTraceUpdates {
+    /// Legacy format. Keys and Values are encoded into bytes via [`Codec`], then stored in our own
+    /// columnar-esque struct.
+    Row(Vec<ColumnarRecords>),
+    /// Keys and Values are structured into an Apache Arrow columnar format.
+    Columnar(Vec<Arc<Part>>),
+    /// Migration format. Keys and Values are encoded into bytes via [`Codec`] and structured into
+    /// an Apache Arrow columnar format.
+    Both {
+        /// Legacy format, Keys and Values encoded via [`Codec`].
+        codec: Vec<ColumnarRecords>,
+        /// Structured columnar format.
+        parquet: Vec<Arc<Part>>,
+    },
+}
+
+impl BlobTraceUpdates {
+    /// TODO
+    pub fn get(&self, idx: usize) -> (Option<&ColumnarRecords>, Option<&Arc<Part>>) {
+        match self {
+            BlobTraceUpdates::Row(updates) => (updates.get(idx), None),
+            BlobTraceUpdates::Columnar(_) => unreachable!("calling code can't handle this case"),
+            BlobTraceUpdates::Both { codec, parquet } => {
+                let update = codec.get(idx);
+                let part = parquet.get(idx);
+
+                assert_eq!(update.is_some(), part.is_some());
+                (update, part)
+            }
+        }
+    }
+
+    /// Returns the number of updates.
+    pub fn len(&self) -> usize {
+        match self {
+            BlobTraceUpdates::Row(updates) => updates.len(),
+            BlobTraceUpdates::Columnar(parts) => parts.len(),
+            BlobTraceUpdates::Both { codec, parquet } => {
+                let row_len = codec.len();
+                let col_len = parquet.len();
+                assert_eq!(row_len, col_len);
+                row_len
+            }
+        }
+    }
+
+    /// TODO
+    pub fn iter(&self) -> impl Iterator<Item = &'_ ColumnarRecords> {
+        let updates = match self {
+            BlobTraceUpdates::Row(updates) => updates,
+            BlobTraceUpdates::Columnar(_) => unreachable!("TODO"),
+            BlobTraceUpdates::Both { codec, .. } => codec,
+        };
+        updates.iter()
+    }
+
+    /// TODO
+    pub fn goodbytes(&self) -> usize {
+        let updates = match self {
+            BlobTraceUpdates::Row(updates) => updates,
+            BlobTraceUpdates::Columnar(_) => unreachable!("TODO"),
+            BlobTraceUpdates::Both { codec, .. } => codec,
+        };
+        updates.iter().map(|u| u.goodbytes()).sum()
     }
 }
 
@@ -385,12 +510,13 @@ mod tests {
         )
     }
 
-    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> Vec<ColumnarRecords> {
+    fn columnar_records(updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> BlobTraceUpdates {
         let mut builder = ColumnarRecordsBuilder::default();
         for ((k, v), t, d) in updates {
             assert!(builder.push(((&k, &v), Codec64::encode(&t), Codec64::encode(&d))));
         }
-        vec![builder.finish(&ColumnarMetrics::disconnected())]
+        let updates = vec![builder.finish(&ColumnarMetrics::disconnected())];
+        BlobTraceUpdates::Row(updates)
     }
 
     #[mz_ore::test]
@@ -612,6 +738,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn encoded_batch_sizes() {
         fn sizes(data: DataGenerator) -> usize {
+            let updates = data.batches().collect();
             let trace = BlobTraceBatchPart {
                 desc: Description::new(
                     Antichain::from_elem(0u64),
@@ -619,7 +746,7 @@ mod tests {
                     Antichain::from_elem(0u64),
                 ),
                 index: 0,
-                updates: data.batches().collect(),
+                updates: BlobTraceUpdates::Row(updates),
             };
             let mut trace_buf = Vec::new();
             trace.encode(&mut trace_buf);

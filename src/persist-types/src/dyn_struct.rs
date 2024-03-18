@@ -34,7 +34,8 @@ use crate::stats::{OptionStats, StatsFn, StructStats};
 #[derive(Debug, Clone)]
 #[cfg_attr(debug_assertions, derive(PartialEq))]
 pub struct DynStructCfg {
-    pub(crate) cols: Arc<Vec<(String, DataType, StatsFn)>>,
+    /// TODO
+    pub cols: Arc<Vec<(String, DataType, StatsFn)>>,
 }
 
 impl From<Vec<(String, DataType, StatsFn)>> for DynStructCfg {
@@ -74,10 +75,14 @@ impl Default for DynStructRef<'_> {
 /// A [crate::columnar::ColumnGet] impl for [DynStruct].
 #[derive(Debug)]
 pub struct DynStructCol {
-    len: usize,
-    cfg: DynStructCfg,
-    pub(crate) validity: Option<<bool as Data>::Col>,
-    pub(crate) cols: Vec<DynColumnRef>,
+    /// TODO
+    pub len: usize,
+    /// TODO
+    pub cfg: DynStructCfg,
+    /// TODO
+    pub validity: Option<<bool as Data>::Col>,
+    /// TODO
+    pub cols: Vec<DynColumnRef>,
 }
 
 impl ColumnRef<DynStructCfg> for DynStructCol {
@@ -133,7 +138,8 @@ impl ColumnGet<Option<DynStruct>> for DynStructCol {
 }
 
 impl DynStructCol {
-    pub(crate) fn empty(cfg: DynStructCfg) -> Self {
+    /// TODO
+    pub fn empty(cfg: DynStructCfg) -> Self {
         DynStructCol {
             len: 0,
             cfg,
@@ -226,8 +232,9 @@ impl DynStructCol {
         Some((array, encodings))
     }
 
+    /// TODO
     #[allow(clippy::borrowed_box)]
-    pub(crate) fn from_arrow(cfg: DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
+    pub fn from_arrow(cfg: DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
             .as_any()
             .downcast_ref::<StructArray>()

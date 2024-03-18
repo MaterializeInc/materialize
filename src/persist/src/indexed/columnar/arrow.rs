@@ -11,27 +11,20 @@
 
 use std::collections::BTreeMap;
 use std::convert;
-use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
-use arrow2::array::{Array, BinaryArray, PrimitiveArray};
+use arrow2::array::{Array, BinaryArray, PrimitiveArray, StructArray};
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType, Field, Schema};
-use arrow2::io::ipc::read::{read_file_metadata, FileMetadata, FileReader};
-use arrow2::io::ipc::write::{FileWriter, WriteOptions};
-use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
 use mz_ore::lgbytes::MetricsRegion;
-use mz_persist_types::Codec64;
+use mz_persist_types::columnar::ColumnFormat;
+use mz_persist_types::dyn_struct::{DynStructCfg, DynStructCol};
+use mz_persist_types::part::Part;
+use mz_persist_types::stats::StatsFn;
 use once_cell::sync::Lazy;
-use timely::progress::{Antichain, Timestamp};
 
-use crate::error::Error;
-use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::ColumnarRecords;
-use crate::indexed::encoding::{
-    decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart,
-};
 use crate::metrics::ColumnarMetrics;
 
 /// The Arrow schema we use to encode ((K, V), T, D) tuples.
@@ -77,94 +70,6 @@ pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
         },
     ]))
 });
-
-const INLINE_METADATA_KEY: &str = "MZ:inline";
-
-/// Encodes an BlobTraceBatchPart into the Arrow file format.
-///
-/// NB: This is currently unused, but it's here because we may want to use it
-/// for the local cache and so we can easily compare arrow vs parquet.
-pub fn encode_trace_arrow<W: Write, T: Timestamp + Codec64>(
-    w: &mut W,
-    batch: &BlobTraceBatchPart<T>,
-) -> Result<(), Error> {
-    let mut metadata = BTreeMap::new();
-    metadata.insert(
-        INLINE_METADATA_KEY.into(),
-        encode_trace_inline_meta(batch, ProtoBatchFormat::ArrowKvtd),
-    );
-    let schema = Schema::from(SCHEMA_ARROW_KVTD.fields.clone()).with_metadata(metadata);
-    let options = WriteOptions { compression: None };
-    let mut writer = FileWriter::try_new(w, schema, None, options)?;
-    for records in batch.updates.iter() {
-        writer.write(&encode_arrow_batch_kvtd(records), None)?;
-    }
-    writer.finish()?;
-    Ok(())
-}
-
-/// Decodes a BlobTraceBatchPart from the Arrow file format.
-///
-/// NB: This is currently unused, but it's here because we may want to use it
-/// for the local cache and so we can easily compare arrow vs parquet.
-pub fn decode_trace_arrow<R: Read + Seek, T: Timestamp + Codec64>(
-    r: &mut R,
-    metrics: &ColumnarMetrics,
-) -> Result<BlobTraceBatchPart<T>, Error> {
-    let file_meta = read_file_metadata(r)?;
-    let (format, meta) =
-        decode_trace_inline_meta(file_meta.schema.metadata.get(INLINE_METADATA_KEY))?;
-
-    let updates = match format {
-        ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKvtd => decode_arrow_file_kvtd(r, file_meta, metrics)?,
-        ProtoBatchFormat::ParquetKvtd => {
-            return Err("ParquetKvtd format not supported in arrow".into())
-        }
-    };
-
-    let ret = BlobTraceBatchPart {
-        desc: meta.desc.map_or_else(
-            || {
-                Description::new(
-                    Antichain::from_elem(T::minimum()),
-                    Antichain::from_elem(T::minimum()),
-                    Antichain::from_elem(T::minimum()),
-                )
-            },
-            |x| x.into(),
-        ),
-        index: meta.index,
-        updates,
-    };
-    ret.validate()?;
-    Ok(ret)
-}
-
-fn decode_arrow_file_kvtd<R: Read + Seek>(
-    r: &mut R,
-    file_meta: FileMetadata,
-    metrics: &ColumnarMetrics,
-) -> Result<Vec<ColumnarRecords>, Error> {
-    let projection = None;
-    let file_reader = FileReader::new(r, file_meta, projection, None);
-
-    let file_schema = file_reader.schema().fields.as_slice();
-    // We're not trying to accept any sort of user created data, so be strict.
-    if file_schema != SCHEMA_ARROW_KVTD.fields {
-        return Err(format!(
-            "expected arrow schema {:?} got: {:?}",
-            SCHEMA_ARROW_KVTD.fields, file_schema
-        )
-        .into());
-    }
-
-    let mut ret = Vec::new();
-    for chunk in file_reader {
-        ret.push(decode_arrow_batch_kvtd(&chunk?, metrics)?);
-    }
-    Ok(ret)
-}
 
 /// Converts a ColumnarRecords into an arrow [(K, V, T, D)] Chunk.
 pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
@@ -218,6 +123,7 @@ pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
 /// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
 pub fn decode_arrow_batch_kvtd(
     x: &Chunk<Box<dyn Array>>,
+    col_idxs: &[usize; 4],
     metrics: &ColumnarMetrics,
 ) -> Result<ColumnarRecords, String> {
     fn to_region<T: Copy>(buf: &[T], metrics: &ColumnarMetrics) -> Arc<MetricsRegion<T>> {
@@ -232,14 +138,11 @@ pub fn decode_arrow_batch_kvtd(
             Arc::new(metrics.lgbytes_arrow.heap_region(buf.to_owned()))
         }
     }
-    let columns = x.columns();
-    if columns.len() != 4 {
-        return Err(format!("expected 4 fields got {}", columns.len()));
-    }
-    let key_col = &x.columns()[0];
-    let val_col = &x.columns()[1];
-    let ts_col = &x.columns()[2];
-    let diff_col = &x.columns()[3];
+
+    let key_col = &x.columns()[col_idxs[0]];
+    let val_col = &x.columns()[col_idxs[1]];
+    let ts_col = &x.columns()[col_idxs[2]];
+    let diff_col = &x.columns()[col_idxs[3]];
 
     let key_array = key_col
         .as_any()
@@ -280,4 +183,103 @@ pub fn decode_arrow_batch_kvtd(
     };
     ret.borrow().validate()?;
     Ok(ret)
+}
+
+/// THIS WHOLE METHOD IS A HACK.
+pub fn decode_arrow_batch_kvtd_columnar(
+    x: &Chunk<Box<dyn Array>>,
+    col_idxs: &[usize; 3],
+    _metrics: &ColumnarMetrics,
+) -> Result<Part, String> {
+    let part_len = x.len();
+    let key_col = &x.columns()[col_idxs[0]];
+    // TODO(parkmycar): val_col.
+    let ts_col = &x.columns()[col_idxs[1]];
+    let diff_col = &x.columns()[col_idxs[2]];
+
+    // TODO(parkmycar): Passing in a Schema or DynStructCfg to decoding when we don't have to for
+    // encoding feels odd. Instead of passing one in we invent a `cfg` here based on the schema
+    // from the Arrow array.
+    //
+    // Also, in a world of schema evolution we'll need to support the schema of the batch being
+    // different than the schema passed in to Persist. This doesn't feel like the right layer to
+    // handle that mismatch, which is further evidence that we shouldn't have a schema at this
+    // layer.
+    let key_array = key_col
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("wrong type");
+
+    let cfg: Vec<_> = key_array
+        .fields()
+        .iter()
+        .map(|field| {
+            fn field_to_meta(
+                field: &Field,
+            ) -> (String, mz_persist_types::columnar::DataType, StatsFn) {
+                let name = field.name.clone();
+                let col_fmt = match &field.data_type {
+                    DataType::Boolean => ColumnFormat::Bool,
+                    DataType::Int8 => ColumnFormat::I8,
+                    DataType::Int16 => ColumnFormat::I16,
+                    DataType::Int32 => ColumnFormat::I32,
+                    DataType::Int64 => ColumnFormat::I64,
+                    DataType::UInt8 => ColumnFormat::U8,
+                    DataType::UInt16 => ColumnFormat::U16,
+                    DataType::UInt32 => ColumnFormat::U32,
+                    DataType::UInt64 => ColumnFormat::U64,
+                    DataType::Float32 => ColumnFormat::F32,
+                    DataType::Float64 => ColumnFormat::F64,
+                    DataType::Utf8 => ColumnFormat::String,
+                    DataType::Binary => ColumnFormat::Bytes,
+                    DataType::Struct(fields) => {
+                        let cfg: Vec<_> = fields.iter().map(field_to_meta).collect();
+                        ColumnFormat::Struct(DynStructCfg {
+                            cols: Arc::new(cfg),
+                        })
+                    }
+                    x => unreachable!("Support {x:?}"),
+                };
+                let dt = mz_persist_types::columnar::DataType {
+                    optional: field.is_nullable,
+                    format: col_fmt,
+                };
+
+                (name, dt, StatsFn::Default)
+            }
+
+            field_to_meta(field)
+        })
+        .collect();
+    let key_cfg = DynStructCfg {
+        cols: Arc::new(cfg),
+    };
+    let key_array = DynStructCol::from_arrow(key_cfg, key_col)?;
+
+    let val_cfg = DynStructCfg {
+        cols: Arc::new(Vec::new()),
+    };
+    let val_array = DynStructCol::empty(val_cfg);
+
+    let ts_array = ts_col
+        .as_any()
+        .downcast_ref::<PrimitiveArray<i64>>()
+        .expect("wrong type");
+    assert!(ts_array.validity().is_none());
+    let ts_array = ts_array.values().clone();
+
+    let diff_array = diff_col
+        .as_any()
+        .downcast_ref::<PrimitiveArray<i64>>()
+        .expect("wrong type");
+    assert!(diff_array.validity().is_none());
+    let diff_array = diff_array.values().clone();
+
+    Ok(Part {
+        len: part_len,
+        key: key_array,
+        val: val_array,
+        ts: ts_array,
+        diff: diff_array,
+    })
 }
