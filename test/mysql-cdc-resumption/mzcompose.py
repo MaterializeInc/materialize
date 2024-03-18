@@ -112,7 +112,7 @@ def workflow_short_bin_log_retention(c: Composition) -> None:
     args.append(f"--binlog_expire_logs_seconds={bin_log_expiration_in_sec}")
 
     with c.override(Materialized(sanity_restart=False), MySql(additional_args=args)):
-        scenarios = [create_source_after_logs_expiration]
+        scenarios = [logs_expiration_while_mz_down, create_source_after_logs_expiration]
         for scenario in scenarios:
             print(f"--- Running scenario {scenario.__name__}")
             initialize(c, create_source=False)
@@ -630,6 +630,43 @@ def create_source_after_logs_expiration(
     )
 
     run_testdrive_files(c, "verify-rows-deleted-t1.td")
+
+
+def logs_expiration_while_mz_down(
+    c: Composition, bin_log_expiration_in_sec: int
+) -> None:
+    """Switch off mz, conduct changes in MySQL, let MySQL bin logs expire, and start mz"""
+
+    run_testdrive_files(
+        c,
+        "--var=mysql-source-host=toxiproxy",
+        "create-source.td",
+    )
+
+    c.kill("materialized")
+
+    mysql_conn = create_mysql_connection(c)
+    mysql_conn.autocommit(True)
+    with mysql_conn.cursor() as cur:
+        cur.execute("DELETE FROM public.t1 WHERE f1 % 2 = 0;")
+
+    sleep_duration = bin_log_expiration_in_sec + 2
+    print(f"Sleeping for {sleep_duration} sec")
+    time.sleep(sleep_duration)
+
+    restart_mysql(c)
+
+    mysql_conn = create_mysql_connection(c)
+    mysql_conn.autocommit(True)
+
+    # conduct a further change to be added to the bin log
+    with mysql_conn.cursor() as cur:
+        cur.execute("UPDATE public.t1 SET f2 = NULL;")
+        cur.execute("FLUSH BINARY LOGS")
+
+    c.up("materialized")
+
+    run_testdrive_files(c, "verify-source-stalled.td")
 
 
 def run_testdrive_files(c: Composition, *files: str, mysql_host: str = "mysql") -> None:
