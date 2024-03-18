@@ -679,10 +679,12 @@ impl MirRelationExpr {
                     // Track columns equated to literals, which we can prune.
                     let mut cols_equal_to_literal = BTreeSet::new();
 
-                    // Perform union find on `col1 = col2` to establish connected
-                    // components of equated columns. Absent any equalities, this
-                    // will be `0 .. arity`, but each equality will orient the root
-                    // of the greater to the root of the lesser.
+                    // Perform union find on `col1 = col2` to establish
+                    // connected components of equated columns. Absent any
+                    // equalities, this will be `0 .. #c` (where #c is the
+                    // greatest column referenced by a predicate), but each
+                    // equality will orient the root of the greater to the root
+                    // of the lesser.
                     let mut union_find = Vec::new();
 
                     for expr in predicates.iter() {
@@ -703,25 +705,29 @@ impl MirRelationExpr {
                                 }
                             }
                             // Perform union-find to equate columns.
-                            if let Some(c1) = expr1.as_column() {
-                                if let Some(c2) = expr2.as_column() {
-                                    if c1 != c2 {
-                                        let mut x: usize = c1;
-                                        let mut y: usize = c2;
-                                        while union_find.len() <= std::cmp::max(x, y) {
-                                            union_find.push(union_find.len());
-                                        }
-                                        while x != union_find[x] {
-                                            assert!(union_find[x] < x);
-                                            x = union_find[x];
-                                        }
-                                        while y != union_find[y] {
-                                            assert!(union_find[y] < y);
-                                            y = union_find[y];
-                                        }
-                                        // Point from larger to smaller index
-                                        union_find[std::cmp::max(x, y)] = std::cmp::min(x, y);
+                            if let (Some(c1), Some(c2)) = (expr1.as_column(), expr2.as_column()) {
+                                if c1 != c2 {
+                                    // Ensure union_find has entries up to
+                                    // max(c1, c2) by filling up missing
+                                    // positions with identity mappings.
+                                    while union_find.len() <= std::cmp::max(c1, c2) {
+                                        union_find.push(union_find.len());
                                     }
+                                    let mut r1 = c1; // Find the representative column of [c1].
+                                    while r1 != union_find[r1] {
+                                        assert!(union_find[r1] < r1);
+                                        r1 = union_find[r1];
+                                    }
+                                    let mut r2 = c2; // Find the representative column of [c2].
+                                    while r2 != union_find[r2] {
+                                        assert!(union_find[r2] < r2);
+                                        r2 = union_find[r2];
+                                    }
+                                    // Union [c1] and [c2] by pointing the
+                                    // larger to the smaller representative (we
+                                    // update the remaining equivalence class
+                                    // members only once after this for-loop).
+                                    union_find[std::cmp::max(r1, r2)] = std::cmp::min(r1, r2);
                                 }
                             }
                         }
@@ -752,6 +758,9 @@ impl MirRelationExpr {
                     // Each instance of `col` can be replaced by any equivalent column.
                     // This has the potential to result in exponentially sized number of unique keys,
                     // and in the future we should probably maintain unique keys modulo equivalence.
+
+                    // First, compute an inverse map from each representative
+                    // column `sub` to all other equivalent columns `col`.
                     let mut subs = Vec::new();
                     for (col, sub) in union_find.iter().enumerate() {
                         if *sub != col {
@@ -768,11 +777,8 @@ impl MirRelationExpr {
                         if !subs.is_empty() {
                             for key_set in input.iter() {
                                 if key_set.contains(&col) {
-                                    let mut to_extend = key_set
-                                        .iter()
-                                        .cloned()
-                                        .filter(|c| c != &col)
-                                        .collect::<Vec<_>>();
+                                    let mut to_extend = key_set.clone();
+                                    to_extend.retain(|c| c != &col);
                                     for sub in subs {
                                         to_extend.push(*sub);
                                         to_add.push(to_extend.clone());
@@ -788,8 +794,6 @@ impl MirRelationExpr {
                         key_set.sort();
                         key_set.dedup();
                     }
-                    input.sort();
-                    input.dedup();
                 }
                 input
             }
