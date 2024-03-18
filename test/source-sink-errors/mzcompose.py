@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import Protocol
 
+from materialize import buildkite
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -42,6 +43,8 @@ SERVICES = [
 
 
 class Disruption(Protocol):
+    name: str
+
     def run_test(self, c: Composition) -> None:
         ...
 
@@ -538,7 +541,11 @@ def workflow_default(c: Composition) -> None:
     introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
     """
 
-    for disruption in disruptions:
+    sharded_disruptions = buildkite.shard_list(disruptions, lambda s: s.name)
+    print(
+        f"Disruptions in shard with index {buildkite.get_parallelism_index()}: {[d.name for d in sharded_disruptions]}"
+    )
+    for disruption in sharded_disruptions:
         disruption.run_test(c)
 
 
