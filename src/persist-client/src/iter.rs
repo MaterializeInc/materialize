@@ -83,7 +83,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         let min_version = WriterKey::for_version(&MINIMUM_CONSOLIDATED_VERSION);
         match self {
             FetchData::Unleased { part_key, .. } => part_key.split().0 >= min_version,
-            FetchData::Leased { part, .. } => part.key.split().0 >= min_version,
+            FetchData::Leased { part, .. } => part.part.key.split().0 >= min_version,
             FetchData::AlreadyFetched => false,
         }
     }
@@ -95,7 +95,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     fn key_lower(&self) -> &[u8] {
         match self {
             FetchData::Unleased { key_lower, .. } => key_lower.as_slice(),
-            FetchData::Leased { part, .. } => part.key_lower.as_slice(),
+            FetchData::Leased { part, .. } => part.part.key_lower.as_slice(),
             FetchData::AlreadyFetched => &[],
         }
     }
@@ -137,7 +137,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                     &part.metrics,
                     &*shard_metrics,
                     read_metrics(&part.metrics.read),
-                    &part.key,
+                    &part.part.key,
                     &part.desc,
                 )
                 .await
@@ -322,7 +322,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
         let run = parts
             .into_iter()
             .map(|part: LeasedBatchPart<T>| {
-                let size = part.encoded_size_bytes;
+                let size = part.part.encoded_size_bytes;
                 let queued = ConsolidationPart::Queued {
                     data: FetchData::Leased {
                         blob: Arc::clone(blob),

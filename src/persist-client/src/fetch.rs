@@ -34,6 +34,7 @@ use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::{BlobKey, PartialBatchKey};
+use crate::internal::state::HollowBatchPart;
 use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
 use crate::ShardId;
@@ -93,7 +94,7 @@ where
             &self.metrics,
             &self.shard_metrics,
             &self.metrics.read.batch_fetcher,
-            &part.key,
+            &part.part.key,
         )
         .await
         .unwrap_or_else(|blob_key| {
@@ -108,7 +109,7 @@ where
             panic!("batch fetcher could not fetch batch part: {}", blob_key)
         });
         let fetched_blob = FetchedBlob {
-            key: part.key.0.clone(),
+            key: part.part.key.0.clone(),
             metrics: Arc::clone(&self.metrics),
             read_metrics: self.metrics.read.batch_fetcher.clone(),
             registered_desc: part.desc.clone(),
@@ -116,7 +117,7 @@ where
             schemas: self.schemas.clone(),
             metadata: part.metadata.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
-            stats: part.stats.clone(),
+            stats: part.part.stats.clone(),
             _phantom: PhantomData,
         };
         Ok(fetched_blob)
@@ -215,7 +216,7 @@ where
         &metrics,
         shard_metrics,
         read_metrics,
-        &part.key,
+        &part.part.key,
         &part.desc,
     )
     .await
@@ -236,7 +237,7 @@ where
         schemas,
         &part.metadata,
         part.filter_pushdown_audit,
-        part.stats.as_ref(),
+        part.part.stats.as_ref(),
     )
 }
 
@@ -364,17 +365,12 @@ pub struct LeasedBatchPart<T> {
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) metadata: SerdeLeasedBatchPartMetadata,
     pub(crate) desc: Description<T>,
-    pub(crate) key: PartialBatchKey,
-    pub(crate) encoded_size_bytes: usize,
+    pub(crate) part: HollowBatchPart,
     /// The `SeqNo` from which this part originated; we track this value as
     /// long as necessary to ensure the `SeqNo` isn't garbage collected while a
     /// read still depends on it.
     pub(crate) leased_seqno: Option<SeqNo>,
-    pub(crate) stats: Option<LazyPartStats>,
     pub(crate) filter_pushdown_audit: bool,
-    /// A lower bound on the key. If a tight lower bound is not available, the
-    /// empty vec (as the minimum vec) is a conservative choice.
-    pub(crate) key_lower: Vec<u8>,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -397,13 +393,13 @@ where
             lower: self.desc.lower().iter().map(T::encode).collect(),
             upper: self.desc.upper().iter().map(T::encode).collect(),
             since: self.desc.since().iter().map(T::encode).collect(),
-            key: self.key.clone(),
-            encoded_size_bytes: self.encoded_size_bytes,
+            key: self.part.key.clone(),
+            encoded_size_bytes: self.part.encoded_size_bytes,
             leased_seqno: self.leased_seqno,
             reader_id: self.reader_id.clone(),
-            stats: self.stats.clone(),
+            stats: self.part.stats.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
-            key_lower: std::mem::take(&mut self.key_lower),
+            key_lower: std::mem::take(&mut self.part.key_lower),
         };
         // If `x` has a lease, we've effectively transferred it to `r`.
         let _ = self.leased_seqno.take();
@@ -430,7 +426,7 @@ where
 
     /// The encoded size of this part in bytes
     pub fn encoded_size_bytes(&self) -> usize {
-        self.encoded_size_bytes
+        self.part.encoded_size_bytes
     }
 
     /// The filter has indicated we don't need this part, we can verify the
@@ -443,7 +439,7 @@ where
 
     /// Returns the pushdown stats for this part.
     pub fn stats(&self) -> Option<PartStats> {
-        self.stats.as_ref().map(|x| x.decode())
+        self.part.stats.as_ref().map(|x| x.decode())
     }
 }
 
@@ -866,13 +862,15 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
                 Antichain::from_iter(x.upper.into_iter().map(T::decode)),
                 Antichain::from_iter(x.since.into_iter().map(T::decode)),
             ),
-            key: x.key,
-            encoded_size_bytes: x.encoded_size_bytes,
+            part: HollowBatchPart {
+                key: x.key,
+                encoded_size_bytes: x.encoded_size_bytes,
+                stats: x.stats,
+                key_lower: x.key_lower,
+            },
             leased_seqno: x.leased_seqno,
             reader_id: x.reader_id,
-            stats: x.stats,
             filter_pushdown_audit: x.filter_pushdown_audit,
-            key_lower: x.key_lower,
         }
     }
 }
