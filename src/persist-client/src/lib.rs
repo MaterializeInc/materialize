@@ -24,6 +24,7 @@ use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
+use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
@@ -312,6 +313,11 @@ impl PersistClient {
             .open(PersistLocation::new_in_mem())
             .await
             .expect("in-mem location is valid")
+    }
+
+    /// Returns persist's [ConfigSet].
+    pub fn dyncfgs(&self) -> &ConfigSet {
+        &self.cfg.configs
     }
 
     async fn make_machine<K, V, T, D>(
