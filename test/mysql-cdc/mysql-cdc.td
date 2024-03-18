@@ -314,8 +314,8 @@ running
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_progress';
 running
 
-> SELECT count(*) > 0 FROM mz_source_progress WHERE transaction_id > 0
-true
+> SELECT count(*) FROM mz_source_progress WHERE transaction_id > 0
+1
 
 # There is no such thing like mz_internal.mz_mysql_sources because MySQL does not have replication slots.
 
