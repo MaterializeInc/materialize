@@ -42,6 +42,7 @@ use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_txn::metrics::Metrics as TxnMetrics;
 use mz_persist_txn::txn_read::TxnsRead;
 use mz_persist_txn::txns::TxnsHandle;
+use mz_persist_txn::INIT_FORGET_ALL;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::RustType;
@@ -2142,11 +2143,29 @@ where
         //
         // We don't have an extra timestamp here for the tidy, so for now ignore it and let the
         // next transaction perform any tidy needed.
-        let (removed, _tidy) = txns
-            .forget_all(init_ts.clone())
-            .await
-            .map_err(|_| StorageError::InvalidUppers(vec![]))?;
-        info!("init_txns removed from txns shard: {:?}", removed);
+        if INIT_FORGET_ALL.get(txns_client.dyncfgs()) {
+            let (removed, _tidy) = txns
+                .forget_all(init_ts.clone())
+                .await
+                .map_err(|_| StorageError::InvalidUppers(vec![]))?;
+            info!("init_txns removed from txns shard: {:?}", removed);
+        } else {
+            // More limited version of the above to mitigate #25992. This is all
+            // that should be necessary (and probably more than we need,
+            // strictly) now that we've removed the old tables impl. Guarantees:
+            // - That we were able to write to the txns shard at `init_ts` (a
+            //   timestamp given to us by the coordinator).
+            // - That all txn writes through `init_ts` have been applied
+            //   (materialized physically in the data shards).
+            let empty_txn = txns.begin();
+            let apply = empty_txn
+                .commit_at(&mut txns, init_ts.clone())
+                .await
+                .map_err(|_| StorageError::InvalidUppers(vec![]))?;
+            let _tidy = apply.apply_eager(&mut txns).await;
+            info!("init_txns committed at and applied through {:?}", init_ts);
+        }
+
         drop(txns);
 
         self.txns_init_run = true;
