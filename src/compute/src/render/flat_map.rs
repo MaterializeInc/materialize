@@ -88,7 +88,7 @@ where
                             drain_through_mfp(
                                 &cap,
                                 &input_row,
-                                &mut time,
+                                &time,
                                 &diff,
                                 &mut datums_mfp,
                                 &table_func_output,
@@ -118,7 +118,7 @@ where
 fn drain_through_mfp<T>(
     cap: &InputCapability<T>,
     input_row: &Row,
-    input_time: &mut T,
+    input_time: &T,
     input_diff: &Diff,
     datum_vec: &mut DatumVec,
     extensions: &[(Row, Diff)],
@@ -158,13 +158,13 @@ fn drain_through_mfp<T>(
                 Ok((row, event_time, diff)) => {
                     // Copy the whole time, and re-populate event time.
                     let mut time = input_time.clone();
-                    *time.event_time() = event_time;
+                    *time.event_time_mut() = event_time;
                     ok_output.give(cap, (row, time, diff));
                 }
                 Err((err, event_time, diff)) => {
                     // Copy the whole time, and re-populate event time.
                     let mut time = input_time.clone();
-                    *time.event_time() = event_time;
+                    *time.event_time_mut() = event_time;
                     err_output.give(cap, (err, time, diff));
                 }
             };

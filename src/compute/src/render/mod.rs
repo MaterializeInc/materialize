@@ -1090,7 +1090,9 @@ pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> + C
     /// Effects a system delay in terms of the timestamp summary.
     fn system_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary;
     /// The event timestamp component of the timestamp.
-    fn event_time(&mut self) -> &mut mz_repr::Timestamp;
+    fn event_time(&self) -> mz_repr::Timestamp;
+    /// The event timestamp component of the timestamp, as a mutable reference.
+    fn event_time_mut(&mut self) -> &mut mz_repr::Timestamp;
     /// Effects an event delay in terms of the timestamp summary.
     fn event_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary;
     /// Steps the timestamp back so that logical compaction to the output will
@@ -1105,7 +1107,10 @@ impl RenderTimestamp for mz_repr::Timestamp {
     fn system_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
         delay
     }
-    fn event_time(&mut self) -> &mut mz_repr::Timestamp {
+    fn event_time(&self) -> mz_repr::Timestamp {
+        *self
+    }
+    fn event_time_mut(&mut self) -> &mut mz_repr::Timestamp {
         self
     }
     fn event_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
@@ -1123,7 +1128,10 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
     fn system_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {
         Product::new(delay, Default::default())
     }
-    fn event_time(&mut self) -> &mut mz_repr::Timestamp {
+    fn event_time(&self) -> mz_repr::Timestamp {
+        self.outer
+    }
+    fn event_time_mut(&mut self) -> &mut mz_repr::Timestamp {
         &mut self.outer
     }
     fn event_delay(delay: mz_repr::Timestamp) -> <Self as Timestamp>::Summary {

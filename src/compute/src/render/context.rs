@@ -978,7 +978,7 @@ where
                 let mut datums_local = datum_vec.borrow();
                 datums_local.extend(row_iter);
                 let time = time.clone();
-                let event_time: mz_repr::Timestamp = *time.clone().event_time();
+                let event_time = time.event_time();
                 mfp_plan
                     .evaluate(
                         &mut datums_local,
@@ -992,13 +992,13 @@ where
                         Ok((row, event_time, diff)) => {
                             // Copy the whole time, and re-populate event time.
                             let mut time: S::Timestamp = time.clone();
-                            *time.event_time() = event_time;
+                            *time.event_time_mut() = event_time;
                             Ok((row, time, diff))
                         }
                         Err((e, event_time, diff)) => {
                             // Copy the whole time, and re-populate event time.
                             let mut time: S::Timestamp = time.clone();
-                            *time.event_time() = event_time;
+                            *time.event_time_mut() = event_time;
                             Err((e, time, diff))
                         }
                     })
