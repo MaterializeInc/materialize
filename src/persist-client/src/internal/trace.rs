@@ -206,12 +206,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
                         return result;
                     }
                 }
-                MergeState::Double(MergeVariant::Complete(batch)) => {
-                    let result = batch.maybe_replace(res);
-                    if result.matched() {
-                        return result;
-                    }
-                }
                 MergeState::Single(batch) => {
                     let result = batch.maybe_replace(res);
                     if result.matched() {
@@ -744,7 +738,6 @@ impl<T> Spine<T> {
                     f(batch1);
                     f(batch2);
                 }
-                MergeState::Double(MergeVariant::Complete(batch)) => f(batch),
                 MergeState::Single(batch) => f(batch),
                 _ => {}
             }
@@ -1096,7 +1089,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         for x in self.merging.iter().rev() {
             let batches = match x {
                 MergeState::Vacant => vec![],
-                MergeState::Single(x) | MergeState::Double(MergeVariant::Complete(x)) => {
+                MergeState::Single(x) => {
                     vec![x]
                 }
                 MergeState::Double(MergeVariant::InProgress(x0, x1, _m)) => {
@@ -1172,7 +1165,6 @@ impl<T: Timestamp + Lattice> MergeState<T> {
         match self {
             MergeState::Single(b) => b.len(),
             MergeState::Double(MergeVariant::InProgress(b1, b2, _)) => b1.len() + b2.len(),
-            MergeState::Double(MergeVariant::Complete(b)) => b.len(),
             _ => 0,
         }
     }
@@ -1184,7 +1176,6 @@ impl<T: Timestamp + Lattice> MergeState<T> {
             MergeState::Double(MergeVariant::InProgress(b1, b2, _)) => {
                 b1.is_empty() && b2.is_empty()
             }
-            MergeState::Double(MergeVariant::Complete(b)) => b.is_empty(),
             _ => true,
         }
     }
@@ -1233,7 +1224,6 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     /// True iff the layer is a complete merge, ready for extraction.
     fn is_complete(&self) -> bool {
         match self {
-            MergeState::Double(MergeVariant::Complete(_)) => true,
             MergeState::Double(MergeVariant::InProgress(_, _, work)) => work.remaining_work <= 0,
             _ => false,
         }
@@ -1273,8 +1263,6 @@ impl<T: Timestamp + Lattice> MergeState<T> {
 enum MergeVariant<T> {
     /// Describes an actual in-progress merge between two non-trivial batches.
     InProgress(SpineBatch<T>, SpineBatch<T>, FuelingMerge<T>),
-    /// A merge that requires no further work.
-    Complete(SpineBatch<T>),
 }
 
 impl<T: Timestamp + Lattice> MergeVariant<T> {
@@ -1282,15 +1270,13 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
     fn complete(self, log: &mut SpineLog<'_, T>) -> SpineBatch<T> {
         match self {
             MergeVariant::InProgress(a, b, merge) => merge.done(a, b, log),
-            MergeVariant::Complete(batch) => batch,
         }
     }
 
     /// Applies some amount of work, potentially completing the merge.
     fn work(&mut self, fuel: &mut isize) {
-        if let MergeVariant::InProgress(b1, b2, merge) = self {
-            merge.work(&b1, &b2, fuel);
-        }
+        let MergeVariant::InProgress(b1, b2, merge) = self;
+        merge.work(&b1, &b2, fuel);
     }
 }
 
