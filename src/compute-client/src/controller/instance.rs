@@ -1117,13 +1117,63 @@ where
             self.compute
                 .send(ComputeCommand::CreateDataflow(augmented_dataflow));
 
-            // TODO: defer scheduling until inputs are ready
             for id in collections {
-                self.compute.send(ComputeCommand::Schedule(id));
+                self.maybe_schedule_collection(id);
             }
         }
 
         Ok(())
+    }
+
+    /// Schedule the identified collection if all its inputs are available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the identified collection does not exist.
+    fn maybe_schedule_collection(&mut self, id: GlobalId) {
+        let collection = self.compute.expect_collection(id);
+
+        // Don't schedule collections twice.
+        if collection.scheduled {
+            return;
+        }
+
+        let as_of = collection.read_frontier();
+
+        // If the collection has an empty `as_of`, it was either never installed on the replica or
+        // has since been dropped. In either case the replica does not expect any commands for it.
+        if as_of.is_empty() {
+            return;
+        }
+
+        // Check dependency frontiers to determine if all inputs are available.
+        // An input is available when its frontier is greater than the `as_of`, i.e., all input
+        // data up to and including the `as_of` has been sealed.
+        let compute_frontiers = collection.compute_dependencies.iter().map(|id| {
+            let dep = &self.compute.expect_collection(*id);
+            &dep.write_frontier
+        });
+        let storage_frontiers = collection.storage_dependencies.iter().map(|id| {
+            let dep = &self.storage_controller.collection(*id).expect("must exist");
+            &dep.write_frontier
+        });
+        let ready = compute_frontiers
+            .chain(storage_frontiers)
+            .all(|frontier| PartialOrder::less_than(&as_of, &frontier.borrow()));
+
+        if ready {
+            self.compute.send(ComputeCommand::Schedule(id));
+            let collection = self.compute.expect_collection_mut(id);
+            collection.scheduled = true;
+        }
+    }
+
+    /// Schedule any unscheduled collections that are ready.
+    fn schedule_collections(&mut self) {
+        let ids: Vec<_> = self.compute.collections.keys().copied().collect();
+        for id in ids {
+            self.maybe_schedule_collection(id);
+        }
     }
 
     /// Drops the read capability for the given collections and allows their resources to be
@@ -1884,6 +1934,7 @@ where
     pub fn maintain(&mut self) {
         self.rehydrate_failed_replicas();
         self.downgrade_warmup_capabilities();
+        self.schedule_collections();
         self.compute.cleanup_collections();
         self.compute.refresh_state_metrics();
     }

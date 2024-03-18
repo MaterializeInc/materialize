@@ -760,6 +760,9 @@ pub struct CollectionState<T> {
     /// `dropped == true`. Otherwise, clients might still expect to be able to query information
     /// about this collection.
     dropped: bool,
+    /// Whether this collection has been scheduled, i.e., the controller has sent a `Schedule`
+    /// command for it.
+    scheduled: bool,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -841,6 +844,7 @@ impl<T: Timestamp> CollectionState<T> {
         Self {
             log_collection: false,
             dropped: false,
+            scheduled: false,
             read_capabilities,
             implied_capability,
             warmup_capability,
@@ -852,11 +856,13 @@ impl<T: Timestamp> CollectionState<T> {
         }
     }
 
-    /// TODO(#25239): Add documentation.
+    /// Creates a new collection state for a log collection.
     pub fn new_log_collection() -> Self {
         let since = Antichain::from_elem(Timestamp::minimum());
         let mut state = Self::new(since, Vec::new(), Vec::new());
         state.log_collection = true;
+        // Log collections are created and scheduled implicitly as part of replica initialization.
+        state.scheduled = true;
         state
     }
 }
