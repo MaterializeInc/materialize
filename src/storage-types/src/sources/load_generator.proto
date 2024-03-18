@@ -23,7 +23,7 @@ message ProtoLoadGeneratorSourceConnection {
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
         google.protobuf.Empty marketing = 7;
-        ProtoUpsertLoadGenerator upsert = 8;
+        ProtoKeyValueLoadGenerator key_value = 8;
     }
     optional uint64 tick_micros = 2;
 }
@@ -40,7 +40,7 @@ message ProtoTpchLoadGenerator {
     int64 count_clerk = 5;
 }
 
-message ProtoUpsertLoadGenerator {
+message ProtoKeyValueLoadGenerator {
     uint64 keys = 1;
     uint64 snapshot_rounds = 2;
     uint64 quick_rounds = 3;

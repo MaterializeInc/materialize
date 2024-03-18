@@ -85,7 +85,7 @@ use mz_storage_types::sources::envelope::{
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
-    LoadGenerator, LoadGeneratorSourceConnection, UpsertLoadGenerator,
+    KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
     LOAD_GENERATOR_KEY_VALUE_KEY_NAME,
 };
 use mz_storage_types::sources::mysql::{
@@ -1228,10 +1228,10 @@ pub fn plan_create_source(
             (key_desc, value_desc)
         }
         None => (
-            // `UPSERT` load generators do not have an encoding so must be special-cased.
+            // `KEY VALUE` load generators do not have an encoding so must be special-cased.
             if let GenericSourceConnection::LoadGenerator(
                 lg @ LoadGeneratorSourceConnection {
-                    load_generator: LoadGenerator::Upsert(_),
+                    load_generator: LoadGenerator::KeyValue(_),
                     ..
                 },
             ) = &external_connection
@@ -1264,7 +1264,7 @@ pub fn plan_create_source(
     // TODO: remove bails as more support for upsert is added.
 
     let envelope = if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-        load_generator: LoadGenerator::Upsert(_),
+        load_generator: LoadGenerator::KeyValue(_),
         ..
     }) = &external_connection
     {
@@ -1296,9 +1296,9 @@ pub fn plan_create_source(
             // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
             // specified.
             let key_envelope =
-                // `UPSERT` load generators do not have an encoding so must be special-cased.
+                // `KEY VALUE` load generators do not have an encoding so must be special-cased.
                 if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-                    load_generator: LoadGenerator::Upsert(_),
+                    load_generator: LoadGenerator::KeyValue(_),
                     ..
                 }) = &external_connection
                 {
@@ -1687,7 +1687,7 @@ impl LoadGeneratorOptionExtracted {
             ast::LoadGenerator::Marketing => &[TickInterval],
             ast::LoadGenerator::Datums => &[TickInterval],
             ast::LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
-            ast::LoadGenerator::Upsert => &[
+            ast::LoadGenerator::KeyValue => &[
                 Keys,
                 SnapshotRounds,
                 QuickRounds,
@@ -1774,8 +1774,8 @@ pub(crate) fn load_generator_ast_to_generator(
                 count_clerk,
             }
         }
-        mz_sql_parser::ast::LoadGenerator::Upsert => {
-            scx.require_feature_flag(&vars::ENABLE_LOAD_GENERATOR_UPSERT)?;
+        mz_sql_parser::ast::LoadGenerator::KeyValue => {
+            scx.require_feature_flag(&vars::ENABLE_LOAD_GENERATOR_KEY_VALUE)?;
             let LoadGeneratorOptionExtracted {
                 keys,
                 snapshot_rounds,
@@ -1788,40 +1788,44 @@ pub(crate) fn load_generator_ast_to_generator(
                 ..
             } = extracted;
 
-            let lgu = UpsertLoadGenerator {
-                keys: keys.ok_or_else(|| sql_err!("LOADGEN UPSERT requires KEYS"))?,
+            let lgkv = KeyValueLoadGenerator {
+                keys: keys.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires KEYS"))?,
                 snapshot_rounds: snapshot_rounds
-                    .ok_or_else(|| sql_err!("LOADGEN UPSERT requires SNAPSHOT ROUNDS"))?,
+                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SNAPSHOT ROUNDS"))?,
                 quick_rounds: quick_rounds.unwrap_or(0),
                 value_size: value_size
-                    .ok_or_else(|| sql_err!("LOADGEN UPSERT requires VALUE SIZE"))?,
+                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires VALUE SIZE"))?,
                 partitions: partitions
-                    .ok_or_else(|| sql_err!("LOADGEN UPSERT requires PARTITIONS"))?,
+                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires PARTITIONS"))?,
                 update_rate,
                 batch_size: batch_size
-                    .ok_or_else(|| sql_err!("LOADGEN UPSERT requires BATCH SIZE"))?,
-                seed: seed.ok_or_else(|| sql_err!("LOADGEN UPSERT requires SEED"))?,
+                    .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires BATCH SIZE"))?,
+                seed: seed.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SEED"))?,
             };
 
-            if lgu.keys == 0 || lgu.partitions == 0 || lgu.value_size == 0 || lgu.batch_size == 0 {
-                sql_bail!("LOAD GENERATOR UPSERT options must be non-zero")
+            if lgkv.keys == 0
+                || lgkv.partitions == 0
+                || lgkv.value_size == 0
+                || lgkv.batch_size == 0
+            {
+                sql_bail!("LOAD GENERATOR KEY VALUE options must be non-zero")
             }
 
-            if lgu.keys % lgu.partitions != 0 {
+            if lgkv.keys % lgkv.partitions != 0 {
                 sql_bail!("KEYS must be a multiple of PARTITIONS")
             }
 
-            if lgu.batch_size > lgu.keys {
+            if lgkv.batch_size > lgkv.keys {
                 sql_bail!("KEYS must be larger than BATCH SIZE")
             }
 
             // This constraints simplifies the source implementation.
             // We can lift it later.
-            if (lgu.keys / lgu.partitions) % lgu.batch_size != 0 {
+            if (lgkv.keys / lgkv.partitions) % lgkv.batch_size != 0 {
                 sql_bail!("PARTITIONS * BATCH SIZE must be a divisor of KEYS")
             }
 
-            LoadGenerator::Upsert(lgu)
+            LoadGenerator::KeyValue(lgkv)
         }
     };
 
@@ -1835,7 +1839,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
-                LoadGenerator::Upsert { .. } => "upsert".into(),
+                LoadGenerator::KeyValue { .. } => "key_value".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },

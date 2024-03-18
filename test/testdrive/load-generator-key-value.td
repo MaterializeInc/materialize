@@ -7,19 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Tests `LOAD GENERATOR UPSERT`
+# Tests `LOAD GENERATOR KEY VALUE`
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
-ALTER SYSTEM SET enable_load_generator_upsert = true
+ALTER SYSTEM SET enable_load_generator_key_value = true
 
 > CREATE CLUSTER lg_cluster SIZE '${arg.default-replica-size}'
 
 # A loadgen that only snapshots.
 > CREATE SOURCE up_no_update
   IN CLUSTER lg_cluster
-  FROM LOAD GENERATOR UPSERT (
+  FROM LOAD GENERATOR KEY VALUE (
     KEYS 16,
     PARTITIONS 4,
     SNAPSHOT ROUNDS 3,
@@ -30,7 +30,7 @@ ALTER SYSTEM SET enable_load_generator_upsert = true
 
 > CREATE SOURCE up_quick
   IN CLUSTER lg_cluster
-  FROM LOAD GENERATOR UPSERT (
+  FROM LOAD GENERATOR KEY VALUE (
     KEYS 16,
     PARTITIONS 4,
     SNAPSHOT ROUNDS 1,
@@ -124,7 +124,7 @@ up_quick     7 7 16 16 64 16
 # Create a source with 1s updates after snapshotting.
 > CREATE SOURCE up_with_update
   IN CLUSTER lg_cluster
-  FROM LOAD GENERATOR UPSERT (
+  FROM LOAD GENERATOR KEY VALUE (
     KEYS 16,
     PARTITIONS 4,
     SNAPSHOT ROUNDS 3,

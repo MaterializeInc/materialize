@@ -14,7 +14,7 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row};
-use mz_storage_types::sources::load_generator::UpsertLoadGenerator;
+use mz_storage_types::sources::load_generator::KeyValueLoadGenerator;
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use rand::rngs::StdRng;
@@ -28,7 +28,7 @@ use crate::source::types::ProgressStatisticsUpdate;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 pub fn render<G: Scope<Timestamp = MzOffset>>(
-    upsert: UpsertLoadGenerator,
+    key_value: KeyValueLoadGenerator,
     scope: &mut G,
     config: RawSourceCreationConfig,
     resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
@@ -68,7 +68,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
         let snapshotting = resume_offset.offset == 0;
 
-        let mut local_partitions: BTreeMap<_, _> = (0..upsert.partitions)
+        let mut local_partitions: BTreeMap<_, _> = (0..key_value.partitions)
             .into_iter()
             .filter_map(|p| {
                 config.responsible_for(p).then(|| {
@@ -76,11 +76,11 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                         p,
                         SnapshotProducer::new(
                             p,
-                            upsert.partitions,
-                            upsert.keys,
-                            upsert.snapshot_rounds,
-                            upsert.batch_size,
-                            upsert.seed,
+                            key_value.partitions,
+                            key_value.keys,
+                            key_value.snapshot_rounds,
+                            key_value.batch_size,
+                            key_value.seed,
                         ),
                     )
                 })
@@ -103,11 +103,11 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
         }
 
         let local_snapshot_size =
-            (u64::cast_from(local_partitions.len())) * upsert.keys * upsert.snapshot_rounds
-                / upsert.partitions;
+            (u64::cast_from(local_partitions.len())) * key_value.keys * key_value.snapshot_rounds
+                / key_value.partitions;
 
         // Re-usable buffers.
-        let mut value_buffer: Vec<u8> = vec![0; usize::cast_from(upsert.value_size)];
+        let mut value_buffer: Vec<u8> = vec![0; usize::cast_from(key_value.value_size)];
         let mut updates_buffer = Vec::new();
 
         // snapshotting
@@ -117,7 +117,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     .give(
                         &stats_cap,
                         ProgressStatisticsUpdate::SteadyState {
-                            offset_known: upsert.snapshot_rounds,
+                            offset_known: key_value.snapshot_rounds,
                             offset_committed: 0,
                         },
                     )
@@ -125,7 +125,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             };
 
             // Downgrade to the snapshot frontier.
-            progress_cap.downgrade(&MzOffset::from(upsert.snapshot_rounds));
+            progress_cap.downgrade(&MzOffset::from(key_value.snapshot_rounds));
 
             let mut emitted = 0;
             stats_output
@@ -156,15 +156,15 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 tokio::task::yield_now().await;
             }
 
-            cap.downgrade(&MzOffset::from(upsert.snapshot_rounds));
-            upsert.snapshot_rounds
+            cap.downgrade(&MzOffset::from(key_value.snapshot_rounds));
+            key_value.snapshot_rounds
         } else {
             cap.downgrade(&resume_offset);
             progress_cap.downgrade(&resume_offset);
             resume_offset.offset
         };
 
-        let mut local_partitions: BTreeMap<_, _> = (0..upsert.partitions)
+        let mut local_partitions: BTreeMap<_, _> = (0..key_value.partitions)
             .into_iter()
             .filter_map(|p| {
                 config.responsible_for(p).then(|| {
@@ -172,21 +172,22 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                         p,
                         UpdateProducer::new(
                             p,
-                            upsert.partitions,
-                            upsert.keys,
-                            upsert.snapshot_rounds,
-                            upsert.quick_rounds,
-                            upsert.batch_size,
-                            upsert.seed,
+                            key_value.partitions,
+                            key_value.keys,
+                            key_value.snapshot_rounds,
+                            key_value.quick_rounds,
+                            key_value.batch_size,
+                            key_value.seed,
                             upper_offset,
                         ),
                     )
                 })
             })
             .collect();
-        if !local_partitions.is_empty() && (upsert.update_rate.is_some() || upsert.quick_rounds > 0)
+        if !local_partitions.is_empty()
+            && (key_value.update_rate.is_some() || key_value.quick_rounds > 0)
         {
-            let mut interval = upsert.update_rate.map(tokio::time::interval);
+            let mut interval = key_value.update_rate.map(tokio::time::interval);
 
             loop {
                 if local_partitions.values().all(|si| si.finished_quick()) {
@@ -462,7 +463,7 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
 ) -> (Stream<G, ProgressStatisticsUpdate>, PressOnDropButton) {
     let id = config.id;
     let mut builder =
-        AsyncOperatorBuilder::new(format!("upsert_loadgen_statistics:{id}"), scope.clone());
+        AsyncOperatorBuilder::new(format!("key_value_loadgen_statistics:{id}"), scope.clone());
 
     let (mut stats_output, stats_stream) = builder.new_output();
 
@@ -514,7 +515,7 @@ mod test {
     use super::*;
 
     #[mz_ore::test]
-    fn test_upsert_loadgen_resume_upper() {
+    fn test_key_value_loadgen_resume_upper() {
         let up = UpdateProducer::new(
             1,    // partition 1
             3,    // of 3 partitions
@@ -545,7 +546,7 @@ mod test {
     }
 
     #[mz_ore::test]
-    fn test_upsert_loadgen_part_iter() {
+    fn test_key_value_loadgen_part_iter() {
         let mut pi = PartitionKeyIterator::new(
             1,   // partition 1
             3,   // of 3 partitions

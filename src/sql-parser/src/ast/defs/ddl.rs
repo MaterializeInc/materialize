@@ -1129,7 +1129,7 @@ pub enum LoadGenerator {
     Auction,
     Datums,
     Tpch,
-    Upsert,
+    KeyValue,
 }
 
 impl AstDisplay for LoadGenerator {
@@ -1140,7 +1140,7 @@ impl AstDisplay for LoadGenerator {
             Self::Auction => f.write_str("AUCTION"),
             Self::Datums => f.write_str("DATUMS"),
             Self::Tpch => f.write_str("TPCH"),
-            Self::Upsert => f.write_str("UPSERT"),
+            Self::KeyValue => f.write_str("KEY VALUE"),
         }
     }
 }

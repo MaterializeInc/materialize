@@ -56,7 +56,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     }
 
     fn key_desc(&self) -> RelationDesc {
-        if let LoadGenerator::Upsert(_) = &self.load_generator {
+        if let LoadGenerator::KeyValue(_) = &self.load_generator {
             RelationDesc::empty().with_column(
                 LOAD_GENERATOR_KEY_VALUE_KEY_NAME,
                 ScalarType::UInt64.nullable(false),
@@ -96,7 +96,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
             }
             LoadGenerator::Marketing => RelationDesc::empty(),
             LoadGenerator::Tpch { .. } => RelationDesc::empty(),
-            LoadGenerator::Upsert(_) => RelationDesc::empty()
+            LoadGenerator::KeyValue(_) => RelationDesc::empty()
                 .with_column("partition", ScalarType::UInt64.nullable(false))
                 .with_column("value", ScalarType::Bytes.nullable(false)),
         }
@@ -135,7 +135,7 @@ pub enum LoadGenerator {
         count_orders: i64,
         count_clerk: i64,
     },
-    Upsert(UpsertLoadGenerator),
+    KeyValue(KeyValueLoadGenerator),
 }
 
 impl LoadGenerator {
@@ -378,7 +378,7 @@ impl LoadGenerator {
                     ),
                 ]
             }
-            LoadGenerator::Upsert(_) => vec![],
+            LoadGenerator::KeyValue(_) => vec![],
         }
     }
 
@@ -392,7 +392,7 @@ impl LoadGenerator {
             LoadGenerator::Marketing => false,
             LoadGenerator::Datums => true,
             LoadGenerator::Tpch { .. } => false,
-            LoadGenerator::Upsert(_) => false,
+            LoadGenerator::KeyValue(_) => false,
         }
     }
 }
@@ -433,7 +433,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_clerk: *count_clerk,
                 }),
                 LoadGenerator::Datums => Kind::Datums(()),
-                LoadGenerator::Upsert(u) => Kind::Upsert(u.into_proto()),
+                LoadGenerator::KeyValue(kv) => Kind::KeyValue(kv.into_proto()),
             }),
             tick_micros: self.tick_micros,
         }
@@ -465,7 +465,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_clerk,
                 },
                 Kind::Datums(()) => LoadGenerator::Datums,
-                Kind::Upsert(u) => LoadGenerator::Upsert(u.into_rust()?),
+                Kind::KeyValue(kv) => LoadGenerator::KeyValue(kv.into_rust()?),
             },
             tick_micros: proto.tick_micros,
         })
@@ -473,7 +473,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
-pub struct UpsertLoadGenerator {
+pub struct KeyValueLoadGenerator {
     // The keyspace of the source.
     pub keys: u64,
     // The number of rounds to emit values for each key in the snapshot.
@@ -499,9 +499,9 @@ pub struct UpsertLoadGenerator {
     pub seed: u64,
 }
 
-impl RustType<ProtoUpsertLoadGenerator> for UpsertLoadGenerator {
-    fn into_proto(&self) -> ProtoUpsertLoadGenerator {
-        ProtoUpsertLoadGenerator {
+impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
+    fn into_proto(&self) -> ProtoKeyValueLoadGenerator {
+        ProtoKeyValueLoadGenerator {
             keys: self.keys,
             snapshot_rounds: self.snapshot_rounds,
             quick_rounds: self.quick_rounds,
@@ -513,7 +513,7 @@ impl RustType<ProtoUpsertLoadGenerator> for UpsertLoadGenerator {
         }
     }
 
-    fn from_proto(proto: ProtoUpsertLoadGenerator) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoKeyValueLoadGenerator) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             keys: proto.keys,
             snapshot_rounds: proto.snapshot_rounds,

@@ -3087,14 +3087,17 @@ impl<'a> Parser<'a> {
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
                 let generator = match self
-                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS, UPSERT])?
+                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS, KEY])?
                 {
                     COUNTER => LoadGenerator::Counter,
                     AUCTION => LoadGenerator::Auction,
                     TPCH => LoadGenerator::Tpch,
                     DATUMS => LoadGenerator::Datums,
                     MARKETING => LoadGenerator::Marketing,
-                    UPSERT => LoadGenerator::Upsert,
+                    KEY => {
+                        self.expect_keyword(VALUE)?;
+                        LoadGenerator::KeyValue
+                    }
                     _ => unreachable!(),
                 };
                 let options = if self.consume_token(&Token::LParen) {

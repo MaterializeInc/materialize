@@ -1997,8 +1997,8 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_load_generator_upsert,
-        desc: "Create a LOAD GENERATOR UPSERT",
+        name: enable_load_generator_key_value,
+        desc: "Create a LOAD GENERATOR KEY VALUE",
         default: false,
         internal: true,
         enable_for_item_parsing: false,
