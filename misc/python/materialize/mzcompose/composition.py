@@ -103,6 +103,7 @@ class Composition:
         silent: bool = False,
         munge_services: bool = True,
         project_name: str | None = None,
+        sanity_restart_mz: bool = False,
     ):
         self.name = name
         self.description = None
@@ -114,6 +115,7 @@ class Composition:
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.files = {}
         self.sources_and_sinks_ignored_from_validation = set()
+        self.is_sanity_restart_mz = sanity_restart_mz
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -453,7 +455,7 @@ class Composition:
                 func(self)
             if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") is not None:
                 self.final_preflight_check()
-            else:
+            elif self.is_sanity_restart_mz:
                 self.sanity_restart_mz()
         finally:
             loader.composition_path = None
@@ -1041,7 +1043,7 @@ class Composition:
         """
         if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") is not None:
             self.final_preflight_check()
-        elif sanity_restart_mz:
+        elif sanity_restart_mz and self.is_sanity_restart_mz:
             self.sanity_restart_mz()
         self.capture_logs()
         self.invoke(
