@@ -32,7 +32,12 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    # Otherwise we are running all workflows
+    sharded_workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
+    print(
+        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+    )
+    for name in sharded_workflows:
         # clear to avoid issues
         c.kill("mysql")
         c.rm("mysql")
@@ -61,11 +66,6 @@ def workflow_disruptions(c: Composition) -> None:
         verify_no_snapshot_reingestion,
         transaction_with_rollback,
     ]
-
-    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
-    print(
-        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
-    )
 
     for scenario in scenarios:
         overrides = (

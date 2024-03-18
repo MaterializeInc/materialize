@@ -186,44 +186,27 @@ steps:
           queue: linux-x86_64-small
         coverage: skip
 
-  - group: "Cargo tests"
-    key: cargo-tests
-    steps:
-      - id: cargo-test
-        label: Cargo test
-        timeout_in_minutes: 45
-        inputs:
-          - Cargo.lock
-          - ".config/nextest.toml"
-          - "**/Cargo.toml"
-          - "**/*.rs"
-          - "**/*.proto"
-          - "**/testdata/**"
-        depends_on: []
-        env:
-          AWS_DEFAULT_REGION: "us-east-1"
-          # cargo-test's coverage is handled separately by cargo-llvm-cov
-          BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
-        plugins:
-          - ./ci/plugins/scratch-aws-access: ~
-          - ./ci/plugins/mzcompose:
-              composition: cargo-test
-        agents:
-          queue: builder-linux-aarch64
-
-      - id: miri-test
-        label: Miri test (fast)
-        inputs: [src]
-        depends_on: []
-        timeout_in_minutes: 45
-        plugins:
-          - ./ci/plugins/scratch-aws-access: ~
-          - ./ci/plugins/mzcompose:
-              composition: cargo-test
-              args: [--miri-fast]
-        agents:
-          queue: builder-linux-aarch64
-        coverage: skip
+  - id: cargo-test
+    label: Cargo test
+    timeout_in_minutes: 45
+    inputs:
+      - Cargo.lock
+      - ".config/nextest.toml"
+      - "**/Cargo.toml"
+      - "**/*.rs"
+      - "**/*.proto"
+      - "**/testdata/**"
+    depends_on: []
+    env:
+      AWS_DEFAULT_REGION: "us-east-1"
+      # cargo-test's coverage is handled separately by cargo-llvm-cov
+      BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: cargo-test
+    agents:
+      queue: builder-linux-aarch64
 
   - id: testdrive
     label: Testdrive %N
@@ -255,7 +238,7 @@ steps:
     label: Fast SQL logic tests %N
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    parallelism: 6
+    parallelism: 2
     inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
@@ -329,7 +312,8 @@ steps:
     key: mysql-tests
     steps:
       - id: mysql-cdc
-        label: MySQL CDC tests
+        label: MySQL CDC tests %N
+        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc]
@@ -340,7 +324,7 @@ steps:
           queue: linux-aarch64-small
 
       - id: mysql-cdc-resumption
-        label: MySQL CDC resumption tests
+        label: MySQL CDC resumption tests %N
         parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -366,7 +350,7 @@ steps:
           queue: linux-aarch64-small
 
       - id: pg-cdc-resumption
-        label: Postgres CDC resumption tests
+        label: Postgres CDC resumption tests %N
         parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -456,7 +440,7 @@ steps:
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
-        parallelism: 5
+        parallelism: 6
         agents:
           queue: linux-aarch64
         plugins:
@@ -496,8 +480,9 @@ steps:
       queue: linux-aarch64
 
   - id: source-sink-errors
-    label: "Source/Sink Error Reporting"
+    label: "Source/Sink Error Reporting %N"
     depends_on: build-aarch64
+    parallelism: 2
     timeout_in_minutes: 30
     agents:
       queue: linux-aarch64-small

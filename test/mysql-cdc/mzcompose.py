@@ -10,6 +10,7 @@
 import threading
 from textwrap import dedent
 
+from materialize import buildkite
 from materialize.mysql_util import (
     retrieve_invalid_ssl_context_for_mysql,
     retrieve_ssl_context_for_mysql,
@@ -73,7 +74,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         workflow_cdc(c, parser)
     else:
         # Otherwise we are running all workflows
-        for name in c.workflows:
+        sharded_workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
+        print(
+            f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+        )
+        for name in sharded_workflows:
             if name == "default":
                 continue
 
