@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import time
+from typing import Any
 
 import pymysql
 
@@ -103,6 +104,23 @@ def workflow_bin_log_manipulations(c: Composition) -> None:
             initialize(c)
             scenario(c)
             # No end confirmation here, since we expect the source to be in a bad state
+
+
+def workflow_short_bin_log_retention(c: Composition) -> None:
+    bin_log_expiration_in_sec = 2
+    args = MySql.DEFAULT_ADDITIONAL_ARGS.copy()
+    args.append(f"--binlog_expire_logs_seconds={bin_log_expiration_in_sec}")
+
+    with c.override(Materialized(sanity_restart=False), MySql(additional_args=args)):
+        scenarios = [logs_expiration_while_mz_down, create_source_after_logs_expiration]
+        for scenario in scenarios:
+            print(f"--- Running scenario {scenario.__name__}")
+            initialize(c, create_source=False)
+            scenario(
+                c,
+                bin_log_expiration_in_sec,
+            )
+            # No end confirmation here
 
 
 def workflow_master_changes(c: Composition) -> None:
@@ -467,13 +485,7 @@ def corrupt_bin_log(c: Composition) -> None:
 
     c.kill("materialized")
 
-    mysql_conn = pymysql.connect(
-        host="localhost",
-        user="root",
-        password=MySql.DEFAULT_ROOT_PASSWORD,
-        database="mysql",
-        port=c.default_port("mysql"),
-    )
+    mysql_conn = create_mysql_connection(c)
 
     mysql_conn.autocommit(True)
     with mysql_conn.cursor() as cur:
@@ -505,13 +517,7 @@ def transaction_with_rollback(c: Composition) -> None:
         "delete-rows-t2.td",
     )
 
-    mysql_conn = pymysql.connect(
-        host="localhost",
-        user="root",
-        password=MySql.DEFAULT_ROOT_PASSWORD,
-        database="mysql",
-        port=c.default_port("mysql"),
-    )
+    mysql_conn = create_mysql_connection(c)
 
     mysql_conn.autocommit(False)
     with mysql_conn.cursor() as cur:
@@ -594,9 +600,88 @@ def backup_restore_mysql(c: Composition) -> None:
     # run_testdrive_files(c, "verify-source-failed.td")
 
 
+def create_source_after_logs_expiration(
+    c: Composition, bin_log_expiration_in_sec: int
+) -> None:
+    """Populate tables, delete rows, and create the source after the log expiration in MySQL took place"""
+
+    run_testdrive_files(c, "delete-rows-t1.td")
+
+    sleep_duration = bin_log_expiration_in_sec + 2
+    print(f"Sleeping for {sleep_duration} sec")
+    time.sleep(sleep_duration)
+
+    mysql_conn = create_mysql_connection(c)
+    with mysql_conn.cursor() as cur:
+        cur.execute("FLUSH BINARY LOGS")
+
+    restart_mysql(c)
+
+    # not really necessary, still do it
+    mysql_conn = create_mysql_connection(c)
+    mysql_conn.autocommit(True)
+    with mysql_conn.cursor() as cur:
+        cur.execute("FLUSH BINARY LOGS")
+
+    run_testdrive_files(
+        c,
+        "--var=mysql-source-host=toxiproxy",
+        "create-source.td",
+    )
+
+    run_testdrive_files(c, "verify-rows-deleted-t1.td")
+
+
+def logs_expiration_while_mz_down(
+    c: Composition, bin_log_expiration_in_sec: int
+) -> None:
+    """Switch off mz, conduct changes in MySQL, let MySQL bin logs expire, and start mz"""
+
+    run_testdrive_files(
+        c,
+        "--var=mysql-source-host=toxiproxy",
+        "create-source.td",
+    )
+
+    c.kill("materialized")
+
+    mysql_conn = create_mysql_connection(c)
+    mysql_conn.autocommit(True)
+    with mysql_conn.cursor() as cur:
+        cur.execute("DELETE FROM public.t1 WHERE f1 % 2 = 0;")
+
+    sleep_duration = bin_log_expiration_in_sec + 2
+    print(f"Sleeping for {sleep_duration} sec")
+    time.sleep(sleep_duration)
+
+    restart_mysql(c)
+
+    mysql_conn = create_mysql_connection(c)
+    mysql_conn.autocommit(True)
+
+    # conduct a further change to be added to the bin log
+    with mysql_conn.cursor() as cur:
+        cur.execute("UPDATE public.t1 SET f2 = NULL;")
+        cur.execute("FLUSH BINARY LOGS")
+
+    c.up("materialized")
+
+    run_testdrive_files(c, "verify-source-stalled.td")
+
+
 def run_testdrive_files(c: Composition, *files: str, mysql_host: str = "mysql") -> None:
     c.run_testdrive_files(
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         f"--var=mysql-host={mysql_host}",
         *files,
+    )
+
+
+def create_mysql_connection(c: Composition) -> Any:
+    return pymysql.connect(
+        host="localhost",
+        user="root",
+        password=MySql.DEFAULT_ROOT_PASSWORD,
+        database="mysql",
+        port=c.default_port("mysql"),
     )
