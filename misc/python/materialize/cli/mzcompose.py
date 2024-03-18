@@ -83,6 +83,12 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
         metavar="PROJECT_NAME",
         help="Use a different project name than the directory name",
     )
+    parser.add_argument(
+        "--sanity-restart-mz",
+        action="store_true",
+        default=os.getenv("BUILDKITE_TAG", "") != "",
+        help="Whether to restart Materialized at the end of test cases and tests, enabled by default on release branches",
+    )
     parser.add_argument("--ignore-docker-version", action="store_true")
     mzbuild.Repository.install_arguments(parser)
 
@@ -175,6 +181,7 @@ def load_composition(args: argparse.Namespace) -> Composition:
             name=args.find or Path.cwd().name,
             preserve_ports=args.preserve_ports,
             project_name=args.project_name,
+            sanity_restart_mz=args.sanity_restart_mz,
         )
     except UnknownCompositionError as e:
         if args.find:
