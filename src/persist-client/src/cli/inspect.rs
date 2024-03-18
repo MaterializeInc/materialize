@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -67,6 +68,9 @@ pub(crate) enum Command {
 
     /// Prints blob batch part contents
     BlobBatchPart(BlobBatchPartArgs),
+
+    /// Prints consolidated and unconsolidated size, in bytes and update count
+    ConsolidatedSize(StateArgs),
 
     /// Prints the unreferenced blobs across all shards
     UnreferencedBlobs(StateArgs),
@@ -148,6 +152,9 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
             let shard_id = ShardId::from_str(&args.shard_id).expect("invalid shard id");
             let updates = blob_batch_part(&args.blob_uri, shard_id, args.key, args.limit).await?;
             println!("{}", json!(updates));
+        }
+        Command::ConsolidatedSize(args) => {
+            let () = consolidated_size(&args).await?;
         }
         Command::UnreferencedBlobs(args) => {
             let unreferenced_blobs = unreferenced_blobs(&args).await?;
@@ -359,6 +366,55 @@ pub async fn blob_batch_part(
     }
 
     Ok(out)
+}
+
+async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
+    let shard_id = args.shard_id();
+    let state_versions = args.open().await?;
+    let versions = state_versions
+        .fetch_recent_live_diffs::<u64>(&shard_id)
+        .await;
+    let state = state_versions
+        .fetch_current_state::<u64>(&shard_id, versions.0.clone())
+        .await;
+    let state = state.check_ts_codec(&shard_id)?;
+    // This is odd, but advance by the upper to get maximal consolidation.
+    let as_of = state.upper().borrow();
+
+    let mut updates = Vec::new();
+    for part in state
+        .collections
+        .trace
+        .batches()
+        .into_iter()
+        .flat_map(|x| x.parts.iter())
+    {
+        let key = part.key.complete(&shard_id);
+        tracing::info!("fetching {}", key);
+        let part = state_versions
+            .blob
+            .get(&*key)
+            .await
+            .expect("blob exists")
+            .expect("part exists");
+        let part = BlobTraceBatchPart::<u64>::decode(&part, &state_versions.metrics.columnar)
+            .expect("decodable");
+        let encoded_part = EncodedPart::new(&*key, part.desc.clone(), part);
+        let mut cursor = Cursor::default();
+        while let Some((k, v, mut t, d)) = cursor.pop(&encoded_part) {
+            t.advance_by(as_of);
+            let d = <i64 as Codec64>::decode(d);
+            updates.push(((k.to_owned(), v.to_owned()), t, d));
+        }
+    }
+
+    let bytes: usize = updates.iter().map(|((k, v), _, _)| k.len() + v.len()).sum();
+    println!("before: {} updates {} bytes", updates.len(), bytes);
+    differential_dataflow::consolidation::consolidate_updates(&mut updates);
+    let bytes: usize = updates.iter().map(|((k, v), _, _)| k.len() + v.len()).sum();
+    println!("after : {} updates {} bytes", updates.len(), bytes);
+
+    Ok(())
 }
 
 /// Arguments for commands that run only against the blob store.
