@@ -256,6 +256,12 @@ pub enum PlanError {
         is_type: ObjectType,
         expected_type: ObjectType,
     },
+    /// MZ failed to generate cast for the data type.
+    PublicationContainsUningestableTypes {
+        publication: String,
+        type_: String,
+        column: String,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -431,6 +437,9 @@ impl PlanError {
             Self::SubsourceNameConflict { .. } | Self::SubsourceAlreadyReferredTo { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             },
+            Self::PublicationContainsUningestableTypes { column,.. } => {
+                Some(format!("Remove the table from the publication or use TEXT COLUMNS ({column}, ..) to ingest this column as text"))
+            }
             _ => None,
         }
     }
@@ -708,6 +717,9 @@ impl fmt::Display for PlanError {
                     expected_type.to_string().to_lowercase()
                 )
             }
+            Self::PublicationContainsUningestableTypes { publication, type_, column } => {
+                write!(f, "publication {publication} contains column {column} of type {type_} which Materialize cannot currently ingest")
+            },
         }
     }
 }
