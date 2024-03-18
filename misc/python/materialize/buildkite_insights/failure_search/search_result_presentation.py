@@ -123,6 +123,7 @@ def print_summary(
         print("Found no builds!")
     else:
         most_recent_build_number = builds_data[0]["number"]
+        oldest_build_number = builds_data[-1]["number"]
         suppressed_results_info = (
             f"Showing only the first {max_results} matches. "
             if count_matches > max_results
@@ -131,5 +132,6 @@ def print_summary(
         print(
             f"{count_matches} match(es) in {len(builds_data)} searched builds of pipeline '{pipeline_slug}'. "
             f"{suppressed_results_info}"
-            f"The most recent considered build was #{most_recent_build_number}."
+            f"The most recent considered build was #{most_recent_build_number}, "
+            f"the oldest was #{oldest_build_number}."
         )
