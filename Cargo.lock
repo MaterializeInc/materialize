@@ -2737,6 +2737,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "id-arena"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25a2bc672d1148e28034f176e01fffebb08b35768468cc954630da77a1449005"
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4380,6 +4386,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-capture",
  "tracing-core",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -4864,6 +4871,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "derivative",
  "futures-core",
  "http",
  "humantime",
@@ -4877,6 +4885,7 @@ dependencies = [
  "opentelemetry_sdk",
  "sentry-tracing",
  "tracing",
+ "tracing-capture",
  "tracing-subscriber",
  "workspace-hack",
 ]
@@ -4895,6 +4904,7 @@ dependencies = [
  "console-subscriber",
  "criterion",
  "ctor",
+ "derivative",
  "either",
  "futures",
  "hibitset",
@@ -4929,6 +4939,7 @@ dependencies = [
  "tokio-test",
  "tonic",
  "tracing",
+ "tracing-capture",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
@@ -5185,6 +5196,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "bytesize",
+ "enum-kinds",
  "futures",
  "itertools",
  "mz-adapter",
@@ -9401,6 +9413,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-capture"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c3b1b84b84d7f95504091cb9518dea662eacba7a3bc23f23e98fe5fafede344"
+dependencies = [
+ "id-arena",
+ "predicates",
+ "tracing-core",
+ "tracing-subscriber",
+ "tracing-tunnel",
+]
+
+[[package]]
 name = "tracing-core"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9467,6 +9492,16 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "tracing-tunnel"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "507bbab1fc2c9e606543558f5656b62e8014ba7e0ffa68b9484511b6871019c5"
+dependencies = [
+ "serde",
+ "tracing-core",
 ]
 
 [[package]]

@@ -2187,10 +2187,9 @@ where
     async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
         assert!(err.severity.is_error());
         debug!(
-            "cid={} error code={} message={}",
+            "cid={} error code={}",
             self.adapter_client.session().conn_id(),
-            err.code.code(),
-            err.message
+            err.code.code()
         );
         let is_fatal = err.severity.is_fatal();
         self.send(BackendMessage::ErrorResponse(err)).await?;

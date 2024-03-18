@@ -80,6 +80,11 @@ who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.6.4"
 
+[[audits.id-arena]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.2.1"
+
 [[audits.im]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -240,6 +245,16 @@ who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
 
+[[audits.tracing-capture]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
+
+[[audits.tracing-fluent-assertions]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.0"
+
 [[audits.tracing-log]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
@@ -259,6 +274,11 @@ version = "0.22.0@git:7035e641b683985cc3b8630f3b61d53c96f83695"
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.3.18"
+
+[[audits.tracing-tunnel]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.0"
 
 [[audits.untrusted]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

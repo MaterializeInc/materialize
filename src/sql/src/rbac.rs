@@ -29,7 +29,7 @@ use crate::names::{
     CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     SystemObjectId,
 };
-use crate::plan;
+use crate::plan::{self, PlanKind};
 use crate::plan::{
     DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
 };
@@ -295,7 +295,10 @@ pub fn check_plan(
         target_cluster_id,
         session.role_metadata().current_role,
     );
-    debug!("rbac requirements {rbac_requirements:?} for plan {plan:?}");
+    debug!(
+        "rbac requirements {rbac_requirements:?} for plan {:?}",
+        PlanKind::from(plan)
+    );
     rbac_requirements.validate(catalog, session, resolved_ids)
 }
 
