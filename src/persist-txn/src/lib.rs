@@ -274,7 +274,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
 /// Used by storage controller as a temporary escape hatch for #25992.
 pub const INIT_FORGET_ALL: Config<bool> = Config::new(
     "persist_txn_init_forget_all",
-    true,
+    false,
     "Whether to call forget_all (true) or empty txn and apply_eager (false) at boot",
 );
 
