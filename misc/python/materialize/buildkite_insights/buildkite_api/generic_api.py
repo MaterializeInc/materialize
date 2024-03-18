@@ -32,7 +32,10 @@ def get(request_path: str, params: dict[str, Any]) -> Any:
 
 
 def get_multiple(
-    request_path: str, params: dict[str, Any], max_fetches: int | None
+    request_path: str,
+    params: dict[str, Any],
+    max_fetches: int | None,
+    first_page: int = 1,
 ) -> list[Any]:
     results = []
 

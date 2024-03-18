@@ -21,6 +21,7 @@ def get_builds(
     build_states: list[str] | None,
     items_per_page: int = 100,
     include_retries: bool = True,
+    first_page: int = 1,
 ) -> list[Any]:
     request_path = f"organizations/materialize/pipelines/{pipeline_slug}/builds"
     params = _get_params(
@@ -30,7 +31,9 @@ def get_builds(
         include_retries=include_retries,
     )
 
-    return generic_api.get_multiple(request_path, params, max_fetches=max_fetches)
+    return generic_api.get_multiple(
+        request_path, params, max_fetches=max_fetches, first_page=first_page
+    )
 
 
 def get_builds_of_all_pipelines(
@@ -38,6 +41,7 @@ def get_builds_of_all_pipelines(
     build_states: list[str] | None = None,
     items_per_page: int = 100,
     include_retries: bool = True,
+    first_page: int = 1,
 ) -> list[Any]:
     params = _get_params(
         branch=None,
@@ -50,6 +54,7 @@ def get_builds_of_all_pipelines(
         "organizations/materialize/builds",
         params,
         max_fetches=max_fetches,
+        first_page=first_page,
     )
 
 

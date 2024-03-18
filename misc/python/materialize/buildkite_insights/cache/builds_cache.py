@@ -26,6 +26,7 @@ def get_or_query_builds(
     branch: str | None,
     build_states: list[str] | None,
     items_per_page: int = 50,
+    first_page: int = 1,
 ) -> list[Any]:
     meta_data = f"{branch}-{build_states}"
     cache_file_path = _get_file_path_for_builds(
@@ -33,6 +34,7 @@ def get_or_query_builds(
         meta_data=meta_data,
         max_fetches=max_fetches,
         items_per_page=items_per_page,
+        first_page=first_page,
     )
 
     fetch_action = lambda: builds_api.get_builds(
@@ -51,6 +53,7 @@ def get_or_query_builds_for_all_pipelines(
     max_fetches: int,
     build_states: list[str] | None,
     items_per_page: int = 50,
+    first_page: int = 1,
 ) -> list[Any]:
     meta_data = f"{build_states}"
     cache_file_path = _get_file_path_for_builds(
@@ -58,6 +61,7 @@ def get_or_query_builds_for_all_pipelines(
         meta_data=meta_data,
         max_fetches=max_fetches,
         items_per_page=items_per_page,
+        first_page=first_page,
     )
 
     fetch_action = lambda: builds_api.get_builds_of_all_pipelines(
@@ -74,9 +78,10 @@ def _get_file_path_for_builds(
     meta_data: str,
     max_fetches: int,
     items_per_page: int,
+    first_page: int,
 ) -> str:
     max_entries = max_fetches * items_per_page
-    meta_data = f"{meta_data}-{max_entries}"
+    meta_data = f"{meta_data}-{max_entries}-{first_page}"
     hash_value = hashlib.sha256(bytes(meta_data, encoding="utf-8")).hexdigest()[:8]
     return get_file_path(
         file_prefix="builds", pipeline_slug=pipeline_slug, params_hash=hash_value

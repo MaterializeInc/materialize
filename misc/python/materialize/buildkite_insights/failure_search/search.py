@@ -107,6 +107,7 @@ def main(
     fetch_builds_mode: FetchMode,
     fetch_annotations_mode: FetchMode,
     max_build_fetches: int,
+    first_build_page_to_fetch: int,
     max_results: int,
     only_failed_builds: bool,
     search_value: str,
@@ -124,6 +125,7 @@ def main(
             fetch_builds_mode,
             max_build_fetches,
             build_states=build_states,
+            first_page=first_build_page_to_fetch,
         )
     else:
         builds_data = builds_cache.get_or_query_builds(
@@ -132,6 +134,7 @@ def main(
             max_build_fetches,
             branch=None,
             build_states=build_states,
+            first_page=first_build_page_to_fetch,
         )
 
     print_before_search_results()
@@ -179,10 +182,11 @@ if __name__ == "__main__":
         help="Whether to fetch fresh annotations from Buildkite.",
     )
     parser.add_argument("--max-build-fetches", default=2, type=int)
+    parser.add_argument("--first-build-page-to-fetch", default=1, type=int)
     parser.add_argument("--max-results", default=50, type=int)
     parser.add_argument(
         "--only-failed-builds",
-        default=True,
+        default=False,
         action="store_true",
     )
     parser.add_argument("--value", required=True, type=str)
@@ -197,6 +201,7 @@ if __name__ == "__main__":
         args.fetch_builds,
         args.fetch_annotations,
         args.max_build_fetches,
+        args.first_build_page_to_fetch,
         args.max_results,
         args.only_failed_builds,
         args.value,
