@@ -401,6 +401,7 @@ impl UnopenedPersistCatalogState {
             storage_usage_events: LargeCollectionStartupCache::new_open(),
             metrics: self.metrics,
         };
+        catalog.metrics.collection_count.reset();
         let updates = self
             .snapshot
             .into_iter()
@@ -986,6 +987,13 @@ impl PersistCatalogState {
         for (kind, ts, diff) in updates {
             if diff != 1 && diff != -1 {
                 panic!("invalid update in consolidated trace: ({kind:?}, {ts:?}, {diff:?})");
+            }
+
+            if let Some(collection_type) = kind.collection_type() {
+                self.metrics
+                    .collection_count
+                    .with_label_values(&[&collection_type.to_string()])
+                    .add(diff);
             }
 
             debug!("applying catalog update: ({kind:?}, {ts:?}, {diff:?})");
