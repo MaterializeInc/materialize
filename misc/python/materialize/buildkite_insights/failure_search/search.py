@@ -182,7 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-results", default=50, type=int)
     parser.add_argument(
         "--only-failed-builds",
-        default=True,
+        default=False,
         action="store_true",
     )
     parser.add_argument("--value", required=True, type=str)
