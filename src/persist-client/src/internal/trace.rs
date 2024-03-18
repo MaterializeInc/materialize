@@ -268,28 +268,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
         }
         ret
     }
-
-    #[allow(dead_code)]
-    pub fn describe(&self) -> String {
-        let mut s = Vec::new();
-        for b in self.spine.merging.iter().rev() {
-            match b {
-                MergeState::Vacant
-                | MergeState::Single(None)
-                | MergeState::Double(MergeVariant::Complete(None)) => s.push("_".to_owned()),
-                MergeState::Single(Some(x))
-                | MergeState::Double(MergeVariant::Complete(Some(x))) => s.push(x.describe(false)),
-                MergeState::Double(MergeVariant::InProgress(b0, b1, m)) => s.push(format!(
-                    "f{}/{}({}+{})",
-                    m.remaining_work,
-                    b0.len() + b1.len(),
-                    b0.describe(false),
-                    b1.describe(false),
-                )),
-            }
-        }
-        s.join(" ")
-    }
 }
 
 /// A log of what transitively happened during a Spine operation: e.g.
@@ -515,6 +493,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         }
     }
 
+    #[cfg(test)]
     fn describe(&self, extended: bool) -> String {
         match (extended, self) {
             (false, SpineBatch::Merged(x)) => format!(
