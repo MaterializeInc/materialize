@@ -823,60 +823,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
 
         // Normal insertion for the batch.
         let index = batch.len().next_power_of_two();
-        self.introduce_batch(Some(batch), usize::cast_from(index.trailing_zeros()), log);
-    }
-
-    /// Apply some amount of effort to trace maintenance.
-    ///
-    /// The units of effort are updates, and the method should be thought of as
-    /// analogous to inserting as many empty updates, where the trace is
-    /// permitted to perform proportionate work.
-    ///
-    /// When this function is called, `effort` must be non-negative
-    #[allow(dead_code)]
-    pub fn exert(&mut self, effort: &isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
-        let mut log = SpineLog::Enabled { merge_reqs };
-        // If there is work to be done, ...
-        self.tidy_layers();
-        if !self.reduced() {
-            // If any merges exist, we can directly call `apply_fuel`.
-            if self.merging.iter().any(|b| b.is_double()) {
-                self.apply_fuel(effort, &mut log);
-            }
-            // Otherwise, we'll need to introduce fake updates to move merges
-            // along.
-            else {
-                // Introduce an empty batch with roughly *effort number of
-                // virtual updates.
-                let level = usize::cast_from(
-                    (usize::try_from(*effort).expect("`exert` called with negative effort"))
-                        .next_power_of_two()
-                        .trailing_zeros(),
-                );
-                self.introduce_batch(None, level, &mut log);
-            }
-        }
-    }
-
-    /// True iff there is at most one non-empty batch in `self.merging`.
-    ///
-    /// When true, there is no maintenance work to perform in the trace, other
-    /// than compaction. We do not yet have logic in place to determine if
-    /// compaction would improve a trace, so for now we are ignoring that.
-    fn reduced(&self) -> bool {
-        let mut non_empty = 0;
-        for index in 0..self.merging.len() {
-            if self.merging[index].is_double() {
-                return false;
-            }
-            if !self.merging[index].is_empty() {
-                non_empty += 1;
-            }
-            if non_empty > 1 {
-                return false;
-            }
-        }
-        true
+        self.introduce_batch(batch, usize::cast_from(index.trailing_zeros()), log);
     }
 
     /// Describes the merge progress of layers in the trace.
@@ -901,7 +848,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// batches at non-trivial indices, to move merges along.
     fn introduce_batch(
         &mut self,
-        batch: Option<SpineBatch<T>>,
+        batch: SpineBatch<T>,
         batch_index: usize,
         log: &mut SpineLog<'_, T>,
     ) {
@@ -973,7 +920,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // Step 3. This insertion should be into an empty layer. It is a logical
         //         error otherwise, as we may be violating our invariant, from
         //         which all wonderment derives.
-        self.insert_at(batch, batch_index);
+        self.insert_at(Some(batch), batch_index);
 
         // Step 4. Tidy the largest layers.
         //
