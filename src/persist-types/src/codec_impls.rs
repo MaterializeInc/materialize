@@ -494,9 +494,9 @@ impl ColumnRef<()> for Bitmap {
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
         let array = BooleanArray::new(ArrowLogicalType::Boolean, self.clone(), None);
-        (Encoding::Plain, Box::new(array))
+        (vec![Encoding::Plain], Box::new(array))
     }
     fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
@@ -529,8 +529,8 @@ impl ColumnRef<()> for BooleanArray {
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+        (vec![Encoding::Plain], Box::new(self.clone()))
     }
     fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
@@ -566,9 +566,9 @@ macro_rules! arrowable_primitive {
             fn len(&self) -> usize {
                 self.len()
             }
-            fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
+            fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
                 let array = PrimitiveArray::new($data::PRIMITIVE.into(), self.clone(), None);
-                ($encoding, Box::new(array.clone()))
+                (vec![$encoding], Box::new(array.clone()))
             }
             fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
                 let array = array
@@ -610,8 +610,8 @@ macro_rules! arrowable_primitive {
             fn len(&self) -> usize {
                 self.len()
             }
-            fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-                ($encoding, Box::new(self.clone()))
+            fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+                (vec![$encoding], Box::new(self.clone()))
             }
             fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
                 let array = array
@@ -664,8 +664,8 @@ impl ColumnRef<()> for BinaryArray<i32> {
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+        (vec![Encoding::Plain], Box::new(self.clone()))
     }
     fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array
@@ -713,8 +713,8 @@ impl ColumnRef<()> for Utf8Array<i32> {
     fn len(&self) -> usize {
         self.len()
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        (Encoding::Plain, Box::new(self.clone()))
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+        (vec![Encoding::Plain], Box::new(self.clone()))
     }
     fn from_arrow(_cfg: &(), array: &Box<dyn Array>) -> Result<Self, String> {
         let array = array

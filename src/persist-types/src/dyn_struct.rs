@@ -87,12 +87,14 @@ impl ColumnRef<DynStructCfg> for DynStructCol {
     fn len(&self) -> usize {
         self.len
     }
-    fn to_arrow(&self) -> (Encoding, Box<dyn Array>) {
-        let array: Box<dyn Array> = match self.to_arrow_struct() {
-            Some((array, _col_encodings)) => Box::new(array),
-            None => Box::new(NullArray::new_empty(ArrowLogicalType::Null)),
-        };
-        (Encoding::Plain, array)
+    fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>) {
+        match self.to_arrow_struct() {
+            Some((array, col_encodings)) => (col_encodings, Box::new(array)),
+            None => {
+                let array = Box::new(NullArray::new_empty(ArrowLogicalType::Null));
+                (vec![Encoding::Plain], array)
+            }
+        }
     }
     fn from_arrow(cfg: &DynStructCfg, array: &Box<dyn Array>) -> Result<Self, String> {
         Self::from_arrow(cfg.clone(), array)
@@ -214,7 +216,7 @@ impl DynStructCol {
         for (name, _stats_fn, col) in self.cols() {
             let (encoding, array, is_nullable) = col.to_arrow();
             fields.push(Field::new(name, array.data_type().clone(), is_nullable));
-            encodings.push(encoding);
+            encodings.extend(encoding);
             arrays.push(array);
         }
         if fields.is_empty() {

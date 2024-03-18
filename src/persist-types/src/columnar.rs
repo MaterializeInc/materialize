@@ -157,7 +157,7 @@ pub(crate) mod sealed {
         fn len(&self) -> usize;
 
         /// Returns this column as an arrow2 Array.
-        fn to_arrow(&self) -> (Encoding, Box<dyn Array>);
+        fn to_arrow(&self) -> (Vec<Encoding>, Box<dyn Array>);
 
         /// Constructs the column from an arrow2 Array.
         #[allow(clippy::borrowed_box)]
