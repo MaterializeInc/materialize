@@ -28,29 +28,51 @@ DROP PUBLICATION IF EXISTS mz_source;
 
 CREATE SCHEMA public;
 
-CREATE TABLE t1 (f1 REGTYPE);
-ALTER TABLE t1 REPLICA IDENTITY FULL;
+CREATE TABLE regtype_table (f1 REGTYPE);
+ALTER TABLE regtype_table REPLICA IDENTITY FULL;
 
-INSERT INTO t1 VALUES (1::regtype),(0::regtype);
+INSERT INTO regtype_table VALUES (1::regtype),(0::regtype);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE SOURCE mz_source
+!CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR ALL TABLES;
+  FOR TABLES (regtype_table);
+contains:publication mz_source contains column regtype_table.f1 of type regtype which Materialize cannot currently ingest
 
-> SELECT COUNT(*) > 0 FROM t1;
-true
-
-# Insert the same data post-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-INSERT INTO t1 SELECT * FROM t1;
+DROP TABLE regtype_table CASCADE;
 
-> SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-regtype
+CREATE TABLE regclass_table (f1 REGCLASS);
+ALTER TABLE regclass_table REPLICA IDENTITY FULL;
 
-> SELECT * FROM t1;
+INSERT INTO regclass_table VALUES (1::regclass),(0::regclass);
+
+!CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (regclass_table);
+contains:publication mz_source contains column regclass_table.f1 of type regclass which Materialize cannot currently ingest
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP TABLE regclass_table CASCADE;
+
+CREATE TABLE regproc_table (f1 REGPROC);
+ALTER TABLE regproc_table REPLICA IDENTITY FULL;
+
+INSERT INTO regproc_table VALUES (1::regproc),(2::regproc);
+
+!CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES (regproc_table);
+contains:publication mz_source contains column regproc_table.f1 of type regproc which Materialize cannot currently ingest
+
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS (regproc_table.f1)
+  )
+  FOR TABLES (regproc_table);
+
+> SELECT * FROM regproc_table;
 1
-0
-1
-0
+2

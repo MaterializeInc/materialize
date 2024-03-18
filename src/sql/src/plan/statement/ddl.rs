@@ -955,10 +955,32 @@ pub fn plan_create_source(
                         }
                     };
 
-                    let mir_cast = cast.lower_uncorrelated().expect(
-                        "lower_uncorrelated should not fail given that there is no correlation \
-                            in the input col_expr",
-                    );
+                    // We expect only reg* types to encounter this issue. Users
+                    // can ingest the data as text if they need to ingest it.
+                    // This is acceptable because we don't expect the OIDs from
+                    // an external PG source to be unilaterally usable in
+                    // resolving item names in MZ.
+                    let mir_cast = cast.lower_uncorrelated().map_err(|_e| {
+                        tracing::info!(
+                            "cannot ingest {:?} data from PG source because cast is correlated",
+                            scalar_type
+                        );
+
+                        let publication = match publication.clone() {
+                            Some(publication) => publication,
+                            None => return sql_err!("[internal error]: missing publication"),
+                        };
+
+                        PlanError::PublicationContainsUningestableTypes {
+                            publication,
+                            type_: scx.humanize_scalar_type(&scalar_type),
+                            column: UnresolvedItemName::qualified(&[
+                                Ident::new_unchecked(table.name.to_string()),
+                                Ident::new_unchecked(column.name.to_string()),
+                            ])
+                            .to_ast_string(),
+                        }
+                    })?;
 
                     column_casts.push((cast_type, mir_cast));
                 }
