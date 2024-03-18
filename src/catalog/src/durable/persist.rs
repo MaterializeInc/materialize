@@ -997,6 +997,14 @@ impl PersistCatalogState {
     }
 
     fn consolidate(&mut self) {
+        soft_assert_no_log!(
+            self.snapshot
+                .windows(2)
+                .all(|updates| updates[0].1 <= updates[1].1),
+            "snapshot should be sorted by timestamp, {:?}",
+            self.snapshot
+        );
+
         let new_ts = self
             .snapshot
             .last()
