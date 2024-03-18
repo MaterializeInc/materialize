@@ -1597,6 +1597,39 @@ generate_extracted_config!(
     (MaxCardinality, u64)
 );
 
+impl LoadGeneratorOptionExtracted {
+    pub(super) fn ensure_only_valid_options(
+        &self,
+        loadgen: &ast::LoadGenerator,
+    ) -> Result<(), PlanError> {
+        use mz_sql_parser::ast::LoadGeneratorOptionName::*;
+
+        let mut options = self.seen.clone();
+
+        let permitted_options: &[_] = match loadgen {
+            ast::LoadGenerator::Auction => &[TickInterval],
+            ast::LoadGenerator::Counter => &[TickInterval, MaxCardinality],
+            ast::LoadGenerator::Marketing => &[TickInterval],
+            ast::LoadGenerator::Datums => &[TickInterval],
+            ast::LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
+        };
+
+        for o in permitted_options {
+            options.remove(o);
+        }
+
+        if !options.is_empty() {
+            sql_bail!(
+                "{} load generators do not support {} values",
+                loadgen,
+                options.iter().join(", ")
+            )
+        }
+
+        Ok(())
+    }
+}
+
 pub(crate) fn load_generator_ast_to_generator(
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
@@ -1607,18 +1640,21 @@ pub(crate) fn load_generator_ast_to_generator(
     ),
     PlanError,
 > {
+    let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
+    extracted.ensure_only_valid_options(loadgen)?;
+
     let load_generator = match loadgen {
         ast::LoadGenerator::Auction => LoadGenerator::Auction,
         ast::LoadGenerator::Counter => {
             let LoadGeneratorOptionExtracted {
                 max_cardinality, ..
-            } = options.to_vec().try_into()?;
+            } = extracted;
             LoadGenerator::Counter { max_cardinality }
         }
         ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
         ast::LoadGenerator::Datums => LoadGenerator::Datums,
         ast::LoadGenerator::Tpch => {
-            let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
+            let LoadGeneratorOptionExtracted { scale_factor, .. } = extracted;
 
             // Default to 0.01 scale factor (=10MB).
             let sf: f64 = scale_factor.unwrap_or(0.01);
