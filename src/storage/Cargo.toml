@@ -41,6 +41,7 @@ mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
+mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
 mz-interchange = { path = "../interchange" }

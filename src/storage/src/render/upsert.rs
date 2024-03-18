@@ -23,6 +23,7 @@ use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_storage_types::sources::envelope::UpsertEnvelope;
 use mz_timely_util::builder_async::{
@@ -209,9 +210,8 @@ where
 
     // If we are configured to delay raw sources till we rehydrate, we do so. Otherwise, skip
     // this, to prevent unnecessary work.
-    let wait_for_input_resumption = storage_configuration
-        .parameters
-        .delay_sources_past_rehydration;
+    let wait_for_input_resumption =
+        dyncfgs::DELAY_SOURCES_PAST_REHYDRATION.get(storage_configuration.config_set());
     let upsert_config = UpsertConfig {
         wait_for_input_resumption,
         shrink_upsert_unused_buffers_by_ratio: storage_configuration

@@ -224,7 +224,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             object_status_updates: Default::default(),
             internal_cmd_tx: command_sequencer,
             async_worker,
-            storage_configuration: StorageConfiguration::new(connection_context),
+            storage_configuration: StorageConfiguration::new(
+                connection_context,
+                mz_dyncfgs::all_dyncfgs(),
+            ),
             dataflow_parameters: DataflowParameters::new(
                 shared_rocksdb_write_buffer_manager,
                 cluster_memory_limit,
@@ -1193,10 +1196,16 @@ impl StorageState {
         match cmd {
             StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
-            StorageCommand::UpdateConfiguration(params) => {
+            StorageCommand::UpdateConfiguration(mut params) => {
                 // These can be done from all workers safely.
                 tracing::info!("Applying configuration update: {params:?}");
-                params.persist.apply(self.persist_clients.cfg());
+
+                // We serialize the dyncfg updates in StorageParameters, but configure
+                // persist separately.
+                if let Some(updates) = params.dyncfg_updates.take() {
+                    updates.apply(self.persist_clients.cfg());
+                }
+
                 params.tracing.apply(self.tracing_handle.as_ref());
 
                 if let Some(log_filter) = &params.tracing.log_filter {

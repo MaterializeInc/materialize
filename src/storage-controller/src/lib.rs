@@ -260,8 +260,12 @@ where
         }
     }
 
-    fn update_parameters(&mut self, config_params: StorageParameters) {
-        config_params.persist.apply(self.persist.cfg());
+    fn update_parameters(&mut self, mut config_params: StorageParameters) {
+        // We serialize the dyncfg updates in StorageParameters, but configure
+        // persist separately.
+        if let Some(updates) = config_params.dyncfg_updates.take() {
+            updates.apply(self.persist.cfg());
+        }
 
         for client in self.clients.values_mut() {
             client.send(StorageCommand::UpdateConfiguration(config_params.clone()));
@@ -2367,7 +2371,7 @@ where
             clients: BTreeMap::new(),
             replicas: BTreeMap::new(),
             initialized: false,
-            config: StorageConfiguration::new(connection_context),
+            config: StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs()),
             internal_response_sender: tx,
             internal_response_queue: rx,
             persist_location,

@@ -13,7 +13,6 @@ use mz_compute_client::protocol::command::ComputeParameters;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_persist_client::cfg::PersistParameters;
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_types::parameters::{
@@ -36,9 +35,6 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
 /// Return the current storage configuration, derived from the system configuration.
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
-        persist: PersistParameters {
-            config_updates: config.dyncfg_updates(),
-        },
         pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig {
             connect_timeout: Some(config.pg_source_connect_timeout()),
             keepalives_retries: Some(config.pg_source_keepalives_retries()),
@@ -124,7 +120,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             disk_only: config.storage_dataflow_max_inflight_bytes_disk_only(),
         },
         grpc_client: grpc_client_config(config),
-        delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
         shrink_upsert_unused_buffers_by_ratio: config
             .storage_shrink_upsert_unused_buffers_by_ratio(),
         record_namespaced_errors: config.storage_record_source_sink_namespaced_errors(),
@@ -152,6 +147,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         enable_dependency_read_hold_asserts: config.enable_dependency_read_hold_asserts(),
         user_storage_managed_collections_batch_duration: config
             .user_storage_managed_collections_batch_duration(),
+        dyncfg_updates: Some(config.dyncfg_updates()),
     }
 }
 

@@ -13,6 +13,7 @@ pub mod collections;
 pub mod configuration;
 pub mod connections;
 pub mod controller;
+pub mod dyncfgs;
 pub mod errors;
 pub mod instances;
 pub mod parameters;

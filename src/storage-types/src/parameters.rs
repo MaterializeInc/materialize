@@ -12,7 +12,6 @@
 use std::time::Duration;
 
 use mz_ore::cast::CastFrom;
-use mz_persist_client::cfg::PersistParameters;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_service::params::GrpcClientParameters;
 use mz_ssh_util::tunnel::SshTimeoutConfig;
@@ -27,8 +26,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
 /// Unset parameters should be interpreted to mean "use the previous value".
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StorageParameters {
-    /// Persist client configuration.
-    pub persist: PersistParameters,
     pub pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig,
     pub pg_source_snapshot_statement_timeout: Duration,
     pub mysql_source_timeouts: mz_mysql_util::TimeoutConfig,
@@ -49,8 +46,6 @@ pub struct StorageParameters {
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
     /// gRPC client parameters.
     pub grpc_client: GrpcClientParameters,
-    /// Configuration for basic hydration backpressure.
-    pub delay_sources_past_rehydration: bool,
     /// Configuration ratio to shrink upsert buffers by.
     pub shrink_upsert_unused_buffers_by_ratio: usize,
     /// Whether or not to record errors by namespace in the `details`
@@ -76,6 +71,10 @@ pub struct StorageParameters {
     pub enable_dependency_read_hold_asserts: bool,
     /// Duration that we wait to batch rows for user owned, storage managed, collections.
     pub user_storage_managed_collections_batch_duration: Duration,
+
+    /// Updates used to update `StorageConfiguration::config_set`. `None` when
+    /// not being moved over the wire.
+    pub dyncfg_updates: Option<mz_dyncfg::ConfigUpdates>,
 }
 
 pub const STATISTICS_INTERVAL_DEFAULT: Duration = Duration::from_secs(60);
@@ -87,7 +86,6 @@ pub const STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT: Duration = Duratio
 impl Default for StorageParameters {
     fn default() -> Self {
         Self {
-            persist: Default::default(),
             pg_source_tcp_timeouts: Default::default(),
             pg_source_snapshot_statement_timeout: Default::default(),
             mysql_source_timeouts: Default::default(),
@@ -100,7 +98,6 @@ impl Default for StorageParameters {
             upsert_auto_spill_config: Default::default(),
             storage_dataflow_max_inflight_bytes_config: Default::default(),
             grpc_client: Default::default(),
-            delay_sources_past_rehydration: Default::default(),
             shrink_upsert_unused_buffers_by_ratio: Default::default(),
             record_namespaced_errors: true,
             ssh_timeout_config: Default::default(),
@@ -111,6 +108,7 @@ impl Default for StorageParameters {
             enable_dependency_read_hold_asserts: true,
             user_storage_managed_collections_batch_duration:
                 STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
+            dyncfg_updates: None,
         }
     }
 }
@@ -187,7 +185,6 @@ impl StorageParameters {
     pub fn update(
         &mut self,
         StorageParameters {
-            persist,
             pg_source_tcp_timeouts,
             pg_source_snapshot_statement_timeout,
             mysql_source_timeouts,
@@ -200,7 +197,6 @@ impl StorageParameters {
             upsert_auto_spill_config,
             storage_dataflow_max_inflight_bytes_config,
             grpc_client,
-            delay_sources_past_rehydration,
             shrink_upsert_unused_buffers_by_ratio,
             record_namespaced_errors,
             ssh_timeout_config,
@@ -210,9 +206,9 @@ impl StorageParameters {
             pg_snapshot_config,
             enable_dependency_read_hold_asserts,
             user_storage_managed_collections_batch_duration,
+            dyncfg_updates: _,
         }: StorageParameters,
     ) {
-        self.persist.update(persist);
         self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
         self.mysql_source_timeouts = mysql_source_timeouts;
@@ -227,7 +223,6 @@ impl StorageParameters {
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
         self.grpc_client.update(grpc_client);
-        self.delay_sources_past_rehydration = delay_sources_past_rehydration;
         self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
         self.record_namespaced_errors = record_namespaced_errors;
         self.ssh_timeout_config = ssh_timeout_config;
@@ -239,13 +234,15 @@ impl StorageParameters {
         self.enable_dependency_read_hold_asserts = enable_dependency_read_hold_asserts;
         self.user_storage_managed_collections_batch_duration =
             user_storage_managed_collections_batch_duration;
+
+        // The storage controller and storage state don't need `dyncfg_updates` maintained.
+        self.dyncfg_updates = None;
     }
 }
 
 impl RustType<ProtoStorageParameters> for StorageParameters {
     fn into_proto(&self) -> ProtoStorageParameters {
         ProtoStorageParameters {
-            persist: Some(self.persist.into_proto()),
             pg_source_tcp_timeouts: Some(self.pg_source_tcp_timeouts.into_proto()),
             pg_source_snapshot_statement_timeout: Some(
                 self.pg_source_snapshot_statement_timeout.into_proto(),
@@ -268,7 +265,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 self.storage_dataflow_max_inflight_bytes_config.into_proto(),
             ),
             grpc_client: Some(self.grpc_client.into_proto()),
-            storage_dataflow_delay_sources_past_rehydration: self.delay_sources_past_rehydration,
             shrink_upsert_unused_buffers_by_ratio: u64::cast_from(
                 self.shrink_upsert_unused_buffers_by_ratio,
             ),
@@ -283,14 +279,12 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 self.user_storage_managed_collections_batch_duration
                     .into_proto(),
             ),
+            dyncfg_updates: self.dyncfg_updates.clone(),
         }
     }
 
     fn from_proto(proto: ProtoStorageParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            persist: proto
-                .persist
-                .into_rust_if_some("ProtoStorageParameters::persist")?,
             pg_source_tcp_timeouts: proto
                 .pg_source_tcp_timeouts
                 .into_rust_if_some("ProtoStorageParameters::pg_source_tcp_timeouts")?,
@@ -329,7 +323,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             grpc_client: proto
                 .grpc_client
                 .into_rust_if_some("ProtoStorageParameters::grpc_client")?,
-            delay_sources_past_rehydration: proto.storage_dataflow_delay_sources_past_rehydration,
             shrink_upsert_unused_buffers_by_ratio: usize::cast_from(
                 proto.shrink_upsert_unused_buffers_by_ratio,
             ),
@@ -355,6 +348,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
                 .into_rust_if_some(
                     "ProtoStorageParameters::user_storage_managed_collections_batch_duration",
                 )?,
+            dyncfg_updates: proto.dyncfg_updates,
         })
     }
 }
