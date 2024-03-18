@@ -1593,8 +1593,8 @@ pub mod datadriven {
                 datadriven.client.metrics.as_ref(),
                 datadriven.machine.applier.shard_metrics.as_ref(),
                 &datadriven.client.metrics.read.batch_fetcher,
-                &part.key,
                 &batch.desc,
+                &part,
             )
             .await
             .expect("invalid batch part");
@@ -1817,8 +1817,8 @@ pub mod datadriven {
                         datadriven.client.metrics.as_ref(),
                         datadriven.machine.applier.shard_metrics.as_ref(),
                         &datadriven.client.metrics.read.batch_fetcher,
-                        &part.key,
                         &batch.desc,
+                        &part,
                     )
                     .await
                     .expect("invalid batch part");

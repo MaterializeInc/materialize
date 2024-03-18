@@ -88,13 +88,13 @@ where
             });
         }
 
-        let value = fetch_batch_part_blob(
+        let buf = fetch_batch_part_blob(
             &part.shard_id,
             self.blob.as_ref(),
             &self.metrics,
             &self.shard_metrics,
             &self.metrics.read.batch_fetcher,
-            &part.part.key,
+            &part.part,
         )
         .await
         .unwrap_or_else(|blob_key| {
@@ -109,15 +109,14 @@ where
             panic!("batch fetcher could not fetch batch part: {}", blob_key)
         });
         let fetched_blob = FetchedBlob {
-            key: part.part.key.0.clone(),
             metrics: Arc::clone(&self.metrics),
             read_metrics: self.metrics.read.batch_fetcher.clone(),
+            buf,
             registered_desc: part.desc.clone(),
-            part: value,
+            part: part.part.clone(),
             schemas: self.schemas.clone(),
             metadata: part.metadata.clone(),
             filter_pushdown_audit: part.filter_pushdown_audit,
-            stats: part.part.stats.clone(),
             _phantom: PhantomData,
         };
         Ok(fetched_blob)
@@ -216,8 +215,8 @@ where
         &metrics,
         shard_metrics,
         read_metrics,
-        &part.part.key,
         &part.desc,
+        &part.part,
     )
     .await
     .unwrap_or_else(|blob_key| {
@@ -247,11 +246,11 @@ pub(crate) async fn fetch_batch_part_blob(
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
-    key: &PartialBatchKey,
+    part: &HollowBatchPart,
 ) -> Result<SegmentedBytes, BlobKey> {
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
-    let blob_key = key.complete(shard_id);
+    let blob_key = part.key.complete(shard_id);
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
         blob.get(&blob_key).await
@@ -272,28 +271,28 @@ pub(crate) async fn fetch_batch_part_blob(
 pub(crate) fn decode_batch_part_blob<T>(
     metrics: &Metrics,
     read_metrics: &ReadMetrics,
-    key: &str,
     registered_desc: Description<T>,
-    value: &SegmentedBytes,
+    part: &HollowBatchPart,
+    buf: &SegmentedBytes,
 ) -> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
     trace_span!("fetch_batch::decode").in_scope(|| {
-        let part = metrics
+        let parsed = metrics
             .codecs
             .batch
-            .decode(|| BlobTraceBatchPart::decode(value, &metrics.columnar))
-            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
+            .decode(|| BlobTraceBatchPart::decode(buf, &metrics.columnar))
+            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
         read_metrics.part_goodbytes.inc_by(u64::cast_from(
-            part.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
+            parsed.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
         ));
-        EncodedPart::new(key, registered_desc, part)
+        EncodedPart::new(registered_desc, part, parsed)
     })
 }
 
@@ -303,15 +302,15 @@ pub(crate) async fn fetch_batch_part<T>(
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
-    key: &PartialBatchKey,
     registered_desc: &Description<T>,
+    part: &HollowBatchPart,
 ) -> Result<EncodedPart<T>, BlobKey>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    let value =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, key).await?;
-    let part = decode_batch_part_blob(metrics, read_metrics, key, registered_desc.clone(), &value);
+    let buf =
+        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, &part).await?;
+    let part = decode_batch_part_blob(metrics, read_metrics, registered_desc.clone(), part, &buf);
     Ok(part)
 }
 
@@ -456,30 +455,28 @@ impl<T> Drop for LeasedBatchPart<T> {
 /// decoding.
 #[derive(Debug)]
 pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
-    key: String,
     metrics: Arc<Metrics>,
     read_metrics: ReadMetrics,
+    buf: SegmentedBytes,
     registered_desc: Description<T>,
-    part: SegmentedBytes,
+    part: HollowBatchPart,
     schemas: Schemas<K, V>,
     metadata: SerdeLeasedBatchPartMetadata,
     filter_pushdown_audit: bool,
-    stats: Option<LazyPartStats>,
     _phantom: PhantomData<fn() -> D>,
 }
 
 impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
-            key: self.key.clone(),
             metrics: Arc::clone(&self.metrics),
             read_metrics: self.read_metrics.clone(),
+            buf: self.buf.clone(),
             registered_desc: self.registered_desc.clone(),
             part: self.part.clone(),
             schemas: self.schemas.clone(),
             metadata: self.metadata.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
-            stats: self.stats.clone(),
             _phantom: self._phantom.clone(),
         }
     }
@@ -491,9 +488,9 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
         let part = decode_batch_part_blob(
             &self.metrics,
             &self.read_metrics,
-            &self.key,
             self.registered_desc.clone(),
             &self.part,
+            &self.buf,
         );
         FetchedPart::new(
             Arc::clone(&self.metrics),
@@ -501,7 +498,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
             self.schemas.clone(),
             &self.metadata,
             self.filter_pushdown_audit,
-            self.stats.as_ref(),
+            self.part.stats.as_ref(),
         )
     }
 }
@@ -677,9 +674,9 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub(crate) fn new(
-        key: &str,
         registered_desc: Description<T>,
-        part: BlobTraceBatchPart<T>,
+        part: &HollowBatchPart,
+        parsed: BlobTraceBatchPart<T>,
     ) -> Self {
         // There are two types of batches in persist:
         // - Batches written by a persist user (either directly or indirectly
@@ -692,21 +689,21 @@ where
         // - Batches written by compaction. These always have an inline desc
         //   that exactly matches the one they are registered with. The since
         //   can be anything.
-        let inline_desc = &part.desc;
+        let inline_desc = &parsed.desc;
         let needs_truncation = inline_desc.lower() != registered_desc.lower()
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
             assert!(
                 PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                 "key={} inline={:?} registered={:?}",
-                key,
+                part.key,
                 inline_desc,
                 registered_desc
             );
             assert!(
                 PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
                 "key={} inline={:?} registered={:?}",
-                key,
+                part.key,
                 inline_desc,
                 registered_desc
             );
@@ -718,7 +715,7 @@ where
                 inline_desc.since(),
                 &Antichain::from_elem(T::minimum()),
                 "key={} inline={:?} registered={:?}",
-                key,
+                part.key,
                 inline_desc,
                 registered_desc
             );
@@ -726,13 +723,13 @@ where
             assert_eq!(
                 inline_desc, &registered_desc,
                 "key={} inline={:?} registered={:?}",
-                key, inline_desc, registered_desc
+                part.key, inline_desc, registered_desc
             );
         }
 
         EncodedPart {
             registered_desc,
-            part: Arc::new(part),
+            part: Arc::new(parsed),
             needs_truncation,
         }
     }
