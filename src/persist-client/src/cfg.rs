@@ -277,6 +277,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     mz_persist::cfg::all_dyn_configs(configs)
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::batch::BLOB_TARGET_SIZE)
+        .add(&crate::batch::BATCH_COLUMNAR_FORMAT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)

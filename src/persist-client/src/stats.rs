@@ -13,15 +13,11 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
-use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_persist_types::columnar::{PartEncoder, Schema};
-use mz_persist_types::part::{Part, PartBuilder};
+use mz_persist_types::part::Part;
 use mz_persist_types::stats::StructStats;
-use mz_persist_types::Codec;
 use proptest_derive::Arbitrary;
 
 use crate::batch::UntrimmableColumns;
-use crate::internal::encoding::Schemas;
 use crate::metrics::Metrics;
 use crate::read::LazyPartStats;
 
@@ -138,33 +134,6 @@ impl PartStats {
     pub(crate) fn new(part: &Part) -> Result<Self, String> {
         let key = part.key_stats()?;
         Ok(PartStats { key })
-    }
-
-    pub(crate) fn legacy_part_format<K: Codec, V: Codec>(
-        schemas: &Schemas<K, V>,
-        part: &[ColumnarRecords],
-    ) -> Result<Self, String> {
-        // This is a laughably inefficient placeholder implementation of stats
-        // on the old part format. We don't intend to make this fast, rather we
-        // intend to compute stats on the new part format.
-        let mut new_format = PartBuilder::new(schemas.key.as_ref(), schemas.val.as_ref());
-        let mut builder = new_format.get_mut();
-        let mut key = schemas.key.encoder(builder.key)?;
-        let mut val = schemas.val.encoder(builder.val)?;
-        for x in part {
-            for ((k, v), t, d) in x.iter() {
-                let k = K::decode(k)?;
-                let v = V::decode(v)?;
-                key.encode(&k);
-                val.encode(&v);
-                builder.ts.push(i64::from_le_bytes(t));
-                builder.diff.push(i64::from_le_bytes(d));
-            }
-        }
-        drop(key);
-        drop(val);
-        let new_format = new_format.finish()?;
-        Self::new(&new_format)
     }
 }
 
