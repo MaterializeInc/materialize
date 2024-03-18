@@ -389,5 +389,6 @@ mod tests {
         assert_eq!(indent.to_string(), "".to_string());
         indent += 1;
         assert_eq!(indent.to_string(), "~~~".to_string());
+
     }
 }

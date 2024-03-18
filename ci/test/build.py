@@ -9,6 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import os
 import subprocess
 import tempfile
@@ -28,8 +29,16 @@ DEBUGINFO_BINS = ["environmentd", "clusterd"]
 
 
 def main() -> None:
-    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
-    repo = mzbuild.Repository(Path("."), coverage=coverage)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("arch", nargs="?", type=Arch, choices=Arch, default=Arch.host())
+    parser.add_argument(
+        "--coverage",
+        action="store_true",
+        default=ui.env_is_truthy("CI_COVERAGE_ENABLED"),
+    )
+    args = parser.parse_args()
+
+    repo = mzbuild.Repository(Path("."), coverage=args.coverage, arch=args.arch)
 
     # Build and push any images that are not already available on Docker Hub,
     # so they are accessible to other build agents.
