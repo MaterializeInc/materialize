@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import time
+from typing import Any
 
 import pymysql
 
@@ -467,13 +468,7 @@ def corrupt_bin_log(c: Composition) -> None:
 
     c.kill("materialized")
 
-    mysql_conn = pymysql.connect(
-        host="localhost",
-        user="root",
-        password=MySql.DEFAULT_ROOT_PASSWORD,
-        database="mysql",
-        port=c.default_port("mysql"),
-    )
+    mysql_conn = create_mysql_connection(c)
 
     mysql_conn.autocommit(True)
     with mysql_conn.cursor() as cur:
@@ -505,13 +500,7 @@ def transaction_with_rollback(c: Composition) -> None:
         "delete-rows-t2.td",
     )
 
-    mysql_conn = pymysql.connect(
-        host="localhost",
-        user="root",
-        password=MySql.DEFAULT_ROOT_PASSWORD,
-        database="mysql",
-        port=c.default_port("mysql"),
-    )
+    mysql_conn = create_mysql_connection(c)
 
     mysql_conn.autocommit(False)
     with mysql_conn.cursor() as cur:
@@ -599,4 +588,14 @@ def run_testdrive_files(c: Composition, *files: str, mysql_host: str = "mysql") 
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         f"--var=mysql-host={mysql_host}",
         *files,
+    )
+
+
+def create_mysql_connection(c: Composition) -> Any:
+    return pymysql.connect(
+        host="localhost",
+        user="root",
+        password=MySql.DEFAULT_ROOT_PASSWORD,
+        database="mysql",
+        port=c.default_port("mysql"),
     )
