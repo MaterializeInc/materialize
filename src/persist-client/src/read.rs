@@ -959,7 +959,7 @@ pub(crate) struct UnexpiredReadHandleState {
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
-    consolidator: Consolidator<T, D>,
+    consolidator: Consolidator<K, V, T, D>,
     _schemas: Schemas<K, V>,
 }
 
@@ -1049,6 +1049,7 @@ where
                 as_of: as_of.clone(),
             },
             self.cfg.dynamic.compaction_memory_bound_bytes(),
+            self.schemas.clone(),
         );
 
         let metadata = SerdeLeasedBatchPartMetadata::Snapshot {

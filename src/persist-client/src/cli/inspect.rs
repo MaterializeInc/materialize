@@ -23,7 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist_types::codec_impls::TodoSchema;
+use mz_persist_types::codec_impls::{TodoSchema, UnitSchema};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use prost::Message;
@@ -34,7 +34,7 @@ use crate::cache::StateCache;
 use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
 use crate::error::CodecConcreteType;
 use crate::fetch::{Cursor, EncodedPart};
-use crate::internal::encoding::{Rollup, UntypedState};
+use crate::internal::encoding::{Rollup, Schemas, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
 };
@@ -345,7 +345,15 @@ pub async fn blob_batch_part(
         desc,
         updates: Vec::new(),
     };
-    let mut cursor = Cursor::default();
+    // TODO(parkmycar): It feels like we need a "DynSchema", where we can parse something akin to
+    // `serde_json::Value`.
+    //
+    // HACK: This almost surely does not work, it just exists to make things typecheck.
+    let schema = Schemas::<(), ()> {
+        key: Arc::new(UnitSchema::default()),
+        val: Arc::new(UnitSchema::default()),
+    };
+    let mut cursor = Cursor::new(schema);
     while let Some((k, v, t, d)) = cursor.pop(&encoded_part) {
         if out.updates.len() > limit {
             break;
