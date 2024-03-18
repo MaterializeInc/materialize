@@ -19,6 +19,17 @@ DefSource name=t0 keys=[[#0], [#1]]
 ----
 Source defined as t0
 
+# Define t1 source
+define
+DefSource name=t1 keys=[[#0, #1, #2, #3, #4]]
+  - c0: bigint
+  - c1: bigint
+  - c2: bigint
+  - c3: bigint
+  - c4: bigint
+----
+Source defined as t1
+
 
 ## Supported patterns
 ## ------------------
@@ -31,6 +42,23 @@ Map (4145)
 ----
 Map (4145) // { keys: "([0], [1])" }
   Get t0 // { keys: "([0], [1])" }
+
+# Project with equalities between key components
+explain with=keys
+Filter #4 = #3 AND #1 = #0
+  Get t1
+----
+Filter (#4 = #3) AND (#1 = #0) // { keys: "([0, 2, 3], [0, 2, 4], [1, 2, 3], [1, 2, 4])" }
+  Get t1 // { keys: "([0, 1, 2, 3, 4])" }
+
+# Project with equalities between key components and
+# a literal constraint on a key component
+explain with=keys
+Filter #0 = #1 AND #3 = 5
+  Get t1
+----
+Filter (#0 = #1) AND (#3 = 5) // { keys: "([0, 2, 4], [1, 2, 4])" }
+  Get t1 // { keys: "([0, 1, 2, 3, 4])" }
 
 
 ## Incomplete patterns
