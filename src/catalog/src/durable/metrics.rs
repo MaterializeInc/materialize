@@ -11,7 +11,7 @@
 
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
-use prometheus::Counter;
+use prometheus::{Counter, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -22,6 +22,7 @@ pub struct Metrics {
     pub snapshot_latency_seconds: Counter,
     pub syncs: IntCounter,
     pub sync_latency_seconds: Counter,
+    pub collection_count: IntGaugeVec,
 }
 
 impl Metrics {
@@ -55,6 +56,11 @@ impl Metrics {
             sync_latency_seconds: registry.register(metric!(
                 name: "mz_catalog_sync_latency_seconds",
                 help: "Total latency for syncing the in-memory state of the durable catalog with the persisted contents.",
+            )),
+            collection_count: registry.register(metric!(
+                name: "mz_catalog_collection_count",
+                help: "Total number of entries, after consolidation, per catalog collection.",
+                var_labels: ["collection"],
             )),
         }
     }

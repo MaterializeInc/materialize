@@ -9,6 +9,7 @@
 
 use std::fmt::Debug;
 
+use crate::durable::debug::CollectionType;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::Diff;
@@ -217,6 +218,34 @@ pub enum StateUpdateKind {
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
     Timestamp(proto::TimestampKey, proto::TimestampValue),
+}
+
+impl StateUpdateKind {
+    pub(crate) fn collection_type(&self) -> Option<CollectionType> {
+        match self {
+            StateUpdateKind::AuditLog(_, _) => Some(CollectionType::AuditLog),
+            StateUpdateKind::Cluster(_, _) => Some(CollectionType::ComputeInstance),
+            StateUpdateKind::ClusterReplica(_, _) => Some(CollectionType::ComputeReplicas),
+            StateUpdateKind::Comment(_, _) => Some(CollectionType::Comments),
+            StateUpdateKind::Config(_, _) => Some(CollectionType::Config),
+            StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
+            StateUpdateKind::DefaultPrivilege(_, _) => Some(CollectionType::DefaultPrivileges),
+            StateUpdateKind::Epoch(_) => None,
+            StateUpdateKind::IdAllocator(_, _) => Some(CollectionType::IdAlloc),
+            StateUpdateKind::IntrospectionSourceIndex(_, _) => {
+                Some(CollectionType::ComputeIntrospectionSourceIndex)
+            }
+            StateUpdateKind::Item(_, _) => Some(CollectionType::Item),
+            StateUpdateKind::Role(_, _) => Some(CollectionType::Role),
+            StateUpdateKind::Schema(_, _) => Some(CollectionType::Schema),
+            StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
+            StateUpdateKind::StorageUsage(_, _) => Some(CollectionType::StorageUsage),
+            StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
+            StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
+            StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
+            StateUpdateKind::Timestamp(_, _) => Some(CollectionType::Timestamp),
+        }
+    }
 }
 
 impl RustType<proto::StateUpdateKind> for StateUpdateKind {
