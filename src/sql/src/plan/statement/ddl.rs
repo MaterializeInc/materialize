@@ -1254,6 +1254,18 @@ pub fn plan_create_source(
         _ => {}
     };
 
+    // `KEY VALUE` load generators always include the key, so must be special-cased.
+    let key_envelope =
+        if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+            load_generator: LoadGenerator::KeyValue(_),
+            ..
+        }) = &external_connection
+        {
+            KeyEnvelope::Named(LOAD_GENERATOR_KEY_VALUE_KEY_NAME.to_string())
+        } else {
+            key_envelope
+        };
+
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
     // choosing compatible envelopes and connections.
@@ -1262,17 +1274,6 @@ pub fn plan_create_source(
     // compatible in typechecking
     //
     // TODO: remove bails as more support for upsert is added.
-
-    let envelope = if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-        load_generator: LoadGenerator::KeyValue(_),
-        ..
-    }) = &external_connection
-    {
-        ast::SourceEnvelope::Upsert
-    } else {
-        envelope
-    };
-
     let envelope = match &envelope {
         // TODO: fixup key envelope
         ast::SourceEnvelope::None => UnplannedSourceEnvelope::None(key_envelope),
@@ -1293,17 +1294,17 @@ pub fn plan_create_source(
             }
         }
         ast::SourceEnvelope::Upsert => {
-            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
-            // specified.
             let key_envelope =
-                // `KEY VALUE` load generators do not have an encoding so must be special-cased.
+                // `KEY VALUE` load generators do not have an encoding, so must be special-cased.
                 if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
                     load_generator: LoadGenerator::KeyValue(_),
                     ..
                 }) = &external_connection
                 {
-                    KeyEnvelope::Named(LOAD_GENERATOR_KEY_VALUE_KEY_NAME.to_string())
+                key_envelope
                 } else {
+            // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
+            // specified.
                     let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
                         None => {
                             bail_unsupported!(format!(

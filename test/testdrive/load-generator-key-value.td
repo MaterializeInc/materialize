@@ -27,6 +27,7 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
     VALUE SIZE 10,
     BATCH SIZE 2
   )
+  ENVELOPE UPSERT
 
 > CREATE SOURCE up_quick
   IN CLUSTER lg_cluster
@@ -39,6 +40,7 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
     VALUE SIZE 10,
     BATCH SIZE 2
   )
+  ENVELOPE UPSERT
 
 # Ensure data is spread as expected.
 > SELECT partition, count(*) FROM up_no_update GROUP BY partition
@@ -133,6 +135,7 @@ up_quick     7 7 16 16 64 16
     BATCH SIZE 2,
     UPDATE RATE '1s'
   )
+  ENVELOPE UPSERT
 
 # Ensure data is partitioned correctly.
 > SELECT partition, count(*) FROM up_with_update GROUP BY partition
@@ -181,3 +184,23 @@ SELECT
   WHERE
     key = 14
 true
+
+# Test NONE-envelope
+> CREATE SOURCE kv_none
+  IN CLUSTER lg_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    QUICK ROUNDS 2,
+    SEED 123,
+    VALUE SIZE 10,
+    BATCH SIZE 2
+  )
+  ENVELOPE NONE
+
+> SELECT partition, count(key) FROM kv_none GROUP BY partition
+0   20
+1   20
+2   20
+3   20
