@@ -128,7 +128,7 @@ impl<T> Trace<T> {
     }
 
     #[must_use]
-    pub fn batches<'a>(&'a self) -> impl IntoIterator<Item = &'a HollowBatch<T>> {
+    pub fn batches(&self) -> impl IntoIterator<Item = &HollowBatch<T>> {
         // It should be possible to do this without the Vec.
         let mut batches = Vec::new();
         self.map_batches(|b| batches.push(b));
@@ -238,7 +238,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 
     // This is only called with the results of one `insert` and so the length of
     // `merge_reqs` is bounded by the number of levels in the spine (or possibly
-    // some small constant multiple?). The number of levels is logarithmic in
+    // some small constant multiple?). The number of levels is logarithmic in the
     // number of updates in the spine, so this number should stay very small. As
     // a result, we simply use the naive O(n^2) algorithm here instead of doing
     // anything fancy with e.g. interval trees.
@@ -1256,7 +1256,7 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     }
 
     /// True iff the layer is a complete merge, ready for extraction.
-    fn is_complete(&mut self) -> bool {
+    fn is_complete(&self) -> bool {
         if let MergeState::Double(MergeVariant::Complete(_)) = self {
             true
         } else {
