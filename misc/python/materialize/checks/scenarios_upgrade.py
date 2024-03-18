@@ -34,7 +34,9 @@ _previous_version: MzVersion | None = None
 def get_minor_versions() -> list[MzVersion]:
     global _minor_versions
     if _minor_versions is None:
-        _minor_versions = get_published_minor_mz_versions(limit=4)
+        _minor_versions = get_published_minor_mz_versions(
+            limit=4, exclude_current_minor_version=True
+        )
     return _minor_versions
 
 
@@ -85,9 +87,7 @@ class UpgradeEntireMzTwoVersions(Scenario):
         return get_previous_version()
 
     def actions(self) -> list[Action]:
-        print(
-            f"Upgrading starting from tag {self.base_version()} going through {get_last_version()}"
-        )
+        print(f"Upgrade path: {self.base_version()} -> {get_last_version()} -> current")
         return [
             # Start with previous_version
             StartMz(self, tag=self.base_version()),
@@ -122,7 +122,7 @@ class UpgradeEntireMzFourVersions(Scenario):
 
     def actions(self) -> list[Action]:
         print(
-            f"Upgrading going through {self.minor_versions[3]} -> {self.minor_versions[2]} -> {get_previous_version()} -> {get_last_version()}"
+            f"Upgrade path: {self.minor_versions[3]} -> {self.minor_versions[2]} -> {get_previous_version()} -> {get_last_version()} -> current"
         )
         return [
             StartMz(self, tag=self.minor_versions[3]),

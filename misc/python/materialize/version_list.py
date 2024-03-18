@@ -258,6 +258,7 @@ def get_published_minor_mz_versions(
     newest_first: bool = True,
     limit: int | None = None,
     include_filter: Callable[[MzVersion], bool] | None = None,
+    exclude_current_minor_version: bool = False,
 ) -> list[MzVersion]:
     """
     Get the latest patch version for every minor version.
@@ -270,6 +271,9 @@ def get_published_minor_mz_versions(
     all_versions = get_all_mz_versions(newest_first=True)
     minor_versions: dict[str, MzVersion] = {}
 
+    version = MzVersion.parse_cargo()
+    current_version = f"{version.major}.{version.minor}"
+
     # Note that this method must not apply limit_to_published_versions to a created list
     # because in that case minor versions may get lost.
     for version in all_versions:
@@ -278,6 +282,10 @@ def get_published_minor_mz_versions(
             continue
 
         minor_version = f"{version.major}.{version.minor}"
+
+        if exclude_current_minor_version and minor_version == current_version:
+            continue
+
         if minor_version in minor_versions.keys():
             # we already have a more recent version for this minor version
             continue
