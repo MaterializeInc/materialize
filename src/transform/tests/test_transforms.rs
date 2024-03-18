@@ -156,6 +156,11 @@ fn handle_apply(
             let transform = ColumnKnowledge::default();
             apply_transform(transform, catalog, input)
         }
+        "flatmap_to_map" => {
+            use mz_transform::canonicalization::FlatMapToMap;
+            let transform = FlatMapToMap;
+            apply_transform(transform, catalog, input)
+        }
         "fold_constants" => {
             use mz_transform::fold_constants::FoldConstants;
             let transform = FoldConstants { limit: None };
