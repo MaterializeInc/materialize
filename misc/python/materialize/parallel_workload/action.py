@@ -1060,7 +1060,16 @@ class GrantPrivilegesAction(Action):
                 return False
 
             query = f"GRANT {privilege} ON {table} TO {role}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if (
+                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    or "unknown role" not in e.msg
+                ):
+                    raise e
+            exe.db.roles.remove(role)
         return True
 
 
@@ -1080,7 +1089,16 @@ class RevokePrivilegesAction(Action):
                 return False
 
             query = f"REVOKE {privilege} ON {table} FROM {role}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if (
+                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    or "unknown role" not in e.msg
+                ):
+                    raise e
+            exe.db.roles.remove(role)
         return True
 
 
