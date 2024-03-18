@@ -104,6 +104,7 @@ def clean_annotation_text(annotation_html: str) -> str:
 
 def main(
     pipeline_slug: str,
+    branch: str,
     fetch_builds_mode: FetchMode,
     fetch_annotations_mode: FetchMode,
     max_build_fetches: int,
@@ -123,6 +124,7 @@ def main(
         builds_data = builds_cache.get_or_query_builds_for_all_pipelines(
             fetch_builds_mode,
             max_build_fetches,
+            branch=branch,
             build_states=build_states,
         )
     else:
@@ -130,7 +132,7 @@ def main(
             pipeline_slug,
             fetch_builds_mode,
             max_build_fetches,
-            branch=None,
+            branch=branch,
             build_states=build_states,
         )
 
@@ -165,6 +167,11 @@ if __name__ == "__main__":
         help="Use * for all pipelines",
     )
     parser.add_argument(
+        "--branch",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
         "--fetch-builds",
         type=lambda mode: FetchMode[mode],
         choices=FETCH_MODE_CHOICES,
@@ -194,6 +201,7 @@ if __name__ == "__main__":
 
     main(
         args.pipeline,
+        args.branch,
         args.fetch_builds,
         args.fetch_annotations,
         args.max_build_fetches,

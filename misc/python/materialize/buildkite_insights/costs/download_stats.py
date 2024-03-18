@@ -12,7 +12,7 @@ from materialize.buildkite_insights.util.data_io import write_results_to_file
 
 
 def main() -> None:
-    result = builds_api.get_builds_of_all_pipelines(max_fetches=None)
+    result = builds_api.get_builds_of_all_pipelines(max_fetches=None, branch=None)
     write_results_to_file(result, "data.json")
 
 

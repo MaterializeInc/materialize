@@ -35,12 +35,13 @@ def get_builds(
 
 def get_builds_of_all_pipelines(
     max_fetches: int | None,
+    branch: str | None,
     build_states: list[str] | None = None,
     items_per_page: int = 100,
     include_retries: bool = True,
 ) -> list[Any]:
     params = _get_params(
-        branch=None,
+        branch=branch,
         build_states=build_states,
         items_per_page=items_per_page,
         include_retries=include_retries,
