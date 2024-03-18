@@ -85,6 +85,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::Collection;
+use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -92,6 +93,7 @@ use mz_postgres_util::{simple_query_opt, PostgresError};
 use mz_repr::{Datum, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::errors::SourceErrorDetails;
+use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
@@ -384,10 +386,21 @@ fn verify_schema(
     oid: u32,
     expected_desc: &PostgresTableDesc,
     upstream_info: &BTreeMap<u32, PostgresTableDesc>,
+    casts: &[(CastType, MirScalarExpr)],
 ) -> Result<(), DefiniteError> {
     let current_desc = upstream_info.get(&oid).ok_or(DefiniteError::TableDropped)?;
 
-    match expected_desc.determine_compatibility(current_desc) {
+    let allow_oids_to_change_by_col_num = expected_desc
+        .columns
+        .iter()
+        .zip_eq(casts.iter())
+        .flat_map(|(col, (cast_type, _))| match cast_type {
+            CastType::Text => Some(col.col_num),
+            CastType::Natural => None,
+        })
+        .collect();
+
+    match expected_desc.determine_compatibility(current_desc, &allow_oids_to_change_by_col_num) {
         Ok(()) => Ok(()),
         Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
     }
@@ -395,13 +408,13 @@ fn verify_schema(
 
 /// Casts a text row into the target types
 fn cast_row(
-    casts: &[MirScalarExpr],
+    casts: &[(CastType, MirScalarExpr)],
     datums: &[Datum<'_>],
     row: &mut Row,
 ) -> Result<(), DefiniteError> {
     let arena = mz_repr::RowArena::new();
     let mut packer = row.packer();
-    for column_cast in casts {
+    for (_, column_cast) in casts {
         let datum = column_cast
             .eval(datums, &arena)
             .map_err(DefiniteError::CastError)?;

@@ -88,7 +88,7 @@ use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
 };
 use mz_storage_types::sources::postgres::{
-    PostgresSourceConnection, PostgresSourcePublicationDetails,
+    CastType, PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
 };
 use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
@@ -870,25 +870,28 @@ pub fn plan_create_source(
                 // column and casts it to the appropriate target type
                 let mut column_casts = vec![];
                 for (i, column) in table.columns.iter().enumerate() {
-                    let ty = match text_cols.get(&Oid(table.oid)) {
+                    let (cast_type, ty) = match text_cols.get(&Oid(table.oid)) {
                         // Treat the column as text if it was referenced in
                         // `TEXT COLUMNS`. This is the only place we need to
                         // perform this logic; even if the type is unsupported,
                         // we'll be able to ingest its values as text in
                         // storage.
-                        Some(names) if names.contains(&column.name) => mz_pgrepr::Type::Text,
+                        Some(names) if names.contains(&column.name) => {
+                            (CastType::Text, mz_pgrepr::Type::Text)
+                        }
                         _ => {
                             match mz_pgrepr::Type::from_oid_and_typmod(
                                 column.type_oid,
                                 column.type_mod,
                             ) {
-                                Ok(t) => t,
+                                Ok(t) => (CastType::Natural, t),
                                 // If this reference survived purification, we
                                 // do not expect it to be from a table that the
                                 // user will consume., i.e. expect this table to
                                 // be filtered out of table casts.
                                 Err(_) => {
-                                    column_casts.push(
+                                    column_casts.push((
+                                        CastType::Natural,
                                         HirScalarExpr::CallVariadic {
                                             func: mz_expr::VariadicFunc::ErrorIfNull,
                                             exprs: vec![
@@ -907,7 +910,7 @@ pub fn plan_create_source(
                                         }
                                         .lower_uncorrelated()
                                         .expect("no correlation"),
-                                    );
+                                    ));
                                     continue;
                                 }
                             }
@@ -957,7 +960,7 @@ pub fn plan_create_source(
                             in the input col_expr",
                     );
 
-                    column_casts.push(mir_cast);
+                    column_casts.push((cast_type, mir_cast));
                 }
                 let r = table_casts.insert(i + 1, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");

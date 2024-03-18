@@ -41,9 +41,9 @@ pub struct PostgresSourceConnection<C: ConnectionAccess = InlinedConnection> {
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types, keyed by their position in the source.
     #[proptest(
-        strategy = "proptest::collection::btree_map(any::<usize>(), proptest::collection::vec(any::<MirScalarExpr>(), 0..4), 0..4)"
+        strategy = "proptest::collection::btree_map(any::<usize>(), proptest::collection::vec((any::<CastType>(), any::<MirScalarExpr>()), 0..4), 0..4)"
     )]
-    pub table_casts: BTreeMap<usize, Vec<MirScalarExpr>>,
+    pub table_casts: BTreeMap<usize, Vec<(CastType, MirScalarExpr)>>,
     pub publication: String,
     pub publication_details: PostgresSourcePublicationDetails,
 }
@@ -157,18 +157,58 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub enum CastType {
+    /// This cast is corresponds to its type in the upstream system.
+    Natural,
+    /// This cast was generated with the `TEXT COLUMNS` option.
+    Text,
+}
+
+impl RustType<proto_postgres_source_connection::ProtoCastType> for CastType {
+    fn into_proto(&self) -> proto_postgres_source_connection::ProtoCastType {
+        use proto_postgres_source_connection::proto_cast_type::Kind::*;
+        proto_postgres_source_connection::ProtoCastType {
+            kind: Some(match self {
+                CastType::Natural => Natural(()),
+                CastType::Text => Text(()),
+            }),
+        }
+    }
+
+    fn from_proto(
+        proto: proto_postgres_source_connection::ProtoCastType,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto_postgres_source_connection::proto_cast_type::Kind::*;
+        Ok(match proto.kind {
+            Some(Natural(())) => CastType::Natural,
+            Some(Text(())) => CastType::Text,
+            None => {
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoWindowFrameUnits::kind",
+                ))
+            }
+        })
+    }
+}
+
 impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
     fn into_proto(&self) -> ProtoPostgresSourceConnection {
         use proto_postgres_source_connection::ProtoPostgresTableCast;
         let mut table_casts = Vec::with_capacity(self.table_casts.len());
         let mut table_cast_pos = Vec::with_capacity(self.table_casts.len());
-        for (pos, table_cast_cols) in self.table_casts.iter() {
+        for (pos, table_cast_inner) in self.table_casts.iter() {
+            let mut column_casts = Vec::with_capacity(table_casts.len());
+            let mut column_cast_types = Vec::with_capacity(table_casts.len());
+
+            for (table_cast_col_type, table_cast_col) in table_cast_inner {
+                column_casts.push(table_cast_col.into_proto());
+                column_cast_types.push(table_cast_col_type.into_proto());
+            }
+
             table_casts.push(ProtoPostgresTableCast {
-                column_casts: table_cast_cols
-                    .iter()
-                    .cloned()
-                    .map(|cast| cast.into_proto())
-                    .collect(),
+                column_casts,
+                column_cast_types,
             });
             table_cast_pos.push(mz_ore::cast::usize_to_u64(*pos));
         }
@@ -203,9 +243,14 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
             .zip_eq(proto.table_casts.into_iter())
         {
             let mut column_casts = vec![];
-            for cast in cast.column_casts {
-                column_casts.push(cast.into_rust()?);
+            for (cast, cast_type) in cast
+                .column_casts
+                .into_iter()
+                .zip_eq(cast.column_cast_types.into_iter())
+            {
+                column_casts.push((cast_type.into_rust()?, cast.into_rust()?));
             }
+
             table_casts.insert(mz_ore::cast::u64_to_usize(pos), column_casts);
         }
 

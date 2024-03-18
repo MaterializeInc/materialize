@@ -147,6 +147,7 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, PostgresError};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -173,7 +174,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<MzOffset>>,
-    table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
+    table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<(CastType, MirScalarExpr)>)>,
     metrics: PgSnapshotMetrics,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
@@ -420,8 +421,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .await;
 
             let mut snapshot_staged = 0;
-            for (&oid, (_, expected_desc, _)) in reader_snapshot_table_info.iter() {
-                let desc = match verify_schema(oid, expected_desc, &upstream_info) {
+            for (&oid, (_, expected_desc, casts)) in reader_snapshot_table_info.iter() {
+                let desc = match verify_schema(oid, expected_desc, &upstream_info, casts) {
                     Ok(()) => expected_desc,
                     Err(err) => {
                         raw_handle
