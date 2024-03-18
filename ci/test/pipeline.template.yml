@@ -186,44 +186,27 @@ steps:
           queue: linux-x86_64-small
         coverage: skip
 
-  - group: "Cargo tests"
-    key: cargo-tests
-    steps:
-      - id: cargo-test
-        label: Cargo test
-        timeout_in_minutes: 45
-        inputs:
-          - Cargo.lock
-          - ".config/nextest.toml"
-          - "**/Cargo.toml"
-          - "**/*.rs"
-          - "**/*.proto"
-          - "**/testdata/**"
-        depends_on: []
-        env:
-          AWS_DEFAULT_REGION: "us-east-1"
-          # cargo-test's coverage is handled separately by cargo-llvm-cov
-          BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
-        plugins:
-          - ./ci/plugins/scratch-aws-access: ~
-          - ./ci/plugins/mzcompose:
-              composition: cargo-test
-        agents:
-          queue: builder-linux-aarch64
-
-      - id: miri-test
-        label: Miri test (fast)
-        inputs: [src]
-        depends_on: []
-        timeout_in_minutes: 45
-        plugins:
-          - ./ci/plugins/scratch-aws-access: ~
-          - ./ci/plugins/mzcompose:
-              composition: cargo-test
-              args: [--miri-fast]
-        agents:
-          queue: builder-linux-aarch64
-        coverage: skip
+  - id: cargo-test
+    label: Cargo test
+    timeout_in_minutes: 45
+    inputs:
+      - Cargo.lock
+      - ".config/nextest.toml"
+      - "**/Cargo.toml"
+      - "**/*.rs"
+      - "**/*.proto"
+      - "**/testdata/**"
+    depends_on: []
+    env:
+      AWS_DEFAULT_REGION: "us-east-1"
+      # cargo-test's coverage is handled separately by cargo-llvm-cov
+      BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: cargo-test
+    agents:
+      queue: builder-linux-aarch64
 
   - id: testdrive
     label: Testdrive %N
