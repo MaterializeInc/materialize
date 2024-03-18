@@ -51,11 +51,12 @@ def get_or_query_builds(
 def get_or_query_builds_for_all_pipelines(
     fetch_mode: FetchMode,
     max_fetches: int,
+    branch: str | None,
     build_states: list[str] | None,
     items_per_page: int = 50,
     first_page: int = 1,
 ) -> list[Any]:
-    meta_data = f"{build_states}"
+    meta_data = f"{branch}-{build_states}"
     cache_file_path = _get_file_path_for_builds(
         pipeline_slug="all",
         meta_data=meta_data,
@@ -66,6 +67,7 @@ def get_or_query_builds_for_all_pipelines(
 
     fetch_action = lambda: builds_api.get_builds_of_all_pipelines(
         max_fetches=max_fetches,
+        branch=branch,
         items_per_page=items_per_page,
         build_states=build_states,
     )

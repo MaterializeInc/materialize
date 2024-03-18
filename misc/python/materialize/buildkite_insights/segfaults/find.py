@@ -17,7 +17,7 @@ from materialize.buildkite_insights.buildkite_api import builds_api, generic_api
 def main() -> None:
     # Used to find recent instances of https://github.com/MaterializeInc/materialize/issues/24644
     # 2 weeks ~ 2000 builds
-    data = builds_api.get_builds_of_all_pipelines(max_fetches=20)
+    data = builds_api.get_builds_of_all_pipelines(max_fetches=20, branch=None)
 
     for build in data:
         request_path = f"organizations/materialize/pipelines/{build['pipeline']['slug']}/builds/{build['number']}/artifacts"
