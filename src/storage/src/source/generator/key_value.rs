@@ -81,6 +81,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                             key_value.snapshot_rounds,
                             key_value.batch_size,
                             key_value.seed,
+                            key_value.include_offset.is_some(),
                         ),
                     )
                 })
@@ -179,6 +180,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                             key_value.batch_size,
                             key_value.seed,
                             upper_offset,
+                            key_value.include_offset.is_some(),
                         ),
                     )
                 })
@@ -281,6 +283,8 @@ struct SnapshotProducer {
     rng: Option<StdRng>,
     // The source-level seed for the rng.
     seed: u64,
+    // Whether to include the offset or not.
+    include_offset: bool,
 }
 
 impl SnapshotProducer {
@@ -291,6 +295,7 @@ impl SnapshotProducer {
         snapshot_rounds: u64,
         batch_size: u64,
         seed: u64,
+        include_offset: bool,
     ) -> Self {
         assert_eq!((keys / partitions) % batch_size, 0);
         let pi = PartitionKeyIterator::new(
@@ -306,6 +311,7 @@ impl SnapshotProducer {
             snapshot_rounds,
             rng: None,
             seed,
+            include_offset,
         }
     }
 
@@ -347,7 +353,11 @@ impl SnapshotProducer {
                 Ok(SourceMessage {
                     key: Row::pack_slice(&[Datum::UInt64(key)]),
                     value: Row::pack_slice(&[Datum::UInt64(partition), Datum::Bytes(value_buffer)]),
-                    metadata: Row::default(),
+                    metadata: if self.include_offset {
+                        Row::pack(&[Datum::UInt64(self.round)])
+                    } else {
+                        Row::default()
+                    },
                 }),
             );
             (msg, MzOffset::from(self.round), 1)
@@ -375,6 +385,8 @@ struct UpdateProducer {
     seed: u64,
     // The number of offsets we expect to be part of the `quick_rounds`.
     expected_quick_offsets: u64,
+    // Whether to include the offset or not.
+    include_offset: bool,
 }
 
 impl UpdateProducer {
@@ -387,6 +399,7 @@ impl UpdateProducer {
         batch_size: u64,
         seed: u64,
         next_offset: u64,
+        include_offset: bool,
     ) -> Self {
         // Each snapshot _round_ is associated with an offset, starting at 0. Therefore
         // the `next_offset` - `snapshot_rounds` is the index of the next non-snapshot update
@@ -409,6 +422,7 @@ impl UpdateProducer {
             next_offset,
             seed,
             expected_quick_offsets,
+            include_offset,
         }
     }
 
@@ -444,7 +458,11 @@ impl UpdateProducer {
                 Ok(SourceMessage {
                     key: Row::pack_slice(&[Datum::UInt64(key)]),
                     value: Row::pack_slice(&[Datum::UInt64(partition), Datum::Bytes(value_buffer)]),
-                    metadata: Row::default(),
+                    metadata: if self.include_offset {
+                        Row::pack(&[Datum::UInt64(self.next_offset)])
+                    } else {
+                        Row::default()
+                    },
                 }),
             );
             (msg, MzOffset::from(self.next_offset), 1)
@@ -517,14 +535,15 @@ mod test {
     #[mz_ore::test]
     fn test_key_value_loadgen_resume_upper() {
         let up = UpdateProducer::new(
-            1,    // partition 1
-            3,    // of 3 partitions
-            126,  // 126 keys.
-            2,    // 2 snapshot rounds
-            0,    // not important
-            2,    // batch size 2
-            1234, //seed
-            5,    // resume upper of 5
+            1,     // partition 1
+            3,     // of 3 partitions
+            126,   // 126 keys.
+            2,     // 2 snapshot rounds
+            0,     // not important
+            2,     // batch size 2
+            1234,  //seed
+            5,     // resume upper of 5
+            false, // not important
         );
 
         // The first key 3 rounds after the 2 snapshot rounds would be the 7th key (3 rounds of 2
@@ -540,6 +559,7 @@ mod test {
             2,           // batch size 2
             1234,        //seed
             5 + 126 / 2, // resume upper of 5 after a full set of keys has been produced.
+            false,       // not important
         );
 
         assert_eq!(up.pi.next, 19);

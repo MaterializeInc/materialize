@@ -28,6 +28,7 @@ include!(concat!(
 ));
 
 pub const LOAD_GENERATOR_KEY_VALUE_KEY_NAME: &str = "key";
+pub const LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT: &str = "offset";
 
 /// Data and progress events of the native stream.
 pub enum Event<F: IntoIterator, D> {
@@ -96,9 +97,16 @@ impl SourceConnection for LoadGeneratorSourceConnection {
             }
             LoadGenerator::Marketing => RelationDesc::empty(),
             LoadGenerator::Tpch { .. } => RelationDesc::empty(),
-            LoadGenerator::KeyValue(_) => RelationDesc::empty()
-                .with_column("partition", ScalarType::UInt64.nullable(false))
-                .with_column("value", ScalarType::Bytes.nullable(false)),
+            LoadGenerator::KeyValue(KeyValueLoadGenerator { include_offset, .. }) => {
+                let mut desc = RelationDesc::empty()
+                    .with_column("partition", ScalarType::UInt64.nullable(false))
+                    .with_column("value", ScalarType::Bytes.nullable(false));
+
+                if let Some(offset_name) = include_offset.as_deref() {
+                    desc = desc.with_column(offset_name, ScalarType::UInt64.nullable(false));
+                }
+                desc
+            }
         }
     }
 
@@ -497,6 +505,8 @@ pub struct KeyValueLoadGenerator {
     pub batch_size: u64,
     // A per-source seed.
     pub seed: u64,
+    // Whether or not to include the offset in the value. The string is the column name.
+    pub include_offset: Option<String>,
 }
 
 impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
@@ -510,6 +520,7 @@ impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
             update_rate: self.update_rate.as_ref().map(|ur| ur.into_proto()),
             batch_size: self.batch_size,
             seed: self.seed,
+            include_offset: self.include_offset.clone(),
         }
     }
 
@@ -523,6 +534,7 @@ impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
             update_rate: proto.update_rate.map(|ur| ur.into_rust()).transpose()?,
             batch_size: proto.batch_size,
             seed: proto.seed,
+            include_offset: proto.include_offset,
         })
     }
 }

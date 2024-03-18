@@ -147,7 +147,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
                         let message = (
                             output,
                             Ok(SourceMessage {
-                                key: Row::pack_slice(&[Datum::UInt64(1)]),
+                                key: Row::default(),
                                 value,
                                 metadata: Row::default(),
                             }),

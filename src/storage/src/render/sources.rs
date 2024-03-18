@@ -205,7 +205,7 @@ where
             ok_source.map(|r| DecodeResult {
                 key: Some(Ok(r.key)),
                 value: Some(Ok(r.value)),
-                metadata: Row::default(),
+                metadata: r.metadata,
                 from_time: r.from_time,
             }),
             empty(scope),

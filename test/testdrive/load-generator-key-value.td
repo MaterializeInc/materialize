@@ -204,3 +204,44 @@ true
 1   20
 2   20
 3   20
+
+# Test INCLUDE OFFSET
+> CREATE SOURCE kv_offset
+  IN CLUSTER lg_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    QUICK ROUNDS 2,
+    SEED 123,
+    VALUE SIZE 10,
+    BATCH SIZE 2
+  )
+  INCLUDE OFFSET
+  ENVELOPE NONE
+
+> SELECT partition, MAX("offset") FROM kv_offset GROUP BY partition
+0   6
+1   6
+2   6
+3   6
+
+> CREATE SOURCE kv_offset2
+  IN CLUSTER lg_cluster
+  FROM LOAD GENERATOR KEY VALUE (
+    KEYS 16,
+    PARTITIONS 4,
+    SNAPSHOT ROUNDS 3,
+    QUICK ROUNDS 2,
+    SEED 123,
+    VALUE SIZE 10,
+    BATCH SIZE 2
+  )
+  INCLUDE OFFSET AS something_else
+  ENVELOPE NONE
+
+> SELECT partition, MAX(something_else) FROM kv_offset2 GROUP BY partition
+0   6
+1   6
+2   6
+3   6

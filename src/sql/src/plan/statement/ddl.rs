@@ -86,7 +86,7 @@ use mz_storage_types::sources::envelope::{
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{
     KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
-    LOAD_GENERATOR_KEY_VALUE_KEY_NAME,
+    LOAD_GENERATOR_KEY_VALUE_KEY_NAME, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT,
 };
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
@@ -641,7 +641,11 @@ pub fn plan_create_source(
         // TODO(guswynn): should this be `bail_unsupported!`?
         sql_bail!("INCLUDE HEADERS with non-Kafka sources not supported");
     }
-    if !matches!(connection, CreateSourceConnection::Kafka { .. }) && !include_metadata.is_empty() {
+    if !matches!(
+        connection,
+        CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. }
+    ) && !include_metadata.is_empty()
+    {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
@@ -1082,7 +1086,7 @@ pub fn plan_create_source(
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let (load_generator, available_subsources) =
-                load_generator_ast_to_generator(scx, generator, options)?;
+                load_generator_ast_to_generator(scx, generator, options, include_metadata)?;
             let available_subsources = available_subsources
                 .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
 
@@ -1720,6 +1724,7 @@ pub(crate) fn load_generator_ast_to_generator(
     scx: &StatementContext,
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
+    include_metadata: &[SourceIncludeMetadata],
 ) -> Result<
     (
         LoadGenerator,
@@ -1729,6 +1734,10 @@ pub(crate) fn load_generator_ast_to_generator(
 > {
     let extracted: LoadGeneratorOptionExtracted = options.to_vec().try_into()?;
     extracted.ensure_only_valid_options(loadgen)?;
+
+    if loadgen != &ast::LoadGenerator::KeyValue && !include_metadata.is_empty() {
+        sql_bail!("INCLUDE metadata only supported with `KEY VALUE` load generators");
+    }
 
     let load_generator = match loadgen {
         ast::LoadGenerator::Auction => LoadGenerator::Auction,
@@ -1789,6 +1798,17 @@ pub(crate) fn load_generator_ast_to_generator(
                 ..
             } = extracted;
 
+            let include_offset = match include_metadata {
+                [SourceIncludeMetadata::Offset { alias }] => Some(alias.clone().map_or_else(
+                    || LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT.to_string(),
+                    |i| i.to_string(),
+                )),
+                [] => None,
+                _ => {
+                    bail_unsupported!("only `INCLUDE OFFSET` is supported");
+                }
+            };
+
             let lgkv = KeyValueLoadGenerator {
                 keys: keys.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires KEYS"))?,
                 snapshot_rounds: snapshot_rounds
@@ -1802,6 +1822,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 batch_size: batch_size
                     .ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires BATCH SIZE"))?,
                 seed: seed.ok_or_else(|| sql_err!("LOAD GENERATOR KEY VALUE requires SEED"))?,
+                include_offset,
             };
 
             if lgkv.keys == 0
