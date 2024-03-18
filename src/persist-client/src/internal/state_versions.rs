@@ -97,7 +97,7 @@ pub struct StateVersions {
     pub(crate) cfg: PersistConfig,
     pub(crate) consensus: Arc<dyn Consensus + Send + Sync>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
-    metrics: Arc<Metrics>,
+    pub(crate) metrics: Arc<Metrics>,
 }
 
 #[derive(Debug, Clone)]
