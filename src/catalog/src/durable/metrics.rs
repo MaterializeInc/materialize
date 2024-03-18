@@ -22,7 +22,7 @@ pub struct Metrics {
     pub snapshot_latency_seconds: Counter,
     pub syncs: IntCounter,
     pub sync_latency_seconds: Counter,
-    pub collection_count: IntGaugeVec,
+    pub collection_entries: IntGaugeVec,
 }
 
 impl Metrics {
@@ -57,8 +57,8 @@ impl Metrics {
                 name: "mz_catalog_sync_latency_seconds",
                 help: "Total latency for syncing the in-memory state of the durable catalog with the persisted contents.",
             )),
-            collection_count: registry.register(metric!(
-                name: "mz_catalog_collection_count",
+            collection_entries: registry.register(metric!(
+                name: "mz_catalog_collection_entries",
                 help: "Total number of entries, after consolidation, per catalog collection.",
                 var_labels: ["collection"],
             )),

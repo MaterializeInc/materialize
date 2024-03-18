@@ -401,7 +401,7 @@ impl UnopenedPersistCatalogState {
             storage_usage_events: LargeCollectionStartupCache::new_open(),
             metrics: self.metrics,
         };
-        catalog.metrics.collection_count.reset();
+        catalog.metrics.collection_entries.reset();
         let updates = self
             .snapshot
             .into_iter()
@@ -991,7 +991,7 @@ impl PersistCatalogState {
 
             if let Some(collection_type) = kind.collection_type() {
                 self.metrics
-                    .collection_count
+                    .collection_entries
                     .with_label_values(&[&collection_type.to_string()])
                     .add(diff);
             }
