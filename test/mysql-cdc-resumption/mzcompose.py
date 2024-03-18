@@ -106,6 +106,23 @@ def workflow_bin_log_manipulations(c: Composition) -> None:
             # No end confirmation here, since we expect the source to be in a bad state
 
 
+def workflow_short_bin_log_retention(c: Composition) -> None:
+    bin_log_expiration_in_sec = 2
+    args = MySql.DEFAULT_ADDITIONAL_ARGS.copy()
+    args.append(f"--binlog_expire_logs_seconds={bin_log_expiration_in_sec}")
+
+    with c.override(Materialized(sanity_restart=False), MySql(additional_args=args)):
+        scenarios = [create_source_after_logs_expiration]
+        for scenario in scenarios:
+            print(f"--- Running scenario {scenario.__name__}")
+            initialize(c, create_source=False)
+            scenario(
+                c,
+                bin_log_expiration_in_sec,
+            )
+            # No end confirmation here
+
+
 def workflow_master_changes(c: Composition) -> None:
     """
     mysql-replica-1 and mysql-replica-2 replicate mysql. The source is attached to mysql-replica-2. mysql is
@@ -581,6 +598,38 @@ def backup_restore_mysql(c: Composition) -> None:
     # TODO: #25760: one of the two following commands must succeed
     # run_testdrive_files(c, "verify-rows-after-restore-t1.td")
     # run_testdrive_files(c, "verify-source-failed.td")
+
+
+def create_source_after_logs_expiration(
+    c: Composition, bin_log_expiration_in_sec: int
+) -> None:
+    """Populate tables, delete rows, and create the source after the log expiration in MySQL took place"""
+
+    run_testdrive_files(c, "delete-rows-t1.td")
+
+    sleep_duration = bin_log_expiration_in_sec + 2
+    print(f"Sleeping for {sleep_duration} sec")
+    time.sleep(sleep_duration)
+
+    mysql_conn = create_mysql_connection(c)
+    with mysql_conn.cursor() as cur:
+        cur.execute("FLUSH BINARY LOGS")
+
+    restart_mysql(c)
+
+    # not really necessary, still do it
+    mysql_conn = create_mysql_connection(c)
+    mysql_conn.autocommit(True)
+    with mysql_conn.cursor() as cur:
+        cur.execute("FLUSH BINARY LOGS")
+
+    run_testdrive_files(
+        c,
+        "--var=mysql-source-host=toxiproxy",
+        "create-source.td",
+    )
+
+    run_testdrive_files(c, "verify-rows-deleted-t1.td")
 
 
 def run_testdrive_files(c: Composition, *files: str, mysql_host: str = "mysql") -> None:
