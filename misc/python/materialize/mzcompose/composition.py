@@ -345,21 +345,25 @@ class Composition:
                     sel = selectors.DefaultSelector()
                     sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
                     sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
+                    assert p.stdout is not None
+                    assert p.stderr is not None
+                    os.set_blocking(p.stdout.fileno(), False)
+                    os.set_blocking(p.stderr.fileno(), False)
                     running = True
                     while running:
                         running = False
                         for key, val in sel.select():
-                            line = key.fileobj.readline()  # type: ignore
-                            if not line:
+                            c = key.fileobj.read(1024)  # type: ignore
+                            if not c:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
                             if key.fileobj is p.stdout:
-                                print(line, end="")
-                                stdout_result += line
+                                print(c, end="", flush=True)
+                                stdout_result += c
                             else:
-                                print(line, end="", file=sys.stderr)
-                                stderr_result += line
+                                print(c, end="", file=sys.stderr, flush=True)
+                                stderr_result += c
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
