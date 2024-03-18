@@ -44,7 +44,7 @@ impl FlatMapToMap {
                 if *width >= exprs.len() {
                     *relation = input.take_dangerous().map(std::mem::take(exprs));
                 }
-            } else if let TableFunc::UnnestArray { .. } = func {
+            } else if is_supported_unnest(func) {
                 let func = func.clone();
                 let exprs = exprs.clone();
                 use mz_expr::MirScalarExpr;
@@ -54,7 +54,7 @@ impl FlatMapToMap {
                     if let Ok(mut iter) = func.eval(&[row.iter().next().unwrap()], &temp_storage) {
                         match (iter.next(), iter.next()) {
                             (None, _) => {
-                                // If there are no elements in the literal array, no output.
+                                // If there are no elements in the literal argument, no output.
                                 relation.take_safely();
                             }
                             (Some((row, 1)), None) => {
@@ -71,4 +71,10 @@ impl FlatMapToMap {
             }
         }
     }
+}
+
+/// Returns `true` for `unnest_~` variants supported by [`FlatMapToMap`].
+fn is_supported_unnest(func: &TableFunc) -> bool {
+    use TableFunc::*;
+    matches!(func, UnnestArray { .. } | UnnestList { .. })
 }
