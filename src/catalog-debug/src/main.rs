@@ -80,9 +80,10 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Action {
-    /// Dumps the catalog contents to stdout in a human readable format.
+    /// Dumps the catalog contents to stdout in a human-readable format.
     /// Includes JSON for each key and value that can be hand edited and
-    /// then passed to the `edit` or `delete` commands.
+    /// then passed to the `edit` or `delete` commands. Also includes statistics
+    /// for each collection.
     Dump {
         /// Ignores the `audit_log` and `storage_usage` usage collections, which are often
         /// extremely large and not that useful for debugging.
@@ -91,6 +92,9 @@ enum Action {
         /// A list of collections to ignore.
         #[clap(long, short = 'i', action = clap::ArgAction::Append)]
         ignore: Vec<CollectionType>,
+        /// Only dumps the statistics of each collection and not the contents.
+        #[clap(long)]
+        stats_only: bool,
         /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
@@ -185,6 +189,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Action::Dump {
             ignore_large_collections,
             ignore,
+            stats_only,
             target,
         } => {
             let ignore: HashSet<_> = ignore.into_iter().collect();
@@ -193,7 +198,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             } else {
                 Box::new(io::stdout().lock())
             };
-            dump(openable_state, ignore_large_collections, ignore, target).await
+            dump(
+                openable_state,
+                ignore_large_collections,
+                ignore,
+                stats_only,
+                target,
+            )
+            .await
         }
         Action::Epoch { target } => {
             let target: Box<dyn Write> = if let Some(path) = target {
@@ -304,12 +316,14 @@ async fn dump(
     mut openable_state: Box<dyn OpenableDurableCatalogState>,
     ignore_large_collections: bool,
     ignore: HashSet<CollectionType>,
+    stats_only: bool,
     mut target: impl Write,
 ) -> Result<(), anyhow::Error> {
     fn dump_col<T: Collection>(
-        data: &mut BTreeMap<String, Vec<Dumped>>,
+        data: &mut BTreeMap<String, DumpedCollection>,
         trace: CollectionTrace<T>,
         ignore: &HashSet<CollectionType>,
+        stats_only: bool,
     ) where
         T::Key: Serialize + Debug + 'static,
         T::Value: Serialize + Debug + 'static,
@@ -318,13 +332,13 @@ async fn dump(
             return;
         }
 
-        let dumped = trace
+        let entries: Vec<_> = trace
             .values
             .into_iter()
             .map(|((k, v), timestamp, diff)| {
                 let key_json = serde_json::to_string(&k).expect("must serialize");
                 let value_json = serde_json::to_string(&v).expect("must serialize");
-                Dumped {
+                DumpedEntry {
                     key: Box::new(k),
                     value: Box::new(v),
                     key_json: UnescapedDebug(key_json),
@@ -334,7 +348,18 @@ async fn dump(
                 }
             })
             .collect();
-        data.insert(T::name(), dumped);
+
+        let total_count = entries.len();
+        let addition_count = entries.iter().filter(|entry| entry.diff == 1).count();
+        let retraction_count = entries.iter().filter(|entry| entry.diff == -1).count();
+        let entries = if stats_only { None } else { Some(entries) };
+        let dumped_col = DumpedCollection {
+            total_count,
+            addition_count,
+            retraction_count,
+            entries,
+        };
+        data.insert(T::name(), dumped_col);
     }
 
     let mut data = BTreeMap::new();
@@ -360,27 +385,27 @@ async fn dump(
     } = openable_state.trace().await?;
 
     if !ignore_large_collections {
-        dump_col(&mut data, audit_log, &ignore);
+        dump_col(&mut data, audit_log, &ignore, stats_only);
     }
-    dump_col(&mut data, clusters, &ignore);
-    dump_col(&mut data, introspection_sources, &ignore);
-    dump_col(&mut data, cluster_replicas, &ignore);
-    dump_col(&mut data, comments, &ignore);
-    dump_col(&mut data, configs, &ignore);
-    dump_col(&mut data, databases, &ignore);
-    dump_col(&mut data, default_privileges, &ignore);
-    dump_col(&mut data, id_allocator, &ignore);
-    dump_col(&mut data, items, &ignore);
-    dump_col(&mut data, roles, &ignore);
-    dump_col(&mut data, schemas, &ignore);
-    dump_col(&mut data, settings, &ignore);
+    dump_col(&mut data, clusters, &ignore, stats_only);
+    dump_col(&mut data, introspection_sources, &ignore, stats_only);
+    dump_col(&mut data, cluster_replicas, &ignore, stats_only);
+    dump_col(&mut data, comments, &ignore, stats_only);
+    dump_col(&mut data, configs, &ignore, stats_only);
+    dump_col(&mut data, databases, &ignore, stats_only);
+    dump_col(&mut data, default_privileges, &ignore, stats_only);
+    dump_col(&mut data, id_allocator, &ignore, stats_only);
+    dump_col(&mut data, items, &ignore, stats_only);
+    dump_col(&mut data, roles, &ignore, stats_only);
+    dump_col(&mut data, schemas, &ignore, stats_only);
+    dump_col(&mut data, settings, &ignore, stats_only);
     if !ignore_large_collections {
-        dump_col(&mut data, storage_usage, &ignore);
+        dump_col(&mut data, storage_usage, &ignore, stats_only);
     }
-    dump_col(&mut data, system_configurations, &ignore);
-    dump_col(&mut data, system_object_mappings, &ignore);
-    dump_col(&mut data, system_privileges, &ignore);
-    dump_col(&mut data, timestamps, &ignore);
+    dump_col(&mut data, system_configurations, &ignore, stats_only);
+    dump_col(&mut data, system_object_mappings, &ignore, stats_only);
+    dump_col(&mut data, system_privileges, &ignore, stats_only);
+    dump_col(&mut data, timestamps, &ignore, stats_only);
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())
@@ -460,7 +485,28 @@ async fn upgrade_check(
     Ok(())
 }
 
-struct Dumped {
+struct DumpedCollection {
+    total_count: usize,
+    addition_count: usize,
+    retraction_count: usize,
+    entries: Option<Vec<DumpedEntry>>,
+}
+
+impl std::fmt::Debug for DumpedCollection {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut debug = f.debug_struct("");
+        let debug = debug.field("total_count", &self.total_count);
+        let debug = debug.field("addition_count", &self.addition_count);
+        let debug = debug.field("retraction_count", &self.retraction_count);
+        let debug = match &self.entries {
+            Some(entries) => debug.field("entries", entries),
+            None => debug,
+        };
+        debug.finish()
+    }
+}
+
+struct DumpedEntry {
     key: Box<dyn std::fmt::Debug>,
     value: Box<dyn std::fmt::Debug>,
     key_json: UnescapedDebug,
@@ -469,7 +515,7 @@ struct Dumped {
     diff: Diff,
 }
 
-impl std::fmt::Debug for Dumped {
+impl std::fmt::Debug for DumpedEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("")
             .field("key", &self.key)
