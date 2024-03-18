@@ -541,7 +541,7 @@ def get_suite_name() -> str:
 
     retry_count = int(os.getenv("BUILDKITE_RETRY_COUNT", "0"))
     if retry_count > 0:
-        suite_name += f" ({retry_count})"
+        suite_name += f" (#{retry_count + 1})"
 
     return suite_name
 
