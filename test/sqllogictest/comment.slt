@@ -21,6 +21,11 @@ COMPLETE 0
 statement ok
 CREATE TABLE a ( x int8, y text, z jsonb );
 
+query T
+SELECT obj_description((SELECT oid FROM mz_tables WHERE name = 'a'), 'pg_class')
+----
+NULL
+
 statement ok
 COMMENT ON TABLE a IS 'foo_table';
 
@@ -33,6 +38,12 @@ query IT
 SELECT objsubid, description FROM pg_description;
 ----
 0  foo_table
+
+query TT
+SELECT obj_description((SELECT oid FROM mz_tables WHERE name = 'a'), 'pg_class'),
+       obj_description((SELECT oid FROM mz_tables WHERE name = 'a'), 'notexist')
+----
+foo_table  NULL
 
 statement ok
 COMMENT ON COLUMN a.y IS 'load_bearing';
@@ -48,6 +59,16 @@ SELECT objsubid, description FROM pg_description;
 ----
 0  foo_table
 2  load_bearing
+
+query T
+SELECT col_description((SELECT oid FROM mz_tables WHERE name = 'a'), 2)
+----
+load_bearing
+
+query T
+SELECT col_description((SELECT oid FROM mz_tables WHERE name = 'a'), 1)
+----
+NULL
 
 statement ok
 CREATE TABLE b ( ts timestamptz );
@@ -131,6 +152,11 @@ SELECT objsubid, description FROM pg_description;
 0  speed_up
 0  this_is_a_view
 
+query T
+SELECT obj_description((SELECT oid FROM mz_indexes WHERE name = 'b_idx'), 'pg_class')
+----
+speed_up
+
 statement ok
 DROP TABLE b CASCADE;
 
@@ -173,6 +199,25 @@ SELECT objsubid, description FROM pg_description;
 1  this_works
 0  this_is_a_view
 1  comment_mat_view_col
+
+query T
+SELECT obj_description((SELECT oid FROM mz_views WHERE name = 'c'), 'pg_class')
+----
+this_is_a_view
+
+query T
+SELECT col_description((SELECT oid FROM mz_views WHERE name = 'c'), 1)
+----
+this_works
+
+query TTTT
+SELECT obj_description((SELECT oid FROM mz_views WHERE name = 'c'), 'pg_class'),
+       col_description((SELECT oid FROM mz_views WHERE name = 'c'), 1),
+       obj_description(
+        (SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 'pg_class'),
+       col_description((SELECT oid FROM mz_materialized_views WHERE name = 'mv'), 1)
+----
+this_is_a_view  this_works  mat_foo  comment_mat_view_col
 
 statement ok
 DROP VIEW c;
@@ -225,6 +270,12 @@ SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 source  1  json_blob
 source  NULL  all_the_data
 cluster  NULL  careful_now
+
+query TT
+SELECT obj_description((SELECT oid FROM mz_sources WHERE name = 'my_webhook'), 'pg_class'),
+       col_description((SELECT oid FROM mz_sources WHERE name = 'my_webhook'), 1)
+----
+all_the_data  json_blob
 
 query IT
 SELECT objsubid, description FROM pg_description;
@@ -309,6 +360,12 @@ SELECT objsubid, description FROM pg_description;
 1 custom_type_x_comment
 2 custom_type_y_comment
 
+query TT
+SELECT obj_description((SELECT oid FROM mz_types WHERE name = 'custom_type'), 'pg_type'),
+       col_description((SELECT oid FROM mz_types WHERE name = 'custom_type'), 1)
+----
+custom_type_comment  NULL
+
 statement ok
 DROP CLUSTER comment_cluster CASCADE;
 
@@ -334,6 +391,11 @@ SELECT objsubid, description FROM pg_description;
 0 custom_type_comment
 1 custom_type_x_comment
 2 custom_type_y_comment
+
+query T
+SELECT obj_description((SELECT oid FROM mz_secrets WHERE name = 'my_secret'), 'pg_class')
+----
+NULL
 
 statement ok
 CREATE DATABASE comment_on_db;
@@ -366,6 +428,14 @@ query IT
 SELECT objsubid, description FROM pg_description;
 ----
 0  this_is_my_schema
+
+query TT
+SELECT obj_description(
+        (SELECT oid FROM mz_databases WHERE name = 'comment_on_db'), 'pg_class'),
+       obj_description(
+        (SELECT oid FROM mz_schemas WHERE name = 'comment_on_schema'), 'pg_namespace')
+----
+NULL  this_is_my_schema
 
 statement ok
 DROP DATABASE comment_on_db;
