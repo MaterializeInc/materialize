@@ -260,6 +260,7 @@ fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, St
         arity: flags.remove("arity"),
         humanized_exprs: flags.remove("humanized_exprs"),
         column_names: flags.remove("column_names"),
+        keys: flags.remove("keys"),
         types: flags.remove("types"),
         redacted: false,
         join_impls: false,
