@@ -98,7 +98,7 @@ class Testdrive(Service):
             entrypoint.append(f"--materialize-param={k}={v}")
 
         if default_timeout is None:
-            default_timeout = "120s"
+            default_timeout = "360s"
         entrypoint.append(f"--default-timeout={default_timeout}")
 
         if kafka_default_partitions:

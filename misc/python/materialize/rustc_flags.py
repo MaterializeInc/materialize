@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from enum import Enum
+
 """rustc flags."""
 
 # Flags to enable code coverage.
@@ -22,8 +24,37 @@ coverage = [
     "-Cllvm-args=-runtime-counter-relocation",
 ]
 
+
+class Sanitizer(Enum):
+    """What sanitizer to use"""
+
+    address = "address"
+    """The AddressSanitizer, see https://clang.llvm.org/docs/AddressSanitizer.html"""
+
+    hwaddress = "hwaddress"
+    """The HWAddressSanitizer, see https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html"""
+
+    cfi = "cfi"
+    """Control Flow Integrity, see https://clang.llvm.org/docs/ControlFlowIntegrity.html"""
+
+    thread = "thread"
+    """The ThreadSanitizer, see https://clang.llvm.org/docs/ThreadSanitizer.html"""
+
+    leak = "leak"
+    """The LeakSanitizer, see https://clang.llvm.org/docs/LeakSanitizer.html"""
+
+    undefined = "undefined"
+    """The UndefinedBehavior, see https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html"""
+
+    none = "none"
+    """No sanitizer"""
+
+    def __str__(self) -> str:
+        return self.value
+
+
 sanitizer = {
-    "address": [
+    Sanitizer.address: [
         "-Zsanitizer=address",
         "-Cllvm-args=-asan-use-after-scope",
         "-Cllvm-args=-asan-use-after-return=always",
@@ -32,43 +63,43 @@ sanitizer = {
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
     ],
-    "hwaddress": [
+    Sanitizer.hwaddress: [
         "-Zsanitizer=hwaddress",
         "-Ctarget-feature=+tagged-globals",
         "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clink-arg=-fsanitize=hwaddress",
-        "-Clinkerclang++",
+        "-Clinker=clang++",
     ],
-    "cfi": [
+    Sanitizer.cfi: [
         "-Zsanitizer=cfi",
         "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clink-arg=-fsanitize=cfi",
-        "-Clinkerclang++",
+        "-Clinker=clang++",
     ],
-    "thread": [
+    Sanitizer.thread: [
         "-Zsanitizer=thread",
         "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clink-arg=-fsanitize=thread",
-        "-Clinkerclang++",
+        "-Clinker=clang++",
     ],
-    "leak": [
+    Sanitizer.leak: [
         "-Zsanitizer=leak",
         "-Cdebug-assertions=off",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clink-arg=-fsanitize=leak",
-        "-Clinkerclang++",
+        "-Clinker=clang++",
     ],
-    "undefined": [],
+    Sanitizer.undefined: [],
 }
 
 sanitizer_cflags = {
-    "address": ["-fsanitize=address"],
-    "hwaddress": ["-fsanitize=hwaddress"],
-    "cfi": ["-fsanitize=cfi"],
-    "thread": ["-fsanitize=thread"],
-    "leak": ["-fsanitize=leak"],
-    "undefined": ["-fsanitize=undefined"],
+    Sanitizer.address: ["-fsanitize=address"],
+    Sanitizer.hwaddress: ["-fsanitize=hwaddress"],
+    Sanitizer.cfi: ["-fsanitize=cfi"],
+    Sanitizer.thread: ["-fsanitize=thread"],
+    Sanitizer.leak: ["-fsanitize=leak"],
+    Sanitizer.undefined: ["-fsanitize=undefined"],
 }

@@ -192,7 +192,7 @@ def _enter_builder(arch: Arch, channel: str | None = None) -> list[str]:
             f"MZ_DEV_CI_BUILDER_ARCH={arch}",
             "bin/ci-builder",
             "run",
-            channel if channel else "stable",
+            channel if channel else "nightly",
         ]
 
 

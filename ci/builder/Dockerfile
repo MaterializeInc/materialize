@@ -214,6 +214,9 @@ RUN mkdir rust \
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
+# Shims for sanitizers
+COPY sanshim/$ARCH_GCC /sanshim
+
 # Install the locked version of our typechecker -- it'll be invoked via `npx`,
 # so using the same command here should ensure it's installed and cached in the
 # right place
@@ -322,8 +325,3 @@ RUN userdel -r ubuntu
 # Ensure that all python output is unbuffered, otherwise it is not
 # logged properly in Buildkite
 ENV PYTHONUNBUFFERED=1
-
-RUN mkdir /asanshim \
-    && echo "#!/usr/bin/bash\nexec /usr/bin/clang -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib \"\$@\"" > /asanshim/cc \
-    && echo "#!/usr/bin/bash\nexec /usr/bin/clang++ -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib \"\$@\"" > /asanshim/c++ \
-    && chmod +x /asanshim/cc /asanshim/c++

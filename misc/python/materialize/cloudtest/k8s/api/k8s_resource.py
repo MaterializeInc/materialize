@@ -16,6 +16,7 @@ from materialize import MZ_ROOT, mzbuild, ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
 from materialize.cloudtest.util.common import run_process_with_error_information
 from materialize.cloudtest.util.wait import wait
+from materialize.rustc_flags import Sanitizer
 
 
 class K8sResource:
@@ -86,7 +87,7 @@ class K8sResource:
             return image_name
         else:
             coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
-            sanitizer = os.getenv("CI_SANITIZER", "none")
+            sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
             repo = mzbuild.Repository(
                 MZ_ROOT,
                 release_mode=release_mode,

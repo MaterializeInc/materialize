@@ -12,13 +12,18 @@
 from pathlib import Path
 
 from materialize import git, mzbuild
+from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
 
 def main() -> None:
     repos = [
-        mzbuild.Repository(Path("."), Arch.X86_64, coverage=False, sanitizer="none"),
-        mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False, sanitizer="none"),
+        mzbuild.Repository(
+            Path("."), Arch.X86_64, coverage=False, sanitizer=Sanitizer.none
+        ),
+        mzbuild.Repository(
+            Path("."), Arch.AARCH64, coverage=False, sanitizer=Sanitizer.none
+        ),
     ]
     print("--- Tagging development Docker images")
     deps = [

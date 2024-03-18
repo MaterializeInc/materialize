@@ -13,13 +13,14 @@ from pathlib import Path
 from ci.deploy.deploy_util import rust_version
 from materialize import mzbuild, spawn
 from materialize.mz_version import MzLspServerVersion
+from materialize.rustc_flags import Sanitizer
 
 from . import deploy_util
 from .deploy_util import MZ_LSP_SERVER_VERSION
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."), coverage=False, sanitizer="none")
+    repo = mzbuild.Repository(Path("."), coverage=False, sanitizer=Sanitizer.none)
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
     print("--- Checking version")

@@ -19,6 +19,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
 SERVICES = [
@@ -70,8 +71,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
-    sanitizer = os.getenv("CI_SANITIZER", "none")
-    print(f"sanitizer: {sanitizer}")
+    sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     extra_env = {}
 
     if coverage:
@@ -138,7 +138,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env=env,
             )
         else:
-            if sanitizer != "none":
+            if sanitizer != Sanitizer.none:
                 cflags = [
                     f"--target={target(Arch.host())}",
                     f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
@@ -158,7 +158,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "CPP": "clang-cpp-15",
                     "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                     "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                    "PATH": f"/asanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "PATH": f"/sanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                     "RUSTFLAGS": (
                         env.get("RUSTFLAGS", "")
                         + " "
@@ -208,7 +208,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             partition = buildkite.get_parallelism_index() + 1
             total = buildkite.get_parallelism_count()
 
-            if sanitizer != "none":
+            if sanitizer != Sanitizer.none:
                 # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
                 metadata = json.loads(
                     subprocess.check_output(

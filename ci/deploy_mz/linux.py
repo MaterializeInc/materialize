@@ -12,13 +12,14 @@ from pathlib import Path
 
 from materialize import mzbuild, spawn
 from materialize.mz_version import MzCliVersion
+from materialize.rustc_flags import Sanitizer
 
 from . import deploy_util
 from .deploy_util import APT_BUCKET, MZ_CLI_VERSION
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."), coverage=False, sanitizer="none")
+    repo = mzbuild.Repository(Path("."), coverage=False, sanitizer=Sanitizer.none)
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
     print("--- Checking version")

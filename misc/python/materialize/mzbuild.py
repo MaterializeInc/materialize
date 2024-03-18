@@ -38,6 +38,7 @@ from typing import IO, Any, cast
 import yaml
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
 
@@ -77,7 +78,7 @@ class RepositoryDetails:
         arch: Arch,
         release_mode: bool,
         coverage: bool,
-        sanitizer: str,
+        sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
     ):
@@ -246,8 +247,8 @@ class CargoPreImage(PreImage):
             flags += "release"
         if self.rd.coverage:
             flags += "coverage"
-        if self.rd.sanitizer != "none":
-            flags += self.rd.sanitizer
+        if self.rd.sanitizer != Sanitizer.none:
+            flags += self.rd.sanitizer.value
         flags.sort()
         return ",".join(flags)
 
@@ -276,12 +277,11 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
-        print(f"sanitizer: {rd.sanitizer}")
         rustflags = (
             rustc_flags.coverage
             if rd.coverage
             else rustc_flags.sanitizer[rd.sanitizer]
-            if rd.sanitizer != "none"
+            if rd.sanitizer != Sanitizer.none
             else ["--cfg=tokio_unstable"]
         )
         cflags = (
@@ -293,7 +293,7 @@ class CargoBuild(CargoPreImage):
                 f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
             ]
             + rustc_flags.sanitizer_cflags[rd.sanitizer]
-            if rd.sanitizer != "none"
+            if rd.sanitizer != Sanitizer.none
             else []
         )
         extra_env = (
@@ -307,9 +307,9 @@ class CargoBuild(CargoPreImage):
                 "CPP": "clang-cpp-15",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                "PATH": f"/asanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             }
-            if rd.sanitizer != "none"
+            if rd.sanitizer != Sanitizer.none
             else {}
         )
 
@@ -325,7 +325,7 @@ class CargoBuild(CargoPreImage):
 
         if rd.release_mode:
             cargo_build.append("--release")
-        if rd.sanitizer != "none":
+        if rd.sanitizer != Sanitizer.none:
             # ASan doesn't work with jemalloc
             cargo_build.append("--no-default-features")
 
@@ -887,7 +887,7 @@ class Repository:
         arch: Arch = Arch.host(),
         release_mode: bool = True,
         coverage: bool = False,
-        sanitizer: str = "none",
+        sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = "materialize",
         image_prefix: str = "",
     ):
@@ -966,9 +966,10 @@ class Repository:
         )
         parser.add_argument(
             "--sanitizer",
-            help="whether to enable a sanitizer (address, thread, leak, memory)",
-            default=os.getenv("CI_SANITIZER", "none"),
-            type=str,
+            help="whether to enable a sanitizer",
+            default=Sanitizer[os.getenv("CI_SANITIZER", "none")],
+            type=Sanitizer,
+            choices=Sanitizer,
         )
         parser.add_argument(
             "--arch",

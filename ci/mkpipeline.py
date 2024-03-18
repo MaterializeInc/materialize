@@ -36,6 +36,7 @@ from materialize import mzbuild, spawn
 from materialize.ci_util.trim_pipeline import permit_rerunning_successful_steps
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
+from materialize.rustc_flags import Sanitizer
 from materialize.ui import UIError
 from materialize.version_list import get_previous_published_version
 from materialize.xcompile import Arch
@@ -78,7 +79,10 @@ so it is executed.""",
 
     parser.add_argument("--coverage", action="store_true")
     parser.add_argument(
-        "--sanitizer", default=os.getenv("CI_SANITIZER", "none"), type=str
+        "--sanitizer",
+        default=Sanitizer[os.getenv("CI_SANITIZER", "none")],
+        type=Sanitizer,
+        choices=Sanitizer,
     )
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
@@ -98,7 +102,7 @@ so it is executed.""",
     pipeline = yaml.safe_load(raw)
 
     if args.pipeline == "test":
-        if args.coverage or args.sanitizer != "none":
+        if args.coverage or args.sanitizer != Sanitizer.none:
             print("Coverage/Sanitizer build, not trimming pipeline")
         elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
             print("On main branch or tag, so not trimming pipeline")
@@ -114,8 +118,8 @@ so it is executed.""",
             print("--- Trimming unchanged steps from pipeline")
             trim_tests_pipeline(pipeline, args.coverage, args.sanitizer)
 
-    if args.sanitizer != "none":
-        pipeline.setdefault("env", {})["CI_SANITIZER"] = args.sanitizer
+    if args.sanitizer != Sanitizer.none:
+        pipeline.setdefault("env", {})["CI_SANITIZER"] = args.sanitizer.value
 
         def visit(step: dict[str, Any]) -> None:
             # ASan runs are slower ...
@@ -375,7 +379,7 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
     pipeline["steps"].insert(0, selection_step)
 
 
-def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: str) -> None:
+def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
     Steps are assigned inputs in two ways:
@@ -491,7 +495,7 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool, sanitizer: str) -> None:
     ]
 
 
-def trim_builds(pipeline: Any, coverage: bool, sanitizer: str) -> None:
+def trim_builds(pipeline: Any, coverage: bool, sanitizer: Sanitizer) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
 
     def deps_publish(arch: Arch) -> mzbuild.DependencySet:
