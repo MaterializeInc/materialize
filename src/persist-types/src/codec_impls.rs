@@ -43,7 +43,9 @@ impl PartEncoder<'_, ()> for UnitSchema {
 }
 
 impl PartDecoder<'_, ()> for UnitSchema {
-    fn decode(&self, _idx: usize, _val: &mut ()) {}
+    fn decode(&self, _idx: usize) -> () {}
+
+    fn decode_into(&self, _idx: usize, _val: &mut ()) {}
 }
 
 impl Schema<()> for UnitSchema {
@@ -119,7 +121,11 @@ pub struct SimpleDecoder<'a, X, T: Data> {
 }
 
 impl<'a, X, T: Data> PartDecoder<'a, X> for SimpleDecoder<'a, X, T> {
-    fn decode(&self, idx: usize, val: &mut X) {
+    fn decode(&self, _idx: usize) -> X {
+        unreachable!("TODO")
+    }
+
+    fn decode_into(&self, idx: usize, val: &mut X) {
         (self.decode)(ColumnGet::<T>::get(self.col, idx), val)
     }
 }
@@ -766,7 +772,11 @@ impl<T> PartEncoder<'_, T> for TodoSchema<T> {
 }
 
 impl<T> PartDecoder<'_, T> for TodoSchema<T> {
-    fn decode(&self, _idx: usize, _val: &mut T) {
+    fn decode(&self, _idx: usize) -> T {
+        panic!("TODO")
+    }
+
+    fn decode_into(&self, _idx: usize, _val: &mut T) {
         panic!("TODO")
     }
 }

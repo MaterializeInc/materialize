@@ -239,10 +239,13 @@ pub trait PartEncoder<'a, T> {
 /// types.
 pub trait PartDecoder<'a, T> {
     /// Decodes the value at the given index.
+    fn decode(&self, idx: usize) -> T;
+
+    /// Decodes the value at the given index, into the provided instance.
     ///
     /// Implementations of this should reuse allocations within the passed value
     /// whenever possible.
-    fn decode(&self, idx: usize, val: &mut T);
+    fn decode_into(&self, idx: usize, val: &mut T);
 }
 
 /// A description of the structure of a [crate::Codec] implementor.
@@ -288,7 +291,7 @@ pub fn validate_roundtrip<T: Codec + Default + PartialEq + Debug>(
     let mut actual = T::default();
     assert_eq!(part.len(), 1);
     let part = part.key_ref();
-    schema.decoder(part)?.decode(0, &mut actual);
+    schema.decoder(part)?.decode_into(0, &mut actual);
     if &actual != val {
         Err(format!(
             "validate_roundtrip expected {:?} but got {:?}",

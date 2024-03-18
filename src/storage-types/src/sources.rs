@@ -946,7 +946,6 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
 #[repr(transparent)]
 pub struct SourceData(pub Result<Row, DataflowError>);
 
-#[cfg(test)]
 impl Default for SourceData {
     fn default() -> Self {
         SourceData(Ok(Row::default()))
@@ -1090,7 +1089,13 @@ pub struct SourceDataDecoder<'a> {
 }
 
 impl<'a> PartDecoder<'a, SourceData> for SourceDataDecoder<'a> {
-    fn decode(&self, idx: usize, val: &mut SourceData) {
+    fn decode(&self, idx: usize) -> SourceData {
+        let mut buf = SourceData::default();
+        Self::decode_into(self, idx, &mut buf);
+        buf
+    }
+
+    fn decode_into(&self, idx: usize, val: &mut SourceData) {
         let err = ColumnGet::<Option<Vec<u8>>>::get(self.err, idx);
         match (self.ok_validity.get(idx), err) {
             (true, None) => {
