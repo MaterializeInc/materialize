@@ -302,7 +302,10 @@ mod relation {
         let ident = input.parse::<syn::Ident>()?;
         let func = match ident.to_string().to_lowercase().as_str() {
             "unnest_list" => UnnestList {
-                el_typ: mz_repr::ScalarType::Bool, // FIXME
+                el_typ: ScalarType::Int64, // FIXME
+            },
+            "unnest_array" => UnnestArray {
+                el_typ: ScalarType::Int64, // FIXME
             },
             "wrap1" => Wrap {
                 types: vec![
@@ -316,6 +319,14 @@ mod relation {
                     ScalarType::Int64.nullable(true), // FIXME
                 ],
                 width: 2,
+            },
+            "wrap3" => Wrap {
+                types: vec![
+                    ScalarType::Int64.nullable(true), // FIXME
+                    ScalarType::Int64.nullable(true), // FIXME
+                    ScalarType::Int64.nullable(true), // FIXME
+                ],
+                width: 3,
             },
             "generate_series" => GenerateSeriesInt64,
             "jsonb_object_keys" => JsonbObjectKeys,
@@ -657,7 +668,7 @@ mod relation {
 /// Support for parsing [mz_expr::MirScalarExpr].
 mod scalar {
     use mz_expr::{BinaryFunc, ColumnOrder, MirScalarExpr};
-    use mz_repr::{AsColumnType, Datum, Row};
+    use mz_repr::{AsColumnType, Datum, Row, RowArena, ScalarType};
 
     use super::*;
 
@@ -891,8 +902,20 @@ mod scalar {
             parse_literal_ok(input)
         } else if lookahead.peek(kw::error) {
             parse_literal_err(input)
+        } else if lookahead.peek(kw::array) {
+            parse_array(input)
+        } else if lookahead.peek(kw::list) {
+            parse_list(input)
         } else if lookahead.peek(syn::Ident) {
             parse_apply(input)
+        } else if lookahead.peek(syn::token::Brace) {
+            let inner;
+            syn::braced!(inner in input);
+            parse_literal_array(&inner)
+        } else if lookahead.peek(syn::token::Bracket) {
+            let inner;
+            syn::bracketed!(inner in input);
+            parse_literal_list(&inner)
         } else if lookahead.peek(syn::token::Paren) {
             let inner;
             syn::parenthesized!(inner in input);
@@ -969,6 +992,66 @@ mod scalar {
             Err(Error::new(msg.span(), "expected `internal error: $msg`"))
         }?;
         Ok(MirScalarExpr::Literal(Err(err), bool::as_column_type())) // FIXME
+    }
+
+    fn parse_literal_array(input: ParseStream) -> Result {
+        use mz_expr::func::VariadicFunc::*;
+
+        let elem_type = ScalarType::Int64; // FIXME
+        let func = ArrayCreate { elem_type };
+        let exprs = input.parse_comma_sep(parse_literal_ok)?;
+
+        // Evaluate into a datum
+        let temp_storage = RowArena::default();
+        let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
+        let typ = ScalarType::Array(Box::new(ScalarType::Int64)); // FIXME
+        Ok(MirScalarExpr::literal_ok(datum, typ))
+    }
+
+    fn parse_literal_list(input: ParseStream) -> Result {
+        use mz_expr::func::VariadicFunc::*;
+
+        let elem_type = ScalarType::Int64; // FIXME
+        let func = ListCreate { elem_type };
+        let exprs = input.parse_comma_sep(parse_literal_ok)?;
+
+        // Evaluate into a datum
+        let temp_storage = RowArena::default();
+        let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
+        let typ = ScalarType::Array(Box::new(ScalarType::Int64)); // FIXME
+        Ok(MirScalarExpr::literal_ok(datum, typ))
+    }
+
+    fn parse_array(input: ParseStream) -> Result {
+        use mz_expr::func::VariadicFunc::*;
+
+        input.parse::<kw::array>()?;
+
+        // parse brackets
+        let inner;
+        syn::bracketed!(inner in input);
+
+        let elem_type = ScalarType::Int64; // FIXME
+        let func = ArrayCreate { elem_type };
+        let exprs = inner.parse_comma_sep(parse_expr)?;
+
+        Ok(MirScalarExpr::CallVariadic { func, exprs })
+    }
+
+    fn parse_list(input: ParseStream) -> Result {
+        use mz_expr::func::VariadicFunc::*;
+
+        input.parse::<kw::list>()?;
+
+        // parse brackets
+        let inner;
+        syn::bracketed!(inner in input);
+
+        let elem_type = ScalarType::Int64; // FIXME
+        let func = ListCreate { elem_type };
+        let exprs = inner.parse_comma_sep(parse_expr)?;
+
+        Ok(MirScalarExpr::CallVariadic { func, exprs })
     }
 
     fn parse_apply(input: ParseStream) -> Result {
@@ -1473,6 +1556,7 @@ mod kw {
     syn::custom_keyword!(aggregates);
     syn::custom_keyword!(AND);
     syn::custom_keyword!(ArrangeBy);
+    syn::custom_keyword!(array);
     syn::custom_keyword!(asc);
     syn::custom_keyword!(Constant);
     syn::custom_keyword!(CrossJoin);
@@ -1493,6 +1577,7 @@ mod kw {
     syn::custom_keyword!(Join);
     syn::custom_keyword!(keys);
     syn::custom_keyword!(limit);
+    syn::custom_keyword!(list);
     syn::custom_keyword!(Map);
     syn::custom_keyword!(monotonic);
     syn::custom_keyword!(Mutually);
