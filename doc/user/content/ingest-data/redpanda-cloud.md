@@ -15,7 +15,7 @@ with the Postgres ones."
 
 This guide goes through the required steps to connect Materialize to a Redpanda
 Cloud cluster. If you already have a Redpanda Cloud cluster up and running,
-skip straight to [Step 4. Download Redpanda Broker CA certificate](#step-4-download-the-broker-ca-certificate).
+skip straight to [Step 2](#step-2-create-a-user).
 
 ## Step 1. Create a Redpanda Cloud cluster
 
