@@ -16,6 +16,8 @@ import pandas as pd
 from materialize.buildkite_insights.buildkite_api.buildkite_config import MZ_PIPELINES
 from materialize.buildkite_insights.buildkite_api.buildkite_constants import (
     BUILDKITE_BUILD_STATES,
+    BUILDKITE_BUILD_STEP_STATES,
+    BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
 )
 from materialize.buildkite_insights.cache import builds_cache
 from materialize.buildkite_insights.cache.cache_constants import (
@@ -109,6 +111,7 @@ def main(
     max_fetches: int,
     branch: str | None,
     build_states: list[str],
+    build_step_states: list[str],
     output_type: str,
 ) -> None:
     builds_data = builds_cache.get_or_query_builds(
@@ -117,6 +120,7 @@ def main(
     step_outcomes = extract_build_step_outcomes(
         builds_data=builds_data,
         selected_build_steps=build_steps,
+        build_step_states=build_step_states,
     )
     job_outcomes = step_outcomes_to_job_outcomes(step_outcomes)
     print_data(job_outcomes, build_steps, output_type)
@@ -148,6 +152,12 @@ if __name__ == "__main__":
         choices=BUILDKITE_BUILD_STATES,
     )
     parser.add_argument(
+        "--build-step-state",
+        action="append",
+        default=BUILDKITE_RELEVANT_COMPLETED_BUILD_STEP_STATES,
+        choices=BUILDKITE_BUILD_STEP_STATES,
+    )
+    parser.add_argument(
         "--output-type",
         choices=[OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT, OUTPUT_TYPE_CSV],
         default=OUTPUT_TYPE_TXT,
@@ -165,5 +175,6 @@ if __name__ == "__main__":
         args.max_fetches,
         args.branch if args.branch != "*" else None,
         args.build_state,
+        args.build_step_state,
         args.output_type,
     )
