@@ -664,6 +664,10 @@ impl SessionClient {
             })
     }
 
+    pub async fn dump_coordinator_state(&mut self) -> Result<serde_json::Value, anyhow::Error> {
+        self.send_without_session(|tx| Command::Dump { tx }).await
+    }
+
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
     pub fn retire_execute(
@@ -806,7 +810,8 @@ impl SessionClient {
                 | Command::SetSystemVars { .. }
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
-                | Command::CheckConsistency { .. } => {}
+                | Command::CheckConsistency { .. }
+                | Command::Dump { .. } => {}
             };
             cmd
         });

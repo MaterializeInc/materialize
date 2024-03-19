@@ -38,3 +38,11 @@ pub async fn handle_coordinator_check(mut client: AuthedClient) -> impl IntoResp
     };
     (TypedHeader(ContentType::json()), response.to_string())
 }
+
+pub async fn handle_coordinator_dump(mut client: AuthedClient) -> impl IntoResponse {
+    let result = match client.client.dump_coordinator_state().await {
+        Ok(dump) => dump,
+        Err(e) => serde_json::json!({ "err": e.to_string() }),
+    };
+    (TypedHeader(ContentType::json()), result.to_string())
+}

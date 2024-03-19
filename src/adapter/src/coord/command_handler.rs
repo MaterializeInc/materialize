@@ -219,6 +219,10 @@ impl Coordinator {
                 Command::CheckConsistency { tx } => {
                     let _ = tx.send(self.check_consistency());
                 }
+
+                Command::Dump { tx } => {
+                    let _ = tx.send(self.dump());
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
