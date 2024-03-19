@@ -25,6 +25,7 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, trace, warn};
 
+use crate::controller::sequential_hydration::SequentialHydration;
 use crate::controller::ReplicaId;
 use crate::logging::LoggingConfig;
 use crate::metrics::ReplicaMetrics;
@@ -32,7 +33,8 @@ use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-type Client<T> = Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>;
+type Client<T> =
+    SequentialHydration<Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>, T>;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
@@ -180,7 +182,7 @@ where
                     match ComputeGrpcClient::connect_partitioned(dests, version, client_params)
                         .await
                     {
-                        Ok(client) => Ok(client),
+                        Ok(client) => Ok(SequentialHydration::new(client)),
                         Err(e) => {
                             if state.i >= mz_service::retry::INFO_MIN_RETRIES {
                                 info!(
