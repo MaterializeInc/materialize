@@ -79,7 +79,7 @@ def defs(
         # Extract materialized view definitions
         # -------------------------------------
 
-        for item in db.catalog_items(database, schema, name):
+        for item in db.catalog_items(database, schema, name, system=False):
             item_database = sql.identifier(item["database"])
             item_schema = sql.identifier(item["schema"])
             item_name = sql.identifier(item["name"])
@@ -135,6 +135,7 @@ def plans(
     explain_stages: set[ExplainStage],
     explain_format: ExplainFormat,
     suffix: str | None = None,
+    system: bool = False,
 ) -> None:
     """
     Extract EXPLAIN plans for selected catalog items.
@@ -170,11 +171,14 @@ def plans(
             require_ssl=db_require_ssl,
         )
     ) as db:
-        for item in db.catalog_items(database, schema, name):
+        for item in db.catalog_items(database, schema, name, system):
             item_database = sql.identifier(item["database"])
             item_schema = sql.identifier(item["schema"])
             item_name = sql.identifier(item["name"])
-            fqname = f"{item_database}.{item_schema}.{item_name}"
+            if item["database"] == "mz":  # don't prepend pseudo-database `mz`
+                fqname = f"{item_schema}.{item_name}"
+            else:
+                fqname = f"{item_database}.{item_schema}.{item_name}"
 
             try:
                 item_type = ItemType(item["type"])

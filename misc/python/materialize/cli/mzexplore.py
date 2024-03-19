@@ -138,6 +138,13 @@ class Opt:
         metavar="FORMAT",
     )
 
+    system: dict[str, Any] = dict(
+        is_flag=True,
+        show_default=True,
+        default=False,
+        help="Inspect system or user tables.",
+    )
+
 
 def is_documented_by(original: Any) -> Any:
     def wrapper(target):
@@ -179,16 +186,16 @@ def defs(
 ) -> None:
     try:
         api.extract.defs(
-            target,
-            database,
-            schema,
-            name,
-            db_port,
-            db_host,
-            db_user,
-            db_pass,
-            db_require_ssl,
-            mzfmt,
+            target=target,
+            database=database,
+            schema=schema,
+            name=name,
+            db_port=db_port,
+            db_host=db_host,
+            db_user=db_user,
+            db_pass=db_pass,
+            db_require_ssl=db_require_ssl,
+            mzfmt=mzfmt,
         )
     except Exception as e:
         import traceback
@@ -211,6 +218,7 @@ def defs(
 @click.option("--with", "-w", "explain_options", **Opt.explain_options)
 @click.option("--stage", "-s", "explain_stages", **Opt.explain_stage)
 @click.option("--format", "-f", "explain_format", **Opt.explain_format)
+@click.option("--system/--user", "system", **Opt.system)
 @click.option("--suffix", **Opt.explain_suffix)
 @is_documented_by(api.extract.plans)
 def plans(
@@ -227,24 +235,26 @@ def plans(
     explain_options: list[api.ExplainFlag],
     explain_stages: set[api.ExplainStage],
     explain_format: api.ExplainFormat,
+    system: bool,
     suffix: str | None = None,
 ) -> None:
     try:
         api.extract.plans(
-            target,
-            database,
-            schema,
-            name,
-            db_port,
-            db_host,
-            db_user,
-            db_pass,
-            db_require_ssl,
-            explainee_type,
-            explain_options,
-            explain_stages,
-            explain_format,
-            suffix,
+            target=target,
+            database=database,
+            schema=schema,
+            name=name,
+            db_port=db_port,
+            db_host=db_host,
+            db_user=db_user,
+            db_pass=db_pass,
+            db_require_ssl=db_require_ssl,
+            explainee_type=explainee_type,
+            explain_options=explain_options,
+            explain_stages=explain_stages,
+            explain_format=explain_format,
+            system=system,
+            suffix=suffix,
         )
     except Exception as e:
         import traceback
