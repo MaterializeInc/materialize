@@ -1583,80 +1583,44 @@ impl Trace {
         let mut trace = Trace::new();
         for StateUpdate { kind, ts, diff } in snapshot {
             match kind {
-                StateUpdateKind::AuditLog(k, v) => {
-                    trace.audit_log.values.push(((k, v), ts.to_string(), diff))
-                }
-                StateUpdateKind::Cluster(k, v) => {
-                    trace.clusters.values.push(((k, v), ts.to_string(), diff))
-                }
+                StateUpdateKind::AuditLog(k, v) => trace.audit_log.values.push(((k, v), ts, diff)),
+                StateUpdateKind::Cluster(k, v) => trace.clusters.values.push(((k, v), ts, diff)),
                 StateUpdateKind::ClusterReplica(k, v) => {
-                    trace
-                        .cluster_replicas
-                        .values
-                        .push(((k, v), ts.to_string(), diff))
+                    trace.cluster_replicas.values.push(((k, v), ts, diff))
                 }
-                StateUpdateKind::Comment(k, v) => {
-                    trace.comments.values.push(((k, v), ts.to_string(), diff))
-                }
-                StateUpdateKind::Config(k, v) => {
-                    trace.configs.values.push(((k, v), ts.to_string(), diff))
-                }
-                StateUpdateKind::Database(k, v) => {
-                    trace.databases.values.push(((k, v), ts.to_string(), diff))
-                }
+                StateUpdateKind::Comment(k, v) => trace.comments.values.push(((k, v), ts, diff)),
+                StateUpdateKind::Config(k, v) => trace.configs.values.push(((k, v), ts, diff)),
+                StateUpdateKind::Database(k, v) => trace.databases.values.push(((k, v), ts, diff)),
                 StateUpdateKind::DefaultPrivilege(k, v) => {
-                    trace
-                        .default_privileges
-                        .values
-                        .push(((k, v), ts.to_string(), diff))
+                    trace.default_privileges.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Epoch(_) => {
                     // Epoch not included in trace.
                 }
                 StateUpdateKind::IdAllocator(k, v) => {
-                    trace
-                        .id_allocator
-                        .values
-                        .push(((k, v), ts.to_string(), diff))
+                    trace.id_allocator.values.push(((k, v), ts, diff))
                 }
-                StateUpdateKind::IntrospectionSourceIndex(k, v) => trace
-                    .introspection_sources
-                    .values
-                    .push(((k, v), ts.to_string(), diff)),
-                StateUpdateKind::Item(k, v) => {
-                    trace.items.values.push(((k, v), ts.to_string(), diff))
+                StateUpdateKind::IntrospectionSourceIndex(k, v) => {
+                    trace.introspection_sources.values.push(((k, v), ts, diff))
                 }
-                StateUpdateKind::Role(k, v) => {
-                    trace.roles.values.push(((k, v), ts.to_string(), diff))
-                }
-                StateUpdateKind::Schema(k, v) => {
-                    trace.schemas.values.push(((k, v), ts.to_string(), diff))
-                }
-                StateUpdateKind::Setting(k, v) => {
-                    trace.settings.values.push(((k, v), ts.to_string(), diff))
-                }
+                StateUpdateKind::Item(k, v) => trace.items.values.push(((k, v), ts, diff)),
+                StateUpdateKind::Role(k, v) => trace.roles.values.push(((k, v), ts, diff)),
+                StateUpdateKind::Schema(k, v) => trace.schemas.values.push(((k, v), ts, diff)),
+                StateUpdateKind::Setting(k, v) => trace.settings.values.push(((k, v), ts, diff)),
                 StateUpdateKind::StorageUsage(k, v) => {
-                    trace
-                        .storage_usage
-                        .values
-                        .push(((k, v), ts.to_string(), diff))
+                    trace.storage_usage.values.push(((k, v), ts, diff))
                 }
-                StateUpdateKind::SystemConfiguration(k, v) => trace
-                    .system_configurations
-                    .values
-                    .push(((k, v), ts.to_string(), diff)),
-                StateUpdateKind::SystemObjectMapping(k, v) => trace
-                    .system_object_mappings
-                    .values
-                    .push(((k, v), ts.to_string(), diff)),
+                StateUpdateKind::SystemConfiguration(k, v) => {
+                    trace.system_configurations.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::SystemObjectMapping(k, v) => {
+                    trace.system_object_mappings.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::SystemPrivilege(k, v) => {
-                    trace
-                        .system_privileges
-                        .values
-                        .push(((k, v), ts.to_string(), diff))
+                    trace.system_privileges.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Timestamp(k, v) => {
-                    trace.timestamps.values.push(((k, v), ts.to_string(), diff))
+                    trace.timestamps.values.push(((k, v), ts, diff))
                 }
             }
         }
