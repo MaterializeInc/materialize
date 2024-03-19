@@ -2269,17 +2269,17 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             }) => Int32, 1375;
         },
         // SQL closely matches PostgreSQL's implementation.
-        // We don't yet support casting to regnamespace, so need to lookup the oid
-        // of 'pg_catalog' via 'pg_namespace'.
+        // We don't yet support casting to regnamespace, so use our constant for
+        // the oid of 'pg_catalog'.
         "obj_description" => Scalar {
-            params!(Oid, String) => sql_impl_func(
+            params!(Oid, String) => sql_impl_func(&format!(
                 "(SELECT description FROM pg_description
                   WHERE objoid = $1
                     AND classoid = (
-                      SELECT oid FROM pg_class WHERE relname = $2 AND relnamespace = (
-                        SELECT oid FROM pg_namespace WHERE nspname = 'pg_catalog'))
-                    AND objsubid = 0)"
-            ) => String, 1215;
+                      SELECT oid FROM pg_class WHERE relname = $2 AND relnamespace = '{}')
+                    AND objsubid = 0)",
+                oid::SCHEMA_PG_CATALOG_OID
+            )) => String, 1215;
         },
         "pg_column_size" => Scalar {
             params!(Any) => UnaryFunc::PgColumnSize(func::PgColumnSize) => Int32, 1269;
