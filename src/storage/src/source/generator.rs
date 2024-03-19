@@ -40,31 +40,80 @@ pub use tpch::Tpch;
 
 use self::marketing::Marketing;
 
-pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Generator> {
-    match g {
-        LoadGenerator::Auction => Box::new(Auction {}),
-        LoadGenerator::Counter { max_cardinality } => Box::new(Counter {
-            max_cardinality: max_cardinality.clone(),
-        }),
-        LoadGenerator::Datums => Box::new(Datums {}),
-        LoadGenerator::Marketing => Box::new(Marketing {}),
-        LoadGenerator::Tpch {
-            count_supplier,
-            count_part,
-            count_customer,
-            count_orders,
-            count_clerk,
-        } => Box::new(Tpch {
-            count_supplier: *count_supplier,
-            count_part: *count_part,
-            count_customer: *count_customer,
-            count_orders: *count_orders,
-            count_clerk: *count_clerk,
-            // The default tick behavior 1s. For tpch we want to disable ticking
-            // completely.
-            tick: Duration::from_micros(tick_micros.unwrap_or(0)),
-        }),
-        LoadGenerator::KeyValue(KeyValueLoadGenerator { .. }) => panic!("not a basic generator"),
+enum GeneratorKind {
+    Simple {
+        generator: Box<dyn Generator>,
+        tick_micros: Option<u64>,
+    },
+    KeyValue(KeyValueLoadGenerator),
+}
+
+impl GeneratorKind {
+    fn new(g: &LoadGenerator, tick_micros: Option<u64>) -> Self {
+        match g {
+            LoadGenerator::Auction => GeneratorKind::Simple {
+                generator: Box::new(Auction {}),
+                tick_micros,
+            },
+            LoadGenerator::Counter { max_cardinality } => GeneratorKind::Simple {
+                generator: Box::new(Counter {
+                    max_cardinality: max_cardinality.clone(),
+                }),
+                tick_micros,
+            },
+            LoadGenerator::Datums => GeneratorKind::Simple {
+                generator: Box::new(Datums {}),
+                tick_micros,
+            },
+            LoadGenerator::Marketing => GeneratorKind::Simple {
+                generator: Box::new(Marketing {}),
+                tick_micros,
+            },
+            LoadGenerator::Tpch {
+                count_supplier,
+                count_part,
+                count_customer,
+                count_orders,
+                count_clerk,
+            } => GeneratorKind::Simple {
+                generator: Box::new(Tpch {
+                    count_supplier: *count_supplier,
+                    count_part: *count_part,
+                    count_customer: *count_customer,
+                    count_orders: *count_orders,
+                    count_clerk: *count_clerk,
+                    // The default tick behavior 1s. For tpch we want to disable ticking
+                    // completely.
+                    tick: Duration::from_micros(tick_micros.unwrap_or(0)),
+                }),
+                tick_micros,
+            },
+            LoadGenerator::KeyValue(kv) => GeneratorKind::KeyValue(kv.clone()),
+        }
+    }
+
+    fn render<G: Scope<Timestamp = MzOffset>>(
+        self,
+        scope: &mut G,
+        config: RawSourceCreationConfig,
+        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        start_signal: impl std::future::Future<Output = ()> + 'static,
+    ) -> (
+        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+        Option<Stream<G, Infallible>>,
+        Stream<G, HealthStatusMessage>,
+        Stream<G, ProgressStatisticsUpdate>,
+        Vec<PressOnDropButton>,
+    ) {
+        match self {
+            GeneratorKind::Simple {
+                tick_micros,
+                generator,
+            } => render_simple_generator(generator, tick_micros, scope, config, resume_uppers),
+            GeneratorKind::KeyValue(kv) => {
+                key_value::render(kv, scope, config, resume_uppers, start_signal)
+            }
+        }
     }
 }
 
@@ -86,143 +135,150 @@ impl SourceRender for LoadGeneratorSourceConnection {
         Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
-        // Currently `KEY VALUE` loadgen renders its own operator, and is not a single-worker
-        // basic generator like the rest.
-        if let LoadGenerator::KeyValue(kv) = self.load_generator.clone() {
-            return key_value::render(kv, scope, config, resume_uppers, start_signal);
+        let generator_kind = GeneratorKind::new(&self.load_generator, self.tick_micros);
+        generator_kind.render(scope, config, resume_uppers, start_signal)
+    }
+}
+
+fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
+    generator: Box<dyn Generator>,
+    tick_micros: Option<u64>,
+    scope: &mut G,
+    config: RawSourceCreationConfig,
+    resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+) -> (
+    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
+    Option<Stream<G, Infallible>>,
+    Stream<G, HealthStatusMessage>,
+    Stream<G, ProgressStatisticsUpdate>,
+    Vec<PressOnDropButton>,
+) {
+    let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
+
+    let (mut data_output, stream) = builder.new_output();
+    let (mut stats_output, stats_stream) = builder.new_output();
+
+    let button = builder.build(move |caps| async move {
+        let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
+
+        if !config.responsible_for(()) {
+            // Emit 0, to mark this worker as having started up correctly.
+            stats_output
+                .give(
+                    &stats_cap,
+                    ProgressStatisticsUpdate::SteadyState {
+                        offset_known: 0,
+                        offset_committed: 0,
+                    },
+                )
+                .await;
+            return;
         }
 
-        let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
+        let resume_upper = Antichain::from_iter(
+            config.source_resume_uppers[&config.id]
+                .iter()
+                .map(MzOffset::decode_row),
+        );
 
-        let (mut data_output, stream) = builder.new_output();
-        let (mut stats_output, stats_stream) = builder.new_output();
+        let Some(resume_offset) = resume_upper.into_option() else {
+            return;
+        };
 
-        let button = builder.build(move |caps| async move {
-            let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
+        let mut rows = generator.by_seed(mz_ore::now::SYSTEM_TIME.clone(), None, resume_offset);
 
-            if !config.responsible_for(()) {
-                // Emit 0, to mark this worker as having started up correctly.
-                stats_output
-                    .give(
-                        &stats_cap,
-                        ProgressStatisticsUpdate::SteadyState {
-                            offset_known: 0,
-                            offset_committed: 0,
-                        },
-                    )
-                    .await;
-                return;
-            }
+        let tick = Duration::from_micros(tick_micros.unwrap_or(1_000_000));
 
-            let resume_upper = Antichain::from_iter(
-                config.source_resume_uppers[&config.id]
-                    .iter()
-                    .map(MzOffset::decode_row),
-            );
+        let mut resume_uppers = std::pin::pin!(resume_uppers);
 
-            let Some(resume_offset) = resume_upper.into_option() else {
-                return;
-            };
+        // If we are just starting up, report 0 as our `offset_committed`.
+        let mut offset_committed = if resume_offset.offset == 0 {
+            Some(0)
+        } else {
+            None
+        };
 
-            let mut rows = as_generator(&self.load_generator, self.tick_micros).by_seed(
-                mz_ore::now::SYSTEM_TIME.clone(),
-                None,
-                resume_offset,
-            );
+        while let Some((output, event)) = rows.next() {
+            match event {
+                Event::Message(offset, (value, diff)) => {
+                    let message = (
+                        output,
+                        Ok(SourceMessage {
+                            key: Row::default(),
+                            value,
+                            metadata: Row::default(),
+                        }),
+                    );
 
-            let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
-
-            let mut resume_uppers = std::pin::pin!(resume_uppers);
-
-            // If we are just starting up, report 0 as our `offset_committed`.
-            let mut offset_committed = if resume_offset.offset == 0 {
-                Some(0)
-            } else {
-                None
-            };
-
-            while let Some((output, event)) = rows.next() {
-                match event {
-                    Event::Message(offset, (value, diff)) => {
-                        let message = (
-                            output,
-                            Ok(SourceMessage {
-                                key: Row::default(),
-                                value,
-                                metadata: Row::default(),
-                            }),
-                        );
-
-                        // Some generators always reproduce their TVC from the beginning which can
-                        // generate a significant amount of data that will overwhelm the dataflow.
-                        // Since those are not required downstream we eagerly ignore them here.
-                        if resume_offset <= offset {
-                            data_output.give(&cap, (message, offset, diff)).await;
-                        }
+                    // Some generators always reproduce their TVC from the beginning which can
+                    // generate a significant amount of data that will overwhelm the dataflow.
+                    // Since those are not required downstream we eagerly ignore them here.
+                    if resume_offset <= offset {
+                        data_output.give(&cap, (message, offset, diff)).await;
                     }
-                    Event::Progress(Some(offset)) => {
-                        cap.downgrade(&offset);
+                }
+                Event::Progress(Some(offset)) => {
+                    cap.downgrade(&offset);
 
-                        // We only sleep if we have surpassed the resume offset so that we can
-                        // quickly go over any historical updates that a generator might choose to
-                        // emit.
-                        // TODO(petrosagg): Remove the sleep below and make generators return an
-                        // async stream so that they can drive the rate of production directly
-                        if resume_offset < offset {
-                            let mut sleep = std::pin::pin!(tokio::time::sleep(tick));
+                    // We only sleep if we have surpassed the resume offset so that we can
+                    // quickly go over any historical updates that a generator might choose to
+                    // emit.
+                    // TODO(petrosagg): Remove the sleep below and make generators return an
+                    // async stream so that they can drive the rate of production directly
+                    if resume_offset < offset {
+                        let mut sleep = std::pin::pin!(tokio::time::sleep(tick));
 
-                            loop {
-                                tokio::select! {
-                                    _ = &mut sleep => {
-                                        break;
-                                    }
-                                    Some(frontier) = resume_uppers.next() => {
-                                        if let Some(offset) = frontier.as_option() {
-                                            // Offset N means we have committed N offsets (offsets are
-                                            // 0-indexed)
-                                            offset_committed = Some(offset.offset);
-                                        }
+                        loop {
+                            tokio::select! {
+                                _ = &mut sleep => {
+                                    break;
+                                }
+                                Some(frontier) = resume_uppers.next() => {
+                                    if let Some(offset) = frontier.as_option() {
+                                        // Offset N means we have committed N offsets (offsets are
+                                        // 0-indexed)
+                                        offset_committed = Some(offset.offset);
                                     }
                                 }
                             }
+                        }
 
-                            // TODO(guswynn): generators have various definitions of "snapshot", so
-                            // we are not going to implement snapshot progress statistics for them
-                            // right now, but will come back to it.
-                            if let Some(offset_committed) = offset_committed {
-                                stats_output
-                                    .give(
-                                        &stats_cap,
-                                        ProgressStatisticsUpdate::SteadyState {
-                                            // technically we could have _known_ a larger offset
-                                            // than the one that has been committed, but we can
-                                            // never recover that known amount on restart, so we
-                                            // just advance these in lock step.
-                                            offset_known: offset_committed,
-                                            offset_committed,
-                                        },
-                                    )
-                                    .await;
-                            }
+                        // TODO(guswynn): generators have various definitions of "snapshot", so
+                        // we are not going to implement snapshot progress statistics for them
+                        // right now, but will come back to it.
+                        if let Some(offset_committed) = offset_committed {
+                            stats_output
+                                .give(
+                                    &stats_cap,
+                                    ProgressStatisticsUpdate::SteadyState {
+                                        // technically we could have _known_ a larger offset
+                                        // than the one that has been committed, but we can
+                                        // never recover that known amount on restart, so we
+                                        // just advance these in lock step.
+                                        offset_known: offset_committed,
+                                        offset_committed,
+                                    },
+                                )
+                                .await;
                         }
                     }
-                    Event::Progress(None) => return,
                 }
+                Event::Progress(None) => return,
             }
-        });
+        }
+    });
 
-        let status = [HealthStatusMessage {
-            index: 0,
-            namespace: Self::STATUS_NAMESPACE.clone(),
-            update: HealthStatusUpdate::running(),
-        }]
-        .to_stream(scope);
-        (
-            stream.as_collection(),
-            None,
-            status,
-            stats_stream,
-            vec![button.press_on_drop()],
-        )
-    }
+    let status = [HealthStatusMessage {
+        index: 0,
+        namespace: StatusNamespace::Generator,
+        update: HealthStatusUpdate::running(),
+    }]
+    .to_stream(scope);
+    (
+        stream.as_collection(),
+        None,
+        status,
+        stats_stream,
+        vec![button.press_on_drop()],
+    )
 }
