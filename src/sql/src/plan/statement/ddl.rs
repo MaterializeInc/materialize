@@ -1799,10 +1799,10 @@ pub(crate) fn load_generator_ast_to_generator(
             } = extracted;
 
             let include_offset = match include_metadata {
-                [SourceIncludeMetadata::Offset { alias }] => Some(alias.clone().map_or_else(
-                    || LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT.to_string(),
-                    |i| i.to_string(),
-                )),
+                [SourceIncludeMetadata::Offset { alias }] => match alias {
+                    Some(alias) => Some(alias.to_string()),
+                    None => Some(LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT.to_string()),
+                },
                 [] => None,
                 _ => {
                     bail_unsupported!("only `INCLUDE OFFSET` is supported");

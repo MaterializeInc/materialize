@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Diff, Row};
 use mz_storage_types::sources::load_generator::{
     Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorSourceConnection,
 };

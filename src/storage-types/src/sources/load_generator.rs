@@ -57,13 +57,12 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     }
 
     fn key_desc(&self) -> RelationDesc {
-        if let LoadGenerator::KeyValue(_) = &self.load_generator {
-            RelationDesc::empty().with_column(
+        match &self.load_generator {
+            LoadGenerator::KeyValue(_) => RelationDesc::empty().with_column(
                 LOAD_GENERATOR_KEY_VALUE_KEY_NAME,
                 ScalarType::UInt64.nullable(false),
-            )
-        } else {
-            RelationDesc::empty()
+            ),
+            _ => RelationDesc::empty(),
         }
     }
 
@@ -400,7 +399,7 @@ impl LoadGenerator {
             LoadGenerator::Marketing => false,
             LoadGenerator::Datums => true,
             LoadGenerator::Tpch { .. } => false,
-            LoadGenerator::KeyValue(_) => false,
+            LoadGenerator::KeyValue(_) => true,
         }
     }
 }
@@ -482,30 +481,30 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub struct KeyValueLoadGenerator {
-    // The keyspace of the source.
+    /// The keyspace of the source.
     pub keys: u64,
-    // The number of rounds to emit values for each key in the snapshot.
-    // This lets users scale the snapshot size independent of the keyspace.
+    /// The number of rounds to emit values for each key in the snapshot.
+    /// This lets users scale the snapshot size independent of the keyspace.
     pub snapshot_rounds: u64,
-    // The number of rounds to emit values for each key, after the snapshot, before
-    // respecting the `update_rate`.
-    //
-    // This lets us quickly produce updates, as opposed to a single-value per key during
-    // snapshotting.
+    /// The number of rounds to emit values for each key, after the snapshot, before
+    /// respecting the `update_rate`.
+    ///
+    /// This lets us quickly produce updates, as opposed to a single-value per key during
+    /// snapshotting.
     pub quick_rounds: u64,
-    // The number of random bytes for each value.
+    /// The number of random bytes for each value.
     pub value_size: u64,
-    // The number of partitions. The keyspace is spread evenly across the partitions.
-    // This lets users scale the concurrency of the source independently of the replica size.
+    /// The number of partitions. The keyspace is spread evenly across the partitions.
+    /// This lets users scale the concurrency of the source independently of the replica size.
     pub partitions: u64,
-    // If provided, the maximum rate at which new batches of updates, per-partition will be
-    // produced after the snapshot.
+    /// If provided, the maximum rate at which new batches of updates, per-partition will be
+    /// produced after the snapshot.
     pub update_rate: Option<Duration>,
-    // The number of keys in each update batch.
+    /// The number of keys in each update batch.
     pub batch_size: u64,
-    // A per-source seed.
+    /// A per-source seed.
     pub seed: u64,
-    // Whether or not to include the offset in the value. The string is the column name.
+    /// Whether or not to include the offset in the value. The string is the column name.
     pub include_offset: Option<String>,
 }
 
@@ -517,7 +516,7 @@ impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
             quick_rounds: self.quick_rounds,
             value_size: self.value_size,
             partitions: self.partitions,
-            update_rate: self.update_rate.as_ref().map(|ur| ur.into_proto()),
+            update_rate: self.update_rate.into_proto(),
             batch_size: self.batch_size,
             seed: self.seed,
             include_offset: self.include_offset.clone(),
@@ -531,7 +530,7 @@ impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
             quick_rounds: proto.quick_rounds,
             value_size: proto.value_size,
             partitions: proto.partitions,
-            update_rate: proto.update_rate.map(|ur| ur.into_rust()).transpose()?,
+            update_rate: proto.update_rate.into_rust()?,
             batch_size: proto.batch_size,
             seed: proto.seed,
             include_offset: proto.include_offset,
