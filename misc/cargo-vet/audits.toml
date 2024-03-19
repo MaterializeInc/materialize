@@ -43,7 +43,7 @@ version = "1.2.6"
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:8797bfb01101db2168e0007aa7aa606bbd2deda5"
+version = "0.12.0@git:448e158aa9ff9f944eabb3a0a87d9801513251a6"
 
 [[audits.dynfmt]]
 who = "Sean Loiselle <sean@materialize.io>"
@@ -228,22 +228,22 @@ delta = "3.8.0 -> 3.8.1"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
+version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
+version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
+version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:9208396d1d86becbcc91c76e780ffe61fd51e65e"
+version = "0.12.0@git:46b28dc48bf5ed26dc0a0d5dbbd53c7964526f27"
 
 [[audits.tracing-capture]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
